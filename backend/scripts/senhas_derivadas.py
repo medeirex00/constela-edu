@@ -49,7 +49,8 @@ Garantias
 * Conta SEM ESCOLA nunca é tocada: sai listada à parte — a recuperação é manual,
   pelo admin global (``python -m scripts.link_redefinicao``).
 * Administração global nunca é tocada: sai listada à parte (troca manual).
-* As sessões abertas das contas invalidadas caem (``token_version``).
+* As sessões abertas das contas invalidadas caem (``token_version``), e os
+  aparelhos registrados para push saem junto (o app registra de novo no login).
 * Cada conta invalidada fica no log de auditoria
   (``usuario.senha_derivada_invalidada``, detalhes ``{"uso", "origem"}``).
 

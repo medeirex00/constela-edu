@@ -392,11 +392,14 @@ def invalidar_senhas_derivadas(db: Session, escola_id: int | None = None, *,
       na classificação (``UPDATE … WHERE id = :id AND senha_hash = :lido``), e o
       ``token_version`` sobe na MESMA instrução. Quem trocou a senha no meio da
       execução não é sobrescrito: volta em ``trocadas_durante``.
+    * A conta invalidada perde também os aparelhos registrados para push
+      (``push.remover_aparelhos_da_conta``), como nas outras substituições de senha.
 
     NÃO commita — quem chama decide (transação única: falha no meio = rollback
     de tudo)."""
     from sqlalchemy.orm.util import identity_key
 
+    from app.services import push as svc_push
     from app.services.audit import registrar
 
     if classificacao is None:
@@ -424,6 +427,11 @@ def invalidar_senhas_derivadas(db: Session, escola_id: int | None = None, *,
             carregada = db.identity_map.get(identity_key(Usuario, uid))
             if carregada is not None:
                 db.expire(carregada, ["senha_hash", "token_version"])
+            # Os aparelhos (push) saem com as sessões, como nas outras substituições
+            # de senha (``admin._revogar_acessos``, ``auth.consumir_link_reset``): a
+            # senha era pública, e um celular registrado com ela seguia recebendo os
+            # avisos da escola. A auditoria da etapa fica com os mesmos campos.
+            svc_push.remover_aparelhos_da_conta(db, uid)
             registrar(db, "usuario.senha_derivada_invalidada", escola_id=item["escola_id"],
                       entidade="usuario", entidade_id=uid,
                       detalhes={"uso": item["uso"], "origem": origem})

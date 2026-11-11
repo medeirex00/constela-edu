@@ -104,11 +104,14 @@ def remover_aparelhos_da_conta(db: Session, usuario_id: int) -> int:
     Chamado quando a conta perde o acesso (desativar, excluir — ``admin.
     _revogar_acessos``), muda de alcance (promoção a Secretaria, ``rede.py``) e
     quando a senha é substituída (troca pelo admin, ``admin._revogar_acessos(
-    senha_substituida=True)``, e redefinição pelo link, ``auth.consumir_link_reset``):
+    senha_substituida=True)``, redefinição pelo link, ``auth.consumir_link_reset``, e
+    a etapa de deploy que invalida a senha derivada do nome, ``professores.
+    invalidar_senhas_derivadas``):
     o app não se descadastra sozinho no 401, e a conta revogada nem conseguiria
     chamar ``/dispositivos/remover``. Reativar a conta não traz o aparelho de
     volta — só um novo registro pelo app. Não comita: vai na transação de quem
-    chama, junto da auditoria (``dispositivos_removidos``)."""
+    chama, junto da auditoria (``dispositivos_removidos``; a etapa de deploy não
+    grava a contagem, a auditoria dela tem só ``uso`` e ``origem``)."""
     return db.execute(
         delete(DispositivoMovel).where(DispositivoMovel.usuario_id == usuario_id)
     ).rowcount or 0
