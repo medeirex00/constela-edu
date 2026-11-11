@@ -255,6 +255,12 @@ class LocalProvedor(ProvedorIA):
             return (f"Sobre {aluno['nome']} (dados do sistema):\n{aluno['linha']}\n\n"
                     "Posso detalhar evolução, alertas ou conquistas se você perguntar.")
 
+        # Pergunta de um módulo que a rede não contratou: diz isso, em vez de um
+        # pódio (de retrato antigo) ou de despejar outra seção.
+        fora = self._fora_do_plano(pergunta, secoes.get("FORA_DO_PLANO", ""))
+        if fora:
+            return fora
+
         # "Os 3 melhores do Matific", "top 5 no Elefante", "melhor aluno da
         # escola": monta o pódio certo, na métrica certa, com o N pedido.
         podio = self._top_n(pergunta, secoes.get("ALUNOS", ""))
@@ -288,15 +294,36 @@ class LocalProvedor(ProvedorIA):
                 secoes[atual] += linha + "\n"
         return secoes
 
+    # Palavras de cada módulo na pergunta (as mesmas do pódio, em `_top_n`). A
+    # chave é o começo da linha que assistente.montar_contexto escreve na seção
+    # FORA_DO_PLANO ("- Matemática: não faz parte do plano desta rede; ...").
+    _MODULOS_NA_PERGUNTA = (
+        ("matematica", re.compile(r"\b(matific|matematica)\b")),
+        ("leitura", re.compile(r"\b(elefante|leitura|portugues|letrado)\b")),
+    )
+
+    @classmethod
+    def _fora_do_plano(cls, pergunta: str, secao_fora: str) -> str | None:
+        linhas = [linha.strip()[2:] for linha in secao_fora.splitlines()
+                  if linha.strip().startswith("- ")]
+        citadas = [linha for modulo, padrao in cls._MODULOS_NA_PERGUNTA
+                   if padrao.search(pergunta)
+                   for linha in linhas if _plano(linha).startswith(modulo)]
+        if not citadas:
+            return None
+        return ("\n".join(citadas)
+                + "\n\n(Resposta gerada no modo local, somente com dados do sistema.)")
+
     # Linha da seção ALUNOS: "- NOME: turma T, 3º lugar, geral 8.5, Matific 7.0,
-    # Elefante 9.0" — montada em assistente.montar_contexto.
+    # Elefante 9.0" — montada em assistente.montar_contexto. Cada plataforma é
+    # opcional por si: a que a rede não contratou não vem na linha.
     # A turma ancora em "º lugar" (não na primeira vírgula) para nomes de turma
     # com vírgula ("4º Ano, Integral") não saírem truncados.
     _RE_ALUNO = re.compile(
         r"^- (?P<nome>.+?): turma (?P<turma>.+?), \S+º lugar, .*?"
         r"geral (?P<geral>\d+(?:[.,]\d+)?)"
-        r"(?:, Matific (?P<matific>\d+(?:[.,]\d+)?)"
-        r", Elefante (?P<elefante>\d+(?:[.,]\d+)?))?")
+        r"(?:, Matific (?P<matific>\d+(?:[.,]\d+)?))?"
+        r"(?:, Elefante (?P<elefante>\d+(?:[.,]\d+)?))?")
 
     @classmethod
     def _top_n(cls, pergunta: str, secao_alunos: str) -> str | None:

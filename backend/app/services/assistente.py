@@ -66,7 +66,8 @@ from app.models import (
     Nota,
     Turma,
 )
-from app.services import evolucao, insights
+from app.services import evolucao, insights, scoring
+from app.services import modulos as svc_modulos
 from app.services.ia import ErroProvedorIA, obter_provedor
 from app.services.ia.provedores import LocalProvedor
 
@@ -207,9 +208,26 @@ def montar_contexto(db: Session, escola_id: int) -> str:
         .order_by(Nota.posicao)
     ).all()
 
+    # CONTRATO: o que a rede não assinou não entra no contexto — nem a nota, nem
+    # o pódio, nem os ganhos daquela plataforma. Com provedor externo o contexto
+    # sai da infraestrutura (minimização), e o modo local responderia "os
+    # melhores no Matific" a uma rede que só contratou Leitura. Escola sem rede
+    # (ou com os dois módulos) segue com tudo, como sempre.
+    contratadas = scoring.dimensoes_contratadas(db, escola)
+    com_matematica = "matematica" in contratadas
+    com_leitura = "leitura" in contratadas
+
+    def por_plataforma(nota: Nota) -> str:
+        partes = []
+        if com_matematica:
+            partes.append(f", Matific {nota.nota_matific:.1f}")
+        if com_leitura:
+            partes.append(f", Elefante {nota.nota_elefante:.1f}")
+        return "".join(partes)
+
     linhas_ranking = [
-        f"- {nota.posicao}º: {aluno.nome} ({turma.nome}) — geral {nota.nota_geral:.1f}, "
-        f"Matific {nota.nota_matific:.1f}, Elefante {nota.nota_elefante:.1f}"
+        f"- {nota.posicao}º: {aluno.nome} ({turma.nome}) — geral {nota.nota_geral:.1f}"
+        f"{por_plataforma(nota)}"
         for nota, aluno, turma in ranking[:15]
     ]
     # Pódios por PLATAFORMA — para perguntas "melhores do Matific/Elefante".
@@ -219,19 +237,24 @@ def montar_contexto(db: Session, escola_id: int) -> str:
             f"- {i}º: {aluno.nome} ({turma.nome}) — nota {metrica(nota):.1f}"
             for i, (nota, aluno, turma) in enumerate(ordenado[:10], start=1)
         ]
-    linhas_matific = podio(lambda n: n.nota_matific)
-    linhas_elefante = podio(lambda n: n.nota_elefante)
     linhas_alunos = [
         f"- {aluno.nome}: turma {turma.nome}, {nota.posicao}º lugar, "
-        f"geral {nota.nota_geral:.1f}, Matific {nota.nota_matific:.1f}, "
-        f"Elefante {nota.nota_elefante:.1f}"
+        f"geral {nota.nota_geral:.1f}{por_plataforma(nota)}"
         for nota, aluno, turma in ranking
     ]
+
+    def ganhos_do_periodo(ganhos: dict) -> str:
+        partes = []
+        if com_matematica:
+            partes.append(f"+{ganhos['atividades']:.0f} atividades")
+        if com_leitura:
+            partes.append(f"+{ganhos['livros']:.0f} livros")
+        return ", ".join(partes)
 
     itens_evolucao = evolucao.ranking_evolucao(db, escola_id, dias=30)[:10]
     linhas_evolucao = [
         f"- {item.posicao}º: {item.nome} ({item.turma}) — evolução {item.nota_evolucao:.1f} "
-        f"(+{item.ganhos['atividades']:.0f} atividades, +{item.ganhos['livros']:.0f} livros)"
+        f"({ganhos_do_periodo(item.ganhos)})"
         for item in itens_evolucao
     ]
 
@@ -248,13 +271,25 @@ def montar_contexto(db: Session, escola_id: int) -> str:
     resumo_escola = evolucao.resumo_escola(db, escola_id)
     linhas_turmas = [
         f"- {t['turma']['nome']} ({t['turma']['ano_escolar']}): {t['total_alunos']} alunos, "
-        f"média geral {t['media_geral']:.1f}, {t['indicadores']['livros_unicos']} livros lidos"
+        f"média geral {t['media_geral']:.1f}"
+        + (f", {t['indicadores']['livros_unicos']} livros lidos" if com_leitura else "")
         for t in resumo_escola["turmas"] if t
     ]
 
     def secao(nome: str, linhas: list[str], vazio: str) -> str:
         corpo = "\n".join(linhas) if linhas else vazio
         return f"### {nome}\n{corpo}\n"
+
+    # O que ficou fora do plano é dito com todas as letras (sem dado de criança):
+    # o modelo e o modo local respondem "não faz parte do plano", em vez de "não
+    # há dados" ou de um pódio vindo de retrato antigo.
+    fora_do_plano = [
+        f"- {svc_modulos.CATALOGO[modulo]['nome']}: não faz parte do plano desta rede; "
+        "o sistema não tem dados dela para responder."
+        for modulo, contratado in (("leitura", com_leitura),
+                                   ("matematica", com_matematica))
+        if not contratado
+    ]
 
     return "\n".join([
         secao("RESUMO", [
@@ -263,9 +298,12 @@ def montar_contexto(db: Session, escola_id: int) -> str:
             f"- Turmas: {len(resumo_escola['turmas'])}",
             f"- Alertas ativos: {len(alertas)}",
         ], "- Sem dados."),
+        *([secao("FORA_DO_PLANO", fora_do_plano, "")] if fora_do_plano else []),
         secao("RANKING", linhas_ranking, "- Nenhuma nota calculada ainda."),
-        secao("RANKING_MATIFIC", linhas_matific, "- Nenhuma nota calculada ainda."),
-        secao("RANKING_ELEFANTE", linhas_elefante, "- Nenhuma nota calculada ainda."),
+        *([secao("RANKING_MATIFIC", podio(lambda n: n.nota_matific),
+                 "- Nenhuma nota calculada ainda.")] if com_matematica else []),
+        *([secao("RANKING_ELEFANTE", podio(lambda n: n.nota_elefante),
+                 "- Nenhuma nota calculada ainda.")] if com_leitura else []),
         secao("EVOLUCAO", linhas_evolucao, "- Sem dados de evolução no período."),
         secao("INDICES", linhas_indices, "- Sem índices calculados."),
         secao("ALERTAS", linhas_alertas, "- Nenhum alerta no momento."),
