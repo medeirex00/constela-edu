@@ -26,7 +26,7 @@ import unicodedata
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.models import Turma
+from app.models import Escola, Turma
 
 #: As séries que concorrem. Fundamental I.
 ANOS_PREMIAVEIS = (1, 2, 3, 4, 5)
@@ -120,14 +120,24 @@ def turmas_premiaveis(db: Session, escola_id: int,
 
 
 def turmas_premiaveis_da_rede(db: Session, escola_ids: list[int] | None = None,
-                              ano_letivo: int | None = None) -> list[int]:
+                              ano_letivo: int | None = None, *,
+                              no_ano_ativo: bool = False) -> list[int]:
     """Mesma regra, para os consumidores que varrem várias escolas de uma vez
     (ranking da rede, painel da Secretaria). Sem isto o número da escola no
-    painel da rede deixaria de bater com o da própria escola."""
+    painel da rede deixaria de bater com o da própria escola.
+
+    ``no_ano_ativo``: só as turmas do ano letivo ATIVO de CADA escola (as escolas de
+    uma rede podem estar em anos diferentes na virada, então o filtro é a coluna da
+    escola, nunca um ano só). É o recorte da Visão da Escola, que lista só as turmas
+    do ano ativo: a matrícula do ano ativo que ficou numa turma de outro ano (dado
+    legado de antes das travas de escrita) não entra em nenhuma das duas."""
     consulta = select(Turma.id, Turma.ano_escolar)
     if escola_ids is not None:
         consulta = consulta.where(Turma.escola_id.in_(escola_ids))
     if ano_letivo is not None:
         consulta = consulta.where(Turma.ano_letivo == ano_letivo)
+    if no_ano_ativo:
+        consulta = (consulta.join(Escola, Escola.id == Turma.escola_id)
+                    .where(Turma.ano_letivo == Escola.ano_letivo_ativo))
     return [tid for tid, rotulo in db.execute(consulta).all()
             if participa_de_premiacao(rotulo)]

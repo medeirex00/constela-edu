@@ -43,21 +43,35 @@ from app.models import (
 _CARIMBO_INSTITUCIONAL = Nota.detalhes["regua_institucional"]["versao_dificuldade"].as_string()
 
 
-def _matriculado_no_ano_ativo(turma_ids: list[int] | None = None):
-    """EXISTS: o aluno da Nota tem matrícula no ano letivo ATIVO da escola.
-
-    ``turma_ids`` (opcional) restringe a matrícula que conta a essas turmas —
-    é por onde entra o corte de elegibilidade (só turmas premiáveis). ``None``
-    = qualquer turma (comportamento de sempre)."""
-    consulta = (
+def _matriculado_no_ano_ativo(turma_ids: list[int]):
+    """EXISTS: o aluno da Nota tem matrícula no ano letivo ATIVO da escola numa das
+    ``turma_ids`` — o corte de elegibilidade (só turmas premiáveis) e o do ano: as
+    turmas vêm de ``_premiaveis_do_ano_ativo`` (ou do ramo "turma" de
+    ``_leituras_da_rede``), que só trazem as turmas do ano ativo de cada escola."""
+    return (
         select(Matricula.id)
         .where(Matricula.escola_id == Nota.escola_id,
                Matricula.aluno_id == Nota.aluno_id,
-               Matricula.ano_letivo == Escola.ano_letivo_ativo)
-    )
-    if turma_ids is not None:
-        consulta = consulta.where(Matricula.turma_id.in_(turma_ids))
-    return consulta.exists()
+               Matricula.ano_letivo == Escola.ano_letivo_ativo,
+               Matricula.turma_id.in_(turma_ids))
+    ).exists()
+
+
+def _premiaveis_do_ano_ativo(db: Session, ids: list[int]) -> list[int]:
+    """As turmas que concorrem, só as do ano letivo ATIVO de cada escola
+    (``elegibilidade.turmas_premiaveis_da_rede``). A MESMA população da Visão da
+    Escola (``evolucao.resumo_escola``, que lista só as turmas do ano ativo): a
+    matrícula do ano ativo que ficou numa turma de outro ano — dado legado de antes
+    das travas de escrita — não entra no cartão. Se entrasse, o cartão menos a soma
+    das turmas da Visão da Escola devolveria à Secretaria os números dessa criança."""
+    return elegibilidade.turmas_premiaveis_da_rede(db, ids, no_ano_ativo=True)
+
+
+def _na_turma_do_ano_ativo():
+    """Condição de JOIN: a turma da matrícula é do ano letivo ATIVO da escola (a
+    matrícula já é). Ver ``_premiaveis_do_ano_ativo``: sem ela, a matrícula do ano
+    ativo numa turma de outro ano contava no cartão e não na Visão da Escola."""
+    return and_(Turma.id == Matricula.turma_id, Turma.ano_letivo == Escola.ano_letivo_ativo)
 
 
 def _carimbo_pendente():
@@ -91,7 +105,7 @@ def _pendentes_recalculo(db: Session, ids: list[int], pendente=None) -> dict[int
     saida: dict[int, int] = {}
     for i in range(0, len(ids), _ESCOLAS_POR_LOTE_DE_PENDENTES):
         lote = ids[i:i + _ESCOLAS_POR_LOTE_DE_PENDENTES]
-        premiaveis = elegibilidade.turmas_premiaveis_da_rede(db, lote)
+        premiaveis = _premiaveis_do_ano_ativo(db, lote)
         saida.update({linha[0]: int(linha[1] or 0)
                       for linha in db.execute(_q_pendentes(lote, premiaveis, pendente)).all()})
     return saida
@@ -176,7 +190,8 @@ def _q_totais(ids: list[int], anos: dict[int, int], modelo, campos: list[str],
     query para a rede inteira e as duas populações. Só números BRUTOS agregados.
 
     RESTRINGE ao MESMO conjunto das contagens de ``_kpis_da_rede`` (aluno ativo
-    E matriculado no ano letivo ATIVO da escola). Sem isso, o snapshot 'preso' de
+    E matriculado no ano letivo ATIVO da escola numa turma desse ano,
+    ``_na_turma_do_ano_ativo``). Sem isso, o snapshot 'preso' de
     um aluno transferido/arquivado (que persiste — o scoring já o filtra de
     propósito) inflava os totais e o ``ativos_*`` frente ao total de alunos. A
     matrícula é ÚNICA por aluno e ano (``uq_matricula_aluno_ano``): a turma é a
@@ -206,6 +221,7 @@ def _q_totais(ids: list[int], anos: dict[int, int], modelo, campos: list[str],
         .join(Matricula, (Matricula.aluno_id == modelo.aluno_id)
               & (Matricula.escola_id == modelo.escola_id)
               & (Matricula.ano_letivo == Escola.ano_letivo_ativo))
+        .join(Turma, _na_turma_do_ano_ativo())
         .where(modelo.escola_id.in_(ids), Aluno.status == "ativo", *filtro)
         .subquery()
     )
@@ -325,7 +341,7 @@ def _medias_por_plataforma(db: Session, ids: list[int], modelo, coluna,
     anos = dict(db.execute(select(Escola.id, Escola.ano_letivo_ativo)
                            .where(Escola.id.in_(ids))).all())
     if turmas_premiaveis is None:
-        turmas_premiaveis = elegibilidade.turmas_premiaveis_da_rede(db, ids)
+        turmas_premiaveis = _premiaveis_do_ano_ativo(db, ids)
     _colunas, q = _q_medias(ids, anos, modelo, coluna, turmas_premiaveis)
     linhas = db.execute(q).all()
     if com_positivas:
@@ -335,14 +351,16 @@ def _medias_por_plataforma(db: Session, ids: list[int], modelo, coluna,
 
 def _q_com_dado(ids: list[int], modelo):
     """(escola, aluno) DISTINTOS com retrato da plataforma, entre os alunos ativos e
-    matriculados no ano letivo ativo — o numerador honesto da cobertura: alunos com
-    dado de ALGUMA plataforma (a contagem antiga, por linhas de ``notas``, dava ~100%)."""
+    matriculados no ano letivo ativo numa turma desse ano — o numerador honesto da
+    cobertura: alunos com dado de ALGUMA plataforma (a contagem antiga, por linhas de
+    ``notas``, dava ~100%)."""
     return (select(modelo.escola_id, modelo.aluno_id)
             .join(Aluno, Aluno.id == modelo.aluno_id)
             .join(Escola, Escola.id == modelo.escola_id)
             .join(Matricula, (Matricula.aluno_id == modelo.aluno_id)
                   & (Matricula.escola_id == modelo.escola_id)
                   & (Matricula.ano_letivo == Escola.ano_letivo_ativo))
+            .join(Turma, _na_turma_do_ano_ativo())
             .where(modelo.escola_id.in_(ids), Aluno.status == "ativo")
             .distinct())
 
@@ -445,6 +463,7 @@ def _leituras_da_rede(db: Session, escolas: list[Escola], contratados: set[str],
                    [(func.count(func.distinct(Matricula.aluno_id)), _INT)],
                    lambda q: q.join_from(Matricula, Aluno, Aluno.id == Matricula.aluno_id)
                    .join(Escola, Escola.id == Matricula.escola_id)
+                   .join(Turma, _na_turma_do_ano_ativo())
                    .where(Matricula.escola_id.in_(ids),
                           Matricula.ano_letivo == Escola.ano_letivo_ativo,
                           Aluno.status == "ativo")
@@ -456,9 +475,12 @@ def _leituras_da_rede(db: Session, escolas: list[Escola], contratados: set[str],
     larg_a = {_INT: 2, _TXT: 1}
     partes = [m(select(*_ramo(f, [(e, _INT), *c], larg_a)))
               for f, (e, c, m) in contagens.items()]
+    # As turmas premiáveis: só as do ano ativo de cada escola (``_premiaveis_do_ano_ativo``).
     partes.append(select(*_ramo("turma", [(Turma.escola_id, _INT), (Turma.id, _INT),
                                           (Turma.ano_escolar, _TXT)], larg_a))
-                  .where(Turma.escola_id.in_(ids)))
+                  .join_from(Turma, Escola, Escola.id == Turma.escola_id)
+                  .where(Turma.escola_id.in_(ids),
+                         Turma.ano_letivo == Escola.ano_letivo_ativo))
     for modelo in _retratos_contratados(contratados):
         q = _q_com_dado(ids, modelo)
         partes.append(q.with_only_columns(*_ramo(
@@ -472,7 +494,7 @@ def _leituras_da_rede(db: Session, escolas: list[Escola], contratados: set[str],
             com_dado.setdefault(a, set()).add(b)
         else:
             lido[fonte][a] = int(b or 0)
-    # (as Fases não concorrem: a mesma regra de ``elegibilidade.turmas_premiaveis_da_rede``)
+    # (as Fases não concorrem: a mesma regra de ``_premiaveis_do_ano_ativo``)
     premiaveis = [tid for tid, rotulo in turmas_e_rotulos
                   if elegibilidade.participa_de_premiacao(rotulo)]
     lido["com_dados"] = {e: len(alunos) for e, alunos in com_dado.items()}
