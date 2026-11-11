@@ -12,7 +12,7 @@ import type { ReactNode } from "react";
 import { api, apiUpload } from "../lib/api";
 import { exigeDataDoRelatorio, instanteDoRelatorio } from "../lib/dataRelatorio";
 import { acharTurmaPorNome } from "../lib/nomes";
-import type { Aluno, Analise, Turma } from "../lib/types";
+import type { Aluno, Analise, LinhaAnalise, ResultadoImportacao, Turma } from "../lib/types";
 import { useApp } from "./AppContext";
 
 export type FaseLote = "selecao" | "analisando" | "conferencia" | "importando" | "relatorio";
@@ -21,6 +21,11 @@ export type StatusItem = "ok" | "alerta" | "pendente" | "erro";
 export type AcaoItem =
   | { tipo: "importar"; alunoId: number }
   | { tipo: "criar"; turmaId: number }
+  // A confirmação manda o arquivo para Revisões de identidade (nome só parecido, mais
+  // de um aluno possível, turma sem destino…): vai com ``deixar_para_revisao`` — o
+  // backend nunca associa nem cria — e a turma do relatório só como contexto da
+  // pendência. Antes ia como "criar", com "Aluno novo — será criado nesta turma.".
+  | { tipo: "revisao"; turmaNome: string | null }
   | { tipo: "corrigir" };
 
 export interface ItemLote {
@@ -37,7 +42,9 @@ export interface ItemLote {
   detalhe: string;
   corrigido: boolean;
   ignorado: boolean;
-  resultado?: "importado" | "erro" | "ignorado" | "pendente";
+  /** "revisao": o servidor gravou o arquivo como pendência em Revisões de identidade
+   *  (``qtd_revisoes``) sem aplicar dado a nenhum aluno (``qtd_alunos`` 0). */
+  resultado?: "importado" | "revisao" | "erro" | "ignorado" | "pendente";
   /** O motivo que o servidor deu ao recusar este arquivo no /confirmar (resultado
    *  "erro"). Antes a recusa era descartada e o relatório mostrava, como motivo, o
    *  ``detalhe`` da ANÁLISE ("Aluno novo — será criado nesta turma."). */
@@ -57,9 +64,87 @@ function mensagemDoErro(erro: unknown, padrao: string): string {
   return erro instanceof Error && erro.message ? erro.message : padrao;
 }
 
+/** Motivos de revisão (``identidade_aluno.decidir``) em que a confirmação NUNCA cria
+ *  a ficha, qualquer que seja a turma escolhida: o motor manda a linha para Revisões
+ *  de identidade e um "Criar" seria ignorado. Só a escolha de um aluno da lista
+ *  (vínculo explícito) muda o destino — menos na conta de um aluno de outra escola,
+ *  em que só o Admin Global confirma o vínculo. Ficam de fora os motivos de TURMA
+ *  (turma_ambigua, turma_arquivada, turma_fora_do_ano_letivo…): neles a turma
+ *  escolhida resolve e a ficha nasce. Vale para a prévia de um arquivo por vez
+ *  (Importacoes.tsx) e para o lote. */
+export const MOTIVOS_SO_REVISAO = new Set([
+  "nome_incompleto",
+  "contas_repetidas_no_relatorio",
+  "id_externo_duplicado",
+  "identidade_de_outra_escola",
+  "identidade_de_ficha_inativa",
+  "identidade_de_outro_aluno",
+  "outra_identidade_na_plataforma",
+  "ra_repetido",
+  "ficha_inativa",
+  "correspondencia_insegura",
+  "candidatos_multiplos",
+  "homonimo_em_outra_sala",
+  "nome_casa_em_outra_sala",
+  "criacao_bloqueada_por_politica",
+  "deixada_para_revisao",
+]);
+
+/** Motivos de TURMA em que a turma do relatório não recebe a ficha nova e o backend
+ *  não escolhe outra (``identidade_aluno._turma_para_criar``): ela está ARQUIVADA, há
+ *  MAIS DE UMA turma cadastrada para a sala, ou a da sala é de OUTRA ETAPA (Educação
+ *  Infantil × Fundamental). Só uma turma escolhida para a ficha nova resolve — o que
+ *  o lote não faz: nele, a linha vai para a Revisão. */
+export const MOTIVOS_TURMA_SEM_DESTINO = new Set([
+  "turma_arquivada", "turma_ambigua", "turma_de_outra_etapa",
+]);
+
+/** O porquê da Revisão, em linguagem simples, para os motivos de um relatório
+ *  individual (sem conta da plataforma). O texto completo do motivo aparece em
+ *  Revisões de identidade. */
+const RAZAO_DA_REVISAO: Record<string, string> = {
+  nome_incompleto: "o relatório traz só parte do nome",
+  candidatos_multiplos: "mais de um aluno cadastrado pode ser esta criança",
+  homonimo_em_outra_sala: "há aluno com este nome em outra turma",
+  nome_casa_em_outra_sala: "o nome corresponde a um aluno de outra turma",
+  ficha_inativa: "o único aluno que corresponde está com a ficha inativa",
+  turma_arquivada: "a turma do relatório está arquivada e não recebe aluno novo",
+  turma_ambigua: "mais de uma turma cadastrada corresponde à turma do relatório",
+  turma_de_outra_etapa: "a turma que corresponde à do relatório é de outra etapa",
+};
+
+function razaoDaRevisao(c: NonNullable<LinhaAnalise["correspondencia"]>): string {
+  if (c.motivo === "correspondencia_insegura") {
+    return `o nome lembra o de ${c.aluno_nome || "um aluno cadastrado"}, mas não o bastante para vincular sozinho`;
+  }
+  return RAZAO_DA_REVISAO[c.motivo ?? ""] ?? "a importação não decide sozinha quem é este aluno";
+}
+
+/** A confirmação manda o arquivo para Revisões de identidade: o destino "revisao", ou
+ *  "criar" numa escola de política "bloquear" (a matrícula vem da Lista Piloto: o
+ *  backend não cria a ficha e abre a pendência). */
+export function arquivoVaiParaRevisao(item: ItemLote): boolean {
+  return item.acao.tipo === "revisao"
+    || (item.acao.tipo === "criar" && Boolean(item.analise?.criacao_bloqueada_por_politica));
+}
+
+/** O resultado de um arquivo pela RESPOSTA do /confirmar — não basta o 200: com
+ *  ``qtd_alunos`` 0, nenhum aluno recebeu os dados; com pendência gravada, o arquivo
+ *  está em Revisões de identidade; sem nenhuma das duas, nada foi gravado. */
+function resultadoDaResposta(r: ResultadoImportacao): Pick<ItemLote, "resultado" | "erroImportacao"> {
+  if ((r.qtd_alunos ?? 0) > 0) return { resultado: "importado" };
+  if ((r.qtd_revisoes ?? 0) > 0 || (r.criacao_bloqueada ?? 0) > 0) return { resultado: "revisao" };
+  const avisos = (r.avisos ?? []).join(" ");
+  return {
+    resultado: "erro",
+    erroImportacao: `Nada foi gravado deste arquivo.${avisos ? ` ${avisos}` : ""}`,
+  };
+}
+
 /** true quando o arquivo tem um destino resolvido e será enviado ao confirmar. */
 export function importavel(item: ItemLote): boolean {
-  return !item.ignorado && (item.acao.tipo === "importar" || item.acao.tipo === "criar");
+  return !item.ignorado
+    && (item.acao.tipo === "importar" || item.acao.tipo === "criar" || item.acao.tipo === "revisao");
 }
 
 /** Lê a análise de um PDF e decide status + ação, sem intervenção do usuário. */
@@ -77,6 +162,10 @@ function montarItem(arquivo: File, indice: number, analise: Analise, turmas: Tur
   const turmaId = novo ? corresp?.turma_id ?? null : acharTurmaPorNome(turmas, analise.turma_detectada);
   const turmaNome = (novo ? corresp?.turma_nome : null)
     ?? turmas.find((t) => t.id === turmaId)?.nome ?? analise.turma_detectada ?? "";
+  // A turma do RELATÓRIO, como veio (a da linha, senão a do cabeçalho): só o contexto
+  // da pendência quando o arquivo vai para a Revisão.
+  const turmaRelatorio = String(analise.linhas.find((l) => l.dados?.turma_relatorio)?.dados
+    ?.turma_relatorio ?? "") || analise.turma_detectada || "";
 
   if (!nome || origem === "nenhum") {
     return {
@@ -93,9 +182,7 @@ function montarItem(arquivo: File, indice: number, analise: Analise, turmas: Tur
     };
   }
   // Só a ALTA confiança do motor ("vinculado") e o nome EXATO único auto-importam
-  // no lote. "revisar"/"provavel" (possível duplicata) e "bloqueado" caem em criar
-  // e passam pelo motor seguro na confirmação — grafia/similaridade parecida nunca
-  // vira vínculo automático (a detecção surfaça depois p/ fusão manual).
+  // no lote. Grafia/similaridade parecida nunca vira vínculo automático.
   if (corresp?.aluno_id
       && (corresp.status === "vinculado" || corresp.status === "exato")) {
     return {
@@ -105,7 +192,30 @@ function montarItem(arquivo: File, indice: number, analise: Analise, turmas: Tur
       detalhe: "",
     };
   }
+  // Linha que a confirmação manda para Revisões de identidade — o mesmo critério da
+  // prévia de um arquivo por vez. Antes caía em "criar" com "Aluno novo — será criado
+  // nesta turma.", e o backend não criava nem importava nada.
+  const motivo = corresp?.motivo ?? "";
+  if (corresp?.status === "revisar"
+      && (MOTIVOS_SO_REVISAO.has(motivo) || MOTIVOS_TURMA_SEM_DESTINO.has(motivo))) {
+    return {
+      ...base, status: "alerta", origem, alunoNome: nome, turmaNome, totalLivros,
+      acao: { tipo: "revisao", turmaNome: turmaRelatorio || null },
+      detalhe: `Vai para Revisões de identidade: ${razaoDaRevisao(corresp)}. Nada é criado `
+        + "nem vinculado — se você já sabe quem é o aluno, use “Corrigir”.",
+    };
+  }
   if (turmaId) {
+    // Política "bloquear": o "criar" vai como sempre (a pendência nasce com a turma
+    // resolvida e o motivo da política), mas a ficha não nasce — diz isso.
+    if (analise.criacao_bloqueada_por_politica) {
+      return {
+        ...base, status: "alerta", origem, alunoNome: nome, turmaNome, totalLivros,
+        acao: { tipo: "criar", turmaId },
+        detalhe: "Vai para Revisões de identidade: a matrícula desta escola vem da Lista Piloto e "
+          + "a importação não cria ficha. Se a criança já tem ficha, use “Corrigir”.",
+      };
+    }
     return {
       ...base, status: "ok", origem, alunoNome: nome, turmaNome, totalLivros,
       acao: { tipo: "criar", turmaId },
@@ -287,13 +397,16 @@ export function ImportacaoLoteProvider({ children }: { children: ReactNode }) {
             dados: l.dados,
             aluno_id: it.acao.tipo === "importar" ? it.acao.alunoId : null,
             criar_em_turma_id: it.acao.tipo === "criar" ? it.acao.turmaId : null,
+            criar_em_turma_nome: it.acao.tipo === "revisao" ? it.acao.turmaNome : null,
+            // "Revisão": o backend nunca associa nem cria nesta linha.
+            deixar_para_revisao: it.acao.tipo === "revisao",
           }));
         // Total acumulado: vai com a data do relatório (a tela a exige antes de
         // gravar); sem ela, o servidor recusa em vez de datar com o relógio de agora.
         const dataReferencia = exigeDataDoRelatorio(it.analise!)
           ? instanteDoRelatorio(dataRelatorio)
           : null;
-        await api(`/escolas/${escolaDaImportacao}/importacoes/confirmar`, {
+        const resposta = await api<ResultadoImportacao>(`/escolas/${escolaDaImportacao}/importacoes/confirmar`, {
           method: "POST",
           body: JSON.stringify({
             plataforma: it.analise!.plataforma,
@@ -309,7 +422,9 @@ export function ImportacaoLoteProvider({ children }: { children: ReactNode }) {
             recalcular: false,
           }),
         });
-        mapa.get(it.id)!.resultado = "importado";
+        // A resposta diz o que aconteceu: um 200 não é "importado" quando o arquivo
+        // foi para Revisões de identidade ou quando nada foi gravado.
+        Object.assign(mapa.get(it.id)!, resultadoDaResposta(resposta));
       } catch (e) {
         // O motivo da recusa (409, 400, 403, 500, sem conexão) vai para o relatório.
         const item = mapa.get(it.id)!;

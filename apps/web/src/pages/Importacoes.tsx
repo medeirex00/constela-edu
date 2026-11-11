@@ -48,7 +48,11 @@ import {
   type TomPastel,
 } from "../components/ui";
 import { useApp } from "../context/AppContext";
-import { useImportacaoLote } from "../context/ImportacaoLoteContext";
+import {
+  MOTIVOS_SO_REVISAO,
+  MOTIVOS_TURMA_SEM_DESTINO,
+  useImportacaoLote,
+} from "../context/ImportacaoLoteContext";
 import { useApi } from "../hooks/useApi";
 import { api, apiUpload } from "../lib/api";
 import {
@@ -171,31 +175,9 @@ type Acao =
   // turma, que ninguém escolheu).
   | { tipo: "ignorar"; manual?: boolean };
 
-/** Motivos de revisão (``identidade_aluno.decidir``) em que a confirmação NUNCA cria
- *  a ficha, qualquer que seja a turma escolhida: o motor manda a linha para Revisões
- *  de identidade e um "Criar" seria ignorado. Só a escolha de um aluno da lista
- *  (vínculo explícito) muda o destino — menos na conta de um aluno de outra escola,
- *  em que só o Admin Global confirma o vínculo (``vinculoVaiParaRevisao``). Ficam de
- *  fora os motivos de TURMA
- *  (turma_ambigua, turma_arquivada, turma_fora_do_ano_letivo…): neles a turma
- *  escolhida na tela resolve e a ficha nasce. */
-const MOTIVOS_SO_REVISAO = new Set([
-  "nome_incompleto",
-  "contas_repetidas_no_relatorio",
-  "id_externo_duplicado",
-  "identidade_de_outra_escola",
-  "identidade_de_ficha_inativa",
-  "identidade_de_outro_aluno",
-  "outra_identidade_na_plataforma",
-  "ra_repetido",
-  "ficha_inativa",
-  "correspondencia_insegura",
-  "candidatos_multiplos",
-  "homonimo_em_outra_sala",
-  "nome_casa_em_outra_sala",
-  "criacao_bloqueada_por_politica",
-  "deixada_para_revisao",
-]);
+// ``MOTIVOS_SO_REVISAO`` e ``MOTIVOS_TURMA_SEM_DESTINO`` (o que a confirmação manda
+// para Revisões de identidade) vêm do contexto do lote: a importação em lote decide
+// pelo mesmo critério — antes ela dizia "será criado" para essas linhas.
 
 /** Cada motivo de revisão do backend (``identidade_aluno.MOTIVOS``) em linguagem
  *  simples: um rótulo curto para o selo da coluna Correspondência e uma explicação,
@@ -322,15 +304,9 @@ function vaiParaRevisao(c: LinhaAnalise["correspondencia"]): boolean {
   return c?.status === "revisar" && MOTIVOS_SO_REVISAO.has(c.motivo ?? "");
 }
 
-/** Motivos de TURMA em que a turma do relatório não recebe a ficha nova e o backend
- *  não escolhe outra (``identidade_aluno._turma_para_criar``): ela está ARQUIVADA, há
- *  MAIS DE UMA turma cadastrada para a sala, ou a da sala é de OUTRA ETAPA (Educação
- *  Infantil × Fundamental). "Criar na turma do relatório" cairia de novo na Revisão;
- *  só uma turma escolhida em "Criar aluno novo…" resolve — até lá, a linha fica na
- *  Revisão. Antes só a arquivada era tratada assim, e a tela pré-escolhia uma turma
- *  (ou "a turma do relatório", que "seria criada") e contava a linha como importada. */
-const MOTIVOS_TURMA_SEM_DESTINO = new Set(["turma_arquivada", "turma_ambigua", "turma_de_outra_etapa"]);
-
+/** Motivo de TURMA sem destino (``MOTIVOS_TURMA_SEM_DESTINO``): "Criar na turma do
+ *  relatório" cairia de novo na Revisão; só uma turma escolhida em "Criar aluno
+ *  novo…" resolve — até lá, a linha fica na Revisão. */
 function turmaSemDestino(c: LinhaAnalise["correspondencia"]): boolean {
   return c?.status === "revisar" && MOTIVOS_TURMA_SEM_DESTINO.has(c.motivo ?? "");
 }
