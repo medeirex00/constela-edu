@@ -1572,8 +1572,9 @@ def listar_alunos_da_turma(
         item.turma = turma.nome
         item.ano_escolar = turma.ano_escolar
         item.nota_geral = nota.nota_geral if nota else None
-        item.posicao = (nota.posicao if nota and premiavel and aluno.status == "ativo"
-                        else None)
+        # Só quem está no ranking (turma premiável, ficha ativa) mostra posição.
+        no_ranking = nota is not None and premiavel and aluno.status == "ativo"
+        item.posicao = nota.posicao if no_ranking else None
         saida.append(item)
     return saida
 
