@@ -66,7 +66,7 @@ from app.models import (
     Nota,
     Turma,
 )
-from app.services import evolucao, insights, scoring
+from app.services import elegibilidade, evolucao, insights, scoring
 from app.services import modulos as svc_modulos
 from app.services.ia import ErroProvedorIA, obter_provedor
 from app.services.ia.provedores import LocalProvedor
@@ -273,7 +273,13 @@ def montar_contexto(db: Session, escola_id: int) -> str:
             partes.append(f"+{ganhos['livros']:.0f} livros")
         return ", ".join(partes)
 
-    itens_evolucao = evolucao.ranking_evolucao(db, escola_id, dias=30)[:10]
+    # A MESMA régua do Ranking de Evolução (web, app, telão, mural, /insights):
+    # sem retrato ANTERIOR à janela, o acumulado de vida não vira "evolução" (a
+    # criança do 1º retrato no mês não lidera), e só as turmas que concorrem —
+    # as Fases ficam fora da lista (a régua continua a da escola inteira).
+    itens_evolucao = evolucao.ranking_evolucao(
+        db, escola_id, dias=30, base_no_periodo=True,
+        turma_ids=elegibilidade.turmas_premiaveis(db, escola_id, ano))[:10]
     linhas_evolucao = [
         f"- {item.posicao}º: {item.nome} ({item.turma}) — evolução {item.nota_evolucao:.1f} "
         f"({ganhos_do_periodo(item.ganhos)})"
