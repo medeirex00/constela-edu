@@ -360,9 +360,10 @@ def _leituras_da_rede(db: Session, escolas: list[Escola], contratados: set[str],
     """Tudo o que os cartões das escolas leem do banco, em DUAS consultas (cada uma um
     ``UNION ALL`` de agregados que já eram consultas separadas, com o MESMO SQL de cada
     um): (A) turmas, alunos, professores, a lista de turmas (para as premiáveis), quem
-    tem dado de alguma plataforma e — no painel — as notas pendentes; (B), que depende
-    das turmas premiáveis, quem concorre, as médias por plataforma e os totais. Antes
-    eram 17 consultas; em produção cada uma custa ~195 ms de ida e volta ao banco."""
+    tem dado de alguma plataforma (com a turma, para separar quem concorre) e — no
+    painel — as notas pendentes; (B), que depende das turmas premiáveis, quem concorre,
+    as médias por plataforma e os totais. Antes eram 17 consultas; em produção cada uma
+    custa ~195 ms de ida e volta ao banco."""
     ids = [e.id for e in escolas]
     anos = {e.id: e.ano_letivo_ativo for e in escolas}
     contagens = {
@@ -384,33 +385,41 @@ def _leituras_da_rede(db: Session, escolas: list[Escola], contratados: set[str],
                         lambda q: q.where(Professor.escola_id.in_(ids))
                         .group_by(Professor.escola_id)),
     }
-    larg_a = {_INT: 2, _TXT: 1}
+    larg_a = {_INT: 3, _TXT: 1}
     partes = [m(select(*_ramo(f, [(e, _INT), *c], larg_a)))
               for f, (e, c, m) in contagens.items()]
     partes.append(select(*_ramo("turma", [(Turma.escola_id, _INT), (Turma.id, _INT),
                                           (Turma.ano_escolar, _TXT)], larg_a))
                   .where(Turma.escola_id.in_(ids)))
     for modelo in (SnapshotElefante, SnapshotMatific):
+        # A turma da matrícula do ano vai junto: é por ela que se sabe quem CONCORRE.
         q = _q_com_dado(ids, modelo)
         partes.append(q.with_only_columns(*_ramo(
-            "dado", [(modelo.escola_id, _INT), (modelo.aluno_id, _INT)], larg_a)))
+            "dado", [(modelo.escola_id, _INT), (modelo.aluno_id, _INT),
+                     (Matricula.turma_id, _INT)], larg_a)))
     if com_pendentes:
         q = _q_pendentes(ids)
         partes.append(q.with_only_columns(*_ramo(
             "pendentes", [(Nota.escola_id, _INT), (func.count(Nota.id), _INT)], larg_a)))
     lido: dict = {"turmas": {}, "alunos": {}, "professores": {}, "pendentes": {}}
     turmas_e_rotulos, com_dado = [], {}
-    for fonte, a, b, rotulo in _ler_ramos(db, partes, 8 * len(ids)):
+    for fonte, a, b, turma_id, rotulo in _ler_ramos(db, partes, 8 * len(ids)):
         if fonte == "turma":
             turmas_e_rotulos.append((b, rotulo))
         elif fonte == "dado":
-            com_dado.setdefault(a, set()).add(b)
+            com_dado.setdefault(a, {})[b] = turma_id
         else:
             lido[fonte][a] = int(b or 0)
     # (as Fases não concorrem: a mesma regra de ``elegibilidade.turmas_premiaveis_da_rede``)
     premiaveis = [tid for tid, rotulo in turmas_e_rotulos
                   if elegibilidade.participa_de_premiacao(rotulo)]
     lido["com_dados"] = {e: len(alunos) for e, alunos in com_dado.items()}
+    # Quem CONCORRE (turma premiável) entre os que têm dado: o peso da média geral
+    # da rede (``_media_geral_das_comparadas``), que só mede as turmas premiáveis.
+    so_premiaveis = set(premiaveis)
+    lido["com_dados_premiaveis"] = {
+        e: sum(1 for turma in alunos.values() if turma in so_premiaveis)
+        for e, alunos in com_dado.items()}
 
     # (B) — depende das turmas premiáveis.
     larg_b = {_INT: 11, _NUM: 1}
@@ -494,6 +503,7 @@ def _cartoes_da_rede(db: Session, rede_id: int, *, com_contribuintes: bool = Fal
     # cada aluno (todos e só quem concorre — o numerador do per capita).
     med_ele, med_mat = lido.get("med_ele", {}), lido.get("med_mat", {})
     com_dados_por_escola = lido["com_dados"]
+    com_dados_premiaveis = lido["com_dados_premiaveis"]
     mat, mat_p = lido["tot_mat"], lido["tot_mat_p"]
     ele, ele_p = lido["tot_ele"], lido["tot_ele_p"]
 
@@ -544,6 +554,9 @@ def _cartoes_da_rede(db: Session, rede_id: int, *, com_contribuintes: bool = Fal
             # ENGAJAMENTO / COBERTURA — quantos usam (conceito SEPARADO do acima).
             "alunos_com_dados": com_dados,
             "adocao": adocao,
+            # Os mesmos, só entre quem CONCORRE (1º–5º ano): o peso da escola na
+            # média geral da rede, que só mede as turmas premiáveis.
+            "alunos_com_dados_premiaveis": int(com_dados_premiaveis.get(escola.id, 0)),
             # Totais brutos das plataformas (para as seções Elefante/Matific da rede).
             "livros": livros,
             "tempo_leitura_min": tempo_min,
@@ -744,7 +757,17 @@ def tem_dado_de_quem_concorre(cartao: dict) -> bool:
     return bool(cartao.get("dimensoes_pontuadas"))
 
 
-def _ponderada(cartoes: list[dict], chave: str, peso: str = "alunos_com_dados") -> float:
+# Os PESOS da rede que não são por dimensão (``_ponderada``: o peso é o denominador
+# da métrica). O índice 0–1000 é per capita POR MATRÍCULA de quem concorre (livros e
+# estrelas ÷ ``alunos_premiaveis``), então o índice da rede ponderado por ele é o per
+# capita da rede inteira na régua da melhor escola. A média geral 0–100 é desempenho
+# de quem TEM dado, só nas turmas premiáveis. Nenhum dos dois é a cobertura
+# (``alunos_com_dados``), que conta também as crianças das Fases.
+PESO_DO_INDICE = "alunos_premiaveis"
+PESO_DA_MEDIA_GERAL = "alunos_com_dados_premiaveis"
+
+
+def _ponderada(cartoes: list[dict], chave: str, peso: str) -> float:
     """Média de ``chave`` sobre ``cartoes`` PONDERADA por ``peso`` (não média de
     médias, que daria peso igual a uma escola de 10 e uma de 500 alunos).
 
@@ -756,6 +779,11 @@ def _ponderada(cartoes: list[dict], chave: str, peso: str = "alunos_com_dados") 
     baixo — o mesmo "ausência vira zero" que a arquitetura elimina no aluno,
     reaparecendo um nível acima. Peso total zero = nada medido → 0.0 (quem
     exibe distingue isso pelo próprio denominador).
+
+    Não há peso padrão: cada chamada diz o denominador da sua métrica. O antigo
+    padrão (``alunos_com_dados``, cobertura de TODOS os matriculados) contava as
+    crianças das Fases, que não entram no índice nem nas médias de escola
+    nenhuma — e era o peso do índice e da média geral da rede.
 
     Valor NULO é a matéria escondida da Secretaria (grupo pequeno, ver
     ``_proteger_cartoes``): sai da conta junto com o seu peso, como ausência.
@@ -772,15 +800,19 @@ def _media_geral_das_comparadas(cartoes: list[dict]) -> float:
     usada pelo painel da rede (``dashboard_rede``), pelo cartão de cada rede no
     Panorama Global e pelo total global (``dashboard_global``).
 
-    Pondera por ``alunos_com_dados`` (o denominador dela É "alunos com algum
-    dado"), mas só sobre as escolas COMPARADAS (``tem_dado_de_quem_concorre``):
-    a escola em que só a Educação Infantil usa a plataforma tem ``media_geral``
-    0,0 por AUSÊNCIA (as médias só olham as turmas premiáveis) e, ao mesmo
-    tempo, ``alunos_com_dados`` > 0 (a cobertura conta as Fases). Somada com
-    esse peso, ela puxava a média para baixo. Quando o Panorama Global tinha a
-    fórmula própria, sobre TODOS os cartões, a mesma rede aparecia com 60 para a
-    Secretaria e 20 para o Admin Global."""
-    return _ponderada([c for c in cartoes if tem_dado_de_quem_concorre(c)], "media_geral")
+    Pondera por ``alunos_com_dados_premiaveis`` (``PESO_DA_MEDIA_GERAL``): quem
+    CONCORRE (1º–5º ano) e tem dado de alguma plataforma, o denominador dela — as
+    médias da escola só olham as turmas premiáveis. Com ``alunos_com_dados``
+    (cobertura, que conta também as Fases), a escola com mais crianças da
+    Educação Infantil usando a plataforma puxava a média da rede para o lado dela.
+
+    E só sobre as escolas COMPARADAS (``tem_dado_de_quem_concorre``): a escola em
+    que só a Educação Infantil usa a plataforma tem ``media_geral`` 0,0 por
+    AUSÊNCIA. Quando o Panorama Global tinha a fórmula própria, sobre TODOS os
+    cartões, a mesma rede aparecia com 60 para a Secretaria e 20 para o Admin
+    Global."""
+    return _ponderada([c for c in cartoes if tem_dado_de_quem_concorre(c)], "media_geral",
+                      PESO_DA_MEDIA_GERAL)
 
 
 # ---------------------------------------------------------------------------
@@ -952,12 +984,13 @@ def dashboard_rede(db: Session, rede_id: int, *, secretaria: bool = False) -> di
 
     # A média geral e o índice só ponderam as escolas COMPARADAS: o 0 de quem
     # não tem ninguém do 1º–5º ano com dado é ausência, e com o peso dos alunos
-    # da Fase ele baixava o índice da rede usado nas metas. `media_geral` e
-    # `pontuacao_geral` usam o peso genérico porque o denominador delas É
-    # "alunos com algum dado" (ver `_ponderada`).
+    # da Fase ele baixava o índice da rede usado nas metas. E cada um pesa pelo
+    # SEU denominador (ver `_ponderada`), nunca pela cobertura, que conta as
+    # crianças das Fases: a média geral, por quem concorre com dado; o índice,
+    # por quem concorre (`PESO_DO_INDICE`).
     comparadas = [c for c in cartoes if c["comparada"]]
     media_rede = _media_geral_das_comparadas(cartoes)
-    indice_rede = _ponderada(comparadas, "pontuacao_geral")
+    indice_rede = _ponderada(comparadas, "pontuacao_geral", PESO_DO_INDICE)
     # (A `media_geral` nula é a da escola com a matéria escondida da Secretaria
     # e nenhuma outra média visível: fica fora da dispersão, como ausência.)
     medias = [c["media_geral"] for c in comparadas if c["media_geral"] is not None]
@@ -1308,7 +1341,13 @@ def dashboard_global(db: Session) -> dict:
             "media_matific": _ponderada(cartoes_rede, "media_matific", "alunos_com_nota_matific"),
             "media_elefante": _ponderada(cartoes_rede, "media_elefante",
                                          "alunos_com_nota_elefante"),
-            "pontuacao_geral": _ponderada(cartoes_rede, "pontuacao_geral"),
+            # O índice entre redes pesa cada rede por quem concorre nela (o
+            # denominador do per capita da rede) e só olha as redes PONTUADAS: a
+            # rede em que só as Fases têm dado tem índice 0 por ausência, como a
+            # escola não comparada no painel da rede.
+            "pontuacao_geral": _ponderada(
+                [r for r in cartoes_rede if tem_dado_de_quem_concorre(r)],
+                "pontuacao_geral", PESO_DO_INDICE),
             "escolas_em_atencao": sum(r["escolas_em_atencao"] for r in cartoes_rede),
         },
         "redes": cartoes_rede,
@@ -1381,7 +1420,7 @@ def remover_meta(db: Session, rede_id: int, metrica: str) -> None:
 _PESO_DA_META = {
     "media_elefante": "alunos_com_nota_elefante",
     "media_matific": "alunos_com_nota_matific",
-    "media_geral": "alunos_com_dados",
+    "media_geral": PESO_DA_MEDIA_GERAL,
 }
 
 
