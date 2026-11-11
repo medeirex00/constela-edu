@@ -2,11 +2,25 @@
  * Notificações push (Expo): pede permissão, obtém o token do aparelho e o
  * registra no backend. Melhor esforço — sem permissão ou sem projectId do
  * EAS o app segue funcionando normalmente, apenas sem push.
+ *
+ * Tirar o aparelho do push (no "Sair" e na sessão expirada) NÃO depende da rede
+ * na hora nem do login:
+ *   - o token registrado fica guardado no aparelho (SecureStore), não só na
+ *     memória: o app que abriu sem rede (e não se registrou de novo) ainda sabe
+ *     qual token tirar;
+ *   - o pedido vai para /dispositivos/descadastrar, que só pede o token do
+ *     aparelho (o JWT já foi apagado, ou venceu);
+ *   - se não der agora (sem rede, servidor fora), o descadastro fica PENDENTE e é
+ *     repetido quando a rede volta e na próxima abertura do app.
+ * Os dois ficam no SecureStore, fora do armazenamento cifrado do cache: o "Sair"
+ * troca a chave do cache (esquecerChave) e o que estivesse lá ficaria ilegível.
  */
-import { api } from "@constela/core";
+import { ApiError, api } from "@constela/core";
+import { onlineManager } from "@tanstack/react-query";
 import Constants from "expo-constants";
 import * as Device from "expo-device";
 import * as Notifications from "expo-notifications";
+import * as SecureStore from "expo-secure-store";
 import { Platform } from "react-native";
 
 import { enviarOuEnfileirar } from "./filaOffline";
@@ -19,6 +33,40 @@ Notifications.setNotificationHandler({
     shouldSetBadge: false,
   }),
 });
+
+interface RegistroPush {
+  escolaId: number;
+  token: string;
+}
+
+/** O último registro deste aparelho no servidor (escola e token do Expo). */
+const CHAVE_REGISTRO = "constela_push_registro_v1";
+/** Descadastro pedido e ainda não confirmado pelo servidor. */
+const CHAVE_DESCADASTRO = "constela_push_descadastro_v1";
+
+// Registro e descadastro mexem nas mesmas duas chaves e falam com o servidor sobre
+// o mesmo token: um passo de cada vez, para um descadastro atrasado nunca tirar o
+// registro que veio depois dele.
+let ultimoPasso: Promise<unknown> = Promise.resolve();
+
+function emSequencia<T>(passo: () => Promise<T>): Promise<T> {
+  const resultado = ultimoPasso.then(passo);
+  ultimoPasso = resultado.catch(() => undefined);
+  return resultado;
+}
+
+async function lerRegistro(chave: string): Promise<RegistroPush | null> {
+  const bruto = await SecureStore.getItemAsync(chave);
+  if (!bruto) return null;
+  try {
+    const valor = JSON.parse(bruto) as Partial<RegistroPush>;
+    return typeof valor.token === "string" && typeof valor.escolaId === "number"
+      ? { escolaId: valor.escolaId, token: valor.token }
+      : null;
+  } catch {
+    return null;
+  }
+}
 
 export async function registrarParaPush(escolaId: number): Promise<string | null> {
   try {
@@ -43,6 +91,14 @@ export async function registrarParaPush(escolaId: number): Promise<string | null
       projectId ? { projectId } : undefined,
     );
 
+    await emSequencia(async () => {
+      // Alguém entrou de novo neste aparelho: o descadastro pendente de uma saída
+      // anterior não pode tirar o registro que vem agora.
+      await SecureStore.deleteItemAsync(CHAVE_DESCADASTRO);
+      const registro: RegistroPush = { escolaId, token };
+      await SecureStore.setItemAsync(CHAVE_REGISTRO, JSON.stringify(registro));
+    });
+
     // Registro do aparelho via fila offline: se a conexão cair entre obter o
     // token e avisar o backend, o POST é reenviado sozinho na reconexão.
     await enviarOuEnfileirar(`/escolas/${escolaId}/dispositivos`, "POST", {
@@ -55,14 +111,61 @@ export async function registrarParaPush(escolaId: number): Promise<string | null
   }
 }
 
-export async function removerRegistroPush(escolaId: number, token: string | null): Promise<void> {
-  if (!token) return;
+/** Erro que repetir não resolve: o servidor recusou o pedido (4xx), exceto
+ *  tempo esgotado (408) e excesso de tentativas (429), que passam. */
+function recusaDefinitiva(erro: unknown): boolean {
+  return (
+    erro instanceof ApiError &&
+    erro.status >= 400 &&
+    erro.status < 500 &&
+    erro.status !== 408 &&
+    erro.status !== 429
+  );
+}
+
+/** Tenta o descadastro pendente (se houver). Sem rede, ou com o servidor fora,
+ *  ele continua pendente para a próxima tentativa. Não lança. */
+export function descadastrarPendente(): Promise<void> {
+  const tentativa = emSequencia(async () => {
+    const pendente = await lerRegistro(CHAVE_DESCADASTRO);
+    if (!pendente || !onlineManager.isOnline()) return;
+    try {
+      await api(`/escolas/${pendente.escolaId}/dispositivos/descadastrar`, {
+        method: "POST",
+        body: JSON.stringify({ token_push: pendente.token }),
+      });
+    } catch (erro) {
+      if (!recusaDefinitiva(erro)) return; // rede/servidor: tenta de novo depois
+    }
+    // Feito (ou recusado de vez): este token não está mais registrado por nós.
+    await SecureStore.deleteItemAsync(CHAVE_DESCADASTRO);
+    const registro = await lerRegistro(CHAVE_REGISTRO);
+    if (registro?.token === pendente.token) await SecureStore.deleteItemAsync(CHAVE_REGISTRO);
+  });
+  return tentativa.catch(() => undefined);
+}
+
+/** Tira este aparelho do push (no "Sair" e na sessão expirada): marca o
+ *  descadastro como pendente e tenta na hora. Não lança: a saída da conta segue
+ *  mesmo se o servidor não responder. */
+export async function removerRegistroPush(): Promise<void> {
   try {
-    await api(`/escolas/${escolaId}/dispositivos/remover`, {
-      method: "POST",
-      body: JSON.stringify({ token_push: token }),
+    const marcado = await emSequencia(async () => {
+      const registro = await lerRegistro(CHAVE_REGISTRO);
+      if (!registro) return false; // este aparelho não está registrado
+      await SecureStore.setItemAsync(CHAVE_DESCADASTRO, JSON.stringify(registro));
+      return true;
     });
+    if (marcado) await descadastrarPendente();
   } catch {
     /* logout continua mesmo se a remoção falhar */
   }
+}
+
+/** Repete o descadastro pendente quando a rede volta. Devolve a função para
+ *  cancelar. */
+export function ligarDescadastroAReconexao(): () => void {
+  return onlineManager.subscribe((online) => {
+    if (online) void descadastrarPendente();
+  });
 }

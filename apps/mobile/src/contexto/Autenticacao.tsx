@@ -23,7 +23,12 @@ import { aoExpirarSessao } from "../api";
 import { esquecerChave } from "../armazenamento/cifra";
 import { lerSessao, limparSessao, salvarSessao, type SessaoSalva } from "../armazenamento/sessao";
 import { clienteQuery, persistidor } from "../cliente-query";
-import { registrarParaPush, removerRegistroPush } from "../notificacoes";
+import {
+  descadastrarPendente,
+  ligarDescadastroAReconexao,
+  registrarParaPush,
+  removerRegistroPush,
+} from "../notificacoes";
 
 interface ContextoAutenticacao {
   usuario: Usuario | null;
@@ -42,7 +47,6 @@ export function ProvedorAutenticacao({ children }: { children: ReactNode }) {
   const [escolas, setEscolas] = useState<Escola[]>([]);
   const [escolaId, setEscolaId] = useState<number | null>(null);
   const [carregando, setCarregando] = useState(true);
-  const [tokenPush, setTokenPush] = useState<string | null>(null);
 
   // Toda mudança de sessão é persistida CIFRADA — é o que permite o boot offline.
   useEffect(() => {
@@ -66,7 +70,9 @@ export function ProvedorAutenticacao({ children }: { children: ReactNode }) {
     setUsuario(eu);
     setEscolas(lista);
     setEscolaId(escolhido);
-    if (escolhido !== null) registrarParaPush(escolhido).then(setTokenPush);
+    // O token registrado fica guardado no aparelho (notificacoes.ts): o "Sair" o
+    // encontra mesmo numa abertura sem rede, quando este registro não roda.
+    if (escolhido !== null) void registrarParaPush(escolhido);
   }, []);
 
   // Encerra a sessão LOCAL: estado, sessão salva, cache das telas e chave de
@@ -75,18 +81,24 @@ export function ProvedorAutenticacao({ children }: { children: ReactNode }) {
     setUsuario(null);
     setEscolas([]);
     setEscolaId(null);
-    setTokenPush(null);
     clienteQuery.clear();
     await Promise.allSettled([limparSessao(), persistidor.removeClient()]);
     await esquecerChave();
   }, []);
 
   useEffect(() => {
-    // Token inválido/expirado (401 no cliente HTTP): aí sim desloga de fato.
+    // Token inválido/expirado (401 no cliente HTTP): aí sim desloga de fato — e o
+    // aparelho sai do push, como no "Sair".
     aoExpirarSessao(() => {
       void limparToken();
+      void removerRegistroPush();
       void encerrarLocal();
     });
+
+    // Descadastro do push que ficou pendente (saída sem rede): tenta agora e a
+    // cada volta da rede.
+    void descadastrarPendente();
+    const desligarReconexao = ligarDescadastroAReconexao();
 
     (async () => {
       try {
@@ -103,6 +115,7 @@ export function ProvedorAutenticacao({ children }: { children: ReactNode }) {
         setCarregando(false);
       }
     })();
+    return desligarReconexao;
   }, [aplicarSessao, atualizarSessao, encerrarLocal]);
 
   const entrar = useCallback(
@@ -115,10 +128,10 @@ export function ProvedorAutenticacao({ children }: { children: ReactNode }) {
   );
 
   const sair = useCallback(async () => {
-    if (escolaId !== null) await removerRegistroPush(escolaId, tokenPush);
+    await removerRegistroPush();
     await limparToken();
     await encerrarLocal();
-  }, [escolaId, tokenPush, encerrarLocal]);
+  }, [encerrarLocal]);
 
   const selecionarEscola = useCallback((id: number) => {
     setEscolaId(id); // o efeito de persistência salva a sessão com a nova escola
