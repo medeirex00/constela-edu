@@ -21,8 +21,12 @@ from tests._ano_letivo import ANO
 
 
 def _escola(db, rede_id, nome, *, alunos, livros_cada=0, tempo_cada=0,
-            estrelas_cada=0, atividades_cada=0, com_matific=True, com_elefante=True):
-    """Escola com N alunos ativos matriculados; cada aluno com os snapshots pedidos."""
+            estrelas_cada=0, atividades_cada=None, com_matific=True, com_elefante=True):
+    """Escola com N alunos ativos matriculados; cada aluno com os snapshots pedidos.
+    ``atividades_cada`` ausente = as bastantes para as estrelas caberem no teto do motor
+    (5 por atividade): acima dele, a rede soma só as estrelas que contam."""
+    if atividades_cada is None:
+        atividades_cada = -(-estrelas_cada // 5)
     esc = Escola(nome=nome, ano_letivo_ativo=ANO, rede_id=rede_id, status="ativa")
     db.add(esc)
     db.flush()

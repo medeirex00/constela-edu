@@ -181,6 +181,30 @@ def _matific_no_ano_ativo(anos: dict[int, int]):
     return or_(*termos) if termos else false()
 
 
+def _estrelas_que_contam():
+    """As estrelas do Matific que CONTAM num retrato, em SQL: no máximo
+    ``ESTRELAS_MAX_POR_ATIVIDADE`` (5) por atividade, negativo = 0 — a regra de
+    ``scoring.estrelas_que_contam`` (fonte única do teto:
+    ``matific_destaque.limitar_estrelas``), a que o motor, os rankings da escola, a
+    Visão da Escola, o telão e o cartaz já seguem. Sem ela, um retrato com 10
+    atividades e 5000 estrelas punha a escola no topo da Matemática da rede enquanto
+    a nota da criança contava 50. Dentro do teto o valor sai intacto."""
+    # Inteiro (5): estrelas e atividades são inteiras, e a soma continua inteira.
+    por_atividade = int(matific_destaque.ESTRELAS_MAX_POR_ATIVIDADE)
+    estrelas = case((SnapshotMatific.estrelas > 0, SnapshotMatific.estrelas), else_=0)
+    teto = case((SnapshotMatific.atividades > 0,
+                 SnapshotMatific.atividades * por_atividade), else_=0)
+    return case((estrelas > teto, teto), else_=estrelas)
+
+
+def _coluna_do_total(modelo, campo: str):
+    """A coluna que ``_q_totais`` soma: a do retrato, salvo as estrelas do Matific,
+    que somam só as que contam (``_estrelas_que_contam``)."""
+    if modelo is SnapshotMatific and campo == "estrelas":
+        return _estrelas_que_contam()
+    return getattr(modelo, campo)
+
+
 def _q_totais(ids: list[int], anos: dict[int, int], modelo, campos: list[str],
               premiaveis: list[int]):
     """Soma, por escola, os campos do snapshot ATUAL de cada aluno (o último por
@@ -200,7 +224,9 @@ def _q_totais(ids: list[int], anos: dict[int, int], modelo, campos: list[str],
 
     MATIFIC É CONTADOR DO ANO (``_matific_no_ano_ativo``): o retrato "atual" é o
     último DENTRO do ano letivo ativo da escola, ANTES de numerar. Sem o corte, as
-    estrelas/atividades de outro ano entravam nos totais e no PER CAPITA.
+    estrelas/atividades de outro ano entravam nos totais e no PER CAPITA. As
+    estrelas somam só as que CONTAM (no máximo 5 por atividade,
+    ``_estrelas_que_contam``), nos totais, no per capita e em quem soma.
 
     ``com_<campo>``: quantos alunos têm o campo > 0, isto é, SOMAM no total. É o k
     da vitrine pública (``_top_escolas``): ``ativos`` conta também o retrato com
@@ -209,7 +235,7 @@ def _q_totais(ids: list[int], anos: dict[int, int], modelo, campos: list[str],
     numerado = (
         select(
             modelo.escola_id.label("escola_id"),
-            *[getattr(modelo, c).label(c) for c in campos],
+            *[_coluna_do_total(modelo, c).label(c) for c in campos],
             case((Matricula.turma_id.in_(premiaveis), 1), else_=0).label("concorre"),
             func.row_number().over(
                 partition_by=(modelo.escola_id, modelo.aluno_id),

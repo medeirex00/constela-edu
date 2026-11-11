@@ -64,8 +64,11 @@ def _escola(db, rede, nome, *, concorrem, sem_dado=0, fase=0):
             db.add(SnapshotElefante(escola_id=esc.id, aluno_id=a.id, importacao_id=imp.id,
                                     livros_unicos=3 if fase_ else livros,
                                     tempo_leitura_min=60))
+            # Atividades bastantes para as estrelas caberem no teto (5 por atividade):
+            # acima dele, a rede soma só as que contam.
+            est = 50 if fase_ else estrelas
             db.add(SnapshotMatific(escola_id=esc.id, aluno_id=a.id, importacao_id=imp.id,
-                                   atividades=10, estrelas=50 if fase_ else estrelas))
+                                   atividades=max(10, -(-est // 5)), estrelas=est))
             if not fase_:
                 db.add(Nota(detalhes=scoring.carimbo_institucional(), escola_id=esc.id,
                             aluno_id=a.id, ano_letivo=2026, nota_geral=nota,
