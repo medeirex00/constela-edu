@@ -78,9 +78,13 @@ interface Gerenciar {
   usuarios: UsuarioItem[];
 }
 
+/** Escola cujas notas não foram recalculadas depois de mudar de rede (o recálculo dela falhou). */
+type EscolaSemRecalculo = { escola_id: number; nome: string };
+
 // `detalhes`: uma linha por item que falhou, com a mensagem do backend (ex.: o 409 de
 // um código INEP que já é de outra escola) — "N com erro" sozinho não diz o que fazer.
-type Aviso = { tipo: "ok" | "erro"; texto: string; detalhes?: string[] } | null;
+// `recalcular`: as escolas com o recálculo pendente — o aviso oferece "Recalcular as notas".
+type Aviso = { tipo: "ok" | "erro"; texto: string; detalhes?: string[]; recalcular?: EscolaSemRecalculo[] } | null;
 
 // O mesmo código INEP em 8 dígitos que o backend compara (`normalizar_inep`): "035012345"
 // e "35012345" são o mesmo código.
@@ -181,6 +185,12 @@ type RespostaContrato = {
     falhas: { escola_id: number; nome: string; erro: string }[];
   };
 };
+
+/** Resposta de "Salvar vínculos" (PUT /redes/{id}/escolas): o recálculo das escolas cujo plano
+ *  mudou com o vínculo (o mesmo formato do PUT de módulos). Ausente = API anterior. */
+type RespostaVinculo = { recalculo?: RespostaContrato["recalculo"] };
+
+const nomesDas = (escolas: EscolaSemRecalculo[]) => escolas.map((e) => e.nome).join(", ");
 
 /** Cargo em linguagem de gente (antes aparecia o valor cru do banco). */
 function rotuloCargo(u: { cargo: string; rede_id: number | null }): string {
@@ -485,11 +495,23 @@ export default function RedeGestao() {
     if (redeSel === null) return;
     setOcupado(true);
     try {
-      await api(`/redes/${redeSel}/escolas`, {
+      const r = await api<RespostaVinculo>(`/redes/${redeSel}/escolas`, {
         method: "PUT",
         body: JSON.stringify({ escola_ids: [...escolasSel] }),
       });
-      setAviso({ tipo: "ok", texto: "Escolas da rede atualizadas." });
+      // O VÍNCULO foi gravado; o que pode ter faltado é recalcular as notas da escola que
+      // mudou de plano com ele. Reenviar o mesmo vínculo não refaz isso (nada mudou): a ação
+      // é o recálculo de cada escola que ficou para trás.
+      const falhas = (r?.recalculo?.falhas ?? []).map((f) => ({ escola_id: f.escola_id, nome: f.nome }));
+      setAviso(falhas.length
+        ? {
+          tipo: "erro",
+          texto: `Vínculos salvos, mas as notas de ${falhas.length} escola(s) não foram recalculadas com o `
+            + `plano da rede: ${nomesDas(falhas)}. Até lá, as notas delas seguem o plano anterior. `
+            + 'Use "Recalcular as notas" — nada é duplicado.',
+          recalcular: falhas,
+        }
+        : { tipo: "ok", texto: "Escolas da rede atualizadas." });
       recarregar();
       recarregarEscolas?.();
     } catch (e) {
@@ -497,6 +519,34 @@ export default function RedeGestao() {
     } finally {
       setOcupado(false);
     }
+  }
+
+  /** Refaz o recálculo das escolas que ficaram para trás ao salvar os vínculos (o recálculo de
+   *  cada escola com o plano de agora: idempotente). Quem falhar de novo continua no aviso. */
+  async function recalcularNotas(escolas: EscolaSemRecalculo[]) {
+    setOcupado(true);
+    const falharam: EscolaSemRecalculo[] = [];
+    const motivos: string[] = [];
+    for (const e of escolas) {
+      try {
+        await api(`/escolas/${e.escola_id}/recalcular`, { method: "POST" });
+      } catch (erro) {
+        falharam.push(e);
+        motivos.push(`${e.nome}: ${erro instanceof ApiError ? erro.message : "a conexão falhou."}`);
+      }
+    }
+    const feitas = escolas.filter((e) => !falharam.includes(e));
+    setAviso(falharam.length
+      ? {
+        tipo: "erro",
+        texto: (feitas.length ? `Notas recalculadas: ${nomesDas(feitas)}. ` : "")
+          + `As notas de ${falharam.length} escola(s) ainda não foram recalculadas: ${nomesDas(falharam)}. `
+          + "Tente de novo em instantes — nada é duplicado.",
+        detalhes: motivos,
+        recalcular: falharam,
+      }
+      : { tipo: "ok", texto: `Notas recalculadas: ${nomesDas(escolas)}.` });
+    setOcupado(false);
   }
 
   async function salvarUsuarios() {
@@ -726,6 +776,16 @@ export default function RedeGestao() {
       {aviso && (
         <Mensagem tipo={aviso.tipo}>
           {aviso.texto}
+          {aviso.recalcular && aviso.recalcular.length > 0 && (
+            <button
+              type="button"
+              className="ml-2 font-semibold underline underline-offset-2 disabled:opacity-50"
+              disabled={ocupado}
+              onClick={() => void recalcularNotas(aviso.recalcular ?? [])}
+            >
+              Recalcular as notas
+            </button>
+          )}
           {aviso.detalhes && aviso.detalhes.length > 0 && (
             <ul className="mt-1 list-disc space-y-0.5 pl-5" data-testid="aviso-detalhes">
               {aviso.detalhes.map((d) => <li key={d}>{d}</li>)}
