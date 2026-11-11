@@ -105,7 +105,8 @@ def _apenas_premiaveis(consulta, db: Session, escola_id: int, ano: int):
 
 def _ranking(db: Session, escola_id: int, ano: int, turma_id=None, ano_escolar=None,
              limite=None, turma_ids: list[int] | None = None,
-             dimensao: str | None = None, turno: str | None = None):
+             dimensao: str | None = None, turno: str | None = None,
+             so_com_dado: bool = False):
     """Lista de ranking de alunos.
 
     ``dimensao`` ausente = Ranking Geral LEGADO (ordem única por `Nota.posicao`,
@@ -121,6 +122,12 @@ def _ranking(db: Session, escola_id: int, ano: int, turma_id=None, ano_escolar=N
     A nota de PLATAFORMA (`nota_matific` / `nota_elefante`) de módulo que a rede
     não contratou sai nula — vale para todo consumidor (Ranking Geral, Top 10
     do dashboard, pacote do app). A ordenação não muda.
+
+    ``so_com_dado=True`` deixa no LEGADO só quem é aferido em ALGUMA dimensão
+    (o corte ``publico._com_algum_dado`` do telão): é o Top 10 do painel, uma
+    vitrine com medalha. O corte vai na CONSULTA, antes do ``limite``, para a
+    vaga de quem não tem dado ser ocupada por quem tem. A posição exibida segue
+    a carimbada (``Nota.posicao``), como no telão.
     """
     modulos = svc_modulos.modulos_da_escola(db, db.get(Escola, escola_id))
     mostra_matific = "matematica" in modulos
@@ -163,6 +170,11 @@ def _ranking(db: Session, escola_id: int, ano: int, turma_id=None, ano_escolar=N
     # `turno` é kwarg NO FIM da assinatura: consumidores externos (app mobile,
     # painel público) chamam posicionalmente e não podem mudar de significado.
     consulta = _aplicar_turno(consulta, turno)
+    if so_com_dado:
+        # AUSÊNCIA NÃO É ZERO: a EXISTÊNCIA do snapshot (`aferido_*`), nunca
+        # `nota > 0` — o retrato zerado (abriu e não produziu) continua.
+        consulta = consulta.where(or_(Nota.aferido_leitura.is_(True),
+                                      Nota.aferido_matematica.is_(True)))
     if limite:
         consulta = consulta.limit(limite)
 
@@ -1121,7 +1133,11 @@ def montar_dashboard(db: Session, escola_id: int,
     # LEGADO: o Top 10 continua saindo da ordem única (`Nota.posicao`). Virar
     # "Top 3/10 por dimensão" é DECISÃO DE PRODUTO (vitrine), não conversão
     # mecânica — muda quem sobe ao pódio em toda escola mista.
-    top10 = _ranking(db, escola_id, ano, limite=10, turma_ids=turma_ids)
+    # Só quem tem dado de ALGUMA plataforma (`so_com_dado`, o corte do telão):
+    # o Top 5 do Painel (web e app) dava medalha e "0,0" a quem nunca abriu
+    # plataforma nenhuma — ausência não é zero.
+    top10 = _ranking(db, escola_id, ano, limite=10, turma_ids=turma_ids,
+                     so_com_dado=True)
     # Professor: posição RELATIVA às turmas dele (1..N), igual ao Ranking Geral —
     # o Top 10 e a tela de ranking não podem mostrar posições diferentes.
     if turma_ids is not None:

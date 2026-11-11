@@ -783,14 +783,21 @@ def test_o_top10_do_painel_AINDA_segue_a_ordem_legada(db, escola_mista):
     confundido com fonte oficial, porque é vitrine (pódio, cartaz, telão).
 
     Quando o dono decidir, este teste é o primeiro a cair — e a queda dele é o
-    sinal de que o item 7 do `docs/plano-retirada-nota-geral.md` andou."""
-    escola, _ = escola_mista
+    sinal de que o item 7 do `docs/plano-retirada-nota-geral.md` andou.
+
+    Só quem tem dado de ALGUMA plataforma entra (o corte do telão,
+    `publico._com_algum_dado`): a criança sem plataforma nenhuma não ganha
+    medalha nem "0,0" no Top 5 do painel — ausência não é zero (RANKINGS-4).
+    A ORDEM entre os que ficam continua a única (`Nota.posicao`)."""
+    escola, alunos = escola_mista
     cliente = _logar()
     painel = cliente.get(f"/api/v1/escolas/{escola.id}/dashboard").json()
     top10 = [(i["aluno_id"], i["posicao"]) for i in painel["top10"]]
 
     notas = {n.aluno_id: n for n in db.query(Nota)
-             .filter(Nota.escola_id == escola.id).all()}
+             .filter(Nota.escola_id == escola.id).all()
+             if n.aferido_leitura or n.aferido_matematica}
+    assert alunos["nenhuma"].id not in notas
     esperado = sorted(notas, key=lambda aid: notas[aid].posicao)[:10]
     assert [aid for aid, _pos in top10] == esperado, (
         "o Top 10 mudou de critério — se foi para a ordem POR DIMENSÃO, "

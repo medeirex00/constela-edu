@@ -507,7 +507,8 @@ def ranking_evolucao(db: Session, escola_id: int, inicio: datetime | None = None
     Sub-decisão da spec §7.2 resolvida como **(a) TER SNAPSHOT**, nunca (b) ter
     crescido: quem usa a plataforma e não cresceu entra com 0,00 e fica em
     último (zero LEGÍTIMO, a mesma filosofia do Ranking Geral); quem não tem
-    dado sai da lista daquela dimensão. (b) premiaria estagnar — bastava não
+    dado sai da lista daquela dimensão — e quem não tem dado em NENHUMA sai
+    também da ordem única (``posicao``) e da lista devolvida. (b) premiaria estagnar — bastava não
     crescer para sumir do denominador — e apagaria a diferença entre "não usa" e
     "usou e não avançou", que é a informação que o professor precisa.
 
@@ -730,6 +731,17 @@ def ranking_evolucao(db: Session, escola_id: int, inicio: datetime | None = None
         ))
 
     _ordenar_evolucao_por_dimensao(itens, contratadas)
+
+    # AUSÊNCIA NÃO É ZERO também no legado: quem não é aferido em NENHUMA
+    # dimensão (sem retrato de plataforma contratada até `fim`) não tem
+    # crescimento a medir e não recebe posição — o mesmo corte que cada lista
+    # por dimensão já faz. Sem ele, um período sem importação devolvia a coorte
+    # inteira empatada em 0,0, numerada em ORDEM ALFABÉTICA, e a web montava o
+    # pódio (e os certificados) com esses nomes. Quem TEM dado e não cresceu
+    # continua, com 0,00 (zero legítimo). Nenhum consumidor perde informação:
+    # as listas por dimensão não contavam essas crianças, e o telão, o mural e o
+    # /insights só usam quem tem nota > 0.
+    itens = [item for item in itens if any(item.aferido.values())]
 
     # LEGADO — a ordem ÚNICA de crescimento (a que o telão, o mural e o
     # /insights ainda consomem). `aluno_id` fecha a chave para que dois

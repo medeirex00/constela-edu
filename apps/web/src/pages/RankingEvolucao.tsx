@@ -143,7 +143,11 @@ export default function RankingEvolucao({ embutido = false, alvoAcoes }: {
   );
 
   // Pódio: a nota de evolução (o que ordena), com os ganhos reais do período.
-  const podio: ItemPodio[] = itensDoPodio(lista).map((item) => ({
+  // Só sobe ao pódio quem CRESCEU (> 0), a regra do telão: num período em que
+  // ninguém cresceu, os 3 primeiros empatam em 0,0 e a ordem é só o desempate
+  // alfabético — não há o que celebrar. A tabela continua com todos.
+  const cresceram = lista.filter((item) => item.nota_evolucao > 0);
+  const podio: ItemPodio[] = itensDoPodio(cresceram).map((item) => ({
     chave: item.aluno_id,
     posicao: item.posicao,
     nome: item.nome,

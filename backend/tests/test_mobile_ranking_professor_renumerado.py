@@ -16,12 +16,14 @@ from tests.test_permissoes import _cliente_como, cenario_professor  # noqa: F401
 
 def _notas(db, escola, alunos, fora):
     """Posições globais espaçadas (100, 103, 105, 110): o aluno de fora (turma B)
-    fica no meio, então a posição global NÃO é 1..N para o professor."""
+    fica no meio, então a posição global NÃO é 1..N para o professor. Todos
+    aferidos em Leitura (nota > 0 só sai de quem tem dado): o Top 10 do painel
+    só lista quem tem dado de alguma plataforma."""
     posicoes = {alunos[0].id: 100, alunos[1].id: 105, alunos[2].id: 110, fora.id: 103}
     valores = {alunos[0].id: 50.0, alunos[1].id: 40.0, alunos[2].id: 30.0, fora.id: 45.0}
     for aid, pos in posicoes.items():
         db.add(Nota(escola_id=escola.id, aluno_id=aid, ano_letivo=2026,
-                    nota_geral=valores[aid], posicao=pos))
+                    nota_geral=valores[aid], posicao=pos, aferido_leitura=True))
     db.commit()
 
 
