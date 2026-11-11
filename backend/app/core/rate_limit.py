@@ -126,6 +126,24 @@ class LimitadorTentativas:
                 return 0
             return max(0, int(self.janela_s - (agora - vivos[excesso])))
 
+    def bloquear_por(self, chave: str, segundos: float) -> None:
+        """Bloqueia a chave NESTE processo por ``segundos`` (no máximo a janela): o
+        bloqueio que a camada persistente já conhece (outro worker contou as falhas)
+        passa a valer aqui sem ida ao banco. Nunca encurta um bloqueio mais longo.
+
+        A fila fica com ``max_tentativas`` eventos no instante que faz o bloqueio
+        acabar daqui a ``segundos`` (``bloqueado`` e ``segundos_restantes`` seguem
+        valendo como para falhas de verdade)."""
+        agora = self._agora()
+        segundos = max(0.0, min(float(segundos), float(self.janela_s)))
+        if segundos <= self.segundos_restantes(chave):
+            return
+        with self._lock:
+            if chave not in self._eventos and len(self._eventos) >= _MAX_CHAVES:
+                self._evacuar(agora)
+            marca = agora - self.janela_s + segundos
+            self._eventos[chave] = deque([marca] * self.max_tentativas)
+
     def falhas_na_janela(self, chave: str) -> int:
         """Quantas falhas da chave estão na janela, neste processo (o que a camada em
         memória sabe quando o banco não respondeu a tempo)."""

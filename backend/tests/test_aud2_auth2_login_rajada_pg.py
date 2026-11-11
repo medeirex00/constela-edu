@@ -241,6 +241,69 @@ def test_rajada_de_logins_errados_nao_para_as_sessoes_abertas(db, escola_complet
     assert globais == [codigos.count(401)]
 
 
+def test_teto_do_ip_vale_para_logins_simultaneos(db, escola_completa, app_com_banco_lento,
+                                               monkeypatch):
+    """G_CARGA-3: 120 logins errados SIMULTÂNEOS de um IP só, cada um numa conta
+    diferente (pulverização). Antes o teto era conferido no começo e a falha contada
+    no fim: todo pedido que passava pelo portão antes de a 50ª falha ser gravada
+    seguia até o bcrypt, e bem mais de 50 palpites eram avaliados (108 medidos em
+    produção simulada, com 2 workers). Agora a tentativa é RESERVADA no banco antes de
+    procurar a conta: no máximo 50 são avaliadas, e cada uma conta uma vez.
+
+    O portão de logins simultâneos fica aberto aqui (1000 vagas) para medir só o teto
+    do IP."""
+    from app.core import rate_limit
+
+    monkeypatch.setattr(rate_limit.portao_login, "vagas", 1000)
+    teto = rate_limit.limitador_ip_falha_login.max_tentativas
+
+    async def cenario():
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app),
+                                     base_url="http://teste", timeout=300) as cli:
+            async def um(i):
+                r = await cli.post(f"{API}/auth/login",
+                                   data={"username": f"pulverizada.{i}@teste.local",
+                                         "password": "Senha-Errada-2026"},
+                                   headers={"X-Forwarded-For": "198.51.100.200"})
+                return r.status_code
+            return await asyncio.gather(*(um(i) for i in range(RAJADA)))
+
+    codigos = asyncio.run(cenario())
+
+    assert set(codigos) <= {401, 429}, sorted(set(codigos))
+    avaliados = codigos.count(401)
+    assert avaliados <= teto, f"{avaliados} palpites avaliados de um IP só (teto {teto})"
+    db.expire_all()
+    por_dimensao = {chave.split(":", 1)[0]: falhas for chave, falhas in db.execute(
+        select(QuestLimiteAcesso.chave, QuestLimiteAcesso.falhas)).all()}
+    # Cada palpite avaliado contou uma vez; os recusados (429) não contaram.
+    assert por_dimensao == {"edu_login_ip_falha": avaliados,
+                            "edu_login_global_falha": avaliados}
+
+
+def test_login_certo_devolve_a_vaga_reservada(db, escola_completa, app_com_banco_lento):
+    """No PostgreSQL também: a vaga reservada pelo login certo volta (só falhas contam),
+    e a do palpite errado fica."""
+    async def cenario():
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app),
+                                     base_url="http://teste") as cli:
+            codigos = []
+            for senha in ("Senha-Errada-2026", "s3nh4", "s3nh4"):
+                r = await cli.post(f"{API}/auth/login",
+                                   data={"username": "admin@teste.local", "password": senha},
+                                   headers={"X-Forwarded-For": "192.0.2.71"})
+                codigos.append(r.status_code)
+            return codigos
+
+    assert asyncio.run(cenario()) == [401, 200, 200]
+    db.expire_all()
+    por_dimensao = {chave.split(":", 1)[0]: (falhas, ate) for chave, falhas, ate in db.execute(
+        select(QuestLimiteAcesso.chave, QuestLimiteAcesso.falhas,
+               QuestLimiteAcesso.bloqueado_ate)).all()}
+    assert por_dimensao == {"edu_login_ip_falha": (1, None),
+                            "edu_login_global_falha": (1, None)}
+
+
 def test_linha_global_presa_por_outra_transacao_nao_segura_o_login(
         db, escola_completa, app_com_banco_lento, caplog):
     """``lock_timeout`` da contagem: outra transação segura a linha do teto global por

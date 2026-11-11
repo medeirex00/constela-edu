@@ -14,7 +14,9 @@ Aqui o contador e o bloqueio valem para todos os processos e sobrevivem ao
 restart (o mesmo banco que todos já usam; sem Redis a mais na infraestrutura).
 
 Contrato pequeno, o mesmo do limitador em memória: ``bloqueado`` /
-``contar`` (``registrar_falha`` para uma chave só) / ``limpar``. O TETO e a JANELA
+``contar`` (``registrar_falha`` para uma chave só) / ``limpar``; e, para o teto que
+tem de valer também para tentativas simultâneas (o login do Edu), ``reservar`` antes
+de avaliar e ``devolver`` o que não virou falha. O TETO e a JANELA
 de cada dimensão vêm do limitador em memória correspondente (quest/routers/auth.py;
 no Edu, app.core.rate_limit, configurável por EDU_LOGIN_TETO_*), para as duas
 camadas nunca divergirem.
@@ -48,6 +50,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import logging
+import math
 import random
 import threading
 import time
@@ -55,7 +58,20 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import Integer, String, case, cast, column, delete, func, or_, select, values
+from sqlalchemy import (
+    Integer,
+    String,
+    and_,
+    case,
+    cast,
+    column,
+    delete,
+    func,
+    null,
+    or_,
+    select,
+    values,
+)
 from sqlalchemy.dialects.postgresql import insert as insert_pg
 from sqlalchemy.dialects.sqlite import insert as insert_sqlite
 from sqlalchemy.engine import Engine
@@ -200,11 +216,37 @@ def _sem_repetidas(itens: Iterable[Limite]) -> list[Limite]:
     return [por_chave[c] for c in sorted(por_chave)]
 
 
-def _instrucao_de_contagem(dialeto: str, itens: list[Limite], agora: datetime):
+_COLUNAS_NOVAS = ["chave", "falhas", "janela_inicio", "atualizado_em", "bloqueado_ate"]
+
+
+def _insercao(dialeto: str, novas: list[tuple]):
+    """O ``INSERT`` das linhas ``novas`` (na ordem de ``_COLUNAS_NOVAS``), ainda sem o
+    ``ON CONFLICT``. No PostgreSQL, ``INSERT ... SELECT`` de um VALUES com o
+    ``lock_timeout`` ligado (``_com_prazo_de_trava``)."""
+    if dialeto != "postgresql":
+        return insert_sqlite(_TABELA).values([dict(zip(_COLUNAS_NOVAS, n)) for n in novas])
+    tipo_data = _TABELA.c.janela_inicio.type
+    linhas = values(column("chave", String), column("falhas", Integer),
+                    column("janela_inicio", tipo_data),
+                    column("atualizado_em", tipo_data),
+                    column("bloqueado_ate", tipo_data), name="nova").data(novas)
+    # O NULL do VALUES não tem tipo (o PostgreSQL o leria como texto): CAST.
+    return insert_pg(_TABELA).from_select(
+        _COLUNAS_NOVAS,
+        select(linhas.c.chave, linhas.c.falhas, linhas.c.janela_inicio,
+               linhas.c.atualizado_em, cast(linhas.c.bloqueado_ate, tipo_data))
+        .where(_com_prazo_de_trava()))
+
+
+def _instrucao_de_contagem(dialeto: str, itens: list[Limite], agora: datetime, *,
+                           so_se_livre: bool = False):
     """``INSERT ... ON CONFLICT (chave) DO UPDATE ... RETURNING`` das chaves: a 1ª
     falha de uma chave cria a linha; as seguintes somam 1 na janela corrente (ou
     recomeçam do 1 se ela venceu); ao chegar ao teto, bloqueia a chave. Teto, janela e
-    bloqueio de cada linha vêm do ``Limite`` dela (``CASE`` pela chave)."""
+    bloqueio de cada linha vêm do ``Limite`` dela (``CASE`` pela chave).
+
+    ``so_se_livre``: só soma na chave que não está bloqueada nem cheia na janela; a
+    que está fica como está e não volta no RETURNING (``reservar``)."""
     teto = case({x.chave: x.teto for x in itens}, value=_TABELA.c.chave)
     corte = case({x.chave: agora - timedelta(seconds=x.janela_s) for x in itens},
                  value=_TABELA.c.chave)
@@ -212,30 +254,19 @@ def _instrucao_de_contagem(dialeto: str, itens: list[Limite], agora: datetime):
                            value=_TABELA.c.chave)
     vencida = _TABELA.c.janela_inicio < corte
     falhas = case((vencida, 1), else_=_TABELA.c.falhas + 1)
+    livre = and_(or_(_TABELA.c.bloqueado_ate.is_(None), _TABELA.c.bloqueado_ate <= agora),
+                 or_(vencida, _TABELA.c.falhas < teto))
     novas = [(x.chave, 1, agora, agora, agora + x.bloqueio if x.teto <= 1 else None)
              for x in itens]
-    nomes = ["chave", "falhas", "janela_inicio", "atualizado_em", "bloqueado_ate"]
-    if dialeto == "postgresql":
-        tipo_data = _TABELA.c.janela_inicio.type
-        linhas = values(column("chave", String), column("falhas", Integer),
-                        column("janela_inicio", tipo_data),
-                        column("atualizado_em", tipo_data),
-                        column("bloqueado_ate", tipo_data), name="nova").data(novas)
-        # O NULL do VALUES não tem tipo (o PostgreSQL o leria como texto): CAST.
-        instrucao = insert_pg(_TABELA).from_select(
-            nomes, select(linhas.c.chave, linhas.c.falhas, linhas.c.janela_inicio,
-                          linhas.c.atualizado_em, cast(linhas.c.bloqueado_ate, tipo_data))
-            .where(_com_prazo_de_trava()))
-    else:
-        instrucao = insert_sqlite(_TABELA).values([dict(zip(nomes, n)) for n in novas])
-    return instrucao.on_conflict_do_update(
+    return _insercao(dialeto, novas).on_conflict_do_update(
         index_elements=[_TABELA.c.chave],
         set_={"falhas": falhas,
               "janela_inicio": case((vencida, agora), else_=_TABELA.c.janela_inicio),
               "atualizado_em": agora,
               "bloqueado_ate": case((falhas >= teto, fim_do_bloqueio),
                                     else_=_TABELA.c.bloqueado_ate)},
-    ).returning(_TABELA.c.chave, _TABELA.c.falhas)
+        where=livre if so_se_livre else None,
+    ).returning(_TABELA.c.chave, _TABELA.c.falhas, _TABELA.c.janela_inicio)
 
 
 def contar(db: Session, itens: Iterable[Limite]) -> dict[str, int]:
@@ -255,7 +286,123 @@ def contar(db: Session, itens: Iterable[Limite]) -> dict[str, int]:
                                                   agora))
     if random.random() < _FAXINA_PROBABILIDADE:
         faxina(db, agora)
-    return {chave_: falhas for chave_, falhas in linhas}
+    return {chave_: falhas for chave_, falhas, _ in linhas}
+
+
+@dataclass(frozen=True)
+class Tomada:
+    """Uma tentativa reservada numa chave: as falhas da janela já com ela e o início
+    da janela em que entrou (a devolução só vale nessa janela)."""
+
+    chave: str
+    teto: int
+    falhas: int
+    janela_inicio: datetime
+
+
+@dataclass(frozen=True)
+class Reserva:
+    """O resultado de ``reservar``: as tentativas tomadas (todas as chaves) ou, se
+    alguma chave recusou, nenhuma tomada e os segundos de espera de cada recusada."""
+
+    tomadas: tuple[Tomada, ...] = ()
+    esperas: tuple[tuple[str, int], ...] = ()
+
+    @property
+    def aceita(self) -> bool:
+        return not self.esperas
+
+    def falhas(self, chave_: str) -> int:
+        return next((t.falhas for t in self.tomadas if t.chave == chave_), 0)
+
+    def espera(self, chave_: str) -> int | None:
+        return next((s for c, s in self.esperas if c == chave_), None)
+
+
+def reservar(db: Session, itens: Iterable[Limite]) -> Reserva:
+    """RESERVA 1 tentativa em todas as chaves, ANTES de avaliá-la, ou em nenhuma
+    (auditoria G_CARGA-3, 11/11/2026). Antes o teto era conferido no começo e a falha
+    contada no fim: todo pedido que passava pela conferência antes de a falha do teto
+    ser gravada seguia até o fim, e uma rajada simultânea de um IP só tinha bem mais
+    que o teto de palpites avaliados. Aqui a conferência e a contagem são a MESMA
+    instrução atômica (``_instrucao_de_contagem`` com ``so_se_livre``): só soma na chave
+    que está abaixo do teto e sem bloqueio, e quem chega com ela cheia não soma nada.
+
+    Se alguma chave recusou, as que foram tomadas na mesma instrução são devolvidas na
+    hora (tudo ou nada: um IP bloqueado não gasta o teto global) e a ``Reserva`` traz a
+    espera de cada recusada. A tentativa reservada que não virar falha (login certo,
+    recusa por outro motivo) volta com ``devolver``: só falhas contam, como antes. Quem
+    está no meio da avaliação ocupa a vaga dele: com o teto quase cheio, uma tentativa
+    em andamento pode recusar outra que chegou junto (por instantes).
+
+    Mesmas regras de ``contar`` (fora da transação da sessão; ``LimiteIndisponivel``
+    se uma linha ficou presa além do prazo, e então nada foi reservado)."""
+    itens = _sem_repetidas(itens)
+    if not itens:
+        return Reserva()
+    agora = _agora()
+    linhas = _executar(db, _instrucao_de_contagem(db.get_bind().dialect.name, itens,
+                                                  agora, so_se_livre=True))
+    por_chave = {chave_: (falhas, inicio) for chave_, falhas, inicio in linhas}
+    tomadas = tuple(Tomada(x.chave, x.teto, *por_chave[x.chave])
+                    for x in itens if x.chave in por_chave)
+    recusadas = [x for x in itens if x.chave not in por_chave]
+    if not recusadas:
+        if random.random() < _FAXINA_PROBABILIDADE:
+            faxina(db, agora)
+        return Reserva(tomadas=tomadas)
+    if tomadas:
+        try:
+            devolver(db, Reserva(tomadas=tomadas))
+        except LimiteIndisponivel:
+            pass   # fica contada (o aviso já saiu): o erro é a favor do teto
+    return Reserva(esperas=_esperas(db, recusadas, agora))
+
+
+def _esperas(db: Session, recusadas: list[Limite],
+             agora: datetime) -> tuple[tuple[str, int], ...]:
+    """Segundos até cada chave recusada voltar a aceitar: o fim do bloqueio ou, com a
+    janela cheia, o fim da janela (no mínimo 1)."""
+    linhas = {chave_: (falhas, inicio, ate) for chave_, falhas, inicio, ate in _executar(
+        db, select(_TABELA.c.chave, _TABELA.c.falhas, _TABELA.c.janela_inicio,
+                   _TABELA.c.bloqueado_ate)
+        .where(_TABELA.c.chave.in_([x.chave for x in recusadas])))}
+    esperas = []
+    for x in recusadas:
+        falhas, inicio, ate = linhas.get(x.chave, (0, agora, None))
+        fins = [ate] if ate is not None else []
+        if falhas >= x.teto:
+            fins.append(inicio + timedelta(seconds=x.janela_s))
+        fim = max(fins, default=agora)
+        esperas.append((x.chave, max(1, math.ceil((fim - agora).total_seconds()))))
+    return tuple(esperas)
+
+
+def devolver(db: Session, reserva: Reserva) -> None:
+    """Desfaz as tentativas tomadas por ``reservar`` (a que não virou falha). Só na
+    janela em que foram tomadas (a janela que já recomeçou não tem o que devolver), e
+    a chave que volta a ficar abaixo do teto sai do bloqueio.
+
+    A mesma forma de instrução de ``reservar`` (``INSERT ... ON CONFLICT DO UPDATE``,
+    em ordem de chave): toda instrução daqui que trava mais de uma linha trava na
+    mesma ordem, sem deadlock entre elas. A linha que não existe mais renasceria
+    zerada (não acontece: a faxina só apaga linha parada há um dia). Fora da transação
+    da sessão, como ``contar``."""
+    tomadas = sorted(reserva.tomadas, key=lambda t: t.chave)
+    if not tomadas:
+        return
+    agora = _agora()
+    teto = case({t.chave: t.teto for t in tomadas}, value=_TABELA.c.chave)
+    janela = case({t.chave: t.janela_inicio for t in tomadas}, value=_TABELA.c.chave)
+    instrucao = _insercao(db.get_bind().dialect.name,
+                          [(t.chave, 0, agora, agora, None) for t in tomadas])
+    _executar(db, instrucao.on_conflict_do_update(
+        index_elements=[_TABELA.c.chave],
+        set_={"falhas": _TABELA.c.falhas - 1,
+              "bloqueado_ate": case((_TABELA.c.falhas - 1 < teto, null()),
+                                    else_=_TABELA.c.bloqueado_ate)},
+        where=and_(_TABELA.c.janela_inicio == janela, _TABELA.c.falhas > 0)),
+        linhas=False)
 
 
 def registrar_falha(db: Session, chave_: str, *, max_tentativas: int,

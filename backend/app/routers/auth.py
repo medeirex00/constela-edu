@@ -77,6 +77,11 @@ def _identificador_para_log(entrada: str) -> str:
 # nenhuma tabela nova —, com dimensões PRÓPRIAS do Edu (prefixo ``edu_login_``),
 # que nunca se misturam com as do Quest. O IP vai para o banco só como HMAC
 # (``limites.chave``), nunca em texto.
+#
+# No banco, a tentativa é RESERVADA antes de procurar a conta (``limites.reservar``:
+# conferir o teto e somar 1 numa instrução atômica só) e devolvida se não virar falha
+# (G_CARGA-3). Conferir no começo e contar no fim deixava passar, numa rajada de
+# logins simultâneos, todos os que chegavam antes de a falha do teto ser gravada.
 _DIM_IP_FALHA = "edu_login_ip_falha"
 _DIM_GLOBAL_FALHA = "edu_login_global_falha"
 _GLOBAL = "*"   # valor único da dimensão global (vale para a API inteira)
@@ -104,29 +109,89 @@ def _tetos_de_falha(rede: str):
             (_DIM_GLOBAL_FALHA, _GLOBAL, limitador_global_falha_login))
 
 
-def _exigir_tetos_de_falha_livres(db: Session, rede: str, entrada: str,
-                                  ip_log: str) -> None:
-    """429 se o IP (ou a API inteira) já estourou o teto de falhas. Roda ANTES de
-    procurar a conta: a resposta é a mesma para conta existente ou não."""
+class _TetosDoPedido:
+    """A tentativa deste login nos tetos de falha por IP e global, já reservada no
+    banco (``reserva``; None quando o banco não respondeu a tempo e só a memória
+    vale). Termina de UM jeito: ``falhou`` (a reserva fica: é a falha contada) ou
+    ``devolver`` (login certo, ou recusa que não é palpite errado: a vaga volta, e só
+    falhas contam, como antes)."""
+
+    def __init__(self, db: Session, rede: str, reserva) -> None:
+        self._db = db
+        self._rede = rede
+        self._reserva = reserva
+        self._resolvida = False
+
+    def falhou(self) -> None:
+        """Palpite errado: conta na memória (no banco, a reserva já é a contagem) e
+        alerta se o teto global foi atingido."""
+        from app.quest.services import limites
+
+        self._resolvida = True
+        for _, valor, limitador in _tetos_de_falha(self._rede):
+            limitador.registrar_falha(valor)
+        if self._reserva is not None:
+            falhas = self._reserva.falhas(limites.chave(_DIM_GLOBAL_FALHA, _GLOBAL))
+        else:
+            falhas = limitador_global_falha_login.falhas_na_janela(_GLOBAL)
+        if (falhas >= limitador_global_falha_login.max_tentativas
+                or limitador_global_falha_login.bloqueado(_GLOBAL)):
+            _alertar_teto_global(falhas)
+
+    def devolver(self) -> None:
+        """Devolve a vaga reservada no banco (uma vez só; nada depois de ``falhou``).
+        Chamar com a sessão sem conexão (depois do commit ou do rollback)."""
+        from app.quest.services import limites
+
+        if self._resolvida:
+            return
+        self._resolvida = True
+        if self._reserva is None:
+            return
+        try:
+            limites.devolver(self._db, self._reserva)
+        except limites.LimiteIndisponivel:
+            pass   # fica contada (o aviso já saiu no log): o erro é a favor do teto
+
+
+def _reservar_tetos_de_falha(db: Session, rede: str, entrada: str,
+                             ip_log: str) -> _TetosDoPedido:
+    """429 se o IP (ou a API inteira) já estourou o teto de falhas; senão RESERVA esta
+    tentativa nos dois tetos. Roda ANTES de procurar a conta: a resposta é a mesma
+    para conta existente ou não.
+
+    Primeiro a memória (barra a rajada sem ir ao banco); depois o banco, numa
+    instrução só que confere e soma (``limites.reservar``), fora da transação da
+    requisição. Recusada lá (outro worker contou as falhas, ou antes de um reinício),
+    a memória deste processo aprende o bloqueio, e a espera anunciada é a do banco."""
     from app.quest.services import limites
 
+    tetos = _tetos_de_falha(rede)
     estourado: tuple[str, int] | None = None
-    for dimensao, valor, limitador in reversed(_tetos_de_falha(rede)):  # global 1º
+    for dimensao, valor, limitador in reversed(tetos):  # global 1º
         if limitador.bloqueado(valor):
             estourado = (dimensao, limitador.segundos_restantes(valor))
             break
+    reserva = None
     if estourado is None:
-        chaves = {d: limites.chave(d, v) for d, v, _ in _tetos_de_falha(rede)}
-        if limites.bloqueado(db, list(chaves.values())):
-            # Bloqueado só no banco (outro worker, ou antes de um reinício): o
-            # bloqueio dura uma janela inteira, que é o teto da espera.
-            global_ = limites.bloqueado(db, [chaves[_DIM_GLOBAL_FALHA]])
-            limitador = (limitador_global_falha_login if global_
-                         else limitador_ip_falha_login)
-            estourado = (_DIM_GLOBAL_FALHA if global_ else _DIM_IP_FALHA,
-                         limitador.janela_s)
+        chaves = {d: limites.chave(d, v) for d, v, _ in tetos}
+        try:
+            reserva = limites.reservar(db, [
+                limites.Limite(chaves[dimensao], limitador.max_tentativas,
+                               limitador.janela_s)
+                for dimensao, _, limitador in tetos])
+        except limites.LimiteIndisponivel:
+            reserva = None   # o banco não respondeu a tempo: vale a memória (acima)
+        if reserva is not None and not reserva.aceita:
+            for dimensao, valor, limitador in tetos:
+                espera = reserva.espera(chaves[dimensao])
+                if espera is not None:
+                    limitador.bloquear_por(valor, espera)
+            global_ = reserva.espera(chaves[_DIM_GLOBAL_FALHA])
+            estourado = ((_DIM_GLOBAL_FALHA, global_) if global_ is not None
+                         else (_DIM_IP_FALHA, reserva.espera(chaves[_DIM_IP_FALHA]) or 1))
     if estourado is None:
-        return
+        return _TetosDoPedido(db, rede, reserva)
     dimensao, espera = estourado
     e_global = dimensao == _DIM_GLOBAL_FALHA
     registrar(db, "login.bloqueado",
@@ -137,32 +202,6 @@ def _exigir_tetos_de_falha_livres(db: Session, rede: str, entrada: str,
         status.HTTP_429_TOO_MANY_REQUESTS,
         ERRO_MUITAS_GLOBAL.format(minutos=minutos_de_espera(espera)) if e_global
         else _erro_muitas(espera))
-
-
-def _contar_falha_nos_tetos(db: Session, rede: str) -> None:
-    """Conta 1 falha no teto do IP e no global, nas duas camadas. No banco é UMA
-    instrução, em AUTOCOMMIT e fora da transação da requisição (``limites.contar``):
-    chamar DEPOIS do commit do caminho de erro, com a sessão sem conexão. Antes ela
-    era contada dentro da transação, e a linha global (uma só para a API inteira)
-    ficava presa até o commit: as falhas passavam em fila por ela (G_CARGA-1). Se a
-    linha estiver presa além do prazo, conta só na memória."""
-    from app.quest.services import limites
-
-    tetos = _tetos_de_falha(rede)
-    for _, valor, limitador in tetos:
-        limitador.registrar_falha(valor)
-    chave_global = limites.chave(_DIM_GLOBAL_FALHA, _GLOBAL)
-    try:
-        no_banco = limites.contar(db, [
-            limites.Limite(limites.chave(dimensao, valor), limitador.max_tentativas,
-                           limitador.janela_s)
-            for dimensao, valor, limitador in tetos])
-        falhas_globais = no_banco[chave_global]
-    except limites.LimiteIndisponivel:
-        falhas_globais = limitador_global_falha_login.falhas_na_janela(_GLOBAL)
-    if (falhas_globais >= limitador_global_falha_login.max_tentativas
-            or limitador_global_falha_login.bloqueado(_GLOBAL)):
-        _alertar_teto_global(falhas_globais)
 
 
 def _alertar_teto_global(falhas: int) -> None:
@@ -230,9 +269,25 @@ def _login(request: Request, form: OAuth2PasswordRequestForm, db: Session) -> Lo
     rede = rede_para_limite(ip)          # IPv6 em /64: chave do teto de falhas por IP
 
     # Tetos de falha por IP e global ANTES de procurar a conta: a mesma resposta
-    # para conta existente ou não (ver ``_exigir_tetos_de_falha_livres``).
-    _exigir_tetos_de_falha_livres(db, rede, entrada, ip_log)
+    # para conta existente ou não. A tentativa fica reservada no banco e, se não
+    # virar falha, volta (ver ``_reservar_tetos_de_falha``).
+    tetos = _reservar_tetos_de_falha(db, rede, entrada, ip_log)
+    try:
+        return _avaliar(form, db, entrada, ip, ip_log, tetos)
+    except Exception:
+        # Recusa que não é palpite errado (429 por conta, conta desativada) ou erro
+        # inesperado: a vaga reservada volta. O rollback solta a conexão da sessão
+        # antes (a devolução é fora da transação); depois de um commit, não faz nada.
+        db.rollback()
+        tetos.devolver()
+        raise
 
+
+def _avaliar(form: OAuth2PasswordRequestForm, db: Session, entrada: str, ip: str,
+             ip_log: str, tetos: _TetosDoPedido) -> LoginOut:
+    """O login depois dos tetos de falha: procura a conta, confere os limites por
+    conta e a senha. Toda falha de palpite chama ``tetos.falhou()``; o login certo
+    devolve a vaga (``tetos.devolver()``) depois do commit."""
     usuario = db.execute(
         select(Usuario).where(Usuario.email == entrada)
     ).scalar_one_or_none()
@@ -276,8 +331,8 @@ def _login(request: Request, form: OAuth2PasswordRequestForm, db: Session) -> Lo
         registrar(db, "login.falhou",
                   detalhes={"email": identidade_log, "ip": ip_log,
                             "motivo": "conta_inexistente"})
+        tetos.falhou()
         db.commit()
-        _contar_falha_nos_tetos(db, rede)   # depois do commit: fora da transação
         raise HTTPException(status.HTTP_401_UNAUTHORIZED,
                             "E-mail/usuário ou senha incorretos.")
 
@@ -287,8 +342,8 @@ def _login(request: Request, form: OAuth2PasswordRequestForm, db: Session) -> Lo
         registrar(db, "login.falhou", escola_id=usuario.escola_id, usuario_id=usuario.id,
                   detalhes={"email": identidade_log, "ip": ip_log,
                             "motivo": "senha_incorreta"})
+        tetos.falhou()
         db.commit()
-        _contar_falha_nos_tetos(db, rede)
         raise HTTPException(status.HTTP_401_UNAUTHORIZED,
                             "E-mail/usuário ou senha incorretos.")
 
@@ -302,8 +357,8 @@ def _login(request: Request, form: OAuth2PasswordRequestForm, db: Session) -> Lo
         registrar(db, "login.falhou", escola_id=usuario.escola_id, usuario_id=usuario.id,
                   detalhes={"email": identidade_log, "ip": ip_log,
                             "motivo": "senha_convencao_antiga"})
+        tetos.falhou()
         db.commit()
-        _contar_falha_nos_tetos(db, rede)
         raise HTTPException(status.HTTP_403_FORBIDDEN,
                             "Senha expirada: peça um link de redefinição ao "
                             "administrador.")
@@ -320,6 +375,8 @@ def _login(request: Request, form: OAuth2PasswordRequestForm, db: Session) -> Lo
     usuario.ultimo_acesso = datetime.now(timezone.utc)
     registrar(db, "login", escola_id=usuario.escola_id, usuario_id=usuario.id)
     db.commit()
+    # Login certo não conta no teto do IP nem no global: a vaga reservada volta.
+    tetos.devolver()
 
     return LoginOut(
         access_token=criar_token(usuario.id, usuario.token_version),

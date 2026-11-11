@@ -51,6 +51,17 @@ foi implementado, porque as duas mudanças alteram o login de todos os usuários
   `edu_login_`), e o IP só vai para o banco como HMAC. São conferidos **antes** de
   procurar a conta (a mesma resposta exista a conta ou não) e só **falhas** contam (o
   login certo não soma nem zera; o 429 não realimenta o contador).
+- **O teto vale também para logins simultâneos (desde 11/11/2026, auditoria
+  G_CARGA-3).** Antes o teto era conferido no começo do login e a falha contada no fim:
+  numa rajada de logins simultâneos de um IP só, todos os que chegavam antes de a 50ª
+  falha ser gravada seguiam até a conferência da senha (108 palpites avaliados, com 2
+  workers). Agora a tentativa é **reservada** no banco antes de procurar a conta, numa
+  instrução atômica que confere o teto e soma 1 (no IP e no global, as duas ou
+  nenhuma); se ela não virar falha (login certo, conta desativada, 429 por conta, erro
+  inesperado), a vaga volta. Enquanto uma tentativa está em andamento ela ocupa a vaga
+  dela: com o IP a uma falha do teto, outra tentativa que chegue no mesmo instante pode
+  receber o 429. Um bloqueio visto no banco passa a valer também na memória do
+  processo, pelo tempo que falta (as tentativas seguintes param ali, sem ir ao banco).
 - As variáveis são lidas no boot (mudar exige reiniciar o serviço); teto ≥ 1 e janela
   de 60 s a 1 h. Os limites por conta e por (conta, IP) seguem fixos e só em memória
   (zeram no restart e não valem entre réplicas).

@@ -178,7 +178,13 @@ segredos do workflow `desktop-release.yml`).
     teto e janela pelas variáveis `EDU_LOGIN_TETO_IP_FALHAS`,
     `EDU_LOGIN_TETO_IP_JANELA_S`, `EDU_LOGIN_TETO_GLOBAL_FALHAS` e
     `EDU_LOGIN_TETO_GLOBAL_JANELA_S`). Os limites do Edu por conta e por
-    (conta, IP) seguem só em memória.
+    (conta, IP) seguem só em memória. No login do Edu a tentativa é
+    **reservada** no banco antes de conferir a senha (conferir o teto e somar
+    numa instrução atômica só, devolvida se não virar falha): o teto vale
+    também para logins simultâneos, e não só entre réplicas. As contagens no
+    banco são instruções curtas em AUTOCOMMIT, fora da transação da requisição
+    (uma rajada não faz fila na linha do teto global), e cada processo deixa
+    correr no máximo 8 logins do Edu ao mesmo tempo (acima disso, 429 na hora).
 - PostgreSQL com índices por `escola_id` em todas as tabelas; consultas
   paginadas (PRD §23).
 - Clientes web/desktop servem estático (CDN-ready); mobile reduz carga com
