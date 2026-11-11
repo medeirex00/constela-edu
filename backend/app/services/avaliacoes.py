@@ -147,6 +147,18 @@ SO_REFERENCIA = frozenset({"ica", "iee"})
 # SAEB e SARESP gravam a SÉRIE avaliada como etapa (0035): "5_ano" (e "2_ano" no
 # SARESP). "anos_iniciais" fica para o IDEB — numa série do SAEB/SARESP ele criaria
 # uma série paralela à normalizada (e, no SARESP, misturaria o 2º com o 5º ano).
+# A faixa possível de cada unidade (mínimo, máximo, como a mensagem diz): um número fora
+# dela não é deste indicador (a coluna errada, ou o arquivo que mudou de formato) e a
+# importação recusa o arquivo inteiro. As mesmas faixas do pacote oficial (``ideb._FAIXAS``
+# e o SARESP da SEDUC); a escala do Saeb vai a 1000 porque a do 2º ano (alfabetização) passa
+# de 500. Unidade fora daqui: sem conferência.
+_FAIXA_DA_UNIDADE: dict[str, tuple[float, float, str]] = {
+    "indice": (0.0, 10.0, "de 0 a 10"),
+    "percentual": (0.0, 100.0, "de 0 a 100%"),
+    "escala_saresp": (0.0, 500.0, "de 0 a 500"),
+    "escala_saeb": (0.0, 1000.0, "de 0 a 1000"),
+}
+
 _ETAPA_POR_SERIE = frozenset({"saeb", "saresp"})
 _MSG_ETAPA_POR_SERIE = ("Para o SAEB e o SARESP, a etapa é a SÉRIE avaliada: use “5_ano” (ou "
                         "“2_ano” no SARESP), não “anos_iniciais” — esse rótulo fica para o "
@@ -580,6 +592,11 @@ def importar_resultados(
     mantidos_oficiais = 0
     inep_nao_casados: set[str] = set()
     truncado = False
+    faixa = _FAIXA_DA_UNIDADE.get((unidade or "").strip().lower())
+    # As linhas casadas são gravadas DEPOIS de ler o arquivo todo: um número fora da
+    # faixa recusa o arquivo inteiro antes de a 1ª linha entrar na sessão (o robô não
+    # desfaz o que já entrou).
+    a_gravar: list[tuple] = []
 
     # Streaming: pula o pré-âmbulo (linha_dados) e processa até o teto anti-OOM.
     for linha in islice(_iterar_grade(conteudo, nome), linha_dados, None):
@@ -597,12 +614,17 @@ def importar_resultados(
             nao_casados += 1
             inep_nao_casados.add(inep)   # TODOS (a tela decide quanto mostrar)
             continue
-        escola_id, rede_id = alvo
-        etapa = _dimensao(linha, col_etapa, etapa_fixa)
-        componente = _dimensao(linha, col_componente, componente_fixo)
-        turma = _dimensao(linha, col_turma, None)
+        if faixa is not None and not faixa[0] <= valor <= faixa[1]:
+            raise ImportacaoRecusada(
+                f"O valor {valor:g} (código INEP {inep}) está fora da faixa da unidade "
+                f"“{unidade}” ({faixa[2]}): a coluna do valor não é a deste indicador ou o "
+                "arquivo mudou. Confira o mapeamento. Nada foi gravado.")
+        a_gravar.append((alvo, inep, valor, _dimensao(linha, col_etapa, etapa_fixa),
+                         _dimensao(linha, col_componente, componente_fixo),
+                         _dimensao(linha, col_turma, None)))
         casados += 1
 
+    for (escola_id, rede_id), inep, valor, etapa, componente, turma in a_gravar:
         chave = (escola_id, etapa, componente, turma)
         atual = existentes.get(chave)
         if atual is not None and atual.importacao_id is not None:
@@ -970,6 +992,119 @@ def _nome_do_url(url: str) -> str:
     return url.rstrip("/").split("/")[-1] or "arquivo"
 
 
+# --- Conferência do arquivo do robô ------------------------------------------
+
+# As colunas que o mapeamento de uma fonte aponta (as que ``importar_resultados`` lê).
+COLUNAS_MAPEADAS = ("col_inep", "col_valor", "col_etapa", "col_componente", "col_turma")
+# A etapa que o TOPO do arquivo oficial do INEP declara: os nomes das variáveis são os
+# mesmos nos arquivos de cada etapa (os marcadores de Anos Iniciais são os do 1 clique).
+_ETAPAS_DO_ARQUIVO_INEP: dict[str, tuple[str, ...]] = {
+    "anos_iniciais": ("Anos Iniciais", "1º ao 5º ano"),
+    "anos_finais": ("Anos Finais", "6º ao 9º ano"),
+    "ensino_medio": ("Ensino Médio",),
+}
+# A etapa fixa da fonte → o arquivo do INEP (por etapa) que a traz.
+_ARQUIVO_INEP_DA_ETAPA = {"anos_iniciais": "anos_iniciais", "5_ano": "anos_iniciais",
+                          "anos_finais": "anos_finais", "9_ano": "anos_finais",
+                          "ensino_medio": "ensino_medio"}
+_REFAZER_FONTE = ("Confira se a URL ainda serve o mesmo arquivo; se o arquivo oficial mudou "
+                  "de formato, monte a fonte de novo com ele. Nada foi gravado.")
+
+
+def _texto_celula(valor) -> str:
+    return "" if valor is None else str(valor).strip()
+
+
+def colunas_do_cabecalho(mapeamento: dict, cabecalho: dict | None) -> dict[str, str] | None:
+    """O texto do cabeçalho de cada coluna mapeada, como a tela o mostrou no arquivo
+    conferido ao montar a fonte — só quando cobre exatamente as colunas mapeadas (senão
+    ``None``, e a 1ª coleta vira a referência)."""
+    mapeadas = {c for c in COLUNAS_MAPEADAS if mapeamento.get(c) is not None}
+    colunas = {c: _texto_celula(t) for c, t in (cabecalho or {}).items()}
+    return colunas if colunas and set(colunas) == mapeadas else None
+
+
+def conferir_arquivo_da_fonte(conteudo: bytes, nome: str, mapeamento: dict
+                              ) -> tuple[dict, dict]:
+    """Confere o arquivo baixado pelo robô com o que foi conferido quando a fonte foi
+    montada e devolve ``(o mapeamento que lê ESTE arquivo, o conferido a guardar)``.
+    LEVANTA ``ImportacaoRecusada`` quando não confere (nada é gravado).
+
+    O robô baixa sempre a mesma URL, e o arquivo dela pode mudar: uma retificação com
+    colunas a mais ou a menos, ou o arquivo de outra etapa. Ler pelas posições do
+    mapeamento gravaria outra variável (ou o Ideb de outra etapa) com status 'ok'.
+
+    * Arquivo oficial do INEP (a linha técnica, com ID_ESCOLA, no topo): as colunas são
+      achadas pelo NOME da variável e a etapa é conferida pelo topo
+      (``localizar_colunas_inep``, como no 1 clique). A etapa esperada é a conferida antes
+      ou, sem ela, a que a etapa fixa da fonte pede (``_ARQUIVO_INEP_DA_ETAPA``).
+    * Outro arquivo: o texto do cabeçalho (a linha antes da 1ª linha de dados) nas
+      colunas mapeadas tem de ser o conferido. Sem linha de cabeçalho (``linha_dados`` 0),
+      só a faixa da unidade (``importar_resultados``) protege.
+
+    O conferido (``mapeamento['cabecalho']``: ``colunas`` e, no INEP, ``etapa_do_arquivo``)
+    vem da tela que montou a fonte ou, numa fonte sem ele, desta coleta."""
+    m = {k: v for k, v in mapeamento.items() if k != "cabecalho"}
+    conferido = dict(mapeamento.get("cabecalho") or {})
+    mapeadas = {c: int(m[c]) for c in COLUNAS_MAPEADAS if m.get(c) is not None}
+    linha_dados = int(m.get("linha_dados", 0))
+    nomes = conferido.get("colunas") or {}
+    if set(nomes) != set(mapeadas):
+        nomes = {}                  # não cobre o mapeamento: esta coleta refaz a referência
+    topo = list(islice(_iterar_grade(conteudo, nome), max(linha_dados, _LINHAS_TOPO_INEP)))
+    tecnica = next((i for i, ln in enumerate(topo[:_LINHAS_TOPO_INEP])
+                    if "ID_ESCOLA" in (_texto_celula(c).upper() for c in ln)), None)
+
+    if tecnica is None:
+        if conferido.get("etapa_do_arquivo"):
+            raise ImportacaoRecusada(
+                "O arquivo da URL não é mais o arquivo oficial do INEP com que a fonte foi "
+                "conferida (não tem a linha técnica com ID_ESCOLA). " + _REFAZER_FONTE)
+        if linha_dados < 1 or not mapeadas:
+            return m, conferido
+        if len(topo) < linha_dados:
+            raise ImportacaoRecusada(
+                f"O arquivo da URL tem menos de {linha_dados} linha(s) antes dos dados: não "
+                "é o arquivo com que a fonte foi montada. " + _REFAZER_FONTE)
+        cabecalho = topo[linha_dados - 1]
+        atuais = {c: _texto_celula(_cel(cabecalho, i)) for c, i in mapeadas.items()}
+        mudaram = [f"a coluna {mapeadas[c]} era “{nomes[c]}” e agora é “{atuais[c]}”"
+                   for c in mapeadas
+                   if nomes and nomes[c].casefold() != atuais[c].casefold()]
+        if mudaram:
+            raise ImportacaoRecusada(
+                "O cabeçalho do arquivo da URL mudou desde que a fonte foi montada: "
+                + "; ".join(mudaram) + ". " + _REFAZER_FONTE)
+        return m, {**conferido, "colunas": nomes or atuais}
+
+    # Arquivo oficial do INEP.
+    etapa = (conferido.get("etapa_do_arquivo")
+             or _ARQUIVO_INEP_DA_ETAPA.get(_texto_celula(m.get("etapa_fixa")).lower()))
+    if etapa not in _ETAPAS_DO_ARQUIVO_INEP:
+        celulas = [str(c).casefold() for ln in topo[:tecnica] for c in ln if c is not None]
+        no_topo = [e for e, marcas in _ETAPAS_DO_ARQUIVO_INEP.items()
+                   if any(mc.casefold() in c for c in celulas for mc in marcas)]
+        if len(no_topo) != 1:
+            raise ImportacaoRecusada(
+                "O topo do arquivo do INEP não diz a etapa (Anos Iniciais, Anos Finais ou "
+                "Ensino Médio) e a fonte não tem uma etapa fixa que a diga. " + _REFAZER_FONTE)
+        etapa = no_topo[0]
+    if not nomes:
+        if tecnica != linha_dados - 1:
+            raise ImportacaoRecusada(
+                f"A 1ª linha de dados da fonte ({linha_dados}) não é a seguinte à linha "
+                f"técnica do arquivo do INEP ({tecnica + 1}): o mapeamento não é deste "
+                "arquivo. " + _REFAZER_FONTE)
+        nomes = {c: _texto_celula(_cel(topo[tecnica], i)) for c, i in mapeadas.items()}
+    linha, indices = localizar_colunas_inep(
+        conteudo, nome, [n.upper() for n in nomes.values()],
+        marcadores_etapa=_ETAPAS_DO_ARQUIVO_INEP[etapa],
+        arquivo_esperado=(f"o arquivo do INEP ({etapa.replace('_', ' ')}) com que a fonte "
+                          "foi montada"))
+    efetivo = {**m, "linha_dados": linha, **{c: indices[n.upper()] for c, n in nomes.items()}}
+    return efetivo, {"colunas": nomes, "etapa_do_arquivo": etapa}
+
+
 def coletar_fonte(db: Session, fonte: FonteAvaliacao,
                   baixador: Baixador | None = None) -> dict:
     """Baixa o arquivo da fonte e importa (MESMA máquina do upload manual), casando
@@ -982,9 +1117,12 @@ def coletar_fonte(db: Session, fonte: FonteAvaliacao,
     from app.core.database import bloquear_fonte_para_coleta
     bloquear_fonte_para_coleta(db, fonte.id)
     av = db.get(AvaliacaoExterna, fonte.avaliacao_id)
-    m = fonte.mapeamento or {}
+    original = fonte.mapeamento or {}
     try:
         conteudo = baixador(fonte.url)
+        # Confere o arquivo (colunas pelo nome no INEP, etapa, cabeçalho) ANTES de gravar
+        # e lê pelas colunas que ESTE arquivo tem (``conferir_arquivo_da_fonte``).
+        m, conferido = conferir_arquivo_da_fonte(conteudo, _nome_do_url(fonte.url), original)
         resumo = importar_resultados(
             db, conteudo, _nome_do_url(fonte.url),
             avaliacao_chave=av.chave, edicao=fonte.edicao,
@@ -995,6 +1133,9 @@ def coletar_fonte(db: Session, fonte: FonteAvaliacao,
             col_turma=m.get("col_turma"),
             etapa_fixa=m.get("etapa_fixa"), componente_fixo=m.get("componente_fixo"),
             escopo_escolas=None)  # global: casa qualquer escola da base por código INEP
+        if conferido and conferido != original.get("cabecalho"):
+            # A referência das próximas coletas (só depois de uma coleta que conferiu).
+            fonte.mapeamento = {**original, "cabecalho": conferido}
         # Persistido (e relido a cada listagem): contagem + amostra, como antes.
         resumo = resumo_para_auditoria(resumo)
         fonte.ultimo_status, fonte.ultimo_erro, fonte.ultimo_resumo = "ok", None, resumo

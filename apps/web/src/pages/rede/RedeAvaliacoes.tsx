@@ -73,6 +73,9 @@ interface Mapeamento {
   linha_dados: number; col_inep: number; col_valor: number;
   col_etapa?: number | null; col_componente?: number | null; col_turma?: number | null;
   etapa_fixa?: string | null; componente_fixo?: string | null;
+  // Ao salvar: o texto do cabeçalho de cada coluna mapeada no arquivo conferido. Na lista,
+  // vem o que o backend guardou (as colunas e, no arquivo do INEP, a etapa).
+  cabecalho?: Record<string, unknown>;
 }
 interface Fonte {
   id: number; avaliacao: string; avaliacao_nome: string | null; nome: string;
@@ -375,6 +378,17 @@ function ImportarAvaliacao({ catalogo, aoImportar, ehGlobal, aoSalvarFonte }: {
         etapa_fixa: etapaFixa.trim() || null,
         componente_fixo: compFixo.trim() || null,
       };
+      // O cabeçalho (a linha antes dos dados) de cada coluna mapeada, como está no arquivo
+      // conferido acima: a cada coleta, o robô confere que o arquivo da URL ainda é este.
+      // (Um texto longo demais fica de fora: a 1ª coleta vira a referência.)
+      const linhaCabecalho = linhaDados >= 1 ? analise?.primeiras_linhas[linhaDados - 1] : undefined;
+      const cabecalho = Object.fromEntries(
+        (["col_inep", "col_valor", "col_etapa", "col_componente"] as const)
+          .filter((c) => mapeamento[c] != null)
+          .map((c) => [c, linhaCabecalho?.[mapeamento[c] as number] ?? ""]));
+      if (linhaCabecalho && Object.values(cabecalho).every((t) => t.length <= 200)) {
+        mapeamento.cabecalho = cabecalho;
+      }
       await api<Fonte>("/avaliacoes/fontes", {
         method: "POST",
         body: JSON.stringify({

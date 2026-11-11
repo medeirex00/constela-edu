@@ -13,7 +13,9 @@ coordenador em ``/escolas/{id}/indicadores``). O catálogo e a lista de presets 
 leitura e continuam abertos a quem está logado.
 """
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
-from pydantic import BaseModel
+from typing import Annotated, Literal
+
+from pydantic import BaseModel, Field
 from sqlalchemy import delete as sa_delete, select
 from sqlalchemy.orm import Session
 
@@ -368,6 +370,11 @@ class _MapeamentoIn(BaseModel):
     col_turma: int | None = None
     etapa_fixa: str | None = None
     componente_fixo: str | None = None
+    # O texto do cabeçalho (a linha antes dos dados) de cada coluna mapeada, como estava
+    # no arquivo conferido na tela. Cada coleta confere o arquivo baixado contra ele
+    # (``svc.conferir_arquivo_da_fonte``); sem ele, a 1ª coleta vira a referência.
+    cabecalho: dict[Literal["col_inep", "col_valor", "col_etapa", "col_componente",
+                            "col_turma"], Annotated[str, Field(max_length=200)]] | None = None
 
 
 class _FonteIn(BaseModel):
@@ -434,11 +441,15 @@ def criar_fonte(
         raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
     av = svc.obter_avaliacao(db, dados.avaliacao)
     cadencia = "mensal" if dados.cadencia == "mensal" else "manual"
+    mapeamento = dados.mapeamento.model_dump(exclude={"cabecalho"})
+    colunas = svc.colunas_do_cabecalho(mapeamento, dados.mapeamento.cabecalho)
+    if colunas:
+        mapeamento["cabecalho"] = {"colunas": colunas}
     fonte = FonteAvaliacao(
         avaliacao_id=av.id, nome=dados.nome.strip(), url=dados.url.strip(),
         edicao=dados.edicao, indicador=dados.indicador.strip(),
         unidade=dados.unidade.strip(), cadencia=cadencia,
-        mapeamento=dados.mapeamento.model_dump(),
+        mapeamento=mapeamento,
         proxima_coleta=svc._agora() if cadencia == "mensal" else None)
     db.add(fonte)
     db.flush()
