@@ -3814,8 +3814,15 @@ def _carregar_estado(db: Session, escola_id: int, ano: int) -> _EstadoEscola:
         recebe, idêntico ao dos imports de plataforma. Indexar por chave de SALA
         (e não por ``turma_id``) faz o aluno criado pelo Matific numa linha de
         turma paralela ("1 ANO A MANHA (300…)") ser candidato da linha da Lista
-        Piloto ("1ºA") — era por aí que a duplicata entrava;
-      * nome → alunos da escola, para reconhecer MUDANÇA DE SALA.
+        Piloto ("1ºA") — era por aí que a duplicata entrava. SÓ quem tem
+        matrícula NO ANO ATIVO entra nele: a mesma chave série+letra de outro ano
+        é OUTRA coorte (na virada todos avançam uma série — o "4º A" de 2026 está
+        no 5º A em 2027), e o roster aceita abreviação sem identificador nenhum:
+        a criança nova do 4º A de 2027 herdava a ficha (e a conta da plataforma)
+        de quem era do 4º A em 2026;
+      * nome → alunos da escola, para reconhecer MUDANÇA DE SALA. Quem só tem
+        matrícula de ano anterior (ou nenhuma) é reconhecido por aqui (nome
+        idêntico, com prova de identidade) ou pelo RA — nunca pelo roster.
     """
     # order_by garante escolha determinística de por_ra quando há RA repetido.
     alunos_todos = db.execute(
@@ -3832,18 +3839,13 @@ def _carregar_estado(db: Session, escola_id: int, ano: int) -> _EstadoEscola:
         t.id: _chave_turma(t.nome) for t in db.execute(
             select(Turma).where(Turma.escola_id == escola_id)).scalars()
     }
-    # Sala ATUAL de cada aluno: a do ano ativo; quem não tem matrícula no ano
-    # herda a da matrícula mais recente (aluno de anos anteriores sendo
-    # rematriculado na MESMA sala continua sendo a mesma pessoa).
-    sala_de: dict[int, str] = {}
-    for aid, tid, _ano_m in db.execute(
-        select(Matricula.aluno_id, Matricula.turma_id, Matricula.ano_letivo)
-        .where(Matricula.escola_id == escola_id)
-        .order_by(Matricula.ano_letivo)).all():
-        sala_de[aid] = chave_da_turma.get(tid, "")
-    for aid, m in matricula_ano.items():
-        if m is not None:
-            sala_de[aid] = chave_da_turma.get(m.turma_id, "")
+    # Sala de cada aluno: SÓ a do ano ativo. Quem não tem matrícula no ano fica sem
+    # sala (não herda a da matrícula de um ano anterior: a mesma série+letra, no ano
+    # novo, é outra turma de crianças) e é reconhecido pelo RA ou pela mudança de
+    # sala (nome idêntico, com prova) — ver ``matriculas.resolver_linha``.
+    sala_de: dict[int, str] = {
+        aid: chave_da_turma.get(m.turma_id, "")
+        for aid, m in matricula_ano.items() if m is not None}
 
     ctx = matriculas.ContextoCasamento()
     for a in alunos_todos:
