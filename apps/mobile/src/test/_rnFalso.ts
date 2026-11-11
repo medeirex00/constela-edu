@@ -15,11 +15,13 @@ import { createElement, type ReactNode } from "react";
 
 type Props = { children?: ReactNode; onPress?: () => void; [chave: string]: unknown };
 
-const elemento = (tag: string) => ({ children, onPress, accessibilityRole }: Props) =>
+const elemento = (tag: string) => ({ children, onPress, accessibilityRole, disabled }: Props) =>
   createElement(
     tag,
     {
-      ...(onPress ? { onClick: onPress } : {}),
+      // Desabilitado, o toque não chega (como no TouchableOpacity de verdade).
+      ...(onPress && !disabled ? { onClick: onPress } : {}),
+      ...(disabled ? { "aria-disabled": true } : {}),
       ...(accessibilityRole ? { role: accessibilityRole } : {}),
     },
     children,

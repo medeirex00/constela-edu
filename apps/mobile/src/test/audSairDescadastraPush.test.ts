@@ -124,6 +124,14 @@ function montar() {
   render(React.createElement(ProvedorAutenticacao, null, React.createElement(Sonda)));
 }
 
+/** "Sair" e o tempo de a tentativa em segundo plano chegar ao servidor falso. */
+async function sairEEsperar() {
+  await act(async () => {
+    await ctx.sair();
+    await esperar(30);
+  });
+}
+
 async function entrarComoProfessora() {
   montar();
   await waitFor(() => expect(ctx.carregando).toBe(false));
@@ -156,9 +164,7 @@ afterEach(() => {
 describe("Sair com rede boa (controle)", () => {
   it("tira o aparelho do push, o token e a sessão", async () => {
     await entrarComoProfessora();
-    await act(async () => {
-      await ctx.sair();
-    });
+    await sairEEsperar();
     expect(ctx.usuario).toBeNull();
     expect(estado.cofre.has("sgpe_token")).toBe(false);
     expect(descadastros().map((d) => d.corpo)).toEqual([{ token_push: TOKEN }]);
@@ -178,9 +184,7 @@ describe("app aberto SEM rede, depois 'Sair' com rede (AUTH-3)", () => {
     expect(ctx.usuario?.email).toBe("prof@ficticio.local"); // sessão salva restaurada
     estado.semRede = false; // a rede volta
 
-    await act(async () => {
-      await ctx.sair();
-    });
+    await sairEEsperar();
     expect(descadastros().map((d) => d.corpo)).toEqual([{ token_push: TOKEN }]);
   });
 });
@@ -189,9 +193,7 @@ describe("'Sair' sem rede (MOBILE-3)", () => {
   it("o descadastro fica pendente e é feito quando a rede volta", async () => {
     await entrarComoProfessora();
     estado.semRede = true;
-    await act(async () => {
-      await ctx.sair();
-    });
+    await sairEEsperar();
     expect(ctx.usuario).toBeNull(); // a sessão local acabou
     expect(estado.cofre.has("sgpe_token")).toBe(false);
     const antes = descadastros().length;
@@ -219,9 +221,7 @@ describe("'Sair' sem rede (MOBILE-3)", () => {
   it("se o app fechar antes de a rede voltar, o descadastro sai na próxima abertura", async () => {
     await entrarComoProfessora();
     estado.semRede = true;
-    await act(async () => {
-      await ctx.sair();
-    });
+    await sairEEsperar();
     cleanup(); // fecha o app
     estado.semRede = false;
     estado.corpos.length = 0;
@@ -237,9 +237,7 @@ describe("'Sair' sem rede (MOBILE-3)", () => {
   it("entrar de novo no aparelho cancela o descadastro pendente da saída anterior", async () => {
     await entrarComoProfessora();
     estado.semRede = true;
-    await act(async () => {
-      await ctx.sair();
-    });
+    await sairEEsperar();
     estado.semRede = false;
     estado.corpos.length = 0;
     await act(async () => {
@@ -270,9 +268,7 @@ describe("resposta do servidor ao descadastro", () => {
   it("429 (muitas tentativas) ou 503: continua pendente e sai depois", async () => {
     await entrarComoProfessora();
     statusDescadastro = 429;
-    await act(async () => {
-      await ctx.sair();
-    });
+    await sairEEsperar();
     statusDescadastro = 503;
     await reconectar();
     statusDescadastro = 200;
@@ -284,9 +280,7 @@ describe("resposta do servidor ao descadastro", () => {
   it("recusa definitiva (422): não fica repetindo para sempre", async () => {
     await entrarComoProfessora();
     statusDescadastro = 422;
-    await act(async () => {
-      await ctx.sair();
-    });
+    await sairEEsperar();
     expect(descadastros()).toHaveLength(1);
     await reconectar();
     expect(descadastros()).toHaveLength(1);

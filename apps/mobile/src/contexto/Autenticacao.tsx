@@ -15,6 +15,7 @@ import {
   useCallback,
   useContext,
   useEffect,
+  useRef,
   useState,
   type ReactNode,
 } from "react";
@@ -47,6 +48,9 @@ export function ProvedorAutenticacao({ children }: { children: ReactNode }) {
   const [escolas, setEscolas] = useState<Escola[]>([]);
   const [escolaId, setEscolaId] = useState<number | null>(null);
   const [carregando, setCarregando] = useState(true);
+  // Muda a cada sessão encerrada: uma resposta da rede que chega DEPOIS do "Sair"
+  // (um refresh do boot que estava pendurado) não pode pôr a sessão de volta.
+  const geracao = useRef(0);
 
   // Toda mudança de sessão é persistida CIFRADA — é o que permite o boot offline.
   useEffect(() => {
@@ -61,10 +65,12 @@ export function ProvedorAutenticacao({ children }: { children: ReactNode }) {
 
   // Refresh a partir da REDE. Mantém a escola atual se ainda válida.
   const atualizarSessao = useCallback(async (preferidaId: number | null) => {
+    const desta = geracao.current;
     const [eu, lista] = await Promise.all([
       api<Usuario>("/auth/me"),
       api<Escola[]>("/escolas"),
     ]);
+    if (desta !== geracao.current) return; // a sessão acabou enquanto esperava a rede
     const valido = preferidaId !== null && lista.some((escola) => escola.id === preferidaId);
     const escolhido = valido ? preferidaId : lista[0]?.id ?? null;
     setUsuario(eu);
@@ -78,6 +84,7 @@ export function ProvedorAutenticacao({ children }: { children: ReactNode }) {
   // Encerra a sessão LOCAL: estado, sessão salva, cache das telas e chave de
   // cifra (rotacionada para o cache antigo virar ilegível num aparelho partilhado).
   const encerrarLocal = useCallback(async () => {
+    geracao.current += 1;
     setUsuario(null);
     setEscolas([]);
     setEscolaId(null);
@@ -104,7 +111,13 @@ export function ProvedorAutenticacao({ children }: { children: ReactNode }) {
       try {
         if (!(await obterToken())) return; // sem token → tela de login
         const salva = await lerSessao();
-        if (salva) aplicarSessao(salva); // abre offline na hora, com o cache
+        if (salva) {
+          // Abre na hora, com o cache: o refresh abaixo segue em segundo plano. A
+          // rede pode não responder por minutos (o fetch do React Native não tem
+          // tempo-limite) e a tela não espera por ela.
+          aplicarSessao(salva);
+          setCarregando(false);
+        }
         // Refresh da rede. Se falhar por ESTAR OFFLINE, seguimos com o cache
         // (o catch não desloga); só o 401 (acima) encerra a sessão.
         await atualizarSessao(salva?.escolaId ?? null);
@@ -127,10 +140,13 @@ export function ProvedorAutenticacao({ children }: { children: ReactNode }) {
     [atualizarSessao],
   );
 
+  // Primeiro a sessão LOCAL (token, dados salvos, tela), que não depende da rede;
+  // depois o push: o descadastro fica marcado no aparelho e vai ao servidor em
+  // segundo plano (notificacoes.ts) — uma rede pendurada não segura a saída.
   const sair = useCallback(async () => {
-    await removerRegistroPush();
     await limparToken();
     await encerrarLocal();
+    await removerRegistroPush();
   }, [encerrarLocal]);
 
   const selecionarEscola = useCallback((id: number) => {

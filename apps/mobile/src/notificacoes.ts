@@ -123,19 +123,30 @@ function recusaDefinitiva(erro: unknown): boolean {
   );
 }
 
-/** Tenta o descadastro pendente (se houver). Sem rede, ou com o servidor fora,
- *  ele continua pendente para a próxima tentativa. Não lança. */
+/** Tempo-limite do pedido de descadastro. O fetch do React Native não tem limite
+ *  (o OkHttp do Android sai com connect/read/write 0): uma conexão que não responde
+ *  prenderia a tentativa, e com ela o próximo registro ou descadastro, por minutos. */
+export const LIMITE_DESCADASTRO_MS = 8_000;
+
+/** Tenta o descadastro pendente (se houver). Sem rede, com o servidor fora ou sem
+ *  resposta no tempo-limite, ele continua pendente para a próxima tentativa. Não
+ *  lança. */
 export function descadastrarPendente(): Promise<void> {
   const tentativa = emSequencia(async () => {
     const pendente = await lerRegistro(CHAVE_DESCADASTRO);
     if (!pendente || !onlineManager.isOnline()) return;
+    const controle = new AbortController();
+    const relogio = setTimeout(() => controle.abort(), LIMITE_DESCADASTRO_MS);
     try {
       await api(`/escolas/${pendente.escolaId}/dispositivos/descadastrar`, {
         method: "POST",
         body: JSON.stringify({ token_push: pendente.token }),
+        signal: controle.signal,
       });
     } catch (erro) {
-      if (!recusaDefinitiva(erro)) return; // rede/servidor: tenta de novo depois
+      if (!recusaDefinitiva(erro)) return; // rede/servidor/tempo: tenta de novo depois
+    } finally {
+      clearTimeout(relogio);
     }
     // Feito (ou recusado de vez): este token não está mais registrado por nós.
     await SecureStore.deleteItemAsync(CHAVE_DESCADASTRO);
@@ -146,8 +157,9 @@ export function descadastrarPendente(): Promise<void> {
 }
 
 /** Tira este aparelho do push (no "Sair" e na sessão expirada): marca o
- *  descadastro como pendente e tenta na hora. Não lança: a saída da conta segue
- *  mesmo se o servidor não responder. */
+ *  descadastro como pendente (no aparelho) e dispara a tentativa na rede em
+ *  SEGUNDO PLANO — quem chama não espera o servidor. Não lança: a saída da conta
+ *  segue mesmo se o servidor não responder. */
 export async function removerRegistroPush(): Promise<void> {
   try {
     const marcado = await emSequencia(async () => {
@@ -156,7 +168,7 @@ export async function removerRegistroPush(): Promise<void> {
       await SecureStore.setItemAsync(CHAVE_DESCADASTRO, JSON.stringify(registro));
       return true;
     });
-    if (marcado) await descadastrarPendente();
+    if (marcado) void descadastrarPendente();
   } catch {
     /* logout continua mesmo se a remoção falhar */
   }
