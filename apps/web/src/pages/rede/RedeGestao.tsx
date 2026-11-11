@@ -212,6 +212,58 @@ function rotuloCargo(u: { cargo: string; rede_id: number | null }): string {
   return u.cargo;
 }
 
+/** O código IBGE do município da rede (7 dígitos): as importações dos indicadores oficiais
+ *  (Ideb, Saeb, SARESP, ICA) são recortadas por ele. Aqui ele se corrige ou se tira (campo
+ *  vazio): o backend recusa (409) o código que já é de outra rede e manda tirá-lo dela
+ *  primeiro — antes, nenhuma tela trocava nem limpava o código de uma rede que já tinha um.
+ *  Montado com `key` pela rede e pelo código gravado: trocar de rede ou salvar recomeça o
+ *  campo; uma recusa mantém o que foi digitado, para corrigir. */
+function CodigoIbgeDaRede({ rede, aoSalvar }: {
+  rede: RedeItem; aoSalvar: (aviso: NonNullable<Aviso>, gravou: boolean) => void;
+}) {
+  const atual = rede.codigo_ibge ?? "";
+  const [codigo, setCodigo] = useState(atual);
+  const [salvando, setSalvando] = useState(false);
+  const valido = codigo === "" || /^\d{7}$/.test(codigo);
+  const tirar = codigo === "" && atual !== "";
+
+  async function salvar() {
+    setSalvando(true);
+    try {
+      const salva = await api<RedeItem>(`/redes/${rede.id}`, {
+        method: "PATCH", body: JSON.stringify({ codigo_ibge: codigo }),
+      });
+      const gravado = salva?.codigo_ibge ?? null;
+      aoSalvar({
+        tipo: "ok",
+        texto: gravado
+          ? `Código IBGE ${gravado} gravado na rede “${rede.nome}”.`
+          : `Código IBGE tirado da rede “${rede.nome}”.`,
+      }, true);
+    } catch (e) {
+      aoSalvar({ tipo: "erro", texto: e instanceof ApiError ? e.message : "Não foi possível gravar o código." }, false);
+    } finally {
+      setSalvando(false);
+    }
+  }
+
+  return (
+    <div className="flex flex-wrap items-end gap-2">
+      <Campo rotulo="Código IBGE do município (7 dígitos)">
+        <input className={`${estiloInput} w-40`} inputMode="numeric" value={codigo} placeholder="sem código"
+               onChange={(e) => setCodigo(e.target.value.replace(/\D/g, "").slice(0, 7))} />
+      </Campo>
+      <Botao variante="neutro" disabled={salvando || !valido || codigo === atual} onClick={salvar}>
+        <Save size={14} /> {tirar ? "Tirar o código IBGE" : "Salvar código IBGE"}
+      </Botao>
+      <p className="w-full text-xs text-zinc-500">
+        Os indicadores oficiais (Ideb, Saeb, SARESP e ICA) são importados pelo município deste código.
+        Para tirar o código desta rede, apague o campo e clique em “Tirar o código IBGE”.
+      </p>
+    </div>
+  );
+}
+
 /** Interruptor visual sobre um checkbox de verdade (os testes e o leitor de tela
  *  continuam vendo role=checkbox com o mesmo nome). */
 function VisualChave({ marcado }: { marcado: boolean }) {
@@ -852,6 +904,15 @@ export default function RedeGestao() {
               <Botao variante="secundario" tamanho="sm" className="sm:ml-auto" onClick={() => navegar("/rede")}>
                 Abrir painel da rede <ArrowRight size={14} aria-hidden />
               </Botao>
+            )}
+            {redeAtual && (
+              <div className="w-full border-t border-zinc-100 pt-3 dark:border-zinc-800">
+                <CodigoIbgeDaRede
+                  key={`${redeAtual.id}:${redeAtual.codigo_ibge ?? ""}`}
+                  rede={redeAtual}
+                  aoSalvar={(a, gravou) => { setAviso(a); if (gravou) recarregar(); }}
+                />
+              </div>
             )}
           </Card>
 

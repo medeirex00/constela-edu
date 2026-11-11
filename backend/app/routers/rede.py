@@ -181,8 +181,8 @@ def _exigir_ibge_livre(db: Session, rede_id: int | None, codigo: str) -> None:
             raise HTTPException(
                 status.HTTP_409_CONFLICT,
                 f"O código IBGE {codigo} já é da rede “{outra_nome}” (id {outra_id}). Cada "
-                "rede tem o seu município: confira o código ou tire-o primeiro da outra "
-                "rede. Nada foi alterado.")
+                "rede tem o seu município: confira o código ou, em Gestão de redes, tire-o "
+                "primeiro da outra rede. Nada foi alterado.")
 
 
 @router.get("/{rede_id}/modulos")
