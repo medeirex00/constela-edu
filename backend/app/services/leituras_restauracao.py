@@ -58,9 +58,12 @@ MOTIVO_MINIMO = 10
 
 # Onde a deduplicação deixa a cópia de evento que ela APAGOU (só no log): a fusão
 # (``alunos_fusao.fundir_par``) e a limpeza do passivo
-# (``eventos.deduplicar_eventos_por_conteudo``, ``scripts/deduplicar_eventos_por_conteudo``).
+# (``eventos.deduplicar_eventos_por_conteudo``, ``scripts/deduplicar_eventos_por_conteudo``);
+# e onde a ingestão deixa a cópia NATIVA que ela NÃO gravou porque o conteúdo já veio
+# de uma ficha absorvida (``eventos.ingerir_eventos``, PEND-14).
 _LOGS_DE_DESCARTE = {"aluno.fundido": "eventos_descartados_detalhe",
-                     "aluno.eventos_duplicados_removidos": "eventos"}
+                     "aluno.eventos_duplicados_removidos": "eventos",
+                     "aluno.eventos_nativos_nao_gravados": "eventos"}
 
 
 def _descartes_anteriores(db: Session, escola_id: int, item: "ItemRestauracao",

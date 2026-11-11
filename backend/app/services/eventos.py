@@ -136,20 +136,60 @@ def ingerir_eventos(db: Session, aluno_id: int, plataforma: str,
     conteudos.discard(None)
     novos: list[dict] = []
     vistos: set[str] = set()
+    nao_gravados: list[dict] = []
     for ev in eventos:
         chave = ev.get("chave_natural")
         if not chave or chave in existentes or chave in vistos:
             continue
         conteudo = _conteudo_comprovado(ev, aluno_id, plataforma)
         if conteudo is not None and conteudo in conteudos:
-            continue   # a mesma linha já está aqui, vinda de uma ficha absorvida
+            # A mesma linha já está aqui, vinda de uma ficha absorvida: a cópia
+            # NATIVA não é gravada — mas fica no log (``_registrar_nao_gravados``).
+            vistos.add(chave)
+            nao_gravados.append(ev)
+            continue
         vistos.add(chave)
         if conteudo is not None:
             conteudos.add(conteudo)
         novos.append(ev)
     if novos:
         db.execute(insert(EventoAluno), novos)
+    if nao_gravados:
+        _registrar_nao_gravados(db, aluno_id, nao_gravados)
     return len(novos)
+
+
+ACAO_NATIVOS_NAO_GRAVADOS = "aluno.eventos_nativos_nao_gravados"
+
+
+def _registrar_nao_gravados(db: Session, aluno_id: int, eventos: list[dict]) -> None:
+    """Registra no log da ficha as cópias NATIVAS que a ingestão não gravou porque o
+    mesmo conteúdo já veio de uma ficha absorvida (PEND-14): livro, instante e a
+    chave que a cópia nativa teria — sem nome nem título.
+
+    POR QUÊ. Era o único caminho em que a ocorrência de um livro para ESTA ficha
+    sumia sem rastro (a fusão e a limpeza do passivo já registram o que descartam).
+    Se a ficha ganha releitura e é absorvida depois, a regra 9 da restauração
+    histórica (``leituras_restauracao._descartes_anteriores``, que lê este log) sabe
+    que a releitura não é a primeira. A chave já registrada para a ficha não se
+    repete: reimportar o mesmo relatório não enche o log."""
+    ja = set()
+    for (detalhes,) in db.execute(select(LogAuditoria.detalhes).where(
+            LogAuditoria.acao == ACAO_NATIVOS_NAO_GRAVADOS,
+            LogAuditoria.entidade == "aluno", LogAuditoria.entidade_id == aluno_id)):
+        for d in (detalhes or {}).get("eventos") or ():
+            if isinstance(d, dict):
+                ja.add(d.get("chave_natural"))
+    registros = [{"livro_id": ev.get("livro_id"),
+                  "ocorrido_em": ev["ocorrido_em"].isoformat(),
+                  "chave_natural": ev["chave_natural"]}
+                 for ev in eventos if ev["chave_natural"] not in ja]
+    if registros:
+        registrar(db, ACAO_NATIVOS_NAO_GRAVADOS, escola_id=eventos[0].get("escola_id"),
+                  entidade="aluno", entidade_id=aluno_id,
+                  detalhes={"motivo": "a mesma linha do relatório já está na ficha, vinda "
+                                      "de uma ficha absorvida",
+                            "eventos": registros})
 
 
 def fichas_absorvidas(db: Session, aluno_ids) -> dict[int, set[int]]:
