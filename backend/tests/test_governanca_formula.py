@@ -128,15 +128,18 @@ def test_coordenador_le_todos_os_parametros(cliente, db, escola_completa):
 
 
 def test_secretaria_le_todos_os_parametros_e_nao_grava(db, escola_completa):
-    """A página 'Pontuação' também é aberta pela Secretaria: todos os GETs
+    """A página 'Pontuação' também é aberta pela Secretaria: os GETs
     (inclusive /perfil-scoring e /dificuldade-livro) são 200; as 5 escritas de
-    parâmetro são 403 — e nada é gravado."""
+    parâmetro são 403 — e nada é gravado. Exceção (G_GRUPO-1): /referencias é 403
+    para ela — os valores em uso são números das crianças da escola (o máximo ou o
+    P90), e nenhuma tela da Secretaria chama a rota."""
     escola = escola_completa["escola"]
     sec = _secretaria(db, escola)
     base = _base(escola.id)
     for rota in ROTAS_GET:
         r = sec.get(f"{base}/{rota}")
-        assert r.status_code == 200, f"{rota} -> {r.status_code} {r.text}"
+        esperado = 403 if rota == "referencias" else 200
+        assert r.status_code == esperado, f"{rota} -> {r.status_code} {r.text}"
     pesos_antes = sec.get(f"{base}/pesos/geral").json()
     for url, corpo in _rotas_put(db, escola_completa):
         r = sec.put(url, json=corpo)

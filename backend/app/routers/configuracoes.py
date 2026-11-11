@@ -45,7 +45,7 @@ from app.schemas import (
     ReferenciasUpdate,
 )
 from app.services import (bimestres, dificuldade_livro, elegibilidade, matific_destaque,
-                          periodos, politica_sync, provisionamento, scoring)
+                          periodos, permissoes, politica_sync, provisionamento, scoring)
 from app.services import premiacoes as svc_premiacoes
 from app.services.audit import registrar
 
@@ -69,6 +69,8 @@ MODOS_PERFIL_SCORING = {"institucional", "personalizado"}
 # critério já aplicado aos níveis (``/niveis``) e ao perfil. As LEITURAS (GET)
 # continuam abertas a admin/coordenador (e à Secretaria): a escola CONSULTA.
 # Nenhum endpoint foi removido — a escola perde só o botão de gravar.
+# Exceção da Secretaria: ``GET /referencias`` (os valores em uso são números das
+# próprias crianças da escola — ver ``obter_referencias``).
 
 
 # --- Perfil de scoring: institucional (rede) × personalizado (interno) -------
@@ -800,12 +802,27 @@ def salvar_pesos(
 
 # --- Referências de normalização (PRD §31, §62) -----------------------------
 
+# A régua em uso é feita dos números das crianças da escola: o MAIOR valor de cada
+# indicador quando a plataforma tem menos de ``scoring.MIN_ALUNOS_ROBUSTO`` crianças com
+# dado, senão o P90 — que, com 11, 21, 31… crianças, é exatamente o número de UMA delas.
+# A Secretaria NUNCA vê dado individual de criança (``permissoes.e_secretaria``): na
+# escola de 1 criança a rota entregava todos os números que o cartão da rede esconde pelo
+# grupo pequeno. Ela não edita a régua e nenhuma tela dela chama esta rota (a web só
+# desenha as referências para o Admin Global), por isso a leitura também é negada.
+REFERENCIAS_SEM_SECRETARIA = (
+    "As referências da pontuação são calculadas com os números das crianças da escola e "
+    "podem mostrar o resultado de uma criança. A Secretaria acompanha só os números "
+    "agregados da rede.")
+
+
 @router.get("/referencias", response_model=ReferenciasOut)
 def obter_referencias(
     escola_id: int = Depends(escola_autorizada),
     db: Session = Depends(get_db),
     usuario: Usuario = Depends(exigir_papeis("admin", "coordenador")),
 ):
+    if permissoes.e_secretaria(usuario):
+        raise HTTPException(status.HTTP_403_FORBIDDEN, REFERENCIAS_SEM_SECRETARIA)
     row = db.execute(
         select(ReferenciaNormalizacao).where(ReferenciaNormalizacao.escola_id == escola_id)
     ).scalar_one_or_none()
