@@ -64,9 +64,11 @@ export default function Scanner() {
         // A leitura fica parada até a pessoa escolher (a câmera continua vendo o
         // mesmo QR; sem isso, o aviso se repetiria a cada leitura).
         aguardaEscolha = true;
-        setMensagem("Este QR code não é do painel do Constela Edu.");
+        // O app só sabe que não reconhece o endereço: pode ser o painel de uma
+        // instalação própria do Constela (o QR leva o PUBLIC_BASE_URL do servidor).
+        setMensagem("O app não reconhece este endereço como o painel do Constela Edu.");
         Alert.alert(
-          "Endereço fora do Constela Edu",
+          "Endereço não reconhecido",
           `Ele leva para:\n\n${data}\n\nSó abra se você confia neste endereço.`,
           [
             { text: "Cancelar", style: "cancel", onPress: liberarLeitura },

@@ -87,7 +87,15 @@ describe("Scanner de QR do Painel Público", () => {
 
   it("endereço de fora: só abre se a pessoa confirmar", async () => {
     const url = "http://192.0.2.10:8040/p/AbC123_-xYz9"; // demonstração local
-    await ler(url);
+    const tela = await ler(url);
+    // Pode ser o painel de uma instalação própria do Constela (PUBLIC_BASE_URL no IP
+    // da rede): o app só sabe que não reconhece o endereço (REV-MOBILE-3).
+    expect(tela.container.textContent).toContain(
+      "O app não reconhece este endereço como o painel do Constela Edu.",
+    );
+    expect(tela.container.textContent).not.toContain("não é do painel");
+    expect(alertas[0].titulo).toBe("Endereço não reconhecido");
+    expect(alertas[0].mensagem).toBe(`Ele leva para:\n\n${url}\n\nSó abra se você confia neste endereço.`);
     const botoes = alertas[0].botoes;
     expect(botoes.map((b) => b.text)).toEqual(["Cancelar", "Abrir mesmo assim"]);
     await act(async () => {
