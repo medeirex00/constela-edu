@@ -481,7 +481,11 @@ def _contingencia(sistema: str, mensagens: list[dict]) -> tuple[str, str]:
 def _responder(db: Session, escola_id: int, sistema: str,
                mensagens: list[dict]) -> tuple[str, str]:
     """(resposta, quem respondeu) pelo provedor da escola. Quando o externo falha,
-    responde o modo local (``CONTINGENCIA``): o assistente nunca sai do ar."""
+    responde o modo local (``CONTINGENCIA``): o assistente nunca sai do ar.
+
+    Antes da chamada ao provedor EXTERNO, faz o commit da transação (até aqui, só
+    leituras): durante a rede (``ia.provedores.PRAZO_RESPOSTA_S`` por tentativa), a
+    conexão do banco volta ao pool em vez de ficar presa "idle in transaction"."""
     try:
         # A criação pode falhar (ex.: chave ausente/errada): cai no modo local.
         provedor = _provedor_da_escola(db, escola_id)
@@ -502,6 +506,7 @@ def _responder(db: Session, escola_id: int, sistema: str,
         {"papel": m["papel"], "conteudo": pseudonimizar(m["conteudo"])}
         for m in mensagens
     ]
+    db.commit()
     try:
         resposta = _reidentificar(provedor.responder(sistema_env, mensagens_env), mapa)
     except ErroProvedorIA as erro:
@@ -516,26 +521,33 @@ def _responder(db: Session, escola_id: int, sistema: str,
     return resposta, provedor.nome
 
 
+def _conversa_do_usuario(db: Session, conversa_id: int, escola_id: int,
+                         usuario_id: int) -> ConversaIA:
+    conversa = db.get(ConversaIA, conversa_id)
+    if conversa is None or conversa.escola_id != escola_id \
+            or conversa.usuario_id != usuario_id:
+        raise ConversaNaoEncontrada("Conversa não encontrada.")
+    return conversa
+
+
 def perguntar(db: Session, escola_id: int, usuario_id: int,
               pergunta: str, conversa_id: int | None = None) -> dict:
     """Fluxo completo: contexto → provedor → registro da conversa.
 
-    Levanta ``ConversaNaoEncontrada`` quando ``conversa_id`` não é de quem pergunta."""
-    if conversa_id is not None:
-        conversa = db.get(ConversaIA, conversa_id)
-        if conversa is None or conversa.escola_id != escola_id \
-                or conversa.usuario_id != usuario_id:
-            raise ConversaNaoEncontrada("Conversa não encontrada.")
-    else:
-        titulo = pergunta.strip()[:80] or "Nova conversa"
-        conversa = ConversaIA(escola_id=escola_id, usuario_id=usuario_id, titulo=titulo)
-        db.add(conversa)
-        db.flush()
+    Primeiro só LÊ (conversa, histórico, contexto); a conversa nova e as duas
+    mensagens são gravadas DEPOIS da resposta, numa transação curta (com provedor
+    externo, ``_responder`` encerra a de leitura antes da rede).
 
-    historico = db.execute(
-        select(MensagemIA).where(MensagemIA.conversa_id == conversa.id)
-        .order_by(MensagemIA.id.desc()).limit(MAX_MENSAGENS_CONTEXTO)
-    ).scalars().all()
+    Levanta ``ConversaNaoEncontrada`` quando ``conversa_id`` não é de quem pergunta
+    (ou deixou de existir enquanto o provedor respondia)."""
+    if conversa_id is not None:
+        _conversa_do_usuario(db, conversa_id, escola_id, usuario_id)
+        historico = db.execute(
+            select(MensagemIA).where(MensagemIA.conversa_id == conversa_id)
+            .order_by(MensagemIA.id.desc()).limit(MAX_MENSAGENS_CONTEXTO)
+        ).scalars().all()
+    else:
+        historico = []
     mensagens = [
         {"papel": m.papel, "conteudo": m.conteudo} for m in reversed(historico)
     ]
@@ -544,6 +556,15 @@ def perguntar(db: Session, escola_id: int, usuario_id: int,
     sistema = INSTRUCOES + montar_contexto(db, escola_id)
     resposta, provedor_usado = _responder(db, escola_id, sistema, mensagens)
 
+    if conversa_id is not None:
+        # Relida: a conversa pode ter sido apagada enquanto o provedor respondia
+        # (retenção, exclusão da conta): 404, não mensagem órfã.
+        conversa = _conversa_do_usuario(db, conversa_id, escola_id, usuario_id)
+    else:
+        titulo = pergunta.strip()[:80] or "Nova conversa"
+        conversa = ConversaIA(escola_id=escola_id, usuario_id=usuario_id, titulo=titulo)
+        db.add(conversa)
+        db.flush()
     conversa.provedor = provedor_usado
     db.add(MensagemIA(conversa_id=conversa.id, papel="usuario", conteudo=pergunta))
     db.add(MensagemIA(conversa_id=conversa.id, papel="assistente", conteudo=resposta))

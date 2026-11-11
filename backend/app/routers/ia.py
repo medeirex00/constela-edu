@@ -226,6 +226,8 @@ def testar_config_assistente(
         provedor = assistente._provedor_da_escola(db, escola_id)
     except ErroProvedorIA as erro:
         return {"ok": False, "erro": str(erro)[:300]}
+    # Só leu: encerra a transação antes da rede, e a conexão do banco volta ao pool.
+    db.rollback()
     try:
         resposta = provedor.responder(
             "Você é um verificador de configuração. Responda apenas: OK",

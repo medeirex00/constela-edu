@@ -99,7 +99,7 @@ def _falso_anthropic(monkeypatch, captura: _Captura):
                 SimpleNamespace(type="text", text=f"O destaque é {token}.")])
 
     class Cliente:
-        def __init__(self, api_key):
+        def __init__(self, api_key, **_opcoes):  # timeout, max_retries (o prazo)
             captura.api_key = api_key
             self.messages = Mensagens()
 

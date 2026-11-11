@@ -16,6 +16,19 @@ from app.services.ia.base import ErroProvedorIA, ProvedorIA
 MODELO_ANTHROPIC_PADRAO = "claude-opus-4-8"
 MODELO_OPENAI_PADRAO = "gpt-4o"
 
+# Prazo das chamadas aos provedores externos. Sem ele, o SDK da Anthropic espera
+# 600 s pela resposta e tenta mais 2 vezes: até ~30 min por pergunta, com a
+# thread do worker presa. Estourado o prazo, o assistente responde no modo local.
+PRAZO_CONEXAO_S = 5.0
+PRAZO_RESPOSTA_S = 60.0
+NOVAS_TENTATIVAS_ANTHROPIC = 1  # pior caso: 2 × 60 s
+
+
+def _prazo():
+    import httpx
+
+    return httpx.Timeout(PRAZO_RESPOSTA_S, connect=PRAZO_CONEXAO_S)
+
 
 class AnthropicProvedor(ProvedorIA):
     nome = "anthropic"
@@ -30,7 +43,8 @@ class AnthropicProvedor(ProvedorIA):
         import anthropic
 
         try:
-            cliente = anthropic.Anthropic(api_key=self._api_key)
+            cliente = anthropic.Anthropic(api_key=self._api_key, timeout=_prazo(),
+                                          max_retries=NOVAS_TENTATIVAS_ANTHROPIC)
             resposta = cliente.messages.create(
                 model=self._modelo,
                 max_tokens=settings.AI_MAX_TOKENS,
@@ -92,7 +106,7 @@ class OpenAIProvedor(ProvedorIA):
                 "https://api.openai.com/v1/chat/completions",
                 headers={"Authorization": f"Bearer {self._api_key}"},
                 json=corpo,
-                timeout=60.0,
+                timeout=_prazo(),
             )
             resposta.raise_for_status()
             dados = resposta.json()
