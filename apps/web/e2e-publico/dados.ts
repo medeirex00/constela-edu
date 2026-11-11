@@ -141,7 +141,22 @@ export async function simularVitrine(page: Page, corpo: unknown = VITRINE) {
     rota.fulfill({ json: corpo, headers: { "Cache-Control": "no-store" } }));
 }
 
+/**
+ * Relógio do telão nos testes: uma SEGUNDA-FEIRA, 12h em Brasília. O cabeçalho do
+ * telão mostra a data por extenso e a dica do dia gira com a data — com o relógio
+ * real, o resultado dependia do dia em que o teste rodava (em 1366x768 o nome da
+ * escola fica em 1 linha ao lado de "Sábado, 14 de novembro" e em 2 ao lado de
+ * "Terça-feira, 10 de novembro": o palco encolhe). Dia útil é o pior caso, e
+ * "Segunda-feira, 09 de novembro" é a data mais larga do calendário (medida em
+ * 1366x768 entre todas as datas de 2026–2027).
+ */
+export const AGORA_TELAO = new Date("2026-11-09T15:00:00Z");
+
+/** Simula a API do telão e fixa a data da página em AGORA_TELAO. Só a data para:
+ *  os timers seguem andando (os reais, ou os falsos de um page.clock.install()
+ *  feito antes, que o page.clock.runFor avança). */
 export async function simularPainel(page: Page, corpo: unknown = PAINEL) {
+  await page.clock.setFixedTime(AGORA_TELAO);
   await prepararPagina(page);
   await page.route((url) => /^\/api\/v1\/publico\/[^/]+\/painel$/.test(url.pathname), (rota: Route) =>
     rota.fulfill({ json: corpo, headers: { "Cache-Control": "no-store" } }));

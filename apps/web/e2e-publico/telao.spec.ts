@@ -188,6 +188,10 @@ for (const tela of TELAS) {
         await simularPainel(page);
         await page.goto(URL_TELAO);
         await expect(page.getByRole("heading", { level: 1 })).toBeVisible();
+        // Relógio fixo no pior caso (dados.ts): a data de dia útil mais larga. Com o
+        // relógio real o resultado dependia do dia (o palco encolhe nos dias úteis).
+        await expect(page.locator("header"), "o relógio do teste não está fixo em AGORA_TELAO")
+          .toContainText("Segunda-feira, 09 de novembro");
         await page.evaluate(() => document.fonts.ready);
         for (let volta = 1; volta <= 2; volta++) {
           for (const titulo of SLIDES) {
