@@ -794,7 +794,9 @@ describe("Navegação — o cartão Contexto da Secretaria", () => {
     expect(marcados()).toEqual(["/rede/escolas"]);
   });
 
-  it.each(["/escola", "/turmas", "/turmas/7", "/professores", "/metricas", "/livros", "/simulador"])(
+  // Só as telas de escola que a Secretaria abre: Turmas, Professores e Simulador são
+  // RotaEscolaOp (o App a manda ao Dashboard antes de o Layout montar).
+  it.each(["/escola", "/metricas", "/livros"])(
     "'Toda a Rede Municipal' numa tela de escola (%s) volta ao Panorama da Rede", async (rota) => {
       const { espiao } = await montar(SECRETARIA, { rota, escolas: ESCOLAS, escolaSelecionada: 1 });
       await userEvent.selectOptions(contexto(), "");
