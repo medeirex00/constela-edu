@@ -53,6 +53,22 @@ class LoginOut(BaseModel):
     usuario: UsuarioOut
 
 
+# Caracteres de CONTROLE (C0 e DEL), com o espaço em volta. Invisíveis na tela,
+# chegam colados de PDF ou relatório (ex.: \x02) — e um só deles num nome derruba
+# a exportação Excel da escola inteira (o openpyxl recusa o caractere). Vale para
+# todo nome que vai para a planilha: aluno, turma (e a série) e escola.
+_RE_CONTROLE = re.compile(r"\s*[\x00-\x1f\x7f]+\s*")
+
+
+def _nome_sem_controle(valor):
+    """Troca cada trecho com caractere de controle por UM espaço (e tira o das
+    pontas), ANTES de conferir o tamanho: o nome que se vê é o nome que fica.
+    Nome sem caractere de controle passa intacto."""
+    if isinstance(valor, str) and _RE_CONTROLE.search(valor):
+        return _RE_CONTROLE.sub(" ", valor).strip()
+    return valor
+
+
 # --- Escolas ----------------------------------------------------------------
 
 class EscolaOut(ORMModel):
@@ -77,7 +93,8 @@ def _ano_corrente_br() -> int:
 # o SQLite aceita e o PostgreSQL recusa no commit (DataError → 500); com eles, a
 # API responde 422 antes de tocar o banco.
 class EscolaCreate(BaseModel):
-    nome: str = Field(min_length=2, max_length=200)
+    nome: Annotated[str, BeforeValidator(_nome_sem_controle)] = Field(
+        min_length=2, max_length=200)
     cidade: str | None = Field(default=None, max_length=120)
     estado: str | None = Field(default=None, max_length=2)
     ano_letivo_ativo: int = Field(default_factory=_ano_corrente_br)
@@ -85,7 +102,7 @@ class EscolaCreate(BaseModel):
 
 class EscolaUpdate(BaseModel):
     # O nome é validado na rota (2 a 200 depois de tirar os espaços das pontas).
-    nome: str | None = None
+    nome: Annotated[str | None, BeforeValidator(_nome_sem_controle)] = None
     cidade: str | None = Field(default=None, max_length=120)
     estado: str | None = Field(default=None, max_length=2)
     logotipo_url: str | None = Field(default=None, max_length=500)
@@ -153,8 +170,10 @@ class TurmaOut(ORMModel):
 
 
 class TurmaCreate(BaseModel):
-    nome: str = Field(min_length=1, max_length=100)
-    ano_escolar: str = Field(min_length=1, max_length=30)
+    nome: Annotated[str, BeforeValidator(_nome_sem_controle)] = Field(
+        min_length=1, max_length=100)
+    ano_escolar: Annotated[str, BeforeValidator(_nome_sem_controle)] = Field(
+        min_length=1, max_length=30)
     ano_letivo: int = Field(ge=2000, le=2100)
     professor_id: int | None = None
     turno: str | None = Field(default=None, pattern=PADRAO_TURNO)
@@ -164,8 +183,10 @@ class TurmaCreate(BaseModel):
 
 class TurmaUpdate(BaseModel):
     """Atualização parcial — só o que foi enviado é alterado."""
-    nome: str | None = Field(default=None, min_length=1, max_length=100)
-    ano_escolar: str | None = Field(default=None, min_length=1, max_length=30)
+    nome: Annotated[str | None, BeforeValidator(_nome_sem_controle)] = Field(
+        default=None, min_length=1, max_length=100)
+    ano_escolar: Annotated[str | None, BeforeValidator(_nome_sem_controle)] = Field(
+        default=None, min_length=1, max_length=30)
     ano_letivo: int | None = Field(default=None, ge=2000, le=2100)
     professor_id: int | None = None
     turno: str | None = Field(default=None, pattern=PADRAO_TURNO)
@@ -206,21 +227,6 @@ def _numero_chamada_valido(valor: int | None) -> int | None:
 
 
 NumeroChamada = Annotated[int | None, AfterValidator(_numero_chamada_valido)]
-
-
-# Caracteres de CONTROLE (C0 e DEL), com o espaço em volta. Invisíveis na tela,
-# chegam colados de PDF ou relatório (ex.: \x02) — e um só deles num nome derruba
-# a exportação Excel da escola inteira (o openpyxl recusa o caractere).
-_RE_CONTROLE = re.compile(r"\s*[\x00-\x1f\x7f]+\s*")
-
-
-def _nome_sem_controle(valor):
-    """Troca cada trecho com caractere de controle por UM espaço (e tira o das
-    pontas), ANTES de conferir o tamanho: o nome que se vê é o nome que fica.
-    Nome sem caractere de controle passa intacto."""
-    if isinstance(valor, str) and _RE_CONTROLE.search(valor):
-        return _RE_CONTROLE.sub(" ", valor).strip()
-    return valor
 
 
 class AlunoCreate(BaseModel):
