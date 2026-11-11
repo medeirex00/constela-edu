@@ -65,6 +65,16 @@ def registrar_dispositivo(
     db: Session = Depends(get_db),
     usuario: Usuario = Depends(get_usuario_atual),
 ):
+    # Um registro da conta por vez: o corte do teto conta os aparelhos da conta DEPOIS
+    # de gravar este, e no PostgreSQL (READ COMMITTED) uma requisição não vê o que
+    # outra gravou e ainda não confirmou. Sem a trava, registros simultâneos da mesma
+    # conta (um script) passavam todos do corte e a conta ficava acima do teto. A
+    # trava é a linha da conta (FOR NO KEY UPDATE: não segura quem só a referencia,
+    # como as linhas da auditoria); o próximo registro espera este confirmar e já o
+    # conta. No SQLite as escritas já são uma por vez e a trava não gera SQL.
+    db.execute(
+        select(Usuario.id).where(Usuario.id == usuario.id).with_for_update(key_share=True)
+    )
     dispositivo = db.execute(
         select(DispositivoMovel).where(DispositivoMovel.token_push == dados.token_push)
     ).scalar_one_or_none()
