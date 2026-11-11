@@ -671,7 +671,9 @@ def _payload_matific_placar(texto: str) -> dict | None:
         return None
     try:
         dados = json.loads(t)
-    except (ValueError, TypeError):
+    except (ValueError, TypeError, RecursionError):
+        # RecursionError: aninhamento profundo demais (arquivo corrompido ou forjado)
+        # — não é ValueError, e virava 500 na prévia.
         return None
     if (isinstance(dados, dict) and dados.get("fonte") == "matific-placar"
             and isinstance(dados.get("alunos"), list)):
