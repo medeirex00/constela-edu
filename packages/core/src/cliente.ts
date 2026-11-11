@@ -11,10 +11,31 @@
 
 export class ApiError extends Error {
   status: number;
-  constructor(status: number, mensagem: string) {
+  /** O id da requisição no log do servidor (cabeçalho X-Request-ID), quando veio. */
+  requestId?: string;
+  constructor(status: number, mensagem: string, requestId?: string) {
     super(mensagem);
     this.status = status;
+    if (requestId) this.requestId = requestId;
   }
+}
+
+/** O id que o servidor põe em toda resposta (X-Request-ID, exposto no CORS) e grava em
+ *  cada linha do log daquela requisição. Só o formato que ele gera (letras, números e
+ *  hífen): um valor estranho, de um proxy no caminho, não vai para a tela. */
+export function idDaRequisicao(resposta: Response): string | undefined {
+  const cabecalhos = (resposta as { headers?: { get?: unknown } }).headers;
+  if (!cabecalhos || typeof cabecalhos.get !== "function") return undefined;
+  const id = ((cabecalhos as Headers).get("X-Request-ID") ?? "").trim();
+  return /^[A-Za-z0-9-]{8,64}$/.test(id) ? id : undefined;
+}
+
+/** Num erro do SERVIDOR (5xx), a mensagem termina com o começo do id da requisição —
+ *  "(código: 4f1c2b9a)" — para a pessoa repassar ao suporte, que acha o erro no log por
+ *  ele. Nos erros de quem pediu (4xx), a mensagem já diz o que corrigir e fica como está. */
+export function comCodigoDeSuporte(mensagem: string, status: number, requestId?: string): string {
+  if (status < 500 || !requestId) return mensagem;
+  return `${mensagem} (código: ${requestId.slice(0, 8)})`;
 }
 
 export interface ArmazenamentoToken {
@@ -123,10 +144,10 @@ async function tratarErro(resposta: Response): Promise<never> {
     aoExpirarSessao();
     throw new ApiError(401, "Sessão expirada. Entre novamente.");
   }
-  throw new ApiError(
-    resposta.status,
-    await extrairDetalhe(resposta, "Não foi possível completar a operação."),
-  );
+  const requestId = idDaRequisicao(resposta);
+  const mensagem = await extrairDetalhe(resposta, "Não foi possível completar a operação.");
+  throw new ApiError(resposta.status, comCodigoDeSuporte(mensagem, resposta.status, requestId),
+    requestId);
 }
 
 /** Corpo JSON de uma resposta OK. 204 (No Content) e corpo vazio devolvem
@@ -186,8 +207,10 @@ export async function loginRequest(email: string, senha: string) {
     body: corpo.toString(),
   });
   if (!resposta.ok) {
+    const requestId = idDaRequisicao(resposta);
     const detalhe = await extrairDetalhe(resposta, "Falha no login.");
-    throw new ApiError(resposta.status, detalhe);
+    throw new ApiError(resposta.status, comCodigoDeSuporte(detalhe, resposta.status, requestId),
+      requestId);
   }
   return resposta.json();
 }
