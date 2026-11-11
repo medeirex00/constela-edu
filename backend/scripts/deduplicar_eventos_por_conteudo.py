@@ -7,8 +7,9 @@ leitura" do Relatório por Período contavam a mais. O código já não duplica;
 script tira o que ficou gravado.
 
 Sem ``--aplicar`` só CONTA (nada é apagado). Com ``--aplicar``, em cada grupo de
-cópias fica a que veio da ficha absorvida (a evidência da restauração histórica)
-e cada remoção vai para o log de auditoria da ficha
+cópias fica a que veio da ficha absorvida (a evidência da restauração histórica);
+a primeira leitura de uma ficha que tem releitura do mesmo livro nunca sai
+(``eventos.primeiras_ocorrencias``). Cada remoção vai para o log de auditoria da ficha
 (``aluno.eventos_duplicados_removidos``). A saída só traz contagens.
 
     python -m scripts.deduplicar_eventos_por_conteudo                 # simulação
