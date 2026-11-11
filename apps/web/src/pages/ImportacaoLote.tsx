@@ -529,6 +529,7 @@ export default function ImportacaoLote({ aoConcluir }: { aoConcluir?: () => void
           escolaId={escolaId}
           aberto={editando !== null}
           turmas={turmas}
+          erroTurmas={erroTurmas}
           turmaInicial={turmaInicialDrawer}
           nomePdf={itemEmEdicao ? `${itemEmEdicao.nome}${itemEmEdicao.alunoNome ? ` — ${itemEmEdicao.alunoNome}` : ""}` : ""}
           aoFechar={() => setEditando(null)}

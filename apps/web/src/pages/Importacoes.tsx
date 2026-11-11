@@ -548,7 +548,8 @@ export default function Importacoes() {
     erro: erroHistorico,
     recarregar: recarregarHistorico,
   } = useApi<Importacao[]>(escolaId ? `/escolas/${escolaId}/importacoes` : null);
-  const { dados: turmasApi } = useApi<Turma[]>(escolaId ? `/escolas/${escolaId}/turmas` : null);
+  const { dados: turmasApi, erro: erroTurmasApi } = useApi<Turma[]>(
+    escolaId ? `/escolas/${escolaId}/turmas` : null);
   const turmas = turmasApi ?? [];
 
   /** "Deixar para a Revisão": uma instrução ao backend (``deixar_para_revisao``), com
@@ -1538,6 +1539,7 @@ export default function Importacoes() {
               escolaId={escolaId}
               aberto={editarGrupo !== null}
               turmas={turmas}
+              erroTurmas={erroTurmasApi?.message ?? null}
               turmaInicial={(editarGrupo !== null ? grupos[editarGrupo]?.correspondencia?.turma_id : null)
                 ?? acharTurmaPorNome(turmas, analise.turma_detectada)}
               nomePdf={editarGrupo !== null ? grupos[editarGrupo]?.nome ?? "" : ""}
