@@ -730,8 +730,15 @@ export interface IdentidadeDoAluno {
 /** As contas que o aluno tem NESTA plataforma, com o estado de cada uma.
  *
  * Só aparece quando há mais de uma — que é quando a pergunta existe. Deixa
- * escolher qual vale (a outra fica APOSENTADA: preservada, fora do retrato) e
+ * escolher qual vale (a outra fica APOSENTADA: preservada, fora da importação) e
  * mostra o histórico da decisão: quem, quando e por quê.
+ *
+ * O que já veio da aposentada NÃO sai da ficha: nem o retrato nem a leitura guardam
+ * de qual conta vieram (ALUNOS-4, ``identidade_efetiva``). As leituras do Elefante
+ * continuam contando, os retratos continuam nos períodos em que entraram, e o
+ * retrato atual só muda quando entra uma coleta da conta que vale — no Matific, a
+ * trava contra queda segura essa coleta se a aposentada tinha números maiores. O
+ * texto não promete mais que isso (REV2-COSTURA-3).
  *
  * A frase sobre o Matific não é decoração: aposentar aqui não desativa nada na
  * plataforma, e confundir as duas coisas é o erro que faz alguém achar que
@@ -778,14 +785,25 @@ function ContasDaPlataforma({
   const lista = contas.dados ?? [];
   if (contas.carregando) return <p className="text-sm text-zinc-500">Carregando as contas…</p>;
   if (lista.length < 2) return null;
+  const oQueFica = plataforma === "elefante"
+    ? "as leituras já importadas continuam contando"
+    : "os retratos já importados continuam nos períodos em que entraram";
 
   return (
     <Bloco titulo={`Contas do aluno no ${rotulo}`}>
       <div className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-xs text-amber-900 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-100">
         <strong>{alunoNome}</strong> tem {lista.length} contas no {rotulo}. Só uma vale no
         Constela — a outra fica <strong>aposentada</strong>: preservada com todo o
-        histórico, mas fora da importação. Os números que já vieram dela continuam na
-        ficha até a próxima coleta da conta que vale.
+        histórico, mas fora da importação. O que já veio dela continua na ficha (o
+        histórico não guarda de qual conta veio): {oQueFica}, e o retrato atual só muda
+        quando entrar uma coleta da conta que vale.
+        {plataforma === "matific" && (
+          <>
+            {" "}Se a conta aposentada tinha números maiores, a coleta automática da que
+            vale fica retida como queda enquanto ficar abaixo deles; para corrigir já,
+            importe o relatório oficial em Importações.
+          </>
+        )}
         <p className="mt-1">
           Aposentar é uma decisão <strong>interna do Constela</strong>. Ela não desativa
           nem remove a conta no {rotulo}.
@@ -802,7 +820,7 @@ function ContasDaPlataforma({
                     <p className="break-all font-mono text-xs">{c.id_externo}</p>
                     <div className="mt-1">
                       <Badge tom={efetiva ? "ok" : "neutro"}>
-                        {efetiva ? "Conta em uso" : "Preservada, não contabilizada"}
+                        {efetiva ? "Conta em uso" : "Preservada, fora da importação"}
                       </Badge>
                     </div>
                     {!efetiva && (

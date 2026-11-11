@@ -5301,10 +5301,10 @@ def definir_identidade_efetiva(
 
     A conta escolhida passa a ser a identidade EFETIVA; as outras ficam
     APOSENTADAS — preservadas com todo o histórico, fora da importação (não chega
-    retrato novo delas) e sem voltar a se associar sozinha; os retratos que já
-    vieram delas continuam na ficha, e o retrato atual só passa a ser o da conta
-    efetiva na próxima coleta dela (o retrato não guarda a conta de origem). Nada
-    é apagado.
+    dado novo delas) e sem voltar a se associar sozinha. O que já veio delas
+    continua na ficha (nem o retrato nem a leitura guardam a conta de origem): as
+    leituras continuam contando, e o retrato atual só muda quando entrar uma coleta
+    da conta efetiva — ver ``identidade_efetiva``. Nada é apagado.
 
     Isto é decisão INTERNA do Constela: a conta continua existindo na plataforma
     externa, e nada é desativado lá. A operação é reversível (``/reativar``) e

@@ -919,15 +919,48 @@ describe("Revisões de identidade — contas do aluno na plataforma", () => {
     expect(within(bloco).getByText("conta-A")).toBeInTheDocument();
     expect(within(bloco).getByText("Conta em uso")).toBeInTheDocument();
     expect(within(bloco).getByText("conta-B")).toBeInTheDocument();
-    expect(within(bloco).getByText("Preservada, não contabilizada")).toBeInTheDocument();
+    // REV2-COSTURA-3: o que já veio dela continua contando — "não contabilizada" prometia o contrário
+    expect(within(bloco).getByText("Preservada, fora da importação")).toBeInTheDocument();
+    expect(bloco).not.toHaveTextContent(/não contabilizada/);
     // o histórico da decisão
     expect(within(bloco).getByText(/por Admin — conta de teste/)).toBeInTheDocument();
     // a distinção que não pode se perder
     expect(within(bloco).getByText(/não desativa nem remove a conta no Matific/i)).toBeInTheDocument();
-    // ALUNOS-4: o retrato não guarda a conta de origem — o que já veio da aposentada
-    // fica na ficha até a próxima coleta da conta que vale; o texto não promete o contrário.
-    expect(bloco).toHaveTextContent(/Os números que já vieram dela continuam na ficha até a próxima coleta da conta que vale/);
+    // ALUNOS-4 / REV2-COSTURA-3: o histórico não guarda a conta de origem. O que já veio da
+    // aposentada fica na ficha e continua contando, e o retrato atual só muda quando entra
+    // uma coleta da conta que vale; a trava contra queda pode segurar essa coleta. O texto
+    // não promete que os números saem na próxima coleta.
+    expect(bloco).toHaveTextContent(/O que já veio dela continua na ficha \(o histórico não guarda de qual conta veio\): os retratos já importados continuam nos períodos em que entraram, e o retrato atual só muda quando entrar uma coleta da conta que vale\./);
+    expect(bloco).toHaveTextContent(/Se a conta aposentada tinha números maiores, a coleta automática da que vale fica retida como queda/);
+    expect(bloco).not.toHaveTextContent(/até a próxima coleta da conta que vale/);
     expect(bloco).not.toHaveTextContent(/alimentar o retrato e a pontuação/);
+  });
+
+  it("no Elefante, diz que as leituras que vieram da conta aposentada continuam contando", async () => {
+    const u = userEvent.setup();
+    filaMock([revisaoFake({
+      plataforma: "elefante", formato: "leituras", id_externo: "4242",
+      motivo: "outra_identidade_na_plataforma",
+      motivo_texto: "o aluno encontrado já tem outra conta nesta plataforma",
+      candidatos: [
+        { aluno_id: 31, nome: "ARIELLE CRISTINA TESTELLI DE AMARO", status: "ativo", turma: "5ºB" },
+      ],
+    })]);
+    responder("GET", "/escolas/1/importacoes/identidades/elefante/aluno/31", [
+      { id: 1, id_externo: "4242", status: "efetiva", created_at: "2026-04-01T10:00:00",
+        aposentada_em: null, aposentada_por: null, motivo_aposentadoria: null },
+      { id: 2, id_externo: "4343", status: "aposentada", created_at: "2026-05-01T10:00:00",
+        aposentada_em: "2026-09-25T09:00:00", aposentada_por: "Admin",
+        motivo_aposentadoria: "conta de teste" },
+    ]);
+    renderComApp(<RevisoesIdentidade />, { rota: "/revisoes-identidade" });
+    const dialogo = await abrirDetalhe(u);
+    const bloco = await within(dialogo).findByRole("region", {
+      name: "Contas do aluno no Elefante Letrado",
+    });
+    expect(bloco).toHaveTextContent(/as leituras já importadas continuam contando, e o retrato atual só muda quando entrar uma coleta da conta que vale\./);
+    // a trava contra queda é do Matific: o aviso dela não aparece aqui
+    expect(bloco).not.toHaveTextContent(/retida como queda/);
   });
 
   it("escolher a conta principal exige motivo e envia aposentando a outra", async () => {

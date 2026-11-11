@@ -232,10 +232,11 @@ class DefinirIdentidadeEfetivaIn(BaseModel):
     """CONTA DUPLICADA: qual conta da plataforma vale para este aluno.
 
     As demais ficam APOSENTADAS — preservadas e fora da importação (não chega
-    retrato novo delas). Os retratos que já vieram delas continuam na ficha até a
-    próxima coleta da conta efetiva: o retrato não guarda a conta de origem
-    (identidade_efetiva). Decisão interna do Constela; nada muda na plataforma
-    externa."""
+    dado novo delas). O que já veio delas continua na ficha, porque nem o retrato
+    nem a leitura guardam a conta de origem (identidade_efetiva): as leituras do
+    Elefante continuam contando, os retratos continuam nos períodos que os contêm, e
+    o retrato atual só muda quando entrar uma coleta da conta efetiva. Decisão
+    interna do Constela; nada muda na plataforma externa."""
     aluno_id: int
     id_externo_efetivo: str = Field(min_length=1, max_length=80)
     aposentar: list[str] = Field(default_factory=list)
