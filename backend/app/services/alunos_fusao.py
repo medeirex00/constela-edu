@@ -15,7 +15,10 @@ Garantias de segurança (a regra do dono: nunca perder dado, nunca dobrar ponto)
   * ``db.flush()`` grava os UPDATE aluno_id ANTES do ``db.delete(remover)``,
     senão o ON DELETE CASCADE apagaria em silêncio o que acabou de ser movido;
   * antes de apagar, o estado do ``remover`` é fotografado no log de auditoria
-    (``foto_pre_fusao``) — rede de segurança para reconstrução manual.
+    (``foto_pre_fusao``) — rede de segurança para reconstrução manual;
+  * no Constela Quest (perfil e cartão únicos por criança) fica o que a criança
+    usa, não o da ficha principal por padrão; as duas fichas com jogo, a fusão é
+    recusada (``FusaoRecusada``) — ver ``plano_quest``.
 
 ``fundir_par`` NÃO faz commit nem recálculo: o chamador decide (a fusão em lote
 faz UM commit e UM recálculo de escola no fim). Devolve as contagens do que foi
@@ -24,9 +27,9 @@ movido/descartado.
 from __future__ import annotations
 
 from collections import defaultdict
-from datetime import date
+from datetime import date, datetime, timezone
 
-from sqlalchemy import select, update
+from sqlalchemy import func, select, update
 from sqlalchemy.orm import Session
 
 from app.core.tempo import agora_br
@@ -55,6 +58,164 @@ from app.services.eventos import (
 )
 
 
+class FusaoRecusada(Exception):
+    """Este par não pode ser fundido sem apagar dado em uso. Levantada ANTES de
+    qualquer escrita: quem chama responde 409 (fusão manual) ou registra a falha do
+    par (lote) com ``motivo``, que é texto para quem usa."""
+
+    def __init__(self, motivo: str):
+        super().__init__(motivo)
+        self.motivo = motivo
+
+
+MOTIVO_QUEST_NAS_DUAS = (
+    "As duas fichas têm progresso no Constela Quest: juntar as duas apagaria o "
+    "progresso de uma delas. Por isso esta fusão não é feita — fale com o suporte.")
+
+
+def quest_das_fichas(db: Session, aluno_ids, *, com_agregados: bool = False
+                      ) -> dict[int, dict]:
+    """O lado Quest de cada ficha, em poucas consultas (a prévia do lote passa
+    todas as fichas de uma vez): ``perfil`` (tem perfil?), ``progresso`` (o perfil
+    tem jogo de verdade: XP, moedas, estrelas, sequência, dia ativo, tentativas e,
+    com ``com_agregados``, progresso e habilidades — a fusão confere tudo antes de
+    apagar), ``nome_escolhido`` (a cerimônia da primeira vez), ``xp``,
+    ``tentativas``, ``cartao`` (tem cartão?) e ``ultimo_acesso`` do cartão (None =
+    nunca entrou com ele)."""
+    from app.quest.models import QuestCredencialAluno, QuestPerfil, QuestTentativa  # noqa: E402
+    from app.quest.services import agregados  # noqa: E402
+
+    ids = set(aluno_ids)
+    saida = {aid: {"perfil": False, "progresso": False, "nome_escolhido": False,
+                   "xp": 0, "tentativas": 0, "cartao": False, "ultimo_acesso": None}
+             for aid in ids}
+    if not ids:
+        return saida
+    perfis = db.execute(select(QuestPerfil).where(QuestPerfil.aluno_id.in_(ids))
+                        ).scalars().all()
+    tentativas = dict(db.execute(
+        select(QuestTentativa.perfil_id, func.count())
+        .where(QuestTentativa.perfil_id.in_([p.id for p in perfis]))
+        .group_by(QuestTentativa.perfil_id)).all()) if perfis else {}
+    for perfil in perfis:
+        n = int(tentativas.get(perfil.id, 0))
+        jogo = bool(n or (perfil.xp_total or 0) or (perfil.moedas or 0)
+                    or (perfil.estrelas_total or 0) or (perfil.sequencia_dias or 0)
+                    or perfil.ultimo_dia_ativo is not None)
+        if not jogo and com_agregados:
+            agg = agregados.contar_agregados_do_perfil(db, perfil.escola_id, perfil.id)
+            jogo = bool(agg["progresso"] or agg["habilidades"])
+        saida[perfil.aluno_id].update(
+            perfil=True, progresso=jogo, xp=int(perfil.xp_total or 0), tentativas=n,
+            nome_escolhido=bool((perfil.nome_exibicao or "").strip()))
+    for aluno_id, ultimo in db.execute(
+        select(QuestCredencialAluno.aluno_id, QuestCredencialAluno.ultimo_acesso)
+        .where(QuestCredencialAluno.aluno_id.in_(ids))).all():
+        saida[aluno_id].update(cartao=True, ultimo_acesso=ultimo)
+    return saida
+
+
+_NUNCA = datetime.min.replace(tzinfo=timezone.utc)
+
+
+def _instante(valor) -> datetime | None:
+    """``ultimo_acesso`` comparável: o SQLite devolve sem fuso, o PG com."""
+    if valor is None:
+        return None
+    return valor if valor.tzinfo else valor.replace(tzinfo=timezone.utc)
+
+
+def plano_quest(manter: Aluno, remover: Aluno, info: dict[int, dict]) -> dict:
+    """O que a fusão de ``remover`` em ``manter`` faz com o Constela Quest — a
+    MESMA regra que ``fundir_par`` aplica e que a prévia mostra:
+
+      * perfil: fica o que tem jogo; nenhum com jogo, o que a criança abriu (nome
+        escolhido ou cartão usado; os dois abertos, o da entrada mais recente);
+        empate, o da ficha principal. Os DOIS com jogo
+        é ``conflito``: a fusão é recusada (``FusaoRecusada``), nada é apagado;
+      * cartão (um por criança): fica o da ficha cujo perfil fica, se a criança
+        entrou com ele; senão o usado mais recentemente; nenhum usado, o da ficha
+        principal. O outro deixa de entrar (e as sessões abertas com ele caem).
+
+    ``perfil_fica``/``cartao_fica`` ∈ {"manter", "remover", None (nenhum tem)}.
+    ``texto`` diz em português o que acontece (None quando não há Quest)."""
+    m, r = info[manter.id], info[remover.id]
+    conflito = m["progresso"] and r["progresso"]
+
+    def uso(lado: dict) -> tuple:
+        # Jogo > aberto pela criança (nome escolhido ou cartão usado) > a entrada
+        # mais recente: dois cartões usados sem jogo, fica o que ela abriu por último.
+        return (lado["progresso"], lado["nome_escolhido"] or lado["ultimo_acesso"] is not None,
+                _instante(lado["ultimo_acesso"]) or _NUNCA)
+
+    if m["perfil"] and r["perfil"]:
+        perfil_fica = "remover" if uso(r) > uso(m) else "manter"
+    else:
+        perfil_fica = "manter" if m["perfil"] else ("remover" if r["perfil"] else None)
+
+    if m["cartao"] and r["cartao"]:
+        dono = r if perfil_fica == "remover" else m
+        if perfil_fica is not None and dono["ultimo_acesso"] is not None:
+            cartao_fica = perfil_fica
+        else:
+            um, ur = _instante(m["ultimo_acesso"]), _instante(r["ultimo_acesso"])
+            cartao_fica = "remover" if ur is not None and (um is None or ur > um) else "manter"
+    else:
+        cartao_fica = "manter" if m["cartao"] else ("remover" if r["cartao"] else None)
+
+    fica, sai = manter.nome, remover.nome
+    texto = None
+    if conflito:
+        texto = ("As duas fichas têm progresso no Constela Quest: esta fusão não será "
+                 "feita, porque juntar as duas apagaria o progresso de uma delas. Fale "
+                 "com o suporte.")
+    else:
+        partes: list[str] = []
+        if perfil_fica == "remover" and r["progresso"]:
+            partes.append(f"o progresso de “{sai}” passa para a ficha que fica")
+        if m["cartao"] and r["cartao"]:
+            vale, perde = (sai, fica) if cartao_fica == "remover" else (fica, sai)
+            usado = (r if cartao_fica == "remover" else m)["ultimo_acesso"] is not None
+            partes.append(f"vale o cartão de “{vale}”"
+                          + (", que é o que a criança usa" if usado else "")
+                          + f", e o de “{perde}” deixa de entrar")
+        elif r["cartao"]:
+            partes.append(f"o cartão de “{sai}” continua valendo")
+        if partes:
+            texto = "Constela Quest: " + "; ".join(partes) + "."
+
+    def lado(x: dict) -> dict:
+        return {"perfil": x["perfil"], "progresso": x["progresso"], "xp": x["xp"],
+                "tentativas": x["tentativas"], "cartao": x["cartao"],
+                "cartao_usado": x["ultimo_acesso"] is not None}
+
+    return {"tem_quest": bool(m["perfil"] or r["perfil"] or m["cartao"] or r["cartao"]),
+            "conflito": conflito, "perfil_fica": perfil_fica, "cartao_fica": cartao_fica,
+            "manter": lado(m), "remover": lado(r), "texto": texto}
+
+
+def _retrato_quest(db: Session, perfil) -> dict:
+    """Agregados de um perfil do Quest que vai sair (o CASCADE leva a telemetria):
+    vai para o log, para reconstrução manual. Progresso/habilidades só pelo helper
+    sancionado (catraca §11)."""
+    from app.quest.models import QuestTentativa  # noqa: E402
+    from app.quest.services import agregados  # noqa: E402
+    agg = agregados.contar_agregados_do_perfil(db, perfil.escola_id, perfil.id)
+    tentativas = len(db.execute(
+        select(QuestTentativa.id)
+        .where(QuestTentativa.perfil_id == perfil.id)).scalars().all())
+    return {
+        "nivel": getattr(perfil, "nivel", None),
+        "xp_total": getattr(perfil, "xp_total", None),
+        "moedas": getattr(perfil, "moedas", None),
+        "estrelas_total": getattr(perfil, "estrelas_total", None),
+        "sequencia_dias": getattr(perfil, "sequencia_dias", None),
+        "progresso": agg["progresso"],
+        "tentativas": tentativas,
+        "habilidades": agg["habilidades"],
+    }
+
+
 def _foto_pre_fusao(db: Session, remover: Aluno) -> dict:
     """Retrato do cadastro que será apagado — guardado na auditoria para
     reconstrução manual (a fusão é irreversível por design; esta é a rede de
@@ -75,28 +236,11 @@ def _foto_pre_fusao(db: Session, remover: Aluno) -> dict:
 
     # Perfil Quest do `remover`: se for descartado na fusão (o `manter` já tem um),
     # o CASCADE apaga tudo — então guardamos o retrato dele para reconstrução.
-    # Agregados (progresso/habilidades) só pelo helper sancionado (catraca §11).
-    from app.quest.models import QuestPerfil, QuestTentativa  # noqa: E402
-    from app.quest.services import agregados  # noqa: E402
+    from app.quest.models import QuestPerfil  # noqa: E402
     perfil = db.execute(
         select(QuestPerfil).where(QuestPerfil.aluno_id == remover.id)
     ).scalars().first()
-    quest = None
-    if perfil is not None:
-        agg = agregados.contar_agregados_do_perfil(db, remover.escola_id, perfil.id)
-        tentativas = len(db.execute(
-            select(QuestTentativa.id)
-            .where(QuestTentativa.perfil_id == perfil.id)).scalars().all())
-        quest = {
-            "nivel": getattr(perfil, "nivel", None),
-            "xp_total": getattr(perfil, "xp_total", None),
-            "moedas": getattr(perfil, "moedas", None),
-            "estrelas_total": getattr(perfil, "estrelas_total", None),
-            "sequencia_dias": getattr(perfil, "sequencia_dias", None),
-            "progresso": agg["progresso"],
-            "tentativas": tentativas,
-            "habilidades": agg["habilidades"],
-        }
+    quest = _retrato_quest(db, perfil) if perfil is not None else None
 
     return {
         "id": remover.id,
@@ -258,7 +402,18 @@ def fundir_par(db: Session, escola_id: int, manter: Aluno, remover: Aluno,
     """Funde ``remover`` em ``manter`` (mesma escola, ambos já validados como
     ativos pelo chamador). Reatribui/deduplica cada relação, funde a ficha,
     registra a auditoria (com a foto pré-fusão) e apaga o ``remover``. NÃO
-    commita nem recalcula — devolve as contagens do que foi movido."""
+    commita nem recalcula — devolve as contagens do que foi movido.
+
+    ``FusaoRecusada`` (antes de qualquer escrita) quando as duas fichas têm
+    progresso no Constela Quest: um perfil é único por criança e juntar dois
+    perfis com jogo (somar XP, escolher estrelas e missões) é regra que não existe —
+    apagar um deles perderia o que a criança fez."""
+    # O Quest decide ANTES de qualquer escrita: recusar no meio deixaria metade
+    # movida (na fusão manual, até o rollback; no lote, o savepoint desfaz o par).
+    quest = plano_quest(manter, remover,
+                        quest_das_fichas(db, (manter.id, remover.id), com_agregados=True))
+    if quest["conflito"]:
+        raise FusaoRecusada(MOTIVO_QUEST_NAS_DUAS)
     manter_nome, remover_nome = manter.nome, remover.nome
     foto = _foto_pre_fusao(db, remover)   # ANTES de mover/apagar qualquer coisa
 
@@ -443,51 +598,61 @@ def fundir_par(db: Session, escola_id: int, manter: Aluno, remover: Aluno,
     from app.quest.models import (  # noqa: E402
         QuestCredencialAluno,
         QuestPerfil,
-        QuestTentativa,
         ResponsavelAluno,
     )
-    from app.quest.services import agregados  # noqa: E402
 
+    # Perfil e cartão são ÚNICOS por criança: com os dois lados tendo um, fica o
+    # que o ``plano_quest`` escolheu (o que a criança usa — não o da ficha
+    # principal por padrão, que apagava o jogo dela) e o outro sai. O conflito
+    # (as duas com jogo) já foi recusado lá em cima.
     quest_perfil_movido = quest_perfil_descartado = 0
-    # Telemetria destruída quando o perfil do `remover` é descartado (o CASCADE
-    # de quest_perfis apaga progresso/tentativas/habilidades). Contada para o log
-    # não esconder o volume perdido (como leituras/eventos já fazem).
+    # Telemetria destruída com o perfil que sai (o CASCADE de quest_perfis apaga
+    # progresso/tentativas/habilidades). Contada para o log não esconder o volume
+    # perdido (como leituras/eventos já fazem) — pela regra acima, só sai perfil sem jogo.
     quest_progresso_descartado = quest_tentativas_descartadas = 0
     quest_habilidades_descartadas = 0
-    manter_tem_perfil = db.execute(
-        select(QuestPerfil.id).where(QuestPerfil.aluno_id == manter.id)
-    ).scalar_one_or_none() is not None
-    for perfil in db.execute(
-        select(QuestPerfil).where(QuestPerfil.aluno_id == remover.id)
-    ).scalars().all():
-        if manter_tem_perfil:
-            agg = agregados.contar_agregados_do_perfil(db, escola_id, perfil.id)
-            quest_progresso_descartado += agg["progresso"]
-            quest_habilidades_descartadas += agg["habilidades"]
-            quest_tentativas_descartadas += len(db.execute(
-                select(QuestTentativa.id)
-                .where(QuestTentativa.perfil_id == perfil.id)).scalars().all())
-            db.delete(perfil)
-            quest_perfil_descartado += 1
-        else:
-            perfil.aluno_id = manter.id
-            manter_tem_perfil = True
-            quest_perfil_movido += 1
+    retrato_principal_descartado = None
+    perfil_m = db.execute(select(QuestPerfil).where(QuestPerfil.aluno_id == manter.id)
+                          ).scalars().first()
+    perfil_r = db.execute(select(QuestPerfil).where(QuestPerfil.aluno_id == remover.id)
+                          ).scalars().first()
+    if perfil_m is not None and perfil_r is not None:
+        sai_p = perfil_m if quest["perfil_fica"] == "remover" else perfil_r
+        retrato = _retrato_quest(db, sai_p)
+        quest_progresso_descartado = retrato["progresso"]
+        quest_habilidades_descartadas = retrato["habilidades"]
+        quest_tentativas_descartadas = retrato["tentativas"]
+        if sai_p is perfil_m:
+            retrato_principal_descartado = retrato   # o do `remover` já está na foto
+        db.delete(sai_p)
+        quest_perfil_descartado = 1
+        db.flush()   # libera a UNIQUE de aluno_id antes de mover o que fica
+        if sai_p is perfil_m:
+            perfil_r.aluno_id = manter.id
+            quest_perfil_movido = 1
+    elif perfil_r is not None:
+        perfil_r.aluno_id = manter.id
+        quest_perfil_movido = 1
 
-    manter_tem_cred = db.execute(
-        select(QuestCredencialAluno.id)
-        .where(QuestCredencialAluno.aluno_id == manter.id)
-    ).scalar_one_or_none() is not None
     quest_credencial_descartada = 0
-    for cred in db.execute(
-        select(QuestCredencialAluno).where(QuestCredencialAluno.aluno_id == remover.id)
-    ).scalars().all():
-        if manter_tem_cred:
-            db.delete(cred)
-            quest_credencial_descartada += 1
+    cred_m = db.execute(select(QuestCredencialAluno).where(
+        QuestCredencialAluno.aluno_id == manter.id)).scalars().first()
+    cred_r = db.execute(select(QuestCredencialAluno).where(
+        QuestCredencialAluno.aluno_id == remover.id)).scalars().first()
+    if cred_m is not None and cred_r is not None:
+        # O cartão que sai deixa de entrar: sem a linha, o código, o QR e as
+        # sessões abertas com ele (o ``sub`` do token é a credencial) caem juntos.
+        if quest["cartao_fica"] == "remover":
+            db.delete(cred_m)
+            db.flush()   # UNIQUE de aluno_id
+            cred_r.aluno_id = manter.id
         else:
-            cred.aluno_id = manter.id
-            manter_tem_cred = True
+            db.delete(cred_r)
+        quest_credencial_descartada = 1
+    elif cred_r is not None:
+        cred_r.aluno_id = manter.id
+    quest_perfil_de = {"manter": manter.id, "remover": remover.id}.get(quest["perfil_fica"])
+    quest_cartao_de = {"manter": manter.id, "remover": remover.id}.get(quest["cartao_fica"])
 
     resp_do_manter = set(db.execute(
         select(ResponsavelAluno.usuario_id)
@@ -584,14 +749,20 @@ def fundir_par(db: Session, escola_id: int, manter: Aluno, remover: Aluno,
         "quest_progresso_descartado": quest_progresso_descartado,
         "quest_tentativas_descartadas": quest_tentativas_descartadas,
         "quest_habilidades_descartadas": quest_habilidades_descartadas,
+        # De qual ficha vieram o perfil e o cartão do Quest que ficaram (None: não há).
+        "quest_perfil_de": quest_perfil_de,
+        "quest_cartao_de": quest_cartao_de,
         "pendencias_atualizadas": pendencias_atualizadas,
         "notificacoes_movidas": notificacoes_movidas,
     }
+    extra_quest = ({"quest_perfil_da_principal_descartado": retrato_principal_descartado}
+                   if retrato_principal_descartado is not None else {})
     registrar(db, "aluno.fundido", escola_id=escola_id, usuario_id=usuario_id,
               entidade="aluno", entidade_id=manter_id,
               detalhes={"mantido": {"id": manter_id, "nome": manter_nome},
                         "removido": {"id": remover.id, "nome": remover_nome},
                         "foto_pre_fusao": foto,
+                        **extra_quest,
                         "decisoes_de_identidade_movidas": decisoes_movidas,
                         "leituras_descartadas_detalhe": descartes,
                         "eventos_descartados_detalhe": eventos_descartes,

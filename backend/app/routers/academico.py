@@ -1337,8 +1337,9 @@ def fundir_alunos(
       * matrícula no mesmo ano nos dois → mantém a do `manter` (a turma
         dele prevalece);
       * perfil/credencial Quest é único por aluno → migra (com toda a
-        telemetria) se o `manter` não tiver; se ambos tiverem, prevalece o do
-        `manter` e o do `remover` é descartado (contado no log);
+        telemetria) se o `manter` não tiver; se ambos tiverem, fica o que a
+        criança usa (``alunos_fusao.plano_quest``) e o outro é descartado (contado
+        no log); as duas fichas com jogo no Quest → 409, nada é fundido;
       * campos vazios do `manter` (foto, nº de chamada, nascimento,
         observações) são preenchidos com os do `remover`.
     Irreversível → exige confirmação textual "FUNDIR". Recalcula ao final."""
@@ -1384,7 +1385,11 @@ def fundir_alunos(
     # Núcleo compartilhado com a fusão em lote (Fundir duplicatas): reatribui/
     # deduplica cada relação, funde a ficha, registra a auditoria (com a foto
     # pré-fusão) e apaga o `remover`. Não commita nem recalcula — isso é aqui.
-    r = alunos_fusao.fundir_par(db, escola_id, manter, remover, usuario.id)
+    # Recusa (as duas fichas com jogo no Constela Quest) vem antes de qualquer escrita.
+    try:
+        r = alunos_fusao.fundir_par(db, escola_id, manter, remover, usuario.id)
+    except alunos_fusao.FusaoRecusada as recusa:
+        raise HTTPException(status.HTTP_409_CONFLICT, recusa.motivo) from None
     if divergencias:
         # Fundiu APESAR da prova de conflito: o log tem de dizer o que o gestor
         # aceitou passar por cima, senão a decisão some.

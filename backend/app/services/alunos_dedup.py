@@ -306,6 +306,10 @@ def plano_deduplicacao(db: Session, escola_id: int) -> list[dict]:
     repetidas = alunos_fusao.leituras_repetidas(
         db, escola.ano_letivo_ativo if escola else 0,
         [(survivor.id, loser.id) for loser, survivor, *_ in candidatos])
+    # O Constela Quest das duas fichas (poucas consultas para o lote inteiro): o que
+    # fica, o cartão que deixa de entrar e o par que não será fundido (as duas com jogo).
+    quest = alunos_fusao.quest_das_fichas(
+        db, {i for loser, survivor, *_ in candidatos for i in (loser.id, survivor.id)})
     return [
         {
             "loser_id": loser.id,
@@ -319,6 +323,7 @@ def plano_deduplicacao(db: Session, escola_id: int) -> list[dict]:
             # O que a fusão faz com os livros que estão nas DUAS fichas. Só descreve
             # (a data de quem fica é a que vale): o gestor vê antes de confirmar.
             "leituras": repetidas[(survivor.id, loser.id)],
+            "quest": alunos_fusao.plano_quest(survivor, loser, quest),
         }
         for loser, survivor, confianca, motivo, turma in candidatos
     ]
@@ -370,6 +375,9 @@ def previa_da_fusao(db: Session, escola_id: int, manter: Aluno, remover: Aluno) 
         "leituras": alunos_fusao.leituras_repetidas(
             db, escola.ano_letivo_ativo if escola else 0, [(manter.id, remover.id)],
             exemplos=20)[(manter.id, remover.id)],
+        # A mesma regra que a fusão aplica (com o progresso e as habilidades conferidos).
+        "quest": alunos_fusao.plano_quest(manter, remover, alunos_fusao.quest_das_fichas(
+            db, (manter.id, remover.id), com_agregados=True)),
     }
 
 
@@ -514,8 +522,14 @@ def aplicar_deduplicacao(db: Session, escola_id: int, loser_ids: list[int],
                 with db.begin_nested():   # isola a falha do par; o lote segue
                     res = alunos_fusao.fundir_par(db, escola_id, canonico, m, usuario_id)
                 fundidos += 1
+                # O que aconteceu com o Constela Quest do par (de qual ficha ficaram o
+                # perfil e o cartão, e o que saiu) — a resposta não esconde o descarte.
                 detalhes.append({"manter_id": canonico.id, "manter": res["manter_nome"],
-                                 "removido": res["remover_nome"]})
+                                 "removido": res["remover_nome"],
+                                 **{k: v for k, v in res.items() if k.startswith("quest_")}})
+            except alunos_fusao.FusaoRecusada as recusa:
+                # Recusa conhecida (antes de qualquer escrita): o motivo é para quem usa.
+                falhas.append({"loser_id": m.id, "motivo": recusa.motivo})
             except Exception:   # noqa: BLE001 — isola o par; o lote segue
                 # Sem isto a falha sumia: a rota responde 200 e o middleware não
                 # vê. Só ids no log (o formatador já redige o texto da exceção).

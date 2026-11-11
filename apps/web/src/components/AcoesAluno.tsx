@@ -370,6 +370,9 @@ interface PreviaFusao {
   /** Esta direção deixa um nome abreviado na ficha que fica? */
   nome?: { mantem_abreviado: boolean; fica: string; sai: string };
   leituras: ResumoLeiturasRepetidas;
+  /** O que acontece com o Constela Quest: fica o progresso e o cartão que a
+   *  criança usa; as duas fichas com progresso, o servidor recusa (``conflito``). */
+  quest?: { tem_quest: boolean; conflito: boolean; texto: string | null };
 }
 
 const MOTIVO_PRINCIPAL: Record<string, string> = {
@@ -445,7 +448,11 @@ export function ModalFundir({ aluno, escolaId, aoFechar, aoConcluir }: {
   const sugerido = previaAtual?.sugestao
     ? (previaAtual.sugestao.manter_id === aluno.id ? aluno : outro) : null;
   const contraSugestao = Boolean(sugerido && principal && sugerido.id !== principal.id);
-  const liberado = outro && !conferindo && confirmacao.trim().toUpperCase() === "FUNDIR"
+  // As duas fichas com progresso no Constela Quest: o servidor recusa (409) —
+  // a tela avisa antes e não libera o botão.
+  const questRecusa = Boolean(previaAtual?.quest?.conflito);
+  const liberado = outro && !conferindo && !questRecusa
+    && confirmacao.trim().toUpperCase() === "FUNDIR"
     && (!conflito || confirmaConflito.trim().toUpperCase() === CONFIRMA_CONFLITO);
 
   async function fundir() {
@@ -581,6 +588,14 @@ export function ModalFundir({ aluno, escolaId, aoFechar, aoConcluir }: {
                 A fusão continua possível; se o aluno tem livros nas duas fichas, fica a data da principal.
               </Mensagem>
             )}
+            {previaAtual?.quest?.texto && (questRecusa ? (
+              <div role="note" aria-label="Atenção: Constela Quest"
+                   className="rounded-xl border border-rose-300 bg-rose-50 p-3 text-sm text-rose-900 dark:border-rose-500/40 dark:bg-rose-500/10 dark:text-rose-100">
+                {previaAtual.quest.texto}
+              </div>
+            ) : (
+              <p className="text-xs text-zinc-500 dark:text-zinc-400">{previaAtual.quest.texto}</p>
+            ))}
             {previaAtual && principal && absorvido && (
               <LeiturasRepetidas
                 resumo={previaAtual.leituras}

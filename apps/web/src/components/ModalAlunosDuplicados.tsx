@@ -44,6 +44,14 @@ interface Impacto {
   plataformas: string[];
 }
 type Confianca = "alta" | "provavel" | "revisar";
+/** O que a fusão faz com o Constela Quest do par (``alunos_fusao.plano_quest``):
+ *  fica o progresso e o cartão que a criança usa; as duas fichas com progresso,
+ *  o servidor recusa o par (``conflito``). ``texto`` já vem em português. */
+interface PlanoQuest {
+  tem_quest: boolean;
+  conflito: boolean;
+  texto: string | null;
+}
 interface CandidatoAluno {
   loser_id: number;
   manter_id: number;
@@ -55,6 +63,7 @@ interface CandidatoAluno {
   impacto: Impacto;
   /** Livros que estão nas duas fichas: fica a data do principal (A7). */
   leituras?: ResumoLeiturasRepetidas;
+  quest?: PlanoQuest;
 }
 interface PreviaAlunos {
   candidatos: CandidatoAluno[];
@@ -141,9 +150,12 @@ export default function ModalAlunosDuplicados({ escolaId, aoFechar, aoConcluir }
       .then((r) => {
         if (!vivo) return;
         setPrevia(r);
-        // "alta" já vem marcada; "revisar" DESMARCADA (o gestor confirma).
+        // "alta" já vem marcada; "revisar" DESMARCADA (o gestor confirma). O par
+        // que o servidor vai recusar (as duas fichas com progresso no Constela
+        // Quest) nunca vem marcado.
         setSelecionados(new Set(
-          r.candidatos.filter((c) => c.confianca === "alta").map((c) => c.loser_id)));
+          r.candidatos.filter((c) => c.confianca === "alta" && !c.quest?.conflito)
+            .map((c) => c.loser_id)));
       })
       .catch((e) => {
         if (vivo) setErro(e instanceof ApiError ? e.message : "Não foi possível carregar.");
@@ -277,7 +289,10 @@ export default function ModalAlunosDuplicados({ escolaId, aoFechar, aoConcluir }
   // CATCH-ALL: garante que nenhum "revisar" de motivo novo/desconhecido suma da
   // tela. Isto é só apresentação: não muda o que o backend sugere.
   const cands = previa?.candidatos ?? [];
-  const datas = somaLeituras(cands.filter((c) => selecionados.has(c.loser_id)));
+  const marcados = cands.filter((c) => selecionados.has(c.loser_id));
+  const datas = somaLeituras(marcados);
+  const questRecusados = marcados.filter((c) => c.quest?.conflito).length;
+  const questMovidos = marcados.some((c) => c.quest?.tem_quest && !c.quest.conflito);
   const MOTIVOS_REV = ["variante", "nome_identico", "subconjunto", "abreviacao"];
   const especifica: {
     chave: string; rotulo: string; dica: string; lote: boolean; tom: TomFaixa;
@@ -398,7 +413,8 @@ export default function ModalAlunosDuplicados({ escolaId, aoFechar, aoConcluir }
 
           <div className="mt-4 max-h-[50vh] space-y-3 overflow-y-auto pr-1">
             {grupos.filter((g) => g.itens.length > 0).map((grupo) => {
-              const ids = grupo.itens.map((c) => c.loser_id);
+              // "Selecionar todos" deixa de fora o par que o servidor vai recusar.
+              const ids = grupo.itens.filter((c) => !c.quest?.conflito).map((c) => c.loser_id);
               const todosMarcados = ids.every((id) => selecionados.has(id));
               return (
               <div key={grupo.chave} className="rounded-2xl border border-zinc-200/80 p-3 dark:border-zinc-800">
@@ -458,6 +474,15 @@ export default function ModalAlunosDuplicados({ escolaId, aoFechar, aoConcluir }
                               ⚠ {avisoLeituras(c)}
                             </span>
                           )}
+                          {c.quest?.texto && (c.quest.conflito ? (
+                            <span className="mt-0.5 block text-xs font-medium text-amber-800 dark:text-amber-300">
+                              ⚠ {c.quest.texto}
+                            </span>
+                          ) : (
+                            <span className="mt-0.5 block text-xs text-zinc-500 dark:text-zinc-400">
+                              {c.quest.texto}
+                            </span>
+                          ))}
                         </span>
                       </label>
                     );
@@ -478,6 +503,18 @@ export default function ModalAlunosDuplicados({ escolaId, aoFechar, aoConcluir }
                   Isto vai fundir <strong>{selecionados.size}</strong> par(es) de cadastros
                   num único aluno cada. Os dados são consolidados no principal.
                   <strong> Esta ação é irreversível.</strong>
+                  {questMovidos && (
+                    <span className="mt-1 block">
+                      No Constela Quest, ficam o progresso e o cartão que a criança usa; o outro
+                      cartão deixa de entrar.
+                    </span>
+                  )}
+                  {questRecusados > 0 && (
+                    <span className="mt-1 block">
+                      {questRecusados} par(es) marcado(s) não será(ão) unido(s): as duas fichas têm
+                      progresso no Constela Quest.
+                    </span>
+                  )}
                   {datas.diferentes > 0 && (
                     <span className="mt-1 block">
                       Nos pares marcados, {datas.diferentes} livro(s) estão nas duas fichas com data
