@@ -125,19 +125,33 @@ def _flexionar(substantivo: str, adjetivo: str) -> str:
 
 def gerar_apelido(db: Session, escola_id: int) -> str:
     """Apelido único dentro da escola (evita duas 'Estrela Valente' na rede
-    local da criança); com sufixo numérico se as combinações esgotarem."""
+    local da criança). Sorteia entre as combinações livres; esgotadas as 256,
+    acrescenta um sufixo numérico — também conferido: antes o sufixo de 10 a 99
+    saía sem conferir e uma escola de 1.000 alunos tinha uma dúzia de apelidos
+    repetidos. Os apelidos da escola são lidos de uma vez (uma consulta).
+
+    Sem índice único (escola_id, apelido), dois perfis criados AO MESMO TEMPO na
+    mesma escola ainda podem sortear o mesmo apelido livre (decisão do dono)."""
+    usados = set(db.execute(
+        select(QuestPerfil.apelido).where(QuestPerfil.escola_id == escola_id)
+    ).scalars())
+    livres = [apelido for apelido in (_flexionar(s, a) for s in _SUBSTANTIVOS
+                                      for a in _ADJETIVOS)
+              if apelido not in usados]
+    if livres:
+        return secrets.choice(livres)
     for _ in range(60):
-        apelido = _flexionar(secrets.choice(_SUBSTANTIVOS),
-                             secrets.choice(_ADJETIVOS))
-        existe = db.execute(
-            select(QuestPerfil.id)
-            .where(QuestPerfil.escola_id == escola_id,
-                   QuestPerfil.apelido == apelido)
-        ).first()
-        if existe is None:
+        apelido = (_flexionar(secrets.choice(_SUBSTANTIVOS), secrets.choice(_ADJETIVOS))
+                   + f" {secrets.randbelow(90) + 10}")
+        if apelido not in usados:
             return apelido
-    return _flexionar(secrets.choice(_SUBSTANTIVOS),
-                      secrets.choice(_ADJETIVOS)) + f" {secrets.randbelow(90) + 10}"
+    # Sorteio sem sorte (escola muito grande): o primeiro sufixo livre a partir de
+    # 10 numa combinação sorteada — sempre existe.
+    base = _flexionar(secrets.choice(_SUBSTANTIVOS), secrets.choice(_ADJETIVOS))
+    sufixo = 10
+    while f"{base} {sufixo}" in usados:
+        sufixo += 1
+    return f"{base} {sufixo}"
 
 
 def gerar_codigo_amigo(db: Session) -> str:
