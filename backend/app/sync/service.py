@@ -1372,7 +1372,13 @@ _TEXTO_DECIDIDO = {
     "conta_esquecida": ("{n} linha(s) de conta(s) de aluno excluído permanentemente "
                         "foram ignoradas — a conta continua ativa na plataforma."),
 }
-_MOTIVOS_FORA_DE_DEFEITO = _MOTIVOS_DE_VINCULO + _MOTIVOS_DECIDIDOS
+# Criança sem ficha que a coleta de FORA do ano letivo ativo não criou (S_G_VIRADA-1):
+# a linha não tem defeito nem pendência de vínculo — espera a virada do ano. Fica em
+# ``ignorados`` (o cursor dela não avança e a coleta depois da virada a traz) e abre o
+# alerta próprio (``TIPO_ALERTA_FORA_DO_ANO``), não o de correspondência pendente.
+_MOTIVO_FORA_DO_ANO = orchestrator.MOTIVO_FORA_DO_ANO_LETIVO
+TIPO_ALERTA_FORA_DO_ANO = orchestrator.MOTIVO_FORA_DO_ANO_LETIVO
+_MOTIVOS_FORA_DE_DEFEITO = _MOTIVOS_DE_VINCULO + _MOTIVOS_DECIDIDOS + (_MOTIVO_FORA_DO_ANO,)
 # O motivo de cada linha com defeito (o código que conectores, parser e importação
 # anotam) como a tela o diz nos alertas "Nenhuma linha aproveitável" e "Coleta parcial".
 _ROTULO_DESCARTE = {
@@ -1473,6 +1479,9 @@ class _Apuracao:
     fim_logado: bool = False
     # Outro caminho encerrou a execução primeiro (``_perdeu_o_fechamento``).
     perdeu_o_fechamento: bool = False
+    # A coleta foi feita fora do ano letivo ativo e não criou ficha nem mudou
+    # matrícula de alguém (S_G_VIRADA-1): abre o alerta 'coleta_fora_do_ano_letivo'.
+    fora_do_ano_letivo: bool = False
 
     def incorporar_coleta(self, coleta: dict | None) -> None:
         """O que o CONECTOR anotou (unidades que não chegaram, linhas com defeito)."""
@@ -1516,6 +1525,7 @@ class _Apuracao:
         for motivo, n in (res.get("descartadas") or {}).items():
             self.descartes[motivo] = self.descartes.get(motivo, 0) + int(n or 0)
         self.avisos_criticos.extend(res.get("avisos_criticos") or [])
+        self.fora_do_ano_letivo = self.fora_do_ano_letivo or bool(res.get("fora_do_ano_letivo"))
         if res.get("parser_incompativel"):
             # O arquivo inteiro perdeu um campo essencial: nada dele foi aplicado.
             self.falhas.append({"unidade": "arquivo", "id": str(self.arquivos),
@@ -1549,6 +1559,20 @@ class _Apuracao:
         uma coleta só de pendências não prova que o dado da escola está em dia
         (forma C da decisão 1)."""
         return bool(self.aplicados) or self.conferidos_sem_mudanca > 0 or self.retidos_queda > 0
+
+    @property
+    def pendencia_de_vinculo(self) -> bool:
+        """Há conta desta coleta esperando vínculo — na fila de revisão ou sem vínculo
+        seguro com uma ficha? Toda linha em ``ignorados`` é uma das duas, menos a da
+        criança sem ficha que a coleta de fora do ano letivo não criou (motivo
+        próprio, ``_MOTIVO_FORA_DO_ANO``): ela está em ``ignorados`` só para o cursor
+        voltar. Sem revisão e sem 'sem_vinculo', os ``ignorados`` são todos dela."""
+        if self.em_revisao:
+            return True
+        if not self.ignorados:
+            return False
+        return (not self.descartes.get(_MOTIVO_FORA_DO_ANO)
+                or bool(self.descartes.get("sem_vinculo")))
 
     @property
     def defeitos(self) -> int:
@@ -1628,7 +1652,7 @@ def decidir_status(ap: _Apuracao, *, falha_no_meio: bool = False) -> tuple[str, 
     uteis = ap.linhas - ap.decididos
     if uteis > 0 and ap.defeitos >= uteis:
         return "erro", "linhas_descartadas"       # tudo o que veio tinha defeito
-    if (ap.em_revisao or ap.ignorados) and not ap.conferiu_a_escola:
+    if ap.pendencia_de_vinculo and not ap.conferiu_a_escola:
         # Forma C: pendência sem nenhuma conta da escola conferida é
         # 'tudo_em_revisao' — não é em dia (credencial de outra escola, casamento
         # quebrado ou 1ª coleta sem vínculo) e tem o texto próprio do alerta.
@@ -1639,7 +1663,7 @@ def decidir_status(ap: _Apuracao, *, falha_no_meio: bool = False) -> tuple[str, 
         # de chegar. Os alertas delas abrem do mesmo jeito (``_concluir`` os decide
         # pela contabilidade, não pelo motivo).
         return "sem_atualizacao", MOTIVO_CAMPOS_NAO_ATUALIZADOS
-    if ap.em_revisao or ap.ignorados:
+    if ap.pendencia_de_vinculo:
         # Forma C: pendência com ≥1 conta da escola conferida é "correspondência
         # pendente" (em dia, com o alerta próprio).
         return "sem_atualizacao", "correspondencia_pendente"
@@ -1804,6 +1828,34 @@ def _contas_vinculadas(db: Session, escola_id: int, plataforma: str, *,
                situacao)) or 0)
 
 
+def _mensagem_fora_do_ano_letivo(db: Session, escola_id: int, ap: _Apuracao) -> str:
+    """Texto do alerta 'coleta_fora_do_ano_letivo' (S_G_VIRADA-1): a coleta de hoje
+    (dia de Brasília) é de outro ano que o ano letivo ativo da escola, e não criou
+    ficha nem mudou matrícula. Diz o que ficou de fora — sem nome de criança e sem
+    contagem (no Elefante a mesma criança vem no resumo e nos livros) — e o que
+    fazer: virar o ano, quando o ano letivo ativo já terminou; conferir o ano, quando
+    ele ainda nem começou."""
+    escola = db.get(Escola, escola_id)
+    ano = getattr(escola, "ano_letivo_ativo", None)
+    hoje = fuso.hoje_local()
+    quando = f"{hoje.day:02d}/{hoje.month:02d}/{hoje.year:04d}"
+    ficou_de_fora = "nenhuma matrícula foi mudada"
+    if ap.descartes.get(_MOTIVO_FORA_DO_ANO):
+        ficou_de_fora += (" e as crianças que ainda não têm ficha ficaram de fora "
+                          "(nenhuma ficha foi criada)")
+    if ano is not None and hoje.year > ano:
+        situacao = f"o ano letivo {ano} da escola já terminou no calendário"
+        acao = (f"Vire o ano letivo antes de coletar: o administrador global troca o "
+                f"“Ano letivo ativo” para {hoje.year} em Configurações e a escola envia a "
+                f"Lista Piloto de {hoje.year}. A coleta seguinte traz quem ficou de fora.")
+    else:
+        situacao = f"o ano letivo ativo da escola ({ano}) ainda não começou no calendário"
+        acao = ("Confira o “Ano letivo ativo” em Configurações (só o administrador global "
+                "o altera) antes de coletar de novo.")
+    return (f"A coleta de {quando} é de fora do ano letivo ativo: {situacao}. Quem já tem "
+            f"ficha recebe os números normalmente, mas {ficou_de_fora}. {acao}")
+
+
 def _mensagem_tudo_em_revisao(db: Session, escola_id: int, plataforma: str,
                               pendentes: str) -> str:
     """Texto do 'correspondencia_pendente' quando NENHUMA conta da escola foi
@@ -1960,7 +2012,7 @@ def _concluir(db: Session, execucao: SincronizacaoExecucao, ap: _Apuracao,
         # nela não há sinal de acesso de outra escola: é a pendência comum. Antes
         # (revisão e95) o alerta e o card mandavam conferir a credencial. Sem
         # pendência (só contas aposentadas no período), nada mudou.
-        motivo = ("correspondencia_pendente" if (ap.em_revisao or ap.ignorados)
+        motivo = ("correspondencia_pendente" if ap.pendencia_de_vinculo
                   else MOTIVO_NADA_MUDOU)
     if not _fechar_se_ainda_executando(db, execucao, status):
         _perdeu_o_fechamento(db, execucao, ap)
@@ -2026,7 +2078,7 @@ def _concluir(db: Session, execucao: SincronizacaoExecucao, ap: _Apuracao,
     # ('sem_atualizacao/correspondencia_pendente') deixava aberto um
     # 'sem_acesso_ao_dado' crítico de dias atrás, e uma 'concluida' com linhas que
     # ficaram em revisão nela mesma fechava o 'correspondencia_pendente'.
-    pendencia_nesta = bool(ap.em_revisao or ap.ignorados)
+    pendencia_nesta = ap.pendencia_de_vinculo
     outra_escola_nesta = len(ap.ids_outra_escola)
     if status in ("concluida", "sem_atualizacao") or (status == "parcial" and not ap.falhas
                                                       and falha is None):
@@ -2039,6 +2091,8 @@ def _concluir(db: Session, execucao: SincronizacaoExecucao, ap: _Apuracao,
             manter += ("coleta_parcial",)
         if ap.interpretacao_incompativel:
             manter += ("parser_incompativel",)
+        if ap.fora_do_ano_letivo:
+            manter += (TIPO_ALERTA_FORA_DO_ANO,)
         fechados = resolver_falhas_da_integracao(db, escola_id, plataforma, manter=manter)
     else:
         tipos = TIPOS_ACESSO + ("interrompida",)
@@ -2130,6 +2184,13 @@ def _concluir(db: Session, execucao: SincronizacaoExecucao, ap: _Apuracao,
         registrar_log(db, execucao, "validacao", "warn", mensagem)
         abrir_alerta(db, escola_id, plataforma, "identidade_de_outra_escola", mensagem,
                      severidade="critico", execucao_id=execucao.id)
+    if ap.fora_do_ano_letivo:
+        # Coleta de fora do ano letivo ativo que deixou alguém de fora: a escola
+        # precisa virar o ano (S_G_VIRADA-1). Sem nome de criança.
+        mensagem = _mensagem_fora_do_ano_letivo(db, escola_id, ap)
+        registrar_log(db, execucao, "validacao", "warn", mensagem)
+        abrir_alerta(db, escola_id, plataforma, TIPO_ALERTA_FORA_DO_ANO, mensagem,
+                     severidade="warn", execucao_id=execucao.id)
     if status == "sem_atualizacao" and ap.defeitos:
         # Linha com defeito sem nenhuma mudança: antes nenhum alerta — o defeito
         # só aparecia no histórico.

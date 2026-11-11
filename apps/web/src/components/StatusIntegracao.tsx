@@ -152,6 +152,9 @@ export const TIPO_ALERTA: Record<string, string> = {
   identidade_de_outra_escola: "Contas já vinculadas a outra escola",
   periodo_invalido: "Período inválido",
   escola_sem_responsavel: "Escola sem administrador ou coordenador ativo",
+  // A coleta foi feita fora do ano letivo ativo da escola (a virada do ano ainda não
+  // foi feita): não criou ficha nem mudou matrícula. A mensagem diz o que fazer.
+  coleta_fora_do_ano_letivo: "Coleta fora do ano letivo ativo",
 };
 export const rotuloAlerta = (tipo: string) => TIPO_ALERTA[tipo] ?? tipo.replace(/_/g, " ");
 
@@ -159,7 +162,7 @@ export const rotuloAlerta = (tipo: string) => TIPO_ALERTA[tipo] ?? tipo.replace(
 const ALERTAS_NAO_FALHA = new Set([
   "desatualizada", "lento", "queda_matific",
   "coleta_parcial", "correspondencia_pendente", "plataforma_sem_dados", "recalculo_pendente",
-  "contas_ausentes", "identidade_de_outra_escola",
+  "contas_ausentes", "identidade_de_outra_escola", "coleta_fora_do_ano_letivo",
 ]);
 
 // Categoria por tipo de alerta — o mesmo mapa do backend (service.CATEGORIA_POR_TIPO),

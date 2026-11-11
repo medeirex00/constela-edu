@@ -989,6 +989,35 @@ def _aviso_contas_esquecidas(n: int) -> str:
             "ignoradas: a conta continua ativa na plataforma; peça o encerramento lá.")
 
 
+# VIRADA DO ANO (S_G_VIRADA-1): a coleta de FORA do ano letivo ativo que deixou algo
+# de fora — criança sem ficha que não foi criada, matrícula que não foi mudada. É o
+# motivo das linhas não criadas (``linhas_descartadas``) e o código estável que a
+# sincronização lê em ``avisos_criticos`` para abrir o alerta de mesmo nome.
+MOTIVO_COLETA_FORA_DO_ANO = "coleta_fora_do_ano_letivo"
+
+
+def _fora_do_ano_letivo(ano: int | None, instante: datetime) -> bool:
+    """O dia de Brasília deste instante (naive = UTC) é de outro ano que o ano letivo
+    ativo ``ano``? Sem ano letivo, não há com o que comparar: False."""
+    return ano is not None and para_br(instante).year != ano
+
+
+def _aviso_coleta_fora_do_ano(ano: int, instante: datetime, *, fichas: int = 0,
+                              turmas: int = 0) -> str:
+    """O aviso da coleta de fora do ano letivo ativo: o que ficou de fora (contagem,
+    sem nome de criança) e o que fazer."""
+    partes = []
+    if fichas:
+        partes.append(f"{fichas} linha(s) de criança(s) sem ficha ficaram de fora "
+                      "(nenhuma ficha nem matrícula foi criada)")
+    if turmas:
+        partes.append(f"{turmas} criança(s) aparecem em outra turma na plataforma e a "
+                      "matrícula delas não foi mudada")
+    return (f"A coleta é de {_dia_txt(para_br(instante).date())} e o ano letivo ativo da "
+            f"escola é {ano}: " + "; ".join(partes) + ". Se o ano letivo terminou, vire o "
+            "ano letivo antes de coletar: a coleta seguinte traz quem ficou de fora.")
+
+
 def _resolver_aluno(db: Session, escola_id: int, ano: int, linha, avisos: list[str],
                     criados: dict | None = None,
                     turmas_novas: dict | None = None,
@@ -999,7 +1028,8 @@ def _resolver_aluno(db: Session, escola_id: int, ano: int, linha, avisos: list[s
                     revisoes: "ida.ColetorRevisoes | None" = None,
                     usuario_id: int | None = None,
                     encerrar_revisoes: bool = True,
-                    descartes: dict | None = None) -> Aluno | None:
+                    descartes: dict | None = None,
+                    coleta_fora_do_ano_letivo: bool = False) -> Aluno | None:
     """Aplica à linha a decisão da PORTA ÚNICA de identidade
     (``identidade_aluno.decidir``) — a MESMA que a prévia mostrou:
 
@@ -1019,6 +1049,11 @@ def _resolver_aluno(db: Session, escola_id: int, ano: int, linha, avisos: list[s
     conta aposentada pela escola, conta de criança excluída para sempre) é contada
     em ``descartes[motivo]`` quando o chamador passa o dict: o núcleo a tira de
     ``ignorados`` e de 'sem_vinculo'.
+
+    ``coleta_fora_do_ano_letivo`` (só a sincronização, ``_fora_do_ano_letivo``):
+    a linha que CRIARIA ficha não cria nada nem vai para a revisão — fica de fora,
+    contada em ``descartes[MOTIVO_COLETA_FORA_DO_ANO]``, e a coleta depois da virada
+    do ano a traz (S_G_VIRADA-1).
 
     ``ctx``/``revisoes`` vêm do /confirmar (estado carregado 1x, fila gravada no
     fim); chamado avulso, carrega o próprio estado e grava a revisão na hora."""
@@ -1136,7 +1171,17 @@ def _resolver_aluno(db: Session, escola_id: int, ano: int, linha, avisos: list[s
             criados[chave_log] = aluno
         return aluno
 
-    # CRIAR — nenhum candidato plausível. Antes de tudo, a LETRA ILEGÍVEL ("�" que a
+    # CRIAR — nenhum candidato plausível. A coleta de FORA do ano letivo ativo (a
+    # escola ainda no ano que terminou, a plataforma já com o ano novo) não cria: a
+    # criança nasceria matriculada no ano letivo ativo, no ranking e nos certificados
+    # de um ano em que não esteve. Nem vai para a revisão ("Criar novo aluno" a
+    # criaria no mesmo ano): fica de fora, e a coleta depois da virada a traz.
+    if coleta_fora_do_ano_letivo:
+        if descartes is not None:
+            descartes[MOTIVO_COLETA_FORA_DO_ANO] = (
+                descartes.get(MOTIVO_COLETA_FORA_DO_ANO, 0) + 1)
+        return None
+    # Antes de tudo, a LETRA ILEGÍVEL ("�" que a
     # leitura do arquivo pôs no acento que não conseguiu ler): a ficha nasceria com
     # ela no nome (e no certificado, no ranking). Só a criação é barrada — a linha
     # que ASSOCIA (conta já vinculada, aluno escolhido, nome que casa) não grava o
@@ -1909,7 +1954,9 @@ def _mesma_serie(atual: Turma | None, nova: Turma) -> bool:
 def _sincronizar_turma_matific(db: Session, escola_id: int, ano: int,
                                resolvidos: dict, avisos: list[str], *,
                                ctx: "ida.Contexto | None" = None,
-                               movidos_ids: list[int] | None = None) -> int:
+                               movidos_ids: list[int] | None = None,
+                               data_coleta: datetime | None = None,
+                               retidos_fora_do_ano: list[int] | None = None) -> int:
     """Na sync AUTOMÁTICA do Matific: vincula o UUID (identificação confiável) e
     MOVE a matrícula quando a turma reportada mudou. Regras de segurança (mexe em
     dado de criança, sem humano no loop):
@@ -1937,12 +1984,19 @@ def _sincronizar_turma_matific(db: Session, escola_id: int, ano: int,
       decorrer dessa regra — o dono pode objetar): vincula o UUID, mas NÃO move — a
       turma divergente vira aviso. Antes a coleta movia e o reenvio da Lista
       Piloto devolvia: a matrícula ia e voltava. A trava fica AQUI, e não só no
-      chamador, para nenhum caminho que chame esta rotina furar a política.
+      chamador, para nenhum caminho que chame esta rotina furar a política;
+    * coleta de FORA do ano letivo ativo (``data_coleta``, pelo dia de Brasília):
+      não move ninguém — em fevereiro, com a escola ainda no ano que terminou, a
+      turma que o Matific mostra é a do ano novo (quem repetiu e está no "3 ANO B"
+      ia do 3º A para o 3º B do ano que terminou). Um aviso só, com a contagem;
+      ``retidos_fora_do_ano`` (quando passado) recebe os ids (S_G_VIRADA-1).
 
     Devolve quantos alunos foram movidos; ``movidos_ids`` (quando passado) recebe
     os ids — a matrícula movida é dado alterado (ranking por turma, posição), e o
     /confirmar os conta como aplicados para a sync recalcular as notas."""
     movidos = 0
+    fora_do_ano = data_coleta is not None and _fora_do_ano_letivo(ano, data_coleta)
+    retidos: list[int] = []
     mover: bool | None = None   # a política só é lida quando há o que mover
     if ctx is None and resolvidos:
         ctx = ida.carregar_contexto(db, escola_id, ano)
@@ -1976,6 +2030,9 @@ def _sincronizar_turma_matific(db: Session, escola_id: int, ano: int,
                     svc.tokens_turma(atual.nome), svc.tokens_turma(turma_nome)) >= 2
                 or ctx.sala_efetiva(ida.chave_sala(turma_nome), turma_nome)
                 == ida.chave_sala(atual.nome)):
+            continue
+        if fora_do_ano:
+            retidos.append(aluno.id)   # a turma da plataforma é de outro ano
             continue
         nova = _turma_existente_por_tokens(db, escola_id, ano, turma_nome)
         if nova is None:
@@ -2019,6 +2076,10 @@ def _sincronizar_turma_matific(db: Session, escola_id: int, ano: int,
         movidos += 1
         if movidos_ids is not None:
             movidos_ids.append(aluno.id)
+    if retidos:
+        avisos.append(_aviso_coleta_fora_do_ano(ano, data_coleta, turmas=len(retidos)))
+        if retidos_fora_do_ano is not None:
+            retidos_fora_do_ano.extend(retidos)
     return movidos
 
 
@@ -3525,6 +3586,13 @@ def _confirmar_sem_commit(
     pode_criar_aluno = (politica_sync.pode_criar_aluno(db, escola_id)
                         and getattr(dados, "permitir_criar_aluno", None) is not False)
     pode_criar_turma = bool(getattr(dados, "permitir_criar_turma", True)) and pode_criar_aluno
+    # VIRADA DO ANO (S_G_VIRADA-1): a COLETA feita fora do ano letivo ativo da escola
+    # (dia de Brasília de agora — o instante em que a plataforma foi lida diz de que
+    # ano são as turmas e as crianças que ela mostra) grava os números de quem já tem
+    # ficha, mas não cria ficha: em fevereiro, com a escola ainda no ano que
+    # terminou, a criança nova do ano seguinte nascia matriculada nele. A importação
+    # manual tem prévia e as regras da data do relatório; não muda.
+    fora_do_ano = da_sincronizacao and _fora_do_ano_letivo(escola.ano_letivo_ativo, agora_utc)
     for linha in dados.linhas:
         faltam = [c for c in exigidos or () if (linha.dados or {}).get(c) is None]
         if faltam:
@@ -3546,6 +3614,7 @@ def _confirmar_sem_commit(
             continue
         na_fila = sum(len(p.linhas) for p in coletor.pendencias.values())
         decididas = sum(linhas_descartadas.get(m, 0) for m in ida.MOTIVOS_DESCARTE_DECIDIDO)
+        fora_antes = linhas_descartadas.get(MOTIVO_COLETA_FORA_DO_ANO, 0)
         aluno = _resolver_aluno(db, escola_id, escola.ano_letivo_ativo, linha,
                                 avisos, criados, turmas_novas,
                                 permitir_criar_turma=pode_criar_turma,
@@ -3553,7 +3622,8 @@ def _confirmar_sem_commit(
                                 plataforma=dados.plataforma, ctx=ctx_identidade,
                                 revisoes=coletor, usuario_id=usuario.id,
                                 encerrar_revisoes=encerrar_revisoes,
-                                descartes=linhas_descartadas)
+                                descartes=linhas_descartadas,
+                                coleta_fora_do_ano_letivo=fora_do_ano)
         if aluno is None:
             if sum(linhas_descartadas.get(m, 0)
                    for m in ida.MOTIVOS_DESCARTE_DECIDIDO) > decididas:
@@ -3567,6 +3637,11 @@ def _confirmar_sem_commit(
             chave_ign = svc.chave_nome(linha.nome)
             if chave_ign not in ignorados:
                 ignorados.append(chave_ign)
+            if linhas_descartadas.get(MOTIVO_COLETA_FORA_DO_ANO, 0) > fora_antes:
+                # Criança sem ficha numa coleta de fora do ano letivo: já contada no
+                # motivo próprio. Em ``ignorados`` (a sync não avança o cursor dela e
+                # a coleta depois da virada a traz), mas não é pendência de vínculo.
+                continue
             # Foi para a fila de revisão (linha preservada) ou ficou sem vínculo?
             if sum(len(p.linhas) for p in coletor.pendencias.values()) > na_fila:
                 linhas_em_revisao += 1
@@ -3601,12 +3676,23 @@ def _confirmar_sem_commit(
     # 'permitir'; com 'bloquear' a matrícula segue a Lista Piloto e a turma
     # divergente vira aviso (P15). Antes do recálculo para o ranking já refletir a
     # turma nova.
+    # Coleta de FORA do ano letivo ativo: ninguém é movido (a turma que a plataforma
+    # mostra é a de outro ano) — ``data_coleta``.
     movidos_ids: list[int] = []
+    retidos_fora_do_ano: list[int] = []
     if getattr(dados, "sincronizar_turma", False) and dados.plataforma == "matific" \
             and resolvidos:
         _sincronizar_turma_matific(
             db, escola_id, escola.ano_letivo_ativo, resolvidos, avisos,
-            ctx=ctx_identidade, movidos_ids=movidos_ids)
+            ctx=ctx_identidade, movidos_ids=movidos_ids, data_coleta=agora_utc,
+            retidos_fora_do_ano=retidos_fora_do_ano)
+    fichas_fora_do_ano = linhas_descartadas.get(MOTIVO_COLETA_FORA_DO_ANO, 0)
+    if fichas_fora_do_ano:
+        avisos.append(_aviso_coleta_fora_do_ano(escola.ano_letivo_ativo, agora_utc,
+                                                fichas=fichas_fora_do_ano))
+    if fichas_fora_do_ano or retidos_fora_do_ano:
+        # Código ESTÁVEL para a sincronização abrir o alerta de mesmo nome.
+        avisos_criticos.append(MOTIVO_COLETA_FORA_DO_ANO)
 
     # Import por período: as séries de snapshots dos alunos envolvidos vêm
     # numa ÚNICA consulta (212 alunos = 1 ida ao banco, não 212).
@@ -3804,9 +3890,12 @@ def _confirmar_sem_commit(
     # para a Revisão de identidade não é erro — está guardada esperando uma decisão
     # (``linhas_em_revisao``) — nem a da conta que a escola aposentou (decisão dela).
     # Antes era "linhas que não viraram dado", e o histórico mostrava em vermelho,
-    # como "Erros", as linhas em revisão de um arquivo sem nenhum defeito.
+    # como "Erros", as linhas em revisão de um arquivo sem nenhum defeito. Nem a da
+    # criança sem ficha que a coleta de fora do ano letivo deixou para depois da
+    # virada (``MOTIVO_COLETA_FORA_DO_ANO``): a linha não tem defeito.
     importacao.qtd_erros = sum(int(n or 0) for motivo, n in linhas_descartadas.items()
-                               if motivo not in ida.MOTIVOS_DESCARTE_DECIDIDO)
+                               if motivo not in ida.MOTIVOS_DESCARTE_DECIDIDO
+                               and motivo != MOTIVO_COLETA_FORA_DO_ANO)
     importacao.tempo_ms = int((time.monotonic() - inicio) * 1000)
 
     # LGPD/§15: o log de auditoria é permanente — não persistir os avisos brutos,

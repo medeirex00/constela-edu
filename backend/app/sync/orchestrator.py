@@ -127,6 +127,10 @@ AVISO_NAO_ATUALIZADOS = "campos_nao_atualizados:"
 # Os campos do retrato que as Questões do período medem: se um deles não veio, o
 # retrato não mede as questões (``IMPORTACAO_SEM_QUESTOES``).
 CAMPOS_QUESTOES = ("questoes_tentativas", "questoes_acertos")
+# Coleta feita FORA do ano letivo ativo da escola que não criou ficha nem mudou
+# matrícula de alguém (S_G_VIRADA-1): o motivo das linhas deixadas de fora e o tipo
+# do alerta que pede a virada do ano — o mesmo código da importação.
+MOTIVO_FORA_DO_ANO_LETIVO = imp.MOTIVO_COLETA_FORA_DO_ANO
 
 
 def campos_nao_atualizados(analise) -> list[str]:
@@ -563,6 +567,12 @@ def aplicar_arquivo(db: Session, escola: Escola, arquivo: ArquivoObtido, *,
     for motivo, n in (getattr(resultado, "linhas_descartadas", None) or {}).items():
         descartadas[motivo] = descartadas.get(motivo, 0) + int(n or 0)
     aplicados_ids = list(getattr(resultado, "alunos_aplicados_ids", None) or [])
+    # Coleta de FORA do ano letivo ativo que deixou algo de fora (S_G_VIRADA-1): o
+    # código estável vira a marca própria, e ``avisos_criticos`` fica só com os
+    # campos que a plataforma perdeu (lidos como tal pelo alerta de formato).
+    criticos = list(getattr(resultado, "avisos_criticos", None) or [])
+    fora_do_ano = MOTIVO_FORA_DO_ANO_LETIVO in criticos
+    criticos = [a for a in criticos if a != MOTIVO_FORA_DO_ANO_LETIVO]
     return {
         "qtd_alunos": resultado.qtd_alunos,
         "qtd_erros": resultado.qtd_erros,
@@ -587,10 +597,13 @@ def aplicar_arquivo(db: Session, escola: Escola, arquivo: ArquivoObtido, *,
                    + retidos + n_descartadas),
         "em_revisao": em_revisao,
         "descartadas": descartadas,
-        "avisos_criticos": (list(getattr(resultado, "avisos_criticos", None) or [])
+        "avisos_criticos": (criticos
                             + ([AVISO_NAO_ATUALIZADOS + ",".join(nao_atualizados)]
                                if nao_atualizados else [])),
         "parser_incompativel": False,
+        # A coleta foi feita fora do ano letivo ativo e não criou ficha nem mudou
+        # matrícula de alguém: o serviço abre o alerta 'coleta_fora_do_ano_letivo'.
+        "fora_do_ano_letivo": fora_do_ano,
         # Contas já efetivas em OUTRA escola do Constela (revisão própria): o
         # serviço abre o alerta crítico 'identidade_de_outra_escola'.
         "ids_de_outra_escola": list(getattr(resultado, "ids_de_outra_escola", None) or []),
