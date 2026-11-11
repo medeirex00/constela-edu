@@ -73,7 +73,9 @@ describe("Ficha da escola — o que ela mostra", () => {
     await abrirFicha("/rede/escolas/2");
     const bloco = await screen.findByTestId("ficha-plataformas");
     expect(within(bloco).getByTestId("plataforma-elefante")).toHaveTextContent("70%");
-    expect(within(bloco).getByTestId("plataforma-matific")).toHaveTextContent("Sem dado do Matific");
+    // Poucos alunos medidos: "Protegido", como a situação de uso lá em cima — não "Sem dado".
+    expect(within(bloco).getByTestId("plataforma-matific"))
+      .toHaveTextContent("Protegido: menos de 5 alunos com dado desta plataforma no período.");
     expect(screen.getByTestId("ficha-recorte-plataformas")).toHaveTextContent("Vale aqui: período (Ano letivo de 2026) e série (1º ao 5º ano).");
     expect(screen.getByTestId("ficha-ultima-coleta")).toHaveTextContent("Última coleta: Elefante 18/10/2026 · Matific 19/10/2026.");
     expect(bloco.querySelector("[data-natureza=plataforma]")).toHaveTextContent("Plataforma");

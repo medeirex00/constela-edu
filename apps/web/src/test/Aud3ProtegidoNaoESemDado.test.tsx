@@ -9,18 +9,23 @@
  *     `numeroProtegido`); o que falta de verdade continua "Sem dado: …".
  * (2) Panorama: o número "Sem uso registrado ou sem dado" contava também as protegidas; o rótulo
  *     agora diz as três situações que ele soma.
+ * (3) REV3-REDE-1: os cartões das plataformas (`CartoesPlataformas`, na ficha da escola e na Análise
+ *     da escola) diziam "Sem dado do Matific: menos de 5 alunos…" logo abaixo da situação de uso
+ *     "Protegido (poucos alunos)" da mesma ficha. Agora dizem "Protegido: …"; a falta de verdade
+ *     continua "Sem dado do Elefante/Matific: …".
  *
  * Dados sintéticos (as fixtures do próprio projeto).
  */
 import { describe, expect, it } from "vitest";
 
+import { CartoesPlataformas } from "../pages/analise/Plataformas";
 import { semNumeroDo } from "../pages/analise/PlataformasRede";
-import type { MetricasMatific } from "../pages/analise/tipos";
+import type { MetricasElefante, MetricasMatific } from "../pages/analise/tipos";
 import PanoramaSecretaria from "../pages/rede/secretaria/PanoramaSecretaria";
 import { classificarRede } from "../pages/rede/secretaria/situacaoDeUso";
 import { painelEscolas, plataformasComEpsilon, renderEscolas, semearEscolas } from "./EscolasRedeFixtures";
 import { renderTela, semearPanorama } from "./SecretariaFixtures";
-import { responder, screen, within } from "./utils";
+import { render, responder, screen, within } from "./utils";
 
 // O texto do serviço (analise/plataformas.py, TEXTOS_COBERTURA[POUCOS_MEDIDOS]) com k = 5.
 const POUCOS = "menos de 5 alunos com dado desta plataforma no período: os números não aparecem, para proteger as crianças";
@@ -81,6 +86,55 @@ describe("número protegido da escola não é 'Sem dado'", () => {
     expect(semNumeroDo(null, null)).toBe("Sem dado: sem dado no período");
     // Bloco com número: nada a dizer no lugar dele.
     expect(semNumeroDo({ participacao_pct: 80 } as unknown as MetricasMatific, "ok")).toBeNull();
+  });
+
+  it("ficha da escola: o cartão do Matific diz 'Protegido', como a situação de uso logo acima (REV3-REDE-1)", async () => {
+    semearEscolas();
+    renderEscolas("/rede/escolas/2");
+    const uso = await screen.findByTestId("ficha-uso-matific");
+    expect(uso).toHaveTextContent("Matific: Protegido (poucos alunos)");
+    const bloco = await screen.findByTestId("ficha-plataformas");
+    const matific = within(bloco).getByTestId("plataforma-matific");
+    // Antes: "Sem dado do Matific: menos de 5 alunos…" — o mesmo motivo com dois nomes na mesma ficha.
+    expect(matific).toHaveTextContent("Protegido: menos de 5 alunos com dado desta plataforma no período.");
+    expect(matific).not.toHaveTextContent(/sem dado/i);
+    // O Elefante da mesma escola tem número: segue com os números.
+    expect(within(bloco).getByTestId("plataforma-elefante")).toHaveTextContent("70%");
+  });
+
+  it("ficha da escola sem coleta: o cartão continua 'Sem dado do Elefante' (falta de verdade)", async () => {
+    semearEscolas();
+    renderEscolas("/rede/escolas/6");
+    const bloco = await screen.findByTestId("ficha-plataformas");
+    expect(within(bloco).getByTestId("plataforma-elefante"))
+      .toHaveTextContent("Sem dado do Elefante: a escola não tem nenhuma coleta desta plataforma (texto sintético).");
+    expect(within(bloco).getByTestId("plataforma-matific"))
+      .toHaveTextContent("Sem dado do Matific: a escola não tem nenhuma coleta desta plataforma (texto sintético).");
+    expect(bloco).not.toHaveTextContent("Protegido");
+  });
+
+  it("os cartões das plataformas (ficha e Análise da escola): cada motivo com o nome certo", () => {
+    const bloco = (motivo: string | null, texto: string | null) => ({
+      alunos_medidos: null, participacao_pct: null, coleta_parcial: false, coberto_ate: null,
+      motivo_sem_dado: motivo, texto_sem_dado: texto, metricas_protegidas: [],
+    });
+    const casos: [string | null, string | null, string][] = [
+      ["poucos_alunos_medidos", "menos de 5 alunos medidos (sintético)", "Protegido: menos de 5 alunos medidos (sintético)."],
+      ["series_suprimidas", "todas as séries com poucos alunos (sintético)",
+       "Protegido: todas as séries com poucos alunos (sintético)."],
+      ["suprimido", "escondido junto com um recorte pequeno (sintético)",
+       "Protegido: escondido junto com um recorte pequeno (sintético)."],
+      ["sem_conta", "ninguém com conta (sintético)", "Sem dado do Elefante: ninguém com conta (sintético)."],
+      ["sem_coleta_no_periodo", null, "Sem dado do Elefante: sem dado no período."],
+    ];
+    for (const [motivo, texto, esperado] of casos) {
+      const { unmount } = render(
+        <CartoesPlataformas alunos={30} modulos={{ elefante: true, matific: false }} matific={null}
+                            elefante={bloco(motivo, texto) as unknown as MetricasElefante} />,
+      );
+      expect(screen.getByTestId("plataforma-elefante")).toHaveTextContent(esperado);
+      unmount();
+    }
   });
 
   it("Panorama: o número das demais escolas diz que soma as sem uso, as sem dado e as protegidas", async () => {
