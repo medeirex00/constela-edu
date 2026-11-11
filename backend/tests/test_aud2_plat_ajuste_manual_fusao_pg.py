@@ -139,8 +139,6 @@ def test_ajuste_segurando_a_trava_a_fusao_espera_e_leva_o_retrato(motor_pg, cena
                                                                   rota):
     """Ordem inversa: o ajuste grava primeiro; a fusão espera e MOVE o retrato manual
     para a ficha que fica (nada some pela cascata)."""
-    from app.core.database import bloquear_escola_para_importacao
-
     entrou, soltar = threading.Event(), threading.Event()
     real = plataformas.registrar
 
@@ -157,7 +155,6 @@ def test_ajuste_segurando_a_trava_a_fusao_espera_e_leva_o_retrato(motor_pg, cena
     erros_fusao: list[Exception] = []
     erros: list[Exception] = []
     respostas: list = []
-    assert bloquear_escola_para_importacao is not None
 
     t_ajuste = _disparar_ajuste(motor_pg, cena, rota, global_id, erros, respostas)
     t_fusao = None
