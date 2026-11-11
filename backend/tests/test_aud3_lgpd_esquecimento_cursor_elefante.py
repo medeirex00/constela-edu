@@ -12,12 +12,15 @@ apagadas, e o ``test_exclusao_alcance_total`` só procurava o nome e o id da fic
 Dados 100% fictícios; sem rede (navegador falso do Elefante, conectores reais,
 serviço real de sincronização).
 """
+import inspect
 import json
 
+import pytest
 from sqlalchemy import JSON, String, Text, select
 
 from app.core.database import Base
-from app.models import Aluno, Configuracao, IdentidadeExterna, Matricula
+from app.models import Aluno, Configuracao, Escola, IdentidadeExterna, Matricula
+from app.services import backup as svc_backup
 from app.services import exclusao_aluno
 from app.sync import service
 from tests._sync_nucleo_fakes import NavElefante, aluno_el, credencial, instalar, livro, rodar
@@ -116,3 +119,197 @@ def test_exclusao_de_turma_com_alunos_tambem_tira_do_cursor(
     db.expire_all()
     assert not any(db.get(Aluno, aid) for aid in contas)
     assert not set(_cursor(db, eid) or {}) & set(contas.values())
+
+
+# ---------------------------------------------------------------------------
+# REV3-LGPD-1: a conta esquecida VOLTAVA ao cursor por dois caminhos
+# ---------------------------------------------------------------------------
+# (1) a coleta seguinte: o Elefante continua mandando a conta (a ficha não volta: a
+#     porta de identidade a ignora pela marca), o conector a conta em
+#     ``contadores_novos`` e ``_salvar_contadores`` faz MERGE com o cursor gravado;
+# (2) a restauração de um backup gerado ANTES da exclusão: o namespace
+#     ``sync_incremental`` volta do arquivo (não está em PRESERVADAS_NA_RESTAURACAO).
+# A ficha não volta em nenhum dos dois, mas o id da conta da criança voltava ao banco
+# e a todo backup seguinte. Tirar a conta só de ``contadores_novos`` não basta: o
+# merge mantém o id que a restauração devolveu. O remédio é
+# ``exclusao_aluno.tirar_contas_esquecidas_do_cursor``, que lê as marcas de
+# esquecimento do log e limpa o cursor JÁ gravado — chamado pela sincronização
+# depois de ``_salvar_contadores`` e pela restauração depois de recriar as
+# configurações.
+_CHAMADA = "tirar_contas_esquecidas_do_cursor"
+# As duas chamadas ficam em módulos de outras frentes (sincronização e restauração).
+# Enquanto não entram, os testes de ponta a ponta abaixo PRECISAM falhar (xfail
+# estrito); quando entram, passam a valer como teste comum.
+_SYNC_CHAMA = _CHAMADA in inspect.getsource(service)
+_RESTAURACAO_CHAMA = _CHAMADA in inspect.getsource(svc_backup)
+_pendente_na_sync = pytest.mark.xfail(
+    not _SYNC_CHAMA, strict=True,
+    reason="a sincronização (app/sync/service.py, bloco CURSOR) ainda não chama "
+           "exclusao_aluno.tirar_contas_esquecidas_do_cursor depois de _salvar_contadores")
+_pendente_na_restauracao = pytest.mark.xfail(
+    not _RESTAURACAO_CHAMA, strict=True,
+    reason="a restauração (services/backup.restaurar) ainda não chama "
+           "exclusao_aluno.tirar_contas_esquecidas_do_cursor depois de recriar as "
+           "configurações")
+
+
+def _coletar_e_achar(db, ec, monkeypatch):
+    eid = ec["escola"].id
+    credencial(db, eid, "elefante")
+    instalar(monkeypatch, nav_elefante=NavElefante(_turmas(ec)))
+    rodar(db, eid, "elefante")
+    [aid] = db.execute(select(Aluno.id).where(Aluno.escola_id == eid, Aluno.nome == NOME)
+                       ).scalars().all()
+    return eid, aid
+
+
+def _excluir(cliente_global, eid, aid):
+    r = cliente_global.post(f"{API}/escolas/{eid}/alunos/excluir-permanente",
+                            json={"aluno_ids": [aid], "confirmacao": "EXCLUIR"})
+    assert r.status_code == 200, r.text
+
+
+def _restaurar(cliente_global, eid, conteudo):
+    r = cliente_global.post(f"{API}/escolas/{eid}/restaurar",
+                            files={"arquivo": ("backup.json", conteudo, "application/json")})
+    assert r.status_code == 200, r.text
+    return r.json()
+
+
+def _ficha_de_volta(db, eid):
+    db.expire_all()
+    return db.execute(select(Aluno.id).where(Aluno.escola_id == eid, Aluno.nome == NOME)
+                      ).scalars().all()
+
+
+def _linha_da_completa(db, eid):
+    db.expire_all()
+    linha = db.execute(select(Configuracao).where(
+        Configuracao.escola_id == eid, Configuracao.namespace == service._NS_INCREMENTAL,
+        Configuracao.chave == "elefante" + service._SUFIXO_COMPLETA)).scalar_one_or_none()
+    return dict(linha.valor) if linha is not None else None
+
+
+def test_cursor_ja_mesclado_pela_coleta_perde_a_conta_esquecida(
+        db, escola_completa, cliente_global, monkeypatch):
+    """O que a coleta faz depois da exclusão (MERGE da conta no cursor gravado) e o
+    que o remédio desfaz: só a conta esquecida sai; as outras ficam com os totais."""
+    eid, aid = _coletar_e_achar(db, escola_completa, monkeypatch)
+    antes = _cursor(db, eid)
+    _excluir(cliente_global, eid, aid)
+    assert str(SID) not in _cursor(db, eid)
+    completa = _linha_da_completa(db, eid)
+    # A coleta seguinte vê a conta de novo e a MESCLA no cursor (é o que
+    # ``_salvar_contadores`` faz com ``contadores_novos``).
+    service._salvar_contadores(db, eid, "elefante", {str(SID): len(LIVROS)})
+    db.commit()
+    assert str(SID) in _cursor(db, eid)
+
+    tiradas = exclusao_aluno.tirar_contas_esquecidas_do_cursor(db, eid)
+    db.commit()
+    assert tiradas == 1
+    assert _cursor(db, eid) == {k: v for k, v in antes.items() if k != str(SID)}
+    # A marca da recoleta completa (mesmo namespace) não é conta: fica.
+    assert _linha_da_completa(db, eid) == completa
+    # Sem conta esquecida no cursor, nada sai.
+    assert exclusao_aluno.tirar_contas_esquecidas_do_cursor(db, eid) == 0
+
+
+def test_cursor_devolvido_pela_restauracao_perde_a_conta_esquecida(
+        db, escola_completa, cliente, cliente_global, monkeypatch):
+    eid, aid = _coletar_e_achar(db, escola_completa, monkeypatch)
+    antes = _cursor(db, eid)
+    baixado = cliente.get(f"{API}/escolas/{eid}/backup")
+    assert baixado.status_code == 200, baixado.text
+    assert str(SID) in json.dumps(baixado.json()["tabelas"]["configuracoes"])
+    _excluir(cliente_global, eid, aid)
+    _restaurar(cliente_global, eid, baixado.content)
+    assert _ficha_de_volta(db, eid) == []
+
+    exclusao_aluno.tirar_contas_esquecidas_do_cursor(db, eid, todas_as_escolas=True)
+    db.commit()
+    assert _cursor(db, eid) == {k: v for k, v in antes.items() if k != str(SID)}
+    assert not _varrer(db, str(SID))
+
+
+def test_cursor_de_outra_escola_so_perde_a_conta_com_todas_as_escolas(
+        db, escola_completa, cliente_global, monkeypatch):
+    """O arquivo de uma escola restaurado em OUTRA leva o cursor da primeira, e a marca
+    está no log da escola que excluiu. A sincronização confere só as marcas da própria
+    escola (a conta pode ser de uma criança que continua estudando na outra); a
+    restauração, as de todas (tirar uma conta do cursor nunca perde dado: a coleta
+    seguinte só a busca inteira)."""
+    eid, aid = _coletar_e_achar(db, escola_completa, monkeypatch)
+    _excluir(cliente_global, eid, aid)
+    outra = Escola(nome="ESCOLA FICTICIA DESTINO DO ARQUIVO", ano_letivo_ativo=2026)
+    db.add(outra)
+    db.flush()
+    db.add(Configuracao(escola_id=outra.id, namespace=service._NS_INCREMENTAL,
+                        chave="elefante", valor={str(SID): 3, "9300001": 1}))
+    db.commit()
+
+    assert exclusao_aluno.tirar_contas_esquecidas_do_cursor(db, outra.id) == 0
+    db.commit()
+    assert _cursor(db, outra.id) == {str(SID): 3, "9300001": 1}
+    assert exclusao_aluno.tirar_contas_esquecidas_do_cursor(
+        db, outra.id, todas_as_escolas=True) == 1
+    db.commit()
+    assert _cursor(db, outra.id) == {"9300001": 1}
+
+
+@_pendente_na_sync
+def test_coleta_seguinte_nao_regrava_a_conta_esquecida_no_cursor(
+        db, escola_completa, cliente_global, monkeypatch):
+    eid, aid = _coletar_e_achar(db, escola_completa, monkeypatch)
+    _excluir(cliente_global, eid, aid)
+    assert str(SID) not in _cursor(db, eid)
+    rodar(db, eid, "elefante")
+    assert _ficha_de_volta(db, eid) == []
+    assert str(SID) not in _cursor(db, eid)
+
+
+@_pendente_na_sync
+def test_coleta_tira_a_conta_esquecida_que_ja_estava_no_cursor(
+        db, escola_completa, cliente_global, monkeypatch):
+    """A conta esquecida JÁ gravada no cursor (por uma restauração sem a limpeza, ou
+    pela exclusão de uma versão que não tirava a conta do cursor) sai na coleta
+    seguinte. Tirá-la só de ``contadores_novos`` não basta: o MERGE de
+    ``_salvar_contadores`` mantém o que já estava gravado."""
+    eid, aid = _coletar_e_achar(db, escola_completa, monkeypatch)
+    _excluir(cliente_global, eid, aid)
+    service._salvar_contadores(db, eid, "elefante", {str(SID): len(LIVROS)})
+    db.commit()
+    assert str(SID) in _cursor(db, eid)
+    rodar(db, eid, "elefante")
+    assert _ficha_de_volta(db, eid) == []
+    assert str(SID) not in _cursor(db, eid)
+
+
+@_pendente_na_restauracao
+def test_restauracao_de_backup_anterior_nao_devolve_a_conta_ao_cursor(
+        db, escola_completa, cliente, cliente_global, monkeypatch):
+    eid, aid = _coletar_e_achar(db, escola_completa, monkeypatch)
+    baixado = cliente.get(f"{API}/escolas/{eid}/backup")
+    assert baixado.status_code == 200, baixado.text
+    _excluir(cliente_global, eid, aid)
+    _restaurar(cliente_global, eid, baixado.content)
+    assert _ficha_de_volta(db, eid) == []
+    assert str(SID) not in (_cursor(db, eid) or {})
+    assert not _varrer(db, str(SID))
+
+
+@_pendente_na_sync
+def test_restauracao_seguida_de_coleta_nao_deixa_a_conta_no_cursor(
+        db, escola_completa, cliente, cliente_global, monkeypatch):
+    """A restauração devolve a conta ao cursor e a coleta seguinte a MESCLA: tirar a
+    conta só de ``contadores_novos`` deixaria o id restaurado para sempre."""
+    eid, aid = _coletar_e_achar(db, escola_completa, monkeypatch)
+    baixado = cliente.get(f"{API}/escolas/{eid}/backup")
+    assert baixado.status_code == 200, baixado.text
+    _excluir(cliente_global, eid, aid)
+    rodar(db, eid, "elefante")
+    assert str(SID) not in _cursor(db, eid)
+    _restaurar(cliente_global, eid, baixado.content)
+    rodar(db, eid, "elefante")
+    assert _ficha_de_volta(db, eid) == []
+    assert str(SID) not in _cursor(db, eid)

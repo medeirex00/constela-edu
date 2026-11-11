@@ -22,7 +22,11 @@ APAGADO (é dado da criança e não sustenta nenhuma obrigação):
   * as conversas da IA que citam o nome (``conversas_ia_que_citam``);
   * a conta dela no cursor da coleta incremental (``configuracoes``, namespace
     ``sync_incremental``: ``{id da conta na plataforma: total}``), que saía também
-    no backup da escola (``_tirar_do_cursor_da_sincronizacao``).
+    no backup da escola (``_tirar_do_cursor_da_sincronizacao``); a conta marcada
+    como esquecida que volta ao cursor pela coleta seguinte ou pela restauração de
+    um backup anterior sai por ``tirar_contas_esquecidas_do_cursor``, a chamar pela
+    sincronização e pela restauração (até as duas chamadas entrarem, é o limite
+    registrado no docs/lgpd/RETENCAO-TECNICA.md, seção 2.3).
 ANONIMIZADO (o nome vira ``[removido]``; o resto do registro fica):
   * revisão de OUTRA criança que a listava como candidata: a candidata excluída
     sai da lista, o nome dela some dos dados;
@@ -78,6 +82,7 @@ import hmac
 import logging
 import re
 import unicodedata
+from collections.abc import Callable
 from pathlib import Path
 
 from sqlalchemy import event, select
@@ -469,33 +474,71 @@ def apagar_arquivos_apos_commit(db: Session, caminhos: list[Path],
 NAMESPACE_CURSOR_DA_SINCRONIZACAO = "sync_incremental"
 
 
+def _tirar_do_cursor(db: Session, escola_id: int, plataformas: set[str],
+                     sai: Callable[[str, str], bool]) -> int:
+    """Tira do cursor de ``escola_id`` (só as linhas das ``plataformas``) cada conta
+    para a qual ``sai(plataforma, id da conta)`` é verdadeiro, reatribuindo o dict;
+    as demais ficam com os totais. Devolve quantas contas saíram."""
+    from app.models import Configuracao
+
+    if not plataformas:
+        return 0
+    tiradas = 0
+    for linha in db.execute(select(Configuracao).where(
+            Configuracao.escola_id == escola_id,
+            Configuracao.namespace == NAMESPACE_CURSOR_DA_SINCRONIZACAO,
+            Configuracao.chave.in_(sorted(plataformas)))).scalars():
+        if not isinstance(linha.valor, dict):
+            continue
+        fica = {chave: total for chave, total in linha.valor.items()
+                if not sai(linha.chave, str(chave).strip())}
+        if len(fica) != len(linha.valor):
+            tiradas += len(linha.valor) - len(fica)
+            linha.valor = fica   # reatribui → o JSON é regravado
+    return tiradas
+
+
 def _tirar_do_cursor_da_sincronizacao(db: Session, escola_id: int,
                                       identidades: set[tuple[str, str]]) -> int:
     """Tira do cursor da coleta incremental de ``escola_id`` as contas
     ``identidades`` ({(plataforma, id externo)}) da criança. Sem a conta no cursor,
     a coleta seguinte só a busca inteira (é o que faz com conta nova) — nunca
     perde nem duplica nada. Devolve quantas contas saíram."""
-    from app.models import Configuracao
-
     contas: dict[str, set[str]] = {}
     for plataforma, id_externo in identidades:
         if plataforma and str(id_externo or "").strip():
             contas.setdefault(plataforma, set()).add(str(id_externo).strip())
-    if not contas:
-        return 0
-    tiradas = 0
-    for linha in db.execute(select(Configuracao).where(
-            Configuracao.escola_id == escola_id,
-            Configuracao.namespace == NAMESPACE_CURSOR_DA_SINCRONIZACAO,
-            Configuracao.chave.in_(sorted(contas)))).scalars():
-        if not isinstance(linha.valor, dict):
-            continue
-        fica = {chave: total for chave, total in linha.valor.items()
-                if str(chave).strip() not in contas[linha.chave]}
-        if len(fica) != len(linha.valor):
-            tiradas += len(linha.valor) - len(fica)
-            linha.valor = fica   # reatribui → o JSON é regravado
-    return tiradas
+    return _tirar_do_cursor(db, escola_id, set(contas),
+                            lambda plataforma, conta: conta in contas[plataforma])
+
+
+def tirar_contas_esquecidas_do_cursor(db: Session, escola_id: int, *,
+                                      todas_as_escolas: bool = False) -> int:
+    """Tira do cursor da coleta incremental de ``escola_id`` toda conta marcada como
+    esquecida (``marcas_esquecidas``). A exclusão já a tirou
+    (``_tirar_do_cursor_da_sincronizacao``), mas ela VOLTA ao cursor por dois caminhos,
+    sem a ficha (REV3-LGPD-1):
+
+    * a coleta seguinte: a plataforma continua mandando a conta e a porta de
+      identidade a ignora, mas o conector a conta em ``contadores_novos`` e
+      ``sync.service._salvar_contadores`` faz MERGE com o cursor gravado. A
+      sincronização deve chamar isto DEPOIS de ``_salvar_contadores``: tirar a conta
+      só de ``contadores_novos`` não basta, o merge manteria o id que uma restauração
+      devolveu ao cursor gravado;
+    * a restauração de um backup gerado antes da exclusão: o cursor volta do arquivo.
+      ``backup.restaurar`` deve chamar isto depois de recriar as configurações, com
+      ``todas_as_escolas``: o arquivo pode ser de OUTRA escola e a marca fica no log da
+      escola que excluiu (como a ficha, que não volta pela exclusão feita em qualquer
+      escola: ``backup._excluidos_depois_do_backup``).
+
+    A sincronização confere só as marcas da própria escola, a regra da porta de
+    identidade. Tirar uma conta do cursor nunca perde dado: a coleta seguinte só a
+    busca inteira, como conta nova (e a porta de identidade a ignora). Sem marca, nem
+    lê o cursor. Não commita; devolve quantas contas saíram."""
+    marcas = _marcas_no_log(db, None if todas_as_escolas else escola_id)
+    return _tirar_do_cursor(
+        db, escola_id, {plataforma for plataforma, _ in marcas},
+        lambda plataforma, conta: conta_esquecida(marcas, plataforma, conta))
 
 
 # ---------------------------------------------------------------------------
@@ -784,12 +827,19 @@ def marcas_esquecidas(db: Session, escola_id: int) -> set[tuple[str, str]]:
     """{(plataforma, marca)} das contas esquecidas de ``escola_id`` — lidas das
     entradas ``aluno.excluido_permanente`` da escola (poucas: a ação é rara e o
     índice é por ação)."""
+    return _marcas_no_log(db, escola_id)
+
+
+def _marcas_no_log(db: Session, escola_id: int | None) -> set[tuple[str, str]]:
+    """``marcas_esquecidas`` de ``escola_id``, ou de TODAS as escolas com ``None``."""
     from app.models import LogAuditoria
 
+    consulta = select(LogAuditoria.detalhes).where(
+        LogAuditoria.acao == ACAO_EXCLUSAO_PERMANENTE)
+    if escola_id is not None:
+        consulta = consulta.where(LogAuditoria.escola_id == escola_id)
     marcas: set[tuple[str, str]] = set()
-    for detalhes in db.execute(select(LogAuditoria.detalhes).where(
-            LogAuditoria.acao == ACAO_EXCLUSAO_PERMANENTE,
-            LogAuditoria.escola_id == escola_id)).scalars():
+    for detalhes in db.execute(consulta).scalars():
         itens = detalhes.get(CHAVE_CONTAS_ESQUECIDAS) if isinstance(detalhes, dict) else None
         for item in itens if isinstance(itens, list) else ():
             if (isinstance(item, dict) and isinstance(item.get("plataforma"), str)

@@ -132,8 +132,23 @@ contadores parados há mais de 1 dia e sem bloqueio vigente.
   `{studentId: totalBooksRead}`), que o backup da escola leva inteiro
   (`exclusao_aluno._tirar_do_cursor_da_sincronizacao`). As contas das outras crianças
   ficam; sem a dela no cursor, a coleta seguinte só a buscaria inteira, como conta nova.
-  Limite: a coleta seguinte ainda regrava no cursor a conta marcada como esquecida
-  (ver "Marca de esquecimento", abaixo) — pendência da sincronização;
+  A conta marcada como esquecida (ver "Marca de esquecimento", abaixo) volta ao cursor,
+  sem a ficha, por dois caminhos: a coleta seguinte (a plataforma continua mandando a
+  conta, e o cursor é gravado por mescla com o que já estava lá) e a restauração de um
+  backup gerado antes da exclusão (o cursor volta do arquivo). Quem a tira do cursor
+  já gravado é `exclusao_aluno.tirar_contas_esquecidas_do_cursor`: na sincronização,
+  depois de gravar o cursor, com as marcas da própria escola (a regra da porta de
+  identidade); na restauração, depois de recriar as configurações, com as marcas de
+  qualquer escola (o arquivo pode ser de outra). Fora do cursor, a conta esquecida é
+  buscada inteira a cada coleta e descartada pela porta de identidade (o custo de uma
+  conta a mais na coleta).
+  **Limite, enquanto as duas chamadas não entram:** a sincronização
+  (`app/sync/service.py`) e a restauração (`services/backup.restaurar`) ainda não chamam
+  essa função. Até lá, a coleta seguinte regrava a conta no cursor, a restauração de um
+  backup anterior à exclusão a devolve (o id da conta na plataforma e o total de livros,
+  sem nome nem ficha) e ela sai em todo backup seguinte. Os testes de ponta a ponta de
+  `tests/test_aud3_lgpd_esquecimento_cursor_elefante.py` ficam em falha esperada até as
+  chamadas entrarem e passam a exigi-las sozinhos depois; tirar este limite nesse dia;
 - o arquivo original de um relatório **individual** dela (o nome do arquivo traz o nome
   dela, o arquivo foi gravado pelo servidor para esta escola e a importação não trouxe
   dado de criança que fica) e **todas** as cópias em `exports/` (não há como saber quais
@@ -251,7 +266,10 @@ a exclusão de turma com alunos não grava a marca)
   restauração do backup JSON da escola pelo app (só o Admin Global) não traz de volta a
   criança excluída de vez depois do arquivo, nem os dados dela, e avisa quantas ficaram de
   fora (`backup.restaurar`, pelo `aluno.excluido_permanente` do log, feito em qualquer
-  escola: vale também para o arquivo de uma escola restaurado em outra). Vale também para o
+  escola: vale também para o arquivo de uma escola restaurado em outra) — com uma
+  exceção enquanto a restauração não chama `tirar_contas_esquecidas_do_cursor`: o id da
+  conta dela na plataforma, com o total de livros, volta no cursor da coleta incremental
+  (ver o limite do cursor, acima). Vale também para o
   arquivo gerado antes de outra restauração, que troca os ids das fichas: cada
   restauração grava em `backup.restaurado` o mapa {id novo: id do arquivo} (só números,
   preservado do expurgo) e a seguinte segue essa linhagem, gravada em qualquer escola
@@ -287,8 +305,9 @@ a exclusão de turma com alunos não grava a marca)
 
 Teste: `tests/test_exclusao_alcance_total.py` varre **todas** as tabelas e colunas de
 texto/JSON depois da exclusão (dados fictícios) e falha se sobrar o nome ou o id;
-`tests/test_aud3_lgpd_esquecimento_cursor_elefante.py` faz o mesmo com o id da conta do
-Elefante (cursor e backup) e `tests/test_aud3_lgpd_esquecimento_absorvida_fora_do_log.py`
+`tests/test_aud3_lgpd_esquecimento_cursor_elefante.py` (e o `_pg`) faz o mesmo com o id
+da conta do Elefante (cursor e backup, também depois da coleta seguinte e da restauração
+de um backup anterior à exclusão) e `tests/test_aud3_lgpd_esquecimento_absorvida_fora_do_log.py`
 com o nome da ficha absorvida por fusão;
 `tests/test_exclusao_escopo_e_homonimos.py` prova que o esquecimento não passa do que
 é da criança (log global, homônimo e nome maior de quem fica, conversas da IA,
