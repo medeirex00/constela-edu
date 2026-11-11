@@ -579,6 +579,12 @@ export function situacaoIntegracao(
     const alunos = contagem && temContagemPorAluno(contagem) ? contagem.qtd_alunos : null;
     const falhas = typeof contagem?.qtd_falhas === "number" ? contagem.qtd_falhas : null;
     const aplicados = alunos !== null ? ` (${plural(alunos, "aluno atualizado", "alunos atualizados")})` : "";
+    // Parte que falhou por MUDANÇA DE FORMATO (alerta "Formato do relatório mudou"
+    // aberto): a próxima coleta lê o mesmo formato, então repetir não completa — o
+    // alerta do servidor também não manda repetir (35993e13).
+    const proximoPasso = alertasAbertos.some((a) => a.tipo === "parser_incompativel")
+      ? `Veja o alerta “${TIPO_ALERTA.parser_incompativel}”: sincronizar de novo não completa.`
+      : "Veja o alerta e sincronize de novo para completar.";
     if (alunos === 0 && motivoUltimo === "coleta_parcial") {
       // D2(6): falhou só o endpoint acessório (nomes do Matific) e as contas já
       // ligadas foram CONFERIDAS sem número mudado — nada foi aplicado. Mesma
@@ -586,7 +592,7 @@ export function situacaoIntegracao(
       return {
         chave: "parcial", tom: "parcial", rotulo: "Verificado em parte",
         detalheTecnico: contagem?.erro_resumo || null,
-        frase: `A última sincronização conferiu as contas já ligadas e nenhum número mudou, mas parte da coleta falhou${falhas !== null && falhas > 0 ? ` (${plural(falhas, "falha", "falhas")})` : ""}. Veja o alerta e sincronize de novo para completar.`,
+        frase: `A última sincronização conferiu as contas já ligadas e nenhum número mudou, mas parte da coleta falhou${falhas !== null && falhas > 0 ? ` (${plural(falhas, "falha", "falhas")})` : ""}. ${proximoPasso}`,
       };
     }
     return {
@@ -598,7 +604,7 @@ export function situacaoIntegracao(
           ? `A última sincronização aplicou dados${aplicados}, mas parte das linhas recebidas veio com defeito (sem data ou sem nome) e não virou dado. Veja o alerta; se repetir, envie o relatório manualmente.`
           : motivoUltimo === "campos_nao_atualizados"
             ? `A última sincronização aplicou dados${aplicados}, mas a plataforma deixou de mandar parte dos números (tempo de leitura ou questões): eles ficaram com o valor da coleta anterior, e sincronizar de novo não os traz de volta. O alerta “Formato do relatório mudou” diz quais faltaram.`
-            : `A última sincronização aplicou dados${aplicados}, mas parte da coleta falhou${falhas !== null && falhas > 0 ? ` (${plural(falhas, "falha", "falhas")})` : ""}. Veja o alerta e sincronize de novo para completar.`,
+            : `A última sincronização aplicou dados${aplicados}, mas parte da coleta falhou${falhas !== null && falhas > 0 ? ` (${plural(falhas, "falha", "falhas")})` : ""}. ${proximoPasso}`,
     };
   }
   if (statusUltimo === "sem_atualizacao" && motivoUltimo === "tudo_em_revisao") {
