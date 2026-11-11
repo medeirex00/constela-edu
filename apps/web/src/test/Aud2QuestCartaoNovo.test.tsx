@@ -28,8 +28,9 @@ const RESUMO = {
 
 function alunoGestao(id: number, nome: string, status: string) {
   return {
+    // Sem nota (a tela mostra "sem nota"): o teste não lê desempenho.
     id, nome, foto_url: null, numero_chamada: id, status, turma: "3º Ano A",
-    ano_escolar: "3º Ano", created_at: null, nota_geral: null, posicao: null,
+    ano_escolar: "3º Ano", created_at: null,
   };
 }
 
