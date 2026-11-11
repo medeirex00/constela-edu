@@ -1195,24 +1195,19 @@ def texto_longo_demais(nome: str, id_externo: str = "", turma: str = "") -> str 
 def texto_ilegivel(nome: str, id_externo: str = "", turma: str = "") -> str | None:
     """O texto da linha com letra que a leitura do arquivo não conseguiu ler (o "�"
     que ``codificacao.decodificar_texto`` põe no byte que nem o UTF-8 nem o
-    Windows-1252 leem), já em palavras para quem usa; None se tudo foi lido. Gravado,
-    o "�" iria para a ficha, o certificado e o ranking — e a criança já cadastrada não
-    casaria pelo nome."""
+    Windows-1252 leem), já em palavras para quem usa; None se tudo foi lido.
+
+    Barra só a CRIAÇÃO da ficha (ela nasceria com o "�" no nome, no certificado e no
+    ranking): a linha que ASSOCIA — conta já vinculada, aluno escolhido pelo gestor,
+    nome que casa — não grava o nome em lugar nenhum e recebe os números. A MESMA
+    regra na prévia (``casar_nomes``: erro só na linha que criaria a ficha) e no
+    /confirmar (``routers.importacoes._resolver_aluno``, no CRIAR)."""
     for texto, rotulo in ((nome, "nome do aluno"),
                           (id_externo, "código da conta na plataforma"),
                           (turma, "nome da turma")):
         if ILEGIVEL in (texto or ""):
             return f"{rotulo} com letra ilegível (“{ILEGIVEL}”, acento perdido no arquivo)"
     return None
-
-
-def texto_que_nao_grava(nome: str, id_externo: str = "", turma: str = "") -> str | None:
-    """O motivo de a linha não poder ser gravada pelo TEXTO dela — longo demais para a
-    coluna (``texto_longo_demais``) ou com letra ilegível (``texto_ilegivel``) —; None
-    se o texto serve. A MESMA regra na prévia (a linha sai com erro) e no /confirmar
-    (a linha é ignorada, com aviso)."""
-    return (texto_longo_demais(nome, id_externo, turma)
-            or texto_ilegivel(nome, id_externo, turma))
 
 
 def casar_nomes(db: Session, escola_id: int, linhas: list[LinhaImportacao], *,
@@ -1243,19 +1238,24 @@ def casar_nomes(db: Session, escola_id: int, linhas: list[LinhaImportacao], *,
         linha.nome, linha.dados or {}, plataforma=plataforma,
         turma_nome=str((linha.dados or {}).get("turma_relatorio") or turma_padrao or ""))
         for linha in linhas]
-    # Texto maior que a coluna ou com letra ilegível: o /confirmar ignora a linha
-    # (``_resolver_aluno``) e ela não disputa ficha com as outras — a prévia já mostra
-    # o erro.
-    problemas = [texto_que_nao_grava(linha.nome, ident.id_externo, ident.turma_nome)
-                 for linha, ident in zip(linhas, idents)]
+    # Texto maior que a coluna: o /confirmar ignora a linha (``_resolver_aluno``) e ela
+    # não disputa ficha com as outras — a prévia já mostra o erro.
+    longos = [texto_longo_demais(linha.nome, ident.id_externo, ident.turma_nome)
+              for linha, ident in zip(linhas, idents)]
     ida.marcar_fichas_disputadas(
-        ctx, [ident for ident, problema in zip(idents, problemas) if not problema])  # idem
-    for linha, ident, problema in zip(linhas, idents, problemas):
+        ctx, [ident for ident, longo in zip(idents, longos) if not longo])   # idem
+    for linha, ident, longo in zip(linhas, idents, longos):
+        decisao = ida.decidir(ctx, ident)
+        # Letra ilegível ("�"): erro só na linha que CRIARIA a ficha — a que associa
+        # (conta vinculada, nome que casa) ou vai para a revisão segue sem erro, como
+        # no /confirmar.
+        problema = longo or (texto_ilegivel(linha.nome, ident.id_externo, ident.turma_nome)
+                             if decisao.acao == ida.CRIAR else None)
         if problema:
             linha.erros.append(
                 f"{problema[:1].upper()}{problema[1:]} — confira o relatório.")
         linha.correspondencia = _correspondencia(
-            ctx, ida.decidir(ctx, ident), linha.nome, parecidos, ident)
+            ctx, decisao, linha.nome, parecidos, ident)
 
 
 class _ParecidosNaEscola:

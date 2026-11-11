@@ -74,7 +74,7 @@ from app.services import identidade_efetiva, politica_sync, triagem_revisoes
 from app.services import turma_arquivada
 from app.services import modulos as svc_modulos
 from app.services.audit import registrar
-from app.services.codificacao import decodificar_texto
+from app.services.codificacao import ILEGIVEL, decodificar_texto
 from app.models.base import agora
 from app.models.plataformas import IMPORTACAO_SEM_QUESTOES
 
@@ -1016,12 +1016,12 @@ def _resolver_aluno(db: Session, escola_id: int, ano: int, linha, avisos: list[s
     if turma_invalida:
         avisos.append(f"Linha “{linha.nome}”: turma inválida — ignorada.")
         return None
-    problema = svc.texto_que_nao_grava(linha.nome, ident.id_externo, turma_nome)
-    if problema:
+    longo = svc.texto_longo_demais(linha.nome, ident.id_externo, turma_nome)
+    if longo:
         # Nada desta linha cabe no banco (nem na fila de revisão): ignorada, com o
-        # mesmo erro que a prévia mostrou. Antes, 500 no PostgreSQL no commit (texto
-        # longo) ou a ficha nascia com "�" no nome (arquivo noutra codificação).
-        avisos.append(f"Linha “{(linha.nome or '')[:60]}”: {problema} — ignorada.")
+        # mesmo erro que a prévia mostrou. Antes, 500 no PostgreSQL no commit. A letra
+        # ilegível ("�") NÃO entra aqui: ela só barra a criação (CRIAR, abaixo).
+        avisos.append(f"Linha “{(linha.nome or '')[:60]}”: {longo} — ignorada.")
         return None
     if linha.aluno_id is None and not svc.tokens_nome(linha.nome):
         avisos.append(f"Linha “{linha.nome}”: sem nome utilizável — ignorada.")
@@ -1110,8 +1110,18 @@ def _resolver_aluno(db: Session, escola_id: int, ano: int, linha, avisos: list[s
             criados[chave_log] = aluno
         return aluno
 
-    # CRIAR — nenhum candidato plausível. Turma: a decidida pela porta única; se a
-    # sala ainda não tem turma cadastrada, cria (import manual) ou revisa (sync).
+    # CRIAR — nenhum candidato plausível. Antes de tudo, a LETRA ILEGÍVEL ("�" que a
+    # leitura do arquivo pôs no acento que não conseguiu ler): a ficha nasceria com
+    # ela no nome (e no certificado, no ranking). Só a criação é barrada — a linha
+    # que ASSOCIA (conta já vinculada, aluno escolhido, nome que casa) não grava o
+    # nome em lugar nenhum e recebe os números acima. A MESMA regra da prévia
+    # (``svc.casar_nomes``: erro só na linha que criaria a ficha).
+    ilegivel = svc.texto_ilegivel(linha.nome, ident.id_externo, turma_nome)
+    if ilegivel:
+        avisos.append(f"Linha “{(linha.nome or '')[:60]}”: {ilegivel} — ignorada.")
+        return None
+    # Turma: a decidida pela porta única; se a sala ainda não tem turma cadastrada,
+    # cria (import manual) ou revisa (sync).
     turma = ctx.turmas.get(decisao.turma_id) if decisao.turma_id is not None else None
     if turma is None and decisao.turma_id is not None:
         turma = db.get(Turma, decisao.turma_id)
@@ -3265,7 +3275,7 @@ def _confirmar_sem_commit(
         ident, turma_linha, invalida = _identidade_da_linha(db, escola_id, linha,
                                                             dados.plataforma)
         if (not invalida
-                and not svc.texto_que_nao_grava(linha.nome, ident.id_externo, turma_linha)
+                and not svc.texto_longo_demais(linha.nome, ident.id_externo, turma_linha)
                 and (linha.aluno_id is not None or svc.tokens_nome(linha.nome))):
             idents_da_importacao.append(ident)
     ida.marcar_fichas_disputadas(ctx_identidade, idents_da_importacao)
@@ -4700,6 +4710,15 @@ def resolver_revisao(
                           "reativado em Alunos.")
         acao = "associar"
     else:
+        if svc.texto_ilegivel(rev.nome_recebido or ""):
+            # Letra ilegível ("�", acento perdido no arquivo): a ficha nova nasceria
+            # com ela — a mesma trava da criação pela importação (``_resolver_aluno``).
+            # A pendência continua pendente para o gestor ESCOLHER o aluno.
+            raise HTTPException(
+                status.HTTP_409_CONFLICT,
+                f"O nome recebido tem letra ilegível (“{ILEGIVEL}”, acento perdido no "
+                "arquivo) e a ficha nova nasceria com ela. Cadastre a criança em Alunos "
+                "com o nome certo e escolha-a nesta pendência.")
         turma = db.get(Turma, corpo.criar_em_turma_id)
         if turma is None or turma.escola_id != escola_id:
             raise HTTPException(status.HTTP_400_BAD_REQUEST, "Turma inválida.")
