@@ -7,8 +7,17 @@ import { api, nota, numero, tempoLeitura, type PacoteSincronizacao } from "@cons
 import { useQuery } from "@tanstack/react-query";
 import { RefreshControl, ScrollView, StyleSheet, Text, View } from "react-native";
 
-import { Carregando, Cartao, Etiqueta, TextoSuave, Titulo } from "../componentes/basicos";
+import {
+  AvisoAtualizacao,
+  Carregando,
+  Cartao,
+  ErroConsulta,
+  Etiqueta,
+  TextoSuave,
+  Titulo,
+} from "../componentes/basicos";
 import { useAutenticacao } from "../contexto/Autenticacao";
+import { estadoDaConsulta } from "../estadoConsulta";
 import { cores, espacos } from "../tema";
 
 function Estatistica({ rotulo, valor }: { rotulo: string; valor: string }) {
@@ -24,15 +33,23 @@ export default function Painel() {
   const { escolaId, escolas } = useAutenticacao();
   const escola = escolas.find((item) => item.id === escolaId);
 
-  const { data, isLoading, refetch, isRefetching, dataUpdatedAt } = useQuery({
+  const consulta = useQuery({
     queryKey: ["sincronizacao", escolaId],
     queryFn: () => api<PacoteSincronizacao>(`/escolas/${escolaId}/sincronizacao`),
     enabled: escolaId !== null,
   });
+  const { refetch, isRefetching, dataUpdatedAt } = consulta;
+  const estado = estadoDaConsulta(consulta);
 
-  if (isLoading && !data) return <Carregando texto="Sincronizando..." />;
-  if (!data) return <Carregando texto="Sem dados — conecte-se uma vez para sincronizar." />;
+  if (estado.tipo === "carregando") return <Carregando texto="Sincronizando..." />;
+  if (estado.tipo === "erro") {
+    return <ErroConsulta mensagem={estado.mensagem} aoTentarDeNovo={() => refetch()} />;
+  }
+  if (estado.tipo === "semDados") {
+    return <Carregando texto="Sem dados — conecte-se uma vez para sincronizar." />;
+  }
 
+  const data = estado.dados;
   const painel = data.dashboard;
 
   return (
@@ -45,6 +62,7 @@ export default function Painel() {
       <TextoSuave>
         Atualizado em {new Date(dataUpdatedAt).toLocaleString("pt-BR")} · puxe para sincronizar
       </TextoSuave>
+      {estado.aviso ? <AvisoAtualizacao mensagem={estado.aviso} /> : null}
 
       <View style={estilos.grade}>
         <Estatistica rotulo="Alunos" valor={numero(painel.total_alunos)} />

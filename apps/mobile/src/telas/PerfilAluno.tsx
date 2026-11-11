@@ -4,8 +4,17 @@ import { useQuery } from "@tanstack/react-query";
 import type { NativeStackScreenProps } from "@react-navigation/native-stack";
 import { ScrollView, StyleSheet, Text, View } from "react-native";
 
-import { Carregando, Cartao, Etiqueta, TextoSuave, Titulo } from "../componentes/basicos";
+import {
+  AvisoAtualizacao,
+  Carregando,
+  Cartao,
+  ErroConsulta,
+  Etiqueta,
+  TextoSuave,
+  Titulo,
+} from "../componentes/basicos";
 import { useAutenticacao } from "../contexto/Autenticacao";
+import { estadoDaConsulta } from "../estadoConsulta";
 import type { PilhaPrincipal } from "../navegacao";
 import { notasDoPerfil } from "../notasDoPerfil";
 import { cores, espacos } from "../tema";
@@ -50,21 +59,29 @@ export default function PerfilAluno({ route }: Props) {
   const { escolaId } = useAutenticacao();
   const { alunoId } = route.params;
 
-  const { data: perfil, isLoading } = useQuery({
+  const consulta = useQuery({
     queryKey: ["perfil", escolaId, alunoId],
     queryFn: () => api<Perfil>(`/escolas/${escolaId}/alunos/${alunoId}/perfil`),
     enabled: escolaId !== null,
   });
+  const estado = estadoDaConsulta(consulta);
 
-  if (isLoading && !perfil) return <Carregando />;
-  if (!perfil) return <Carregando texto="Perfil indisponível offline — conecte-se uma vez." />;
+  if (estado.tipo === "carregando") return <Carregando />;
+  if (estado.tipo === "erro") {
+    return <ErroConsulta mensagem={estado.mensagem} aoTentarDeNovo={() => consulta.refetch()} />;
+  }
+  if (estado.tipo === "semDados") {
+    return <Carregando texto="Perfil indisponível offline — conecte-se uma vez." />;
+  }
 
+  const perfil = estado.dados;
   const { detalhes } = perfil;
   // "—" para quem não tem dado da plataforma (o mesmo critério da web).
   const notas = notasDoPerfil(perfil);
 
   return (
     <ScrollView style={estilos.tela} contentContainerStyle={{ padding: espacos.l }}>
+      {estado.aviso ? <AvisoAtualizacao mensagem={estado.aviso} /> : null}
       <Titulo>{perfil.aluno.nome}</Titulo>
       <View style={estilos.etiquetas}>
         {perfil.posicao ? <Etiqueta texto={`${perfil.posicao}º no ranking`} tom="destaque" /> : null}

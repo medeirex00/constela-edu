@@ -52,6 +52,32 @@ export function Botao({
   );
 }
 
+/** Erro de uma consulta SEM dados salvos para mostrar: a mensagem (a do servidor,
+ *  ou a de falta de conexão) e como tentar de novo. */
+export function ErroConsulta({
+  mensagem,
+  aoTentarDeNovo,
+}: {
+  mensagem: string;
+  aoTentarDeNovo: () => void;
+}) {
+  return (
+    <View style={estilos.carregando}>
+      <Text style={estilos.erro}>{mensagem}</Text>
+      <Botao titulo="Tentar de novo" onPress={aoTentarDeNovo} />
+    </View>
+  );
+}
+
+/** Aviso discreto acima dos dados salvos quando a última atualização falhou. */
+export function AvisoAtualizacao({ mensagem }: { mensagem: string }) {
+  return (
+    <Text style={estilos.aviso}>
+      Mostrando os dados salvos. Não foi possível atualizar: {mensagem}
+    </Text>
+  );
+}
+
 export function Etiqueta({
   texto,
   tom = "neutro",
@@ -100,6 +126,14 @@ const estilos = StyleSheet.create({
     gap: espacos.s,
     paddingVertical: espacos.xl * 2,
   },
+  erro: {
+    color: cores.texto,
+    fontSize: 14,
+    textAlign: "center",
+    paddingHorizontal: espacos.xl,
+    marginBottom: espacos.s,
+  },
+  aviso: { color: cores.alerta, fontSize: 12, marginBottom: espacos.s },
   botao: {
     backgroundColor: cores.primaria,
     borderRadius: 10,

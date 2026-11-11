@@ -13,8 +13,15 @@ import {
   View,
 } from "react-native";
 
-import { Carregando, Etiqueta, TextoSuave } from "../componentes/basicos";
+import {
+  AvisoAtualizacao,
+  Carregando,
+  ErroConsulta,
+  Etiqueta,
+  TextoSuave,
+} from "../componentes/basicos";
 import { useAutenticacao } from "../contexto/Autenticacao";
+import { estadoDaConsulta } from "../estadoConsulta";
 import type { PilhaPrincipal } from "../navegacao";
 import { cores, espacos } from "../tema";
 
@@ -25,24 +32,34 @@ export default function Ranking() {
   const navegacao = useNavigation<NativeStackNavigationProp<PilhaPrincipal>>();
   const [aba, setAba] = useState<Aba>("geral");
 
-  const { data, isLoading, refetch, isRefetching } = useQuery({
+  const consulta = useQuery({
     queryKey: ["sincronizacao", escolaId],
     queryFn: () => api<PacoteSincronizacao>(`/escolas/${escolaId}/sincronizacao`),
     enabled: escolaId !== null,
   });
+  const { refetch, isRefetching } = consulta;
+  const estado = estadoDaConsulta(consulta);
 
-  if (isLoading && !data) return <Carregando />;
+  if (estado.tipo === "carregando") return <Carregando />;
+  if (estado.tipo === "erro") {
+    return <ErroConsulta mensagem={estado.mensagem} aoTentarDeNovo={() => refetch()} />;
+  }
+  // Nada salvo e sem rede: não se sabe se há dados no período.
+  if (estado.tipo === "semDados") {
+    return <Carregando texto="Sem dados — conecte-se uma vez para sincronizar." />;
+  }
 
+  const data = estado.dados;
   const itens =
     aba === "geral"
-      ? (data?.ranking ?? []).map((item) => ({
+      ? (data.ranking ?? []).map((item) => ({
           chave: item.aluno_id,
           posicao: item.posicao,
           nome: item.nome,
           detalhe: item.turma ?? "",
           valor: item.nota_geral,
         }))
-      : (data?.evolucao ?? []).map((item) => ({
+      : (data.evolucao ?? []).map((item) => ({
           chave: item.aluno_id,
           posicao: item.posicao,
           nome: item.nome,
@@ -65,6 +82,11 @@ export default function Ranking() {
           </TouchableOpacity>
         ))}
       </View>
+      {estado.aviso ? (
+        <View style={estilos.aviso}>
+          <AvisoAtualizacao mensagem={estado.aviso} />
+        </View>
+      ) : null}
 
       <FlatList
         data={itens}
@@ -104,6 +126,7 @@ const estilos = StyleSheet.create({
   abaAtiva: { backgroundColor: "#fff" },
   abaTexto: { fontSize: 13, color: cores.textoSuave, fontWeight: "600" },
   abaTextoAtivo: { color: cores.primaria },
+  aviso: { marginHorizontal: espacos.l, marginTop: espacos.s },
   linha: {
     flexDirection: "row",
     alignItems: "center",
