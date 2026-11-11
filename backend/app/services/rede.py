@@ -994,8 +994,9 @@ def _proteger_cartoes(cartoes: list[dict]) -> list[dict]:
     escondida inteira também sai da COORTE do índice (nem pontua nem é régua,
     ver ``_pontuar_por_percapita``); a ``media_geral`` e a ``pontuacao_geral``
     da escola passam a ser só das matérias visíveis (nulas se nenhuma sobra) —
-    nunca calculadas com o número escondido. O motivo de atenção é refeito com o
-    índice que a Secretaria vê.
+    nunca calculadas com o número escondido —, e o peso da escola na média geral
+    da rede (``PESO_DA_MEDIA_GERAL``), só de quem a média visível mede. O motivo
+    de atenção é refeito com o índice que a Secretaria vê.
 
     Os totais e as médias ponderadas da rede, montados depois sobre estes
     cartões, deixam a matéria escondida de fora (valor nulo = ausência em
@@ -1031,10 +1032,14 @@ def _proteger_cartoes(cartoes: list[dict]) -> list[dict]:
             for campo in campos:
                 c[campo] = None
         if inteiras[c["escola_id"]]:
-            visiveis = [c[media] for media, n in _MEDIA_NO_CARTAO
-                        if c[media] is not None and c[n]]
-            c["media_geral"] = (round(sum(visiveis) / len(visiveis), 1)
-                                if visiveis else None)
+            medidas = [(c[media], c[n]) for media, n in _MEDIA_NO_CARTAO
+                       if c[media] is not None and c[n]]
+            c["media_geral"] = (round(sum(m for m, _ in medidas) / len(medidas), 1)
+                                if medidas else None)
+            # O PESO dela na média geral da rede segue a média: com uma matéria
+            # escondida sobra no máximo UMA visível, e quem a média mede são os
+            # aferidos dela — a criança que só está na matéria escondida não pesa.
+            c[PESO_DA_MEDIA_GERAL] = sum(n for _, n in medidas)
             if not c["dimensoes_pontuadas"]:
                 c["pontuacao_geral"] = None
         motivo = _motivo_atencao(c["total_alunos"], c["alunos_com_dados"],

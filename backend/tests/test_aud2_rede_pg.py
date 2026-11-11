@@ -60,6 +60,12 @@ from tests.test_aud2_rede_peso_media_medida import (  # noqa: E402,F401
     test_quem_so_tem_leitura_itemizada_pesa_na_media_geral as test_pg_peso_media_leitura,
     test_quem_so_tem_o_matific_do_ano_passado_nao_pesa_na_media_geral as test_pg_peso_media_matific,
 )
+from tests.test_aud2_rede_peso_media_secretaria import (  # noqa: E402,F401
+    test_admin_continua_pesando_quem_esta_em_alguma_das_medias as test_pg_peso_media_admin,
+    test_secretaria_escola_com_materia_escondida_pesa_por_quem_a_media_visivel_mede
+    as test_pg_peso_media_secretaria,
+    test_secretaria_meta_da_media_geral_le_o_mesmo_peso as test_pg_peso_media_secretaria_meta,
+)
 from tests.test_aud2_rede_percapita_exato import (  # noqa: E402,F401
     test_indice_e_regua_saem_do_per_capita_exato as test_pg_percapita_regua,
     test_panorama_global_compara_redes_pelo_per_capita_exato as test_pg_percapita_global,
