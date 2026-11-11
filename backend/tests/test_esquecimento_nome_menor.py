@@ -427,7 +427,8 @@ def test_trilha_de_auditoria_continua_util_depois_do_esquecimento(
     assert vinculo.created_at is not None
     assert vinculo.detalhes["motivo"] == "abreviacao"       # o PORQUÊ técnico fica
     assert vinculo.detalhes["origem"] == "importacao_matriculas"
-    assert vinculo.detalhes["ra"] == "12345"
+    # O RA é dado da criança, não o porquê: sai como o nome (REV2-LGPD-3, DEC-14).
+    assert vinculo.detalhes["ra"] == "[removido]"
 
     revisao = por_acao["aluno.revisao_necessaria"]
     assert revisao.detalhes["turma"] == "3º Ano A"          # contexto operacional fica

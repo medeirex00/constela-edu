@@ -970,10 +970,14 @@ _PARTICULAS_DE_NOME = frozenset({"de", "da", "do", "dos", "das", "e"})
 
 # Dado pessoal da criança que NÃO é nome e que algumas entradas guardam: a foto da
 # ficha absorvida na fusão (``aluno.fundido`` → ``foto_pre_fusao``: nascimento,
-# observações — campo livre, sensível — e foto) e as duas datas de
-# ``aluno.nascimento_divergente``. Nas entradas da própria criança, caem pela chave.
+# observações — campo livre, sensível — e foto), as duas datas de
+# ``aluno.nascimento_divergente`` e o RA da linha da Lista Piloto em
+# ``aluno.identidade_vinculada`` (``routers/importacoes``: gravado em TODO vínculo
+# que troca o nome, qualquer que seja o motivo — o log não guarda a via do
+# casamento, então o número não é "o motivo da decisão"; o ``motivo`` fica). Nas
+# entradas da própria criança, caem pela chave.
 _CHAVES_DE_DADO_PESSOAL = frozenset({
-    "data_nascimento", "observacoes", "foto_url", "na_ficha", "na_planilha",
+    "data_nascimento", "observacoes", "foto_url", "na_ficha", "na_planilha", "ra",
 })
 
 _MARCA_REMOVIDO = "[removido]"
@@ -992,8 +996,9 @@ _PREFIXOS_DE_DADO_NA_DIVERGENCIA = (_PREFIXO_NASCIMENTO, _PREFIXO_RA)
 # ``aluno.fundido`` → ``foto_pre_fusao`` → ``ficha``: o retrato do cadastro da
 # ficha absorvida (pela minimização da Lista Piloto, hoje só o RA). Não é o motivo
 # de nenhuma decisão: nas entradas da própria criança, todo valor dela vira
-# "[removido]" (as chaves ficam). O RA que é o MOTIVO de uma decisão — o vínculo
-# feito pelo RA, ``aluno.identidade_vinculada`` — continua.
+# "[removido]" (as chaves ficam). Os outros RAs que o código grava hoje nas
+# entradas dela também caem: o de ``aluno.identidade_vinculada`` pela chave
+# (``_CHAVES_DE_DADO_PESSOAL``), o das ``divergencias`` pelo prefixo.
 _CHAVES_DE_RETRATO = frozenset({"foto_pre_fusao"})
 _CAMPO_FICHA_DO_RETRATO = "ficha"
 
@@ -1024,11 +1029,12 @@ def _anonimizar_logs_do_aluno(db: Session, escola_id: int,
     referem ao aluno excluído (LGPD/direito ao esquecimento).
 
     Anonimiza, NÃO apaga: o "quê/quando/por quem/sobre qual registro" — e o
-    porquê técnico (decisão, motivo, turma, o RA que motivou um vínculo) —
-    continuam intactos; só o nome de pessoa (e o dado pessoal de
-    ``_CHAVES_DE_DADO_PESSOAL``, os valores dos itens de nascimento e de RA de
-    ``divergencias`` e a ``ficha`` da ``foto_pre_fusao``, com o RA dela) vira
-    ``"[removido]"``. O ``entidade_id`` fica como referência anônima.
+    porquê técnico (decisão, motivo, turma, a origem de um vínculo) — continuam
+    intactos; só o nome de pessoa (e o dado pessoal de ``_CHAVES_DE_DADO_PESSOAL``
+    — com o RA do ``aluno.identidade_vinculada`` —, os valores dos itens de
+    nascimento e de RA de ``divergencias`` e a ``ficha`` da ``foto_pre_fusao``, com
+    o RA dela) vira ``"[removido]"``. O ``entidade_id`` fica como referência
+    anônima.
     ``logs_auditoria`` é permanente por design (``models/nota.py``).
 
     ``absorvidas`` ({id: {nomes}}, de ``exclusao_aluno.fichas_absorvidas``): as

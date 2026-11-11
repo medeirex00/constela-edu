@@ -11,8 +11,8 @@ como "porquê técnico".
 
 O CONSERTO. Nas entradas da própria criança, o RA da ``ficha`` da foto pré-fusão
 vira "[removido]" e o item de RA das divergências vira "RA [removido]": o registro
-de que houve conflito continua, o número não. O RA que é o MOTIVO de uma decisão
-(o vínculo feito pelo RA, ``aluno.identidade_vinculada``) continua.
+de que houve conflito continua, o número não. O RA de ``aluno.identidade_vinculada``
+também sai (REV2-LGPD-3): ``test_aud2_lgpd_esquecimento_ra_vinculo.py``.
 
 Dados fictícios.
 """

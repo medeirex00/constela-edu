@@ -143,9 +143,12 @@ contadores parados há mais de 1 dia e sem bloqueio vigente.
   itens de nascimento e de RA das `divergencias` de `aluno.fundido_com_conflito` viram
   `[removido]` (os itens ficam "nascimento [removido]" e "RA [removido]": o registro de
   que houve conflito continua, a data e o número saem);
-- o RA que é o **motivo** de uma decisão (o vínculo feito pelo RA,
-  `aluno.identidade_vinculada`) continua, como o "porquê técnico" do registro — ver
-  `_anonimizar_logs_do_aluno`;
+- o RA da linha da Lista Piloto em `aluno.identidade_vinculada` (a importação o grava
+  em todo vínculo que troca o nome, qualquer que seja o motivo) também vira
+  `[removido]`: o log não guarda a via do casamento, então o número não prova ser o
+  motivo da decisão. O `motivo` e a `origem` do vínculo continuam, como o "porquê
+  técnico" do registro — ver `_anonimizar_logs_do_aluno`. Com isso, nenhuma entrada que
+  o código grava hoje deixa o RA da criança em claro nas entradas dela;
 - revisões de **outra** criança: a excluída sai da lista de candidatos; a candidata de
   quem **continua** (ficha existente) fica intacta, e a de ficha que não existe mais
   (duplicata já fundida) perde o nome se ele era o da excluída;
