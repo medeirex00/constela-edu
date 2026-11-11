@@ -890,6 +890,15 @@ _CHAVES_DE_DADO_PESSOAL = frozenset({
 
 _MARCA_REMOVIDO = "[removido]"
 
+# ``aluno.fundido_com_conflito`` guarda em ``divergencias``, em texto, os sinais
+# de serem crianças diferentes que a gestão aceitou passar por cima
+# (``_divergencias_de_identidade``): "nascimento 2017-04-10 × 2017-04-09", o RA, o
+# nº de chamada. Nas entradas da própria criança, o item de nascimento perde as
+# datas e fica "nascimento [removido]": o porquê técnico (houve conflito de
+# nascimento) continua; a data de nascimento, não. O RA fica (decisão do dono).
+_CHAVES_DE_DIVERGENCIA = frozenset({"divergencias"})
+_PREFIXO_NASCIMENTO = "nascimento "
+
 
 def _anonimizar_logs_do_aluno(db: Session, escola_id: int,
                               aluno_ids: list[int], nomes: set[str],
@@ -899,9 +908,10 @@ def _anonimizar_logs_do_aluno(db: Session, escola_id: int,
 
     Anonimiza, NÃO apaga: o "quê/quando/por quem/sobre qual registro" — e o
     porquê técnico (decisão, motivo, turma, RA) — continuam intactos; só o nome
-    de pessoa (e o dado pessoal de ``_CHAVES_DE_DADO_PESSOAL``) vira
-    ``"[removido]"``. O ``entidade_id`` fica como referência
-    anônima. ``logs_auditoria`` é permanente por design (``models/nota.py``).
+    de pessoa (e o dado pessoal de ``_CHAVES_DE_DADO_PESSOAL`` e as datas do item
+    de nascimento de ``divergencias``) vira ``"[removido]"``. O ``entidade_id``
+    fica como referência anônima. ``logs_auditoria`` é permanente por design
+    (``models/nota.py``).
 
     ``absorvidas`` ({id: {nomes}}, de ``exclusao_aluno.fichas_absorvidas``): as
     fichas que a criança absorveu por fusão. São ELA: as entradas com o id delas
@@ -993,23 +1003,27 @@ def _anonimizar_logs_do_aluno(db: Session, escola_id: int,
         "matific"), que não tem nenhum token em comum."""
         return bool(_tokens(valor) & tokens_alvo)
 
+    def _redigir_campo(chave: str, item, *, por_chave: bool):
+        if isinstance(item, str) and (
+                (chave in _CHAVES_COM_NOME_DE_PESSOA
+                 and (_e_nome_de_alvo(item)
+                      or (por_chave and (chave in _CHAVES_SO_DE_NOME
+                                         or _parece_nome_do_alvo(item)))))
+                or (por_chave and chave in _CHAVES_DE_DADO_PESSOAL and item.strip())):
+            return _MARCA_REMOVIDO
+        redigido = _redigir(item, por_chave=por_chave)
+        if por_chave and chave in _CHAVES_DE_DIVERGENCIA and isinstance(redigido, list):
+            return [_PREFIXO_NASCIMENTO + _MARCA_REMOVIDO
+                    if isinstance(texto, str) and texto.startswith(_PREFIXO_NASCIMENTO)
+                    else texto
+                    for texto in redigido]
+        return redigido
+
     def _redigir(valor, *, por_chave: bool):
         """``por_chave``: a entrada é comprovadamente do aluno excluído."""
         if isinstance(valor, dict):
-            return {
-                chave: (
-                    _MARCA_REMOVIDO
-                    if isinstance(item, str)
-                    and ((chave in _CHAVES_COM_NOME_DE_PESSOA
-                          and (_e_nome_de_alvo(item)
-                               or (por_chave and (chave in _CHAVES_SO_DE_NOME
-                                                  or _parece_nome_do_alvo(item)))))
-                         or (por_chave and chave in _CHAVES_DE_DADO_PESSOAL
-                             and item.strip()))
-                    else _redigir(item, por_chave=por_chave)
-                )
-                for chave, item in valor.items()
-            }
+            return {chave: _redigir_campo(chave, item, por_chave=por_chave)
+                    for chave, item in valor.items()}
         if isinstance(valor, list):
             return [_redigir(item, por_chave=por_chave) for item in valor]
         if isinstance(valor, str) and _e_nome_de_alvo(valor):
@@ -1203,7 +1217,7 @@ def _divergencias_de_identidade(a: Aluno, b: Aluno) -> dict[str, str]:
         return {}
     motivos: dict[str, str] = {}
     if ia.nascimento and ib.nascimento and ia.nascimento != ib.nascimento:
-        motivos["nascimento"] = f"nascimento {ia.nascimento} × {ib.nascimento}"
+        motivos["nascimento"] = f"{_PREFIXO_NASCIMENTO}{ia.nascimento} × {ib.nascimento}"
     if ia.ra and ib.ra and ia.ra != ib.ra:
         motivos["ra"] = f"RA {ia.ra} × {ib.ra}"
     if (ia.chamada is not None and ib.chamada is not None
