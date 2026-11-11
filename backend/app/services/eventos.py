@@ -68,6 +68,39 @@ def nasceu_na_ficha(chave_natural: str, aluno_id: int, plataforma: str, tipo: st
     return chave_natural == chave_evento(plataforma, tipo, aluno_id, titulo or "", quando)
 
 
+def origem_comprovada(evento, origens) -> int | None:
+    """A ficha, entre ``origens``, cuja chave ``evento`` prova ter nascido nela
+    sem ``extra`` (``nasceu_na_ficha``); ``None`` quando nenhuma se prova.
+    ``evento`` é um ``EventoAluno`` ou uma linha com as mesmas colunas."""
+    return next((origem for origem in origens if nasceu_na_ficha(
+        evento.chave_natural, origem, evento.plataforma, evento.tipo_evento,
+        evento.conteudo_titulo, evento.ocorrido_em)), None)
+
+
+def primeiras_ocorrencias(eventos) -> set[int]:
+    """Ids das cópias que a deduplicação por conteúdo NÃO pode apagar: para cada
+    ficha de origem, a PRIMEIRA ocorrência de um livro quando essa mesma origem
+    tem outra ocorrência do livro depois.
+
+    ``eventos``: tuplas ``(id, origem, livro_id, plataforma, ocorrido_em)``, com a
+    ``origem`` que a chave prova (``origem_comprovada``) ou ``None``. Passe TODOS
+    os eventos que vão ficar juntos na ficha, não só os repetidos.
+
+    POR QUÊ. A restauração histórica (``leituras_restauracao``, regra 9) só aceita
+    como evidência a primeira ocorrência do livro na ficha de origem, e reconhece
+    as ocorrências daquela ficha pela chave. Apagar a primeira deixaria a seguinte
+    com cara de primeira, e a restauração aceitaria reescrever a leitura com a
+    data errada. A ocorrência única pode sair (não sobra posterior para enganar a
+    regra), e as seguintes também (a primeira continua lá). Vale também para a
+    ficha que fica: ela vira origem quando for absorvida depois."""
+    por_origem: dict[tuple, list[tuple[datetime, int]]] = defaultdict(list)
+    for evento_id, origem, livro_id, plataforma, quando in eventos:
+        if origem is not None and livro_id is not None and quando is not None:
+            por_origem[(origem, livro_id, plataforma)].append((quando, evento_id))
+    return {min(ocorrencias)[1] for ocorrencias in por_origem.values()
+            if len(ocorrencias) > 1}
+
+
 def _conteudo_comprovado(ev: dict, aluno_id: int, plataforma: str):
     """Conteúdo de um evento A GRAVAR, só quando a chave dele prova que foi
     gerado sem ``extra`` para esta ficha; senão ``None`` (vale só a chave)."""
@@ -157,8 +190,12 @@ def deduplicar_eventos_por_conteudo(db: Session, *, escola_id: int | None = None
     e sem ``extra``; o que não se prova fica intocado. Em cada grupo de cópias
     fica UMA: a que veio de uma ficha absorvida (é a evidência de origem da
     restauração histórica), a de menor id entre elas; a cópia nativa é a
-    redundante. Cada remoção vai para o log ``aluno.eventos_duplicados_removidos``
-    da ficha (só ids, instante, livro e chave). Com ``aplicar=False`` só conta.
+    redundante. Mas nunca sai a primeira ocorrência de um livro para a ficha de
+    origem dela quando essa ficha tem ocorrência posterior do mesmo livro
+    (``primeiras_ocorrencias``): essa fica, e saem as outras; se o grupo tem mais
+    de uma assim, ficam todas elas. Cada remoção vai para o log
+    ``aluno.eventos_duplicados_removidos`` da ficha (só ids, instante, livro e
+    chave). Com ``aplicar=False`` só conta.
 
     Lê em fluxo, uma ficha por vez, para caber na memória numa rede inteira; as
     remoções acontecem depois da leitura."""
@@ -175,27 +212,30 @@ def deduplicar_eventos_por_conteudo(db: Session, *, escola_id: int | None = None
     remocoes: dict[tuple[int, int], list[dict]] = {}
     for aluno_id, linhas in groupby(db.execute(consulta), key=lambda linha: linha.aluno_id):
         origens = [aluno_id, *sorted(absorvidas.get(aluno_id, ()))]
+        da_ficha = [(origem_comprovada(linha, origens), linha) for linha in linhas]
+        protegidas = primeiras_ocorrencias(
+            (linha.id, origem, linha.livro_id, linha.plataforma, linha.ocorrido_em)
+            for origem, linha in da_ficha)
         grupos: dict[tuple, list[tuple[int, object]]] = defaultdict(list)
         escola_da_ficha = None
-        for linha in linhas:
+        for origem, linha in da_ficha:
             escola_da_ficha = linha.escola_id
             conteudo = conteudo_evento(linha.plataforma, linha.tipo_evento,
                                        linha.conteudo_titulo, linha.ocorrido_em)
-            if conteudo is None:
-                continue
-            origem = next((o for o in origens if nasceu_na_ficha(
-                linha.chave_natural, o, linha.plataforma, linha.tipo_evento,
-                linha.conteudo_titulo, linha.ocorrido_em)), None)
-            if origem is not None:
+            if conteudo is not None and origem is not None:
                 grupos[conteudo].append((origem, linha))
         saem: list[dict] = []
         for copias in grupos.values():
             if len(copias) < 2:
                 continue
-            # Fica a cópia de uma ficha absorvida (prova de origem); depois, a mais antiga.
+            # Fica a cópia de uma ficha absorvida (prova de origem); depois, a mais
+            # antiga — salvo as primeiras ocorrências, que ficam todas.
             copias.sort(key=lambda par: (par[0] == aluno_id, par[1].id))
-            fica = copias[0][1]
-            for _origem, linha in copias[1:]:
+            ficam = [linha for _origem, linha in copias if linha.id in protegidas]
+            fica = (ficam or [copias[0][1]])[0]
+            for _origem, linha in copias:
+                if linha.id == fica.id or linha.id in protegidas:
+                    continue
                 saem.append({"evento_id": linha.id, "igual_ao_evento_id": fica.id,
                              "livro_id": linha.livro_id,
                              "ocorrido_em": linha.ocorrido_em.isoformat(),

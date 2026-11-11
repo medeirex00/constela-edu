@@ -47,7 +47,11 @@ from app.models import (
 )
 from app.services import bimestres
 from app.services.audit import registrar
-from app.services.eventos import conteudo_evento, nasceu_na_ficha
+from app.services.eventos import (
+    conteudo_evento,
+    origem_comprovada,
+    primeiras_ocorrencias,
+)
 
 
 def _foto_pre_fusao(db: Session, remover: Aluno) -> dict:
@@ -304,28 +308,41 @@ def fundir_par(db: Session, escola_id: int, manter: Aluno, remover: Aluno,
     # histórico do `remover`.
     # Duplicado = mesma chave OU mesmo CONTEÚDO: a mesma linha do relatório nas
     # duas fichas tem chaves que diferem só pelo id da ficha (``chave_evento``).
-    # Entre as duas cópias fica a que prova a origem de uma ficha absorvida — é a
-    # evidência da restauração histórica (``leituras_restauracao``) —, então a
-    # cópia NATIVA do `manter` é a redundante. A cópia descartada vai para o log.
-    chaves_evt_manter: set[tuple[str, str]] = set()
-    # conteúdo → (cópia no `manter`, nasceu no `manter`?, a chave prova "sem extra"?)
-    copia_no_manter: dict[tuple, tuple[EventoAluno, bool, bool]] = {}
-    for evento in db.execute(
+    # Qual cópia sai: de preferência a NATIVA do `manter` (a de uma ficha
+    # absorvida prova a origem — é a evidência da restauração histórica,
+    # ``leituras_restauracao``); senão, a que vem do `remover`. Nunca sai a
+    # primeira ocorrência de um livro para a ficha de origem dela quando essa
+    # ficha tem outra ocorrência do livro depois (``primeiras_ocorrencias``):
+    # sem ela, a posterior passaria por primeira e a restauração aceitaria a data
+    # errada. Se as duas cópias são assim, ficam as duas; cópia cuja origem a
+    # chave não prova também fica. A cópia descartada vai para o log.
+    eventos_do_manter = db.execute(
         select(EventoAluno).where(EventoAluno.aluno_id == manter.id)
-    ).scalars().all():
+    ).scalars().all()
+    eventos_do_remover = db.execute(
+        select(EventoAluno).where(EventoAluno.aluno_id == remover.id)
+    ).scalars().all()
+    origem_de: dict[int, int | None] = {}
+    for eventos_da_ficha, origens in ((eventos_do_manter, (manter.id,)),
+                                      (eventos_do_remover, (remover.id,))):
+        for evento in eventos_da_ficha:
+            origem_de[evento.id] = origem_comprovada(evento, origens)
+    protegidas = primeiras_ocorrencias(
+        (evento.id, origem_de[evento.id], evento.livro_id, evento.plataforma,
+         evento.ocorrido_em)
+        for evento in (*eventos_do_manter, *eventos_do_remover))
+
+    chaves_evt_manter: set[tuple[str, str]] = set()
+    copia_no_manter: dict[tuple, EventoAluno] = {}      # conteúdo → cópia no `manter`
+    for evento in eventos_do_manter:
         chaves_evt_manter.add((evento.plataforma, evento.chave_natural))
         conteudo = conteudo_evento(evento.plataforma, evento.tipo_evento,
                                    evento.conteudo_titulo, evento.ocorrido_em)
-        if conteudo is not None and conteudo not in copia_no_manter:
-            nativa = nasceu_na_ficha(evento.chave_natural, manter.id, evento.plataforma,
-                                     evento.tipo_evento, evento.conteudo_titulo,
-                                     evento.ocorrido_em)
-            copia_no_manter[conteudo] = (evento, nativa, nativa)
+        if conteudo is not None:
+            copia_no_manter.setdefault(conteudo, evento)
     eventos_movidos = eventos_descartados = 0
     eventos_descartes: list[dict] = []
-    for evento in db.execute(
-        select(EventoAluno).where(EventoAluno.aluno_id == remover.id)
-    ).scalars().all():
+    for evento in eventos_do_remover:
         chave = (evento.plataforma, evento.chave_natural)
         if chave in chaves_evt_manter:
             db.delete(evento)
@@ -333,29 +350,32 @@ def fundir_par(db: Session, escola_id: int, manter: Aluno, remover: Aluno,
             continue
         conteudo = conteudo_evento(evento.plataforma, evento.tipo_evento,
                                    evento.conteudo_titulo, evento.ocorrido_em)
-        sem_extra = conteudo is not None and nasceu_na_ficha(
-            evento.chave_natural, remover.id, evento.plataforma, evento.tipo_evento,
-            evento.conteudo_titulo, evento.ocorrido_em)
-        copia = copia_no_manter.get(conteudo) if conteudo is not None else None
-        # A MESMA ocorrência só quando uma das cópias prova que nasceu sem ``extra``
-        # (a repetição no mesmo minuto, com ``extra``, continua distinta).
-        if copia is not None and (copia[2] or sem_extra):
-            existente, existente_nativa, _ = copia
-            sai, fica = (existente, evento) if existente_nativa else (evento, existente)
-            eventos_descartes.append({
-                "evento_id": sai.id, "da_ficha": sai.aluno_id,
-                "igual_ao_evento_id": fica.id, "livro_id": sai.livro_id,
-                "ocorrido_em": sai.ocorrido_em.isoformat(),
-                "chave_natural": sai.chave_natural})
-            db.delete(sai)
-            eventos_descartados += 1
-            if sai is evento:
-                continue
-            copia_no_manter[conteudo] = (evento, False, sem_extra)
+        existente = copia_no_manter.get(conteudo) if conteudo is not None else None
+        # A MESMA ocorrência só quando a chave de uma das cópias prova que ela
+        # nasceu sem ``extra`` (a repetição no mesmo minuto, com ``extra``,
+        # continua distinta).
+        if existente is not None and (origem_de[existente.id] is not None
+                                      or origem_de[evento.id] is not None):
+            ordem = ((existente, evento) if origem_de[existente.id] == manter.id
+                     else (evento, existente))
+            sai = next((copia for copia in ordem if origem_de[copia.id] is not None
+                        and copia.id not in protegidas), None)
+            if sai is not None:
+                fica = existente if sai is evento else evento
+                eventos_descartes.append({
+                    "evento_id": sai.id, "da_ficha": sai.aluno_id,
+                    "igual_ao_evento_id": fica.id, "livro_id": sai.livro_id,
+                    "ocorrido_em": sai.ocorrido_em.isoformat(),
+                    "chave_natural": sai.chave_natural})
+                db.delete(sai)
+                eventos_descartados += 1
+                if sai is evento:
+                    continue
+                copia_no_manter[conteudo] = evento
         evento.aluno_id = manter.id
         chaves_evt_manter.add(chave)
         if conteudo is not None:
-            copia_no_manter.setdefault(conteudo, (evento, False, sem_extra))
+            copia_no_manter.setdefault(conteudo, evento)
         eventos_movidos += 1
 
     # Identidade externa (vínculo UUID): RETÉM ambos os vínculos — só descarta o
