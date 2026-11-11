@@ -17,6 +17,34 @@ from app.services import elegibilidade, periodos, permissoes, timeline
 router = APIRouter(prefix="/escolas/{escola_id}", tags=["Evolução"])
 
 
+def _intervalo_pedido(escola: Escola | None, periodo: str | None, inicio: str | None,
+                      fim: str | None, dia: str | None):
+    """(início, fim) do período pedido, no MESMO contrato de
+    ``/alunos/{id}/leituras`` — o que o ``SeletorPeriodo`` da web manda
+    (``periodoParaQuery``): ``?periodo=<preset>`` ("bimestre_3", "semana"...,
+    "tudo"), ``?periodo=personalizado&inicio=&fim=`` ou ``?dia=``.
+
+    Antes as rotas do Perfil do Aluno só declaravam ``inicio``/``fim``: o
+    ``periodo`` era descartado em silêncio e "3º bimestre" no seletor trazia o
+    histórico todo. Sem ``periodo``, ``inicio``/``fim`` continuam valendo como
+    intervalo personalizado (quem já chamava assim não muda); sem nada, é o
+    histórico todo. Data inválida → 400."""
+    hoje = hoje_br()
+    ano = escola.ano_letivo_ativo if escola else hoje.year
+    try:
+        if dia:
+            d = periodos._parse_data(dia)
+            ini, fim_dt, _ = periodos.resolver("personalizado", hoje, ano, d, d)
+        else:
+            preset = periodo or ("personalizado" if (inicio or fim) else "tudo")
+            ini, fim_dt, _ = periodos.resolver(
+                preset, hoje, ano, periodos._parse_data(inicio), periodos._parse_data(fim))
+    except ValueError as exc:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST,
+                            "Data inválida (use AAAA-MM-DD).") from exc
+    return ini, fim_dt
+
+
 @router.get("/alunos/{aluno_id}/evolucao")
 def evolucao_do_aluno(
     aluno_id: int,
@@ -54,8 +82,10 @@ def evolucao_do_aluno(
 def evolucao_leitura_do_aluno(
     aluno_id: int,
     granularidade: str = Query(default="mes", pattern="^(semana|mes|bimestre)$"),
+    periodo: str | None = Query(default=None, max_length=40),
     inicio: str | None = Query(default=None),
     fim: str | None = Query(default=None),
+    dia: str | None = Query(default=None),
     escola_id: int = Depends(escola_autorizada),
     db: Session = Depends(get_db),
     usuario: Usuario = Depends(get_usuario_atual),
@@ -74,14 +104,7 @@ def evolucao_leitura_do_aluno(
     permissoes.exigir_aluno_permitido(
         db, escola_id, escola.ano_letivo_ativo if escola else 0, usuario, aluno_id)
     svc_modulos.exigir(svc_modulos.modulos_da_escola(db, escola), "leitura")
-    try:
-        preset = "personalizado" if (inicio or fim) else "tudo"
-        ini, fim_dt, _ = periodos.resolver(
-            preset, hoje_br(), escola.ano_letivo_ativo,
-            periodos._parse_data(inicio), periodos._parse_data(fim))
-    except ValueError as exc:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST,
-                            "Data inválida (use AAAA-MM-DD).") from exc
+    ini, fim_dt = _intervalo_pedido(escola, periodo, inicio, fim, dia)
     return svc.evolucao_leitura(db, escola_id, aluno_id, granularidade, ini, fim_dt)
 
 
@@ -90,8 +113,10 @@ def linha_do_tempo_do_aluno(
     aluno_id: int,
     plataforma: str | None = Query(default=None, pattern="^(matific|elefante)$"),
     tipo: str | None = Query(default=None, max_length=40),
+    periodo: str | None = Query(default=None, max_length=40),
     inicio: str | None = Query(default=None),
     fim: str | None = Query(default=None),
+    dia: str | None = Query(default=None),
     cursor: str | None = Query(default=None, max_length=80),
     limite: int = Query(default=50, ge=1, le=200),
     escola_id: int = Depends(escola_autorizada),
@@ -99,8 +124,9 @@ def linha_do_tempo_do_aluno(
     usuario: Usuario = Depends(get_usuario_atual),
 ):
     """Linha do tempo cronológica (evento a evento) do aluno, do mais recente ao
-    mais antigo, paginada por cursor. Sem período informado, traz o histórico
-    TODO. Dado detalhado: professor restrito não acessa.
+    mais antigo, paginada por cursor, no período do seletor (``periodo``,
+    ``inicio``/``fim`` ou ``dia``, como em ``/leituras``). Sem período informado,
+    traz o histórico TODO. Dado detalhado: professor restrito não acessa.
 
     Módulo fora do plano da rede: ``?plataforma=`` dele → 403 (a mesma régua das
     rotas inteiras de um módulo); sem filtro, os eventos dele não entram no feed.
@@ -113,15 +139,7 @@ def linha_do_tempo_do_aluno(
     modulos = svc_modulos.modulos_da_escola(db, escola)
     if plataforma:
         svc_modulos.exigir_plataforma(modulos, plataforma)
-    ini = fim_dt = None
-    if inicio or fim:
-        try:
-            ini, fim_dt, _ = periodos.resolver(
-                "personalizado", hoje_br(), escola.ano_letivo_ativo,
-                periodos._parse_data(inicio), periodos._parse_data(fim))
-        except ValueError as exc:
-            raise HTTPException(status.HTTP_400_BAD_REQUEST,
-                                "Data inválida (use AAAA-MM-DD).") from exc
+    ini, fim_dt = _intervalo_pedido(escola, periodo, inicio, fim, dia)
     dados = timeline.linha_do_tempo(
         db, escola_id, aluno_id, plataforma=plataforma, tipo_evento=tipo,
         inicio=ini, fim=fim_dt, cursor=cursor, limite=limite,

@@ -215,7 +215,7 @@ export default function LinhaDoTempoAluno({ escolaId, alunoId }: {
   return (
     <div className="space-y-5">
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <SeletorPeriodo valor={periodo} onChange={setPeriodo} />
+        <SeletorPeriodo valor={periodo} onChange={setPeriodo} comTudo />
         {esp && (
           <span className="rounded-full bg-white px-3 py-1 text-sm font-medium text-zinc-600 shadow-cartao dark:bg-zinc-900 dark:text-zinc-300">
             {Object.entries(esp.por_plataforma)

@@ -97,7 +97,7 @@ export default function EvolucaoAlunoAba({ escolaId, alunoId }: {
             </button>
           ))}
         </div>
-        <SeletorPeriodo valor={periodo} onChange={setPeriodo} />
+        <SeletorPeriodo valor={periodo} onChange={setPeriodo} comTudo />
         <Link
           to={`/alunos/${alunoId}/evolucao`}
           className={`ml-auto inline-flex items-center justify-center font-semibold transition-colors ${TAMANHOS_BOTAO.md} ${ESTILOS_BOTAO.secundario}`}

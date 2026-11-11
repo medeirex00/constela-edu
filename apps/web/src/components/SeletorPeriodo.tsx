@@ -83,12 +83,22 @@ export function DatasDoPeriodo({ valor, onChange, estilo, classeAte = "text-sm t
   return null;
 }
 
+/** "Todo o histórico" (preset "tudo" do backend): só nas telas que ABREM sem
+ *  recorte de período (as abas do Perfil do Aluno). Fora da lista, o <select>
+ *  controlado com `preset: "tudo"` mostrava a 1ª opção ("Hoje") enquanto a
+ *  consulta pedia o histórico inteiro. */
+export const PRESET_TUDO = { valor: "tudo", rotulo: "Todo o histórico" } as const;
+
 /** Identidade v2: a pílula branca das referências ("4º bimestre"), com o <select>
- *  nativo por baixo — mesmos presets, aria-labels e contrato com o backend. */
-export function SeletorPeriodo({ valor, onChange }: {
+ *  nativo por baixo — mesmos presets, aria-labels e contrato com o backend.
+ *  `comTudo` acrescenta "Todo o histórico" no topo (opt-in: as premiações e os
+ *  rankings não oferecem histórico sem recorte). */
+export function SeletorPeriodo({ valor, onChange, comTudo = false }: {
   valor: Periodo;
   onChange: (p: Periodo) => void;
+  comTudo?: boolean;
 }) {
+  const presets = comTudo ? [PRESET_TUDO, ...PRESETS_PERIODO] : PRESETS_PERIODO;
   return (
     <div className="flex flex-wrap items-center gap-2">
       <MolduraPilula icone={CalendarRange}>
@@ -98,7 +108,7 @@ export function SeletorPeriodo({ valor, onChange }: {
           value={valor.preset}
           onChange={(e) => onChange({ ...valor, preset: e.target.value })}
         >
-          {PRESETS_PERIODO.map((p) => (
+          {presets.map((p) => (
             <option key={p.valor} value={p.valor}>{p.rotulo}</option>
           ))}
         </select>
