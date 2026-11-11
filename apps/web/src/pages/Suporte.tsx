@@ -438,7 +438,8 @@ export default function Suporte() {
           <div className="space-y-6">
             <RegraDaNota escolaId={escolaId} daSecretaria={perfil === "secretaria"} />
             {/* O exemplo da conta é das telas de gestão (o servidor libera
-                admin, coordenação e Secretaria). */}
+                admin, coordenação e Secretaria). A Secretaria vê o exemplo do
+                Elefante só por nível: o livro do acervo da escola é 403 para ela. */}
             <ExemploPontuacao escolaId={escolaId} />
           </div>
         ) : (
