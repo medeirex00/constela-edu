@@ -3548,37 +3548,55 @@ async def analisar_matriculas(
         for a in t.alunos:
             ra = lista_piloto.ra_util(a.ficha.get("ra"))
             identidades.add(ra or (_norm(a.nome), _chave_turma(t.nome)))
+    avisos = list(analise.avisos) + avisos_colunas + avisos_arquivadas
 
-    # Resumo novos × atualizar (casamento LEVE, só para a prévia — a confirmação
-    # usa o casamento completo em services/matriculas). Existe por RA, senão por
-    # (nome normalizado, turma) do ano ativo.
-    ras_existentes: set[str] = set()
-    nome_turma_existentes: set = set()
-    for aluno, turma_nome in db.execute(
-        select(Aluno, Turma.nome)
-        .join(Matricula, Matricula.aluno_id == Aluno.id)
-        .join(Turma, Turma.id == Matricula.turma_id)
-        .where(Aluno.escola_id == escola_id, Matricula.ano_letivo == ano)
-    ):
-        ra = lista_piloto.ra_util((aluno.ficha or {}).get("ra"))
-        if ra:
-            ras_existentes.add(ra)
-        nome_turma_existentes.add((_norm(aluno.nome), _chave_turma(turma_nome)))
-    def _ja_cadastrado(ident) -> bool:
-        if isinstance(ident, str):
-            return ident in ras_existentes
-        return ident in nome_turma_existentes
-    atualizar = sum(1 for ident in identidades if _ja_cadastrado(ident))
+    # Resumo novos × atualizar × em revisão: a MESMA confirmação, desfeita. Antes
+    # era um casamento LEVE próprio (RA, ou nome idêntico + mesma sala), e o modal
+    # prometia "N aluno(s) novo(s)" para quem a confirmação reconhece (nome completo
+    # × abreviado, mudança de sala, grafia) ou manda para revisão.
+    simulado = _simular_lista_piloto(db, escola_id, ano, usuario, analise)
 
     return MatriculasAnaliseOut(
         escola_detectada=analise.escola_detectada, ano_letivo=analise.ano_letivo,
         total_turmas=len(turmas), total_alunos=len(identidades),
         total_registros=analise.total_alunos,
-        alunos_novos=len(identidades) - atualizar, alunos_atualizar=atualizar,
+        alunos_novos=simulado.criados, alunos_atualizar=simulado.atualizados,
+        alunos_em_revisao=simulado.em_revisao,
         turmas_existentes=sum(1 for t in turmas if t.ja_existe),
         turmas=turmas,
-        avisos=list(analise.avisos) + avisos_colunas + avisos_arquivadas,
+        avisos=avisos,
     )
+
+
+def _simular_lista_piloto(db: Session, escola_id: int, ano: int, usuario: Usuario,
+                          analise) -> "_Resultado":
+    """PRÉVIA = CONFIRMAÇÃO na Lista Piloto: roda as etapas da confirmação (turmas
+    que faltam, a porta única de identidade ``matriculas.resolver_linha`` com as
+    disputas do lote, e a matrícula, linha a linha, cada uma vendo as anteriores) e
+    DESFAZ tudo com rollback — dela só sai a contagem (criados, atualizados, em
+    revisão). Simular as etapas em vez de chamá-las seria um segundo motor, que
+    voltaria a divergir da confirmação. As contas de professor não são criadas (não
+    mudam a identidade de ninguém). Quem chama não grava nada na mesma transação: o
+    rollback desfaz a sessão inteira — a prévia não tem o que commitar.
+
+    Tudo dentro de um SAVEPOINT próprio, desfeito no fim: os savepoints internos
+    (``_inserir_turma``) ficam aninhados nele e o RELEASE deles nunca encerra a
+    transação (no SQLite, liberar o savepoint mais externo equivale a COMMIT)."""
+    if not analise.turmas:
+        return _Resultado()
+    simulacao = db.begin_nested()
+    try:
+        estado = _carregar_estado(db, escola_id, ano)
+        resolvidas, _criadas, _profs = _resolver_turmas(
+            db, escola_id, ano, analise.turmas, criar_professores=False)
+        linhas = [(resolvidas[i], parsed)
+                  for i, t in enumerate(analise.turmas) if resolvidas[i] is not None
+                  for parsed in t.alunos]
+        return _persistir_linhas(db, escola_id, ano, usuario, linhas, estado)
+    finally:
+        if simulacao.is_active:
+            simulacao.rollback()
+        db.rollback()
 
 
 # --- Importação da planilha de matrículas (Lista Piloto) --------------------
@@ -3652,7 +3670,8 @@ def _carregar_estado(db: Session, escola_id: int, ano: int) -> _EstadoEscola:
 
 
 def _resolver_turmas(db: Session, escola_id: int, ano: int, turmas_analise,
-                     avisos: list[str] | None = None,
+                     avisos: list[str] | None = None, *,
+                     criar_professores: bool = True,
                      ) -> tuple[list[Turma | None], int, int]:
     """Cria as turmas que faltam (chave insensível a º/acento/caixa) e devolve,
     na ordem da análise, a Turma resolvida de cada uma + quantas turmas foram
@@ -3691,6 +3710,9 @@ def _resolver_turmas(db: Session, escola_id: int, ano: int, turmas_analise,
                 criadas += 1
         elif t.sed and not turma.codigo_externo:
             turma.codigo_externo = t.sed          # completa o código em reimports
+        if not criar_professores:                 # prévia (``_simular_lista_piloto``)
+            resolvidas.append(turma)
+            continue
         # Cria a conta de login de cada professor da turma (idempotente) e
         # vincula o titular para o RBAC. O SAVEPOINT garante que QUALQUER falha
         # aqui desfaça só o professor — nunca polui a transação nem derruba a

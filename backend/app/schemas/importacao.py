@@ -272,8 +272,11 @@ class MatriculasAnaliseOut(BaseModel):
     total_registros: int = 0          # linhas na planilha (pode repetir aluno)
     # Resumo por efeito (prévia antes de confirmar): quantos serão CRIADOS vs
     # ATUALIZADOS (já existem) e quantas turmas já existem (duplicidade).
+    # São os números da CONFIRMAÇÃO (a prévia roda a mesma e a desfaz): criados,
+    # atualizados (distintos) e linhas que irão para revisão — nem criam nem alteram.
     alunos_novos: int = 0
     alunos_atualizar: int = 0
+    alunos_em_revisao: int = 0
     turmas_existentes: int = 0
     turmas: list[MatriculaTurmaOut]
     avisos: list[str] = []
