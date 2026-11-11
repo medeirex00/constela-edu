@@ -5,6 +5,7 @@ import os
 import shutil
 import sys
 import tempfile
+from datetime import datetime, timezone
 
 # Sem saída para a internet a partir do runner: o app.main dispara no import o
 # diagnóstico do robô (GET a ipinfo.io/ipapi.co e o Chromium abrindo as páginas de
@@ -44,8 +45,10 @@ from app.models import (
     Turma,
     Usuario,
 )
+from app.models.base import agora
 from app.services import scoring
-from tests._ano_letivo import ANO_DAS_DATAS_FIXAS
+from tests import _relogio
+from tests._ano_letivo import ANO_DAS_DATAS_FIXAS, FOLGA_DO_INICIO_DO_ANO
 
 
 def pytest_configure(config):
@@ -203,6 +206,32 @@ def ano_letivo_da_escola() -> int:
     com o ano de HOJE (``tests._ano_letivo.escola_no_ano_de_hoje``): senão, a partir de
     01/01 do ano seguinte, o dado de agora fica fora do ano letivo da escola (TESTES-1)."""
     return ANO_DAS_DATAS_FIXAS
+
+
+@pytest.fixture()
+def relogio_no_ano_letivo(monkeypatch, ano_letivo_da_escola):
+    """Prende o relógio do app, durante o teste, num instante do ano letivo da escola com
+    pelo menos ``FOLGA_DO_INICIO_DO_ANO`` de ano letivo para trás — e devolve o instante.
+
+    Para o teste que monta "N dias atrás" (ou pede "os últimos 30 dias") com o Matific:
+    o contador dele é DO ANO (``scoring.snapshots_matific_do_ano``, a exceção do início
+    do ano em ``evolucao._janela``), então nas primeiras semanas de janeiro o retrato de
+    N dias atrás é do ano passado e o cenário do teste deixa de existir — com razão. E
+    para o teste da retenção de queda do sync, que conta o ano pelo dia de Brasília
+    enquanto o retrato é gravado em UTC: nas três últimas horas de 31/12 os dois anos
+    discordam e a retenção não roda (a borda é a decisão TESTES-6, do dono). No
+    ano letivo de hoje, fora dessas semanas, o instante é o agora real (só deixa de
+    andar); nelas, é o fim da folga. Num ano letivo que já passou (a escola de datas
+    fixas), é o meio-dia de 31/12 dele.
+
+    Peça-a ANTES das fixtures que fazem login (``cliente``...): o token nasce no relógio
+    preso, que é o mesmo pelo qual o PyJWT confere o ``iat`` e o ``exp``."""
+    ano = ano_letivo_da_escola
+    inicio = datetime(ano, 1, 1, tzinfo=timezone.utc)
+    fim = datetime(ano, 12, 31, 12, tzinfo=timezone.utc)
+    instante = min(max(agora(), inicio + FOLGA_DO_INICIO_DO_ANO), fim)
+    _relogio.prender(monkeypatch, instante)
+    return instante
 
 
 @pytest.fixture()

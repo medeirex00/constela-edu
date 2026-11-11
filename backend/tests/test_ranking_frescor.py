@@ -44,6 +44,15 @@ from tests._ano_letivo import ANO, escola_no_ano_de_hoje  # noqa: F401 — fixtu
 API = "/api/v1"
 
 
+@pytest.fixture(autouse=True)
+def _relogio(relogio_no_ano_letivo):
+    """Os retratos daqui são de "N dias atrás" (até 20) contados de ``hoje_br`` e o Matific
+    é contador DO ANO: nas primeiras semanas de janeiro o retrato de N dias atrás seria do
+    ano passado, e o selo diria, com razão, "sem dados" (PERIODOS-9). O relógio fica no
+    ano letivo da escola com folga para trás — e, autouse, antes de qualquer login."""
+    return relogio_no_ano_letivo
+
+
 def _dia(dias_atras: int) -> datetime:
     """Meio da manhã de N dias atrás (dia de Brasília, igual ao `hoje_br`)."""
     return datetime.combine(hoje_br() - timedelta(days=dias_atras), time(10, 0))

@@ -27,6 +27,8 @@ inteiro, importando a fixture :func:`escola_no_ano_de_hoje`; num teste só, com
 ``escola_completa`` (outra turma, outra matrícula) usa o ano dela,
 ``escola.ano_letivo_ativo``, e não um número.
 """
+from datetime import timedelta
+
 import pytest
 
 from app.models.base import agora
@@ -34,6 +36,11 @@ from app.models.base import agora
 ANO: int = agora().year
 
 ANO_DAS_DATAS_FIXAS = 2026
+
+#: Quanto de ano letivo o teste de "N dias atrás" precisa ter para trás (a fixture
+#: ``relogio_no_ano_letivo``): o maior recuo entre os que a usam é de 100 dias (a base
+#: dos índices em ``test_ia``), e as janelas medidas, de até 90.
+FOLGA_DO_INICIO_DO_ANO = timedelta(days=120)
 
 
 @pytest.fixture(name="ano_letivo_da_escola")

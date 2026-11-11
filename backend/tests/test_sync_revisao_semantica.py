@@ -201,8 +201,12 @@ def test_concluida_com_linhas_em_revisao_mantem_correspondencia_pendente(
 # Achado 5 — queda retida do Matific não é "correspondência pendente".
 # ---------------------------------------------------------------------------
 @no_ano_de_hoje
-def test_queda_retida_tem_motivo_proprio_e_nao_manda_para_revisao(db, escola_completa,
-                                                                 monkeypatch):
+def test_queda_retida_tem_motivo_proprio_e_nao_manda_para_revisao(relogio_no_ano_letivo, db,
+                                                                 escola_completa, monkeypatch):
+    # O relógio fica no ano letivo (relogio_no_ano_letivo): a coleta conta o ano pelo
+    # dia de Brasília e o retrato é gravado em UTC; nas três últimas horas de 31/12 os
+    # dois anos discordam e a retenção não roda (a borda é a decisão TESTES-6, do
+    # dono). O teste mede a retenção, não a borda.
     eid = escola_completa["escola"].id
     credencial(db, eid, "matific")
     placar = _placar_3(escola_completa)

@@ -78,9 +78,11 @@ def test_professor_cartaz_tem_a_data_do_frescor_das_turmas_dele(
 
 
 def test_professor_cartaz_recorta_o_frescor_pelas_turmas_dele(
-        cenario_professor, db, monkeypatch):  # noqa: F811
+        relogio_no_ano_letivo, cenario_professor, db, monkeypatch):  # noqa: F811
     """A turma do professor tem retrato velho; a outra turma, recente. A data no
-    cartaz do professor é a das turmas DELE, não a da escola inteira."""
+    cartaz do professor é a das turmas DELE, não a da escola inteira. O retrato
+    velho é de 12 dias atrás, e o Matific é contador do ano: o relógio fica no ano
+    letivo com folga para trás (em 1º–12/01 o retrato seria do ano passado)."""
     c = cenario_professor
     escola_id = c["escola"].id
     base = f"/api/v1/escolas/{escola_id}"

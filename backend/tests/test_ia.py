@@ -26,7 +26,8 @@ def _snapshot(db, escola_id, aluno_id, dias_atras=1, **valores):
 
 # --- Insights e alertas ---------------------------------------------------------
 
-def test_indices_engajamento_evolucao_persistencia(db, escola_completa):
+def test_indices_engajamento_evolucao_persistencia(relogio_no_ano_letivo, db,
+                                                    escola_completa):
     escola = escola_completa["escola"]
     ana = escola_completa["alunos"][0]
     # dias_atras=0: atividade DENTRO da semana atual — a Persistência agora é
@@ -50,7 +51,7 @@ def test_indices_engajamento_evolucao_persistencia(db, escola_completa):
     assert sem_dados["persistencia"] == 0.0
 
 
-def test_persistencia_e_semanal_nao_acumulada(db, escola_completa):
+def test_persistencia_e_semanal_nao_acumulada(relogio_no_ano_letivo, db, escola_completa):
     """A Persistência mede a SEMANA ATUAL (ritmo do próprio aluno), não um streak
     acumulado: quem foi ativo só em semanas passadas, mas parou esta semana,
     zera; quem está ativo esta semana pontua."""

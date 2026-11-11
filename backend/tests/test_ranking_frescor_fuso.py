@@ -94,9 +94,11 @@ def test_retrato_da_noite_de_oito_dias_e_desatualizado(db, escola_completa):
 
 
 def test_snapshot_em_do_ranking_de_matematica_usa_o_mesmo_dia_do_selo(
-        cliente, db, escola_completa):
+        relogio_no_ano_letivo, cliente, db, escola_completa):
     """A linha do aluno e o selo não podem discordar sobre o dia: a coleta das
-    22h30 de três dias atrás é de três dias atrás, não de dois."""
+    22h30 de três dias atrás é de três dias atrás, não de dois. O relógio fica no ano
+    letivo da escola: em 1º–3/01, três dias atrás seria o ano anterior e o Matific, que
+    é contador do ano, nem entraria no ranking (PERIODOS-9)."""
     escola = escola_completa["escola"]
     ana = escola_completa["alunos"][0]
     dia = fuso.hoje_local() - timedelta(days=3)

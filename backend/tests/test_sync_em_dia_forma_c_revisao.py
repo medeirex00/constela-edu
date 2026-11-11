@@ -121,7 +121,7 @@ def test_vinculados_todos_de_fichas_inativas_tem_texto_proprio(db, escola_comple
 # ---------------------------------------------------------------------------
 @no_ano_de_hoje
 def test_queda_de_conta_de_ficha_transferida_nao_conta_como_conferida(
-        db, escola_completa, monkeypatch):
+        relogio_no_ano_letivo, db, escola_completa, monkeypatch):
     """Credencial de outra escola: lá está a criança A (transferida para lá), com
     total menor que o gravado aqui, e uma criança desconhecida. Antes, a queda da
     ficha TRANSFERIDA era retida e contava como "conta da escola conferida": a

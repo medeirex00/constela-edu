@@ -17,7 +17,8 @@ from tests._ano_letivo import escola_no_ano_de_hoje  # noqa: F401 — fixture
 API = "/api/v1"
 
 
-def test_destaques_da_web_sao_o_1o_do_ranking_de_evolucao(cliente, db, escola_completa):
+def test_destaques_da_web_sao_o_1o_do_ranking_de_evolucao(
+        relogio_no_ano_letivo, cliente, db, escola_completa):
     escola, _primeira, segunda = _cenario(db, escola_completa)
     base = f"{API}/escolas/{escola.id}"
     mural = cliente.get(f"{base}/gamificacao/mural")
@@ -43,7 +44,8 @@ def test_destaques_da_web_sao_o_1o_do_ranking_de_evolucao(cliente, db, escola_co
     assert app.json()["evolucao"][0]["aluno_id"] == destaques["mes"]["aluno_id"]
 
 
-def test_insights_nao_premia_o_acumulado_de_quem_nao_cresceu(cliente, db, escola_completa):
+def test_insights_nao_premia_o_acumulado_de_quem_nao_cresceu(
+        relogio_no_ano_letivo, cliente, db, escola_completa):
     escola, primeira, segunda = _cenario(db, escola_completa)
     r = cliente.get(f"{API}/escolas/{escola.id}/insights")
     assert r.status_code == 200, r.text

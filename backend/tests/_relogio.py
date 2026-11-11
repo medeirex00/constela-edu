@@ -1,7 +1,8 @@
 """Relógio dos testes: as classes de data com o relógio trocado (fonte única).
 
 Usadas pelo plugin ``tests._relogio_adiantado`` (a suíte inteira com o relógio adiantado,
-a guarda das bombas-relógio).
+a guarda das bombas-relógio) e por :func:`prender`, que prende o relógio do app num
+instante só durante UM teste (a fixture ``relogio_no_ano_letivo`` do conftest).
 
 Só o RELÓGIO muda: ``now()``, ``today()`` e ``utcnow()``. Construir uma data
 (``datetime(2026, 3, 1)``, ``fromisoformat``, ``combine``) devolve o tipo REAL — o
@@ -12,6 +13,7 @@ devolve o UTC sem fuso, como no runner do GitHub (hora local = UTC).
 from __future__ import annotations
 
 import datetime as _modulo
+import sys
 from collections.abc import Callable
 
 
@@ -70,3 +72,26 @@ def classes_com_relogio(agora_utc: Callable[[], _modulo.datetime]) -> tuple[type
             return cls.now()
 
     return Data, Instante
+
+
+def prender(monkeypatch, instante: _modulo.datetime) -> None:
+    """Prende em ``instante`` (com fuso) o relógio de todo módulo ``app.*``, ``tests.*`` e
+    ``jwt.*`` já importado que usa ``datetime``/``date`` importados pelo nome (``from
+    datetime import datetime``) — o caso do app inteiro: ``models.base.agora``,
+    ``core.tempo``, ``sync.fuso``, os serviços. O PyJWT entra porque confere o ``iat`` e o
+    ``exp`` do token pelo relógio dele: o token emitido no relógio preso tem de valer no
+    mesmo relógio. O ``monkeypatch`` desfaz no fim do teste. Não alcança ``time.time``
+    nem o relógio do banco."""
+    if instante.tzinfo is None:
+        raise ValueError("o instante precisa de fuso")
+    data, inst = classes_com_relogio(lambda: instante)
+    atuais = {"datetime": (INSTANTE_REAL, _modulo.datetime),
+              "date": (DATA_REAL, _modulo.date)}
+    trocas = {"datetime": inst, "date": data}
+    for nome_mod, mod in list(sys.modules.items()):
+        if mod is None or not (nome_mod.startswith(("app.", "tests.", "jwt."))
+                               or nome_mod in ("app", "jwt")):
+            continue
+        for nome, aceitas in atuais.items():
+            if any(getattr(mod, nome, None) is classe for classe in aceitas):
+                monkeypatch.setattr(mod, nome, trocas[nome])

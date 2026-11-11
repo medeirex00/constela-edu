@@ -26,7 +26,7 @@ from app.services import evolucao as svc_evolucao
 from app.services import grupo_pequeno, scoring
 from app.services import rede as svc_rede
 from app.services import relatorios as svc_relatorios
-from tests._ano_letivo import ANO
+from tests._ano_letivo import ANO, escola_no_ano_de_hoje  # noqa: F401 — fixture
 
 API = "/api/v1"
 GP = grupo_pequeno.MOTIVO_GRUPO_PEQUENO
@@ -112,7 +112,9 @@ def _escola(db, rede_id, nome, *, livros, notas, questoes=None, matific=None,
 
 
 @pytest.fixture()
-def rede(db):
+def rede(db, relogio_no_ano_letivo):
+    """O retrato de cada criança é de ONTEM, e o Matific é contador do ano: o relógio
+    fica no ano letivo com folga para trás (em 1º/01, ontem seria o ano passado)."""
     rede = Rede(nome="REDE_SINT_CONTRIB", status="ativa")
     db.add(rede)
     db.flush()

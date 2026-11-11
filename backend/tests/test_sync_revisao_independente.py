@@ -88,7 +88,8 @@ def test_leaderboard_falhando_sem_numero_mudado_e_parcial_nao_erro(db, escola_co
 
 
 @no_ano_de_hoje
-def test_leaderboard_falhando_com_total_retido_abre_o_alerta_de_queda(db, escola_completa,
+def test_leaderboard_falhando_com_total_retido_abre_o_alerta_de_queda(relogio_no_ano_letivo, db,
+                                                                     escola_completa,
                                                                      monkeypatch):
     """Total do ano MENOR que o gravado (retido) + falha só do endpoint dos nomes: a
     execução é 'parcial' e a avaliação da queda roda (antes, no 'erro', não rodava)."""

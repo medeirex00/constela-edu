@@ -262,8 +262,8 @@ def test_mistura_vinculados_conferidos_e_pendencias_e_em_dia_com_alerta(
 
 
 @no_ano_de_hoje
-def test_matific_queda_retida_com_pendencia_conta_como_conferida(db, escola_completa,
-                                                                 monkeypatch):
+def test_matific_queda_retida_com_pendencia_conta_como_conferida(relogio_no_ano_letivo, db,
+                                                                 escola_completa, monkeypatch):
     """Decisão registrada: o total menor RETIDO só acontece para uuid já vinculado
     NESTA escola, comparado com o retrato gravado — a coleta conferiu a escola.
     Queda retida + pendência é 'correspondencia_pendente' (em dia), com os alertas
