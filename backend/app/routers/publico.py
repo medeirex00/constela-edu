@@ -13,6 +13,7 @@ Duas metades:
 import ipaddress
 import re
 import secrets
+import threading
 import time
 from urllib.parse import urlsplit
 
@@ -592,6 +593,30 @@ _cache_painel: dict[int, tuple[float, tuple, dict]] = {}
 # recomputar a evolução da escola inteira a cada abertura de aluno (mesmo TTL).
 _cache_visiveis: dict[int, tuple[float, tuple, set[int]]] = {}
 
+# GERAÇÃO do cache: cada `invalidar_cache_painel` avança a da escola (ou a global,
+# quando invalida todas). A montagem anota a geração ANTES de ler o banco e só grava
+# no cache se ela não mudou. Sem isto, uma montagem que começou antes do commit de um
+# arquivamento (ela leva segundos) lia a criança ainda ativa e gravava o resultado
+# DEPOIS da invalidação, valendo pelo TTL inteiro no mesmo processo — a invalidação
+# do próprio worker se perdia. (Entre workers, a desatualização de até TTL_PAINEL_S
+# continua aceita por desenho.)
+_geracao_lock = threading.Lock()
+_geracao_global = 0
+_geracao_por_escola: dict[int, int] = {}
+
+
+def _geracao(escola_id: int) -> tuple[int, int]:
+    with _geracao_lock:
+        return _geracao_global, _geracao_por_escola.get(escola_id, 0)
+
+
+def _guardar(cache: dict, escola_id: int, geracao: tuple[int, int], entrada: tuple) -> None:
+    """Grava a montagem no cache só se nenhuma invalidação chegou enquanto ela era
+    feita; senão, o resultado vale só para a resposta que já estava a caminho."""
+    with _geracao_lock:
+        if (_geracao_global, _geracao_por_escola.get(escola_id, 0)) == geracao:
+            cache[escola_id] = entrada
+
 
 def _assinatura_config(config: dict) -> tuple:
     """O que da config muda o que o telão publica (e quem pode ter o perfil
@@ -628,8 +653,9 @@ def painel_publico(token: str, response: Response, db: Session = Depends(get_db)
     assinatura = _assinatura_config(config)
     dados = _do_cache(_cache_painel, escola.id, agora, assinatura)
     if dados is None:
+        geracao = _geracao(escola.id)          # ANTES de ler o banco
         dados = _dados_publicos(db, escola, config)
-        _cache_painel[escola.id] = (agora, assinatura, dados)
+        _guardar(_cache_painel, escola.id, geracao, (agora, assinatura, dados))
     # NUNCA cachear no navegador/CDN: DESLIGAR o painel (ou trocar o token) tem que
     # bloquear NA HORA, e o payload pode conter nome de criança (anonimizar=False).
     # O cache em memória (_cache_painel) já absorve os polls do telão no servidor.
@@ -639,7 +665,14 @@ def painel_publico(token: str, response: Response, db: Session = Depends(get_db)
 
 def invalidar_cache_painel(escola_id: int | None = None) -> None:
     """Chamado após recálculo/importação/troca de config para o painel refletir
-    logo (inclui o cache de tokens, caso o token tenha rotacionado/desativado)."""
+    logo (inclui o cache de tokens, caso o token tenha rotacionado/desativado).
+    Avança a geração: a montagem que estava em andamento não grava no cache."""
+    global _geracao_global
+    with _geracao_lock:
+        if escola_id is None:
+            _geracao_global += 1
+        else:
+            _geracao_por_escola[escola_id] = _geracao_por_escola.get(escola_id, 0) + 1
     if escola_id is None:
         _cache_painel.clear()
         _cache_visiveis.clear()
@@ -666,6 +699,7 @@ def _ids_visiveis(db: Session, escola: Escola, config: dict) -> set[int]:
     em_cache = _do_cache(_cache_visiveis, escola.id, agora, assinatura)
     if em_cache is not None:
         return em_cache
+    geracao = _geracao(escola.id)              # ANTES de ler o banco (ver _guardar)
     limite = int(config.get("max_posicoes", 10))
     ativos = _slides_ativos(config)
     # AS FASES NÃO CONCORREM: o conjunto tem de casar com o que o telão exibe
@@ -701,13 +735,13 @@ def _ids_visiveis(db: Session, escola: Escola, config: dict) -> set[int]:
     # Fases do payload: sem ele, a criança da Fase que lidera o crescimento
     # entraria aqui e o perfil público dela abriria (200).
     if "evolucao" not in ativos:
-        _cache_visiveis[escola.id] = (agora, assinatura, ids)
+        _guardar(_cache_visiveis, escola.id, geracao, (agora, assinatura, ids))
         return ids
     for item in [it for it in svc_evolucao.ranking_evolucao(
             db, escola.id, dias=30, base_no_periodo=True, turma_ids=premiaveis)
             if it.nota_evolucao > 0][:limite]:
         ids.add(item.aluno_id)
-    _cache_visiveis[escola.id] = (agora, assinatura, ids)
+    _guardar(_cache_visiveis, escola.id, geracao, (agora, assinatura, ids))
     return ids
 
 
