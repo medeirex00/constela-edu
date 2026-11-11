@@ -18,6 +18,8 @@ from pydantic import (
     field_validator,
 )
 
+from app.core import tempo
+
 
 class ORMModel(BaseModel):
     model_config = ConfigDict(from_attributes=True)
@@ -63,6 +65,14 @@ class EscolaOut(ORMModel):
     status: str
 
 
+def _ano_corrente_br() -> int:
+    """O ano civil de hoje em Brasília — o ano letivo da escola nova coincide com
+    ele. Era o literal 2026: a partir de 2027, a escola cadastrada sem ano (a tela
+    Escolas manda só nome, cidade e estado) nasceria no ano letivo errado.
+    ``tempo.hoje_br`` pelo módulo, para os testes poderem adiantar o relógio."""
+    return tempo.hoje_br().year
+
+
 # Limites dos campos de texto = tamanho da coluna String(n) do modelo. Sem eles,
 # o SQLite aceita e o PostgreSQL recusa no commit (DataError → 500); com eles, a
 # API responde 422 antes de tocar o banco.
@@ -70,7 +80,7 @@ class EscolaCreate(BaseModel):
     nome: str = Field(min_length=2, max_length=200)
     cidade: str | None = Field(default=None, max_length=120)
     estado: str | None = Field(default=None, max_length=2)
-    ano_letivo_ativo: int = 2026
+    ano_letivo_ativo: int = Field(default_factory=_ano_corrente_br)
 
 
 class EscolaUpdate(BaseModel):

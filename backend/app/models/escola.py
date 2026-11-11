@@ -3,8 +3,15 @@ from datetime import datetime
 from sqlalchemy import ForeignKey, Index, String, text
 from sqlalchemy.orm import Mapped, mapped_column
 
+from app.core import tempo
 from app.core.database import Base
 from app.models.base import agora
+
+
+def _ano_corrente_br() -> int:
+    """Padrão do ano letivo de uma escola criada sem ele: o ano de hoje em Brasília
+    (era o literal 2026, que envelhece na virada do ano)."""
+    return tempo.hoje_br().year
 
 
 class Escola(Base):
@@ -30,7 +37,7 @@ class Escola(Base):
     bairro: Mapped[str | None] = mapped_column(String(120), default=None)
     endereco: Mapped[str | None] = mapped_column(String(200), default=None)
     logotipo_url: Mapped[str | None] = mapped_column(String(500))
-    ano_letivo_ativo: Mapped[int] = mapped_column(default=2026)
+    ano_letivo_ativo: Mapped[int] = mapped_column(default=_ano_corrente_br)
     # ativa | inativa — só o Admin Global muda (PATCH /escolas). HOJE tira a escola
     # das listas e do painel público, mas NÃO revoga o acesso de quem tem conta
     # nela (decisão pendente do dono: docs/operacao/STATUS-ESCOLA-REDE.md).
