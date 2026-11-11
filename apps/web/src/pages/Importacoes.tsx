@@ -158,9 +158,12 @@ type Acao =
   // Turma lida do relatório que AINDA NÃO EXISTE: a confirmação a cria e
   // matricula o aluno nela (primeiro import sem cadastrar turmas antes).
   | { tipo: "criar_nova" }
-  // A linha vai para Revisões de identidade (a confirmação não cria a ficha nem
-  // associa): segue com a MESMA turma que a prévia usou, para o motor decidir igual.
-  | { tipo: "revisao"; turmaId: number | null; turmaNome: string | null }
+  // "Deixar para a Revisão": a linha vai com ``deixar_para_revisao`` — o backend nunca
+  // associa nem cria nela, ainda que o contexto mude desde a prévia (a outra conta de
+  // uma disputa ignorada, por exemplo). Antes ia o corpo de um "Criar" (a turma da
+  // linha), e o backend criava a ficha quando, sozinho, decidia criar. ``turmaNome``:
+  // a turma do relatório, só como contexto da pendência (é a que a prévia leu).
+  | { tipo: "revisao"; turmaNome: string | null }
   | { tipo: "ignorar" };
 
 /** Motivos de revisão (``identidade_aluno.decidir``) em que a confirmação NUNCA cria
@@ -186,6 +189,7 @@ const MOTIVOS_SO_REVISAO = new Set([
   "homonimo_em_outra_sala",
   "nome_casa_em_outra_sala",
   "criacao_bloqueada_por_politica",
+  "deixada_para_revisao",
 ]);
 
 /** Cada motivo de revisão do backend (``identidade_aluno.MOTIVOS``) em linguagem
@@ -262,6 +266,13 @@ const MOTIVO_REVISAO: Record<string, { rotulo: string; explicacao: string }> = {
   criacao_bloqueada_por_politica: {
     rotulo: "Criação bloqueada pela política",
     explicacao: "A matrícula desta escola vem da Lista Piloto: a importação não cria ficha.",
+  },
+  // O pedido de quem confirmou ("Deixar para a Revisão", ``deixar_para_revisao``): o
+  // backend o grava quando, sozinho, associaria ou criaria a linha.
+  deixada_para_revisao: {
+    rotulo: "Deixada para a Revisão",
+    explicacao:
+      "Quem confirmou a importação deixou esta linha para a Revisão de identidade: nada é associado nem criado.",
   },
   // Motivos de TURMA: a turma escolhida em "Criar aluno novo…" resolve.
   turma_ambigua: {
@@ -526,14 +537,13 @@ export default function Importacoes() {
   const { dados: turmasApi } = useApi<Turma[]>(escolaId ? `/escolas/${escolaId}/turmas` : null);
   const turmas = turmasApi ?? [];
 
-  /** "Deixar para a Revisão": a linha segue com a MESMA turma que um "Criar"
-   *  mandaria (a cadastrada da linha ou do cabeçalho; senão o nome lido do
-   *  relatório), para o motor da confirmação decidir como decidiu na prévia. */
+  /** "Deixar para a Revisão": uma instrução ao backend (``deixar_para_revisao``), com
+   *  a turma do relatório pelo nome — a da linha, senão a do cabeçalho — como contexto
+   *  da pendência. Nunca a turma cadastrada de um "Criar": com ela, o backend criava a
+   *  ficha sempre que, sozinho, decidia criar. */
   function acaoRevisao(g: Grupo, a: Analise): Acao {
     const turmaLinha = String(a.linhas[g.indices[0]]?.dados?.turma_relatorio ?? "");
-    const turmaId = acharTurmaPorNome(turmas, turmaLinha) ?? acharTurmaPorNome(turmas, a.turma_detectada);
-    if (turmaId) return { tipo: "revisao", turmaId, turmaNome: null };
-    return { tipo: "revisao", turmaId: null, turmaNome: turmaLinha || a.turma_detectada || null };
+    return { tipo: "revisao", turmaNome: turmaLinha || a.turma_detectada || null };
   }
 
   async function analisar() {
@@ -617,8 +627,7 @@ export default function Importacoes() {
             nome: linha.nome,
             dados: linha.dados,
             aluno_id: acao.tipo === "importar" ? acao.alunoId : null,
-            criar_em_turma_id:
-              acao.tipo === "criar" || acao.tipo === "revisao" ? acao.turmaId : null,
+            criar_em_turma_id: acao.tipo === "criar" ? acao.turmaId : null,
             // Turma inexistente: manda o NOME (da linha ou do cabeçalho) — o
             // backend cria a turma uma única vez e matricula o aluno nela.
             criar_em_turma_nome:
@@ -627,6 +636,8 @@ export default function Importacoes() {
                 : acao.tipo === "revisao"
                   ? acao.turmaNome
                   : null,
+            // "Deixar para a Revisão": o backend nunca associa nem cria nesta linha.
+            deixar_para_revisao: acao.tipo === "revisao",
           }));
       });
       if (linhas.length === 0) {

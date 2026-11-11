@@ -275,12 +275,14 @@ describe("Importacoes", () => {
       qtd_alunos: 0, qtd_erros: 0, avisos: [], qtd_revisoes: 1, criacao_bloqueada: 0,
     } satisfies ResultadoImportacao);
     await u.click(within(confirmacao).getByRole("button", { name: "Gravar importação" }));
-    // A linha SEGUE para o backend (é ele quem abre a pendência), com a turma da
-    // prévia e sem aluno escolhido.
+    // A linha SEGUE para o backend (é ele quem abre a pendência) como instrução
+    // ("deixar_para_revisao"), sem aluno nem turma escolhidos — a turma do relatório
+    // vai pelo nome, só como contexto. Antes ia o corpo de um "Criar" (criar_em_turma_id).
     const chamada = api.mock.calls.find(([caminho]) => caminho === URL_CONFIRMAR);
     const corpo = JSON.parse(String((chamada?.[1] as RequestInit).body));
     expect(corpo.linhas).toHaveLength(1);
-    expect(corpo.linhas[0]).toMatchObject({ aluno_id: null, criar_em_turma_id: 1 });
+    expect(corpo.linhas[0]).toMatchObject({
+      aluno_id: null, criar_em_turma_id: null, criar_em_turma_nome: "3º Ano A", deixar_para_revisao: true });
     // O resultado leva às Revisões mesmo sem a política "bloquear".
     expect(await screen.findByText(/1 aluno aguarda/)).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "Ver revisões de identidade" }))
@@ -520,14 +522,15 @@ describe("Importacoes", () => {
       qtd_alunos: 1, qtd_erros: 2, avisos: [], qtd_revisoes: 2, criacao_bloqueada: 0,
     } satisfies ResultadoImportacao);
     await u.click(within(confirmacao).getByRole("button", { name: "Gravar importação" }));
-    // O corpo é o que o teste do backend confirma: cada conta na sua linha, sem aluno
-    // escolhido, com a turma da prévia.
+    // Cada conta na sua linha, sem aluno escolhido, como instrução ("deixar_para_revisao"):
+    // o backend nunca cria nelas (backend/tests/test_aud_impweb_deixar_para_revisao.py).
     const chamada = api.mock.calls.find(([caminho]) => caminho === URL_CONFIRMAR);
     const corpo = JSON.parse(String((chamada?.[1] as RequestInit).body));
     expect(corpo.linhas.map((l: { dados: { matific_uuid: string } }) => l.dados.matific_uuid))
       .toEqual(["uuid-ficticio-ana", "uuid-ficticio-1", "uuid-ficticio-2"]);
-    expect(corpo.linhas.slice(1)).toMatchObject([
-      { aluno_id: null, criar_em_turma_id: 1 }, { aluno_id: null, criar_em_turma_id: 1 }]);
+    const revisao = { aluno_id: null, criar_em_turma_id: null, criar_em_turma_nome: "3º Ano A",
+                      deixar_para_revisao: true };
+    expect(corpo.linhas.slice(1)).toMatchObject([revisao, revisao]);
     expect(await screen.findByText(/2 alunos aguardam a decisão de um gestor/)).toBeInTheDocument();
   });
 

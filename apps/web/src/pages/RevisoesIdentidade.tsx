@@ -203,6 +203,7 @@ const ROTULO_MOTIVO: Record<string, string> = {
   turma_fora_do_ano_letivo: "Turma de outro ano",
   turma_de_outra_etapa: "Turma de outra etapa",
   identidade_de_outra_escola: "Conta de outra escola",
+  deixada_para_revisao: "Deixada para a Revisão",
 };
 
 /** Lista com marcador: o marcador fica FORA do texto, no recuo da lista, e a 2ª linha
@@ -276,6 +277,10 @@ const ORIENTACAO: Record<string, string> = {
   // sem fluxo novo.
   identidade_de_outra_escola:
     "Esta conta da plataforma já está vinculada a um aluno de OUTRA escola do Constela. Confira se a credencial e a turma são desta escola. Se a criança mudou de escola, só o Admin Global vincula a conta à ficha dela aqui (a outra escola não é alterada, mas a conta cai em revisão lá na coleta seguinte); se a conta é de outra escola, descarte. Escolher a ficha na importação manual não encerra esta pendência: a decisão é feita aqui.",
+  // "Deixar para a Revisão" na prévia da importação manual (``deixar_para_revisao``):
+  // o backend, sozinho, associaria ou criaria — quem importou preferiu decidir aqui.
+  deixada_para_revisao:
+    "Quem importou preferiu decidir aqui: nada foi associado nem criado. Confira se a criança já tem ficha antes de criar uma.",
 };
 
 /** Rótulos dos dados que ficaram aguardando (chaves de `linhas`). */
