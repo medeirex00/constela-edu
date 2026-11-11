@@ -102,7 +102,9 @@ def remover_aparelhos_da_conta(db: Session, usuario_id: int) -> int:
     """Apaga os aparelhos (push) registrados pela conta e devolve quantos eram.
 
     Chamado quando a conta perde o acesso (desativar, excluir — ``admin.
-    _revogar_acessos``) ou muda de alcance (promoção a Secretaria, ``rede.py``):
+    _revogar_acessos``), muda de alcance (promoção a Secretaria, ``rede.py``) e
+    quando a senha é substituída (troca pelo admin, ``admin._revogar_acessos(
+    senha_substituida=True)``, e redefinição pelo link, ``auth.consumir_link_reset``):
     o app não se descadastra sozinho no 401, e a conta revogada nem conseguiria
     chamar ``/dispositivos/remover``. Reativar a conta não traz o aparelho de
     volta — só um novo registro pelo app. Não comita: vai na transação de quem
