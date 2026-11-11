@@ -17,7 +17,9 @@ num deploy pequeno; para ESCALA HORIZONTAL (várias réplicas atrás do
 balanceador) troque por um backend compartilhado (ex.: Redis INCR+EXPIRE) — a
 interface pública (bloqueado/registrar_falha/limpar/limpar_prefixo) foi mantida
 pequena de propósito para essa substituição. Decisão de infraestrutura: pende de
-aprovação.
+aprovação. Zerar a memória de um processo não alcança os outros: por isso a
+troca de senha libera o login pela CHAVE (``identidade_da_conta``, com a versão
+da sessão lida do banco), e não pela limpeza (``liberar_conta``).
 
 Memória: o dicionário é LIMITADO (_MAX_CHAVES) com descarte de chaves expiradas
 + despejo das mais antigas, para que tentativas com chaves atacante-controladas
@@ -248,18 +250,41 @@ alerta_global_login = LimitadorTentativas(
     max_tentativas=1, janela_s=settings.EDU_LOGIN_TETO_GLOBAL_JANELA_S)
 
 
+def identidade_da_conta(usuario) -> str:
+    """Identidade de uma conta que EXISTE no ``limitador_conta`` e no
+    ``limitador_login``: o e-mail e a versão da sessão (``token_version``), lida
+    do banco no pedido. O /auth/login e a reautenticação
+    (``admin._exigir_senha_atual``) usam esta mesma chave; conta inexistente
+    segue com o texto digitado.
+
+    A versão é o que faz a troca de senha liberar o login em TODOS os processos
+    da API: toda substituição da senha (link de redefinição, senha definida pelo
+    admin, troca da própria senha, "Padronizar @", fusão de professores
+    duplicados) sobe o ``token_version`` na mesma transação. Cada processo passa a
+    contar numa chave nova, e as falhas da senha antiga, gravadas na memória de
+    cada processo (ver LIMITAÇÃO DE ESCALA, no topo), deixam de travar. Outras
+    ações do admin que derrubam as sessões (desativar, reativar, promover à
+    Secretaria) também zeram. A versão só sobe por ação do admin ou com a senha
+    atual: errar a senha não muda a chave.
+
+    Quem digita esta chave como se fosse um login (``e-mail#versão``, conta
+    inexistente) só soma falhas nela: o mesmo travamento que errar a senha da
+    conta já causa (o trade-off do ``limitador_conta``)."""
+    return f"{usuario.email}#{usuario.token_version or 0}"
+
+
 def chave_conta_ip(identidade: str, ip: str) -> str:
-    """Chave do ``limitador_login``: a conta (e-mail canônico, ou o texto
+    """Chave do ``limitador_login``: a conta (``identidade_da_conta``, ou o texto
     digitado quando a conta não existe) e o IP completo."""
     return f"{identidade}|{ip}"
 
 
-def liberar_conta(identidade: str) -> None:
-    """Zera os limites DA CONTA — o por conta e os por (conta, IP) de qualquer
-    IP — depois que a senha foi substituída (link de redefinição, senha definida
-    pelo admin ou troca da própria senha). A substituição prova a posse da conta,
-    como o login certo, que também zera: sem isto a tela dizia "você já pode
-    entrar" e a senha NOVA recebia 429 até a janela vencer. Os tetos de falha por
-    IP e global (acima) não dependem da conta e ficam como estão."""
-    limitador_conta.limpar(identidade)
-    limitador_login.limpar_prefixo(chave_conta_ip(identidade, ""))
+def liberar_conta(email: str) -> None:
+    """Apaga deste processo os contadores da conta, em qualquer versão da sessão
+    e em qualquer IP, depois que a senha foi substituída. Só libera memória: quem
+    faz o login com a senha nova entrar, em todos os processos, é a versão nova
+    na chave (``identidade_da_conta``). Os tetos de falha por IP e global (acima)
+    não dependem da conta e ficam como estão."""
+    prefixo = f"{email}#"
+    limitador_conta.limpar_prefixo(prefixo)
+    limitador_login.limpar_prefixo(prefixo)

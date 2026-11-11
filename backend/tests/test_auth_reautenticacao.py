@@ -134,7 +134,7 @@ def test_falhas_contam_no_limitador_da_conta_e_nao_abrem_oraculo(db, escola_comp
     sessao = _cli("prof.x@teste.local", SENHA)
     teto = rate_limit.limitador_conta.max_tentativas
     for _ in range(teto - 3):                       # falhas anteriores (ex.: login)
-        rate_limit.limitador_conta.registrar_falha("prof.x@teste.local")
+        rate_limit.limitador_conta.registrar_falha(rate_limit.identidade_da_conta(p))
     for _ in range(3):
         assert _link(sessao, e.id, p.id, senha_atual="chute-errado-1").status_code == 403
     assert _link(sessao, e.id, p.id, senha_atual=SENHA).status_code == 429

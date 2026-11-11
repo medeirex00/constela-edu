@@ -102,7 +102,7 @@ def test_redefinicao_libera_o_teto_por_conta_de_varios_ips(cliente, db, escola_c
     for ip, n in zip(ips, (8, 8, 4)):
         for i in range(n):
             assert _login(EMAIL, f"errada-{ip}-{i}", ip).status_code == 401
-    assert rate_limit.limitador_conta.bloqueado(EMAIL)
+    assert rate_limit.limitador_conta.bloqueado(rate_limit.identidade_da_conta(prof))
     assert _login(EMAIL, "senha-esquecida-77", "198.51.100.99").status_code == 429
 
     _redefinir_pelo_link(cliente, eid, prof.id)

@@ -43,7 +43,7 @@ from app.core.deps import (
     get_usuario_atual,
     negar_secretaria,
 )
-from app.core.rate_limit import liberar_conta, limitador_conta
+from app.core.rate_limit import identidade_da_conta, liberar_conta, limitador_conta
 from app.core.security import (
     gerar_token_reset,
     hash_senha,
@@ -253,12 +253,13 @@ def _exigir_senha_atual(db: Session, ator: Usuario, senha_atual: str | None) -> 
     transformava as 8 h do token em posse permanente da conta.
 
     As falhas contam no limitador da CONTA — o mesmo do /auth/login, pela mesma
-    chave (o e-mail) —, então a rota não vira um oráculo de força bruta fora do
-    teto do login: com o teto estourado responde 429 sem conferir a senha.
+    chave (``identidade_da_conta``: o e-mail e a versão da sessão) —, então a
+    rota não vira um oráculo de força bruta fora do teto do login: com o teto
+    estourado responde 429 sem conferir a senha.
 
     Chamar ANTES de qualquer alteração no alvo: a falha vai para a auditoria com
     commit."""
-    identidade = ator.email
+    identidade = identidade_da_conta(ator)
     if limitador_conta.bloqueado(identidade):
         espera = limitador_conta.segundos_restantes(identidade)
         raise HTTPException(status.HTTP_429_TOO_MANY_REQUESTS,
@@ -507,9 +508,10 @@ def atualizar_usuario(
                             "E-mail ou nome de usuário já está em uso.")
     db.refresh(alvo)
     if dados.senha is not None:
-        # A senha nova entra já: quem errou a antiga até travar o login não espera
-        # a janela do limitador (o admin, ou a dona com a senha atual, provou a
-        # posse da conta, como no login certo).
+        # A senha nova entra já, em qualquer processo da API: o ``token_version``
+        # que ``_revogar_acessos`` subiu muda a chave dos limitadores da conta
+        # (``identidade_da_conta``; o admin, ou a dona com a senha atual, provou a
+        # posse da conta). Aqui só se libera a memória deste processo.
         liberar_conta(alvo.email)
     return alvo
 

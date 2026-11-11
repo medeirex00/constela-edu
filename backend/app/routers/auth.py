@@ -13,6 +13,7 @@ from app.core.deps import get_usuario_atual
 from app.core.rate_limit import (
     alerta_global_login,
     chave_conta_ip,
+    identidade_da_conta,
     ip_do_cliente,
     liberar_conta,
     limitador_conta,
@@ -202,9 +203,12 @@ def login(
 
     # O limitador conta pela CONTA (e-mail canônico): tentar pelo e-mail e
     # pelo @username soma no MESMO contador — dois identificadores não podem
-    # dobrar o orçamento de força bruta contra a mesma vítima.
-    identidade = usuario.email if usuario is not None else entrada
-    # Para o LOG: conta inexistente nunca grava o texto cru (``_identificador_para_log``).
+    # dobrar o orçamento de força bruta contra a mesma vítima. A chave leva a
+    # versão da sessão (``identidade_da_conta``): a senha substituída sobe a
+    # versão e libera o login em todos os processos da API.
+    identidade = identidade_da_conta(usuario) if usuario is not None else entrada
+    # Para o LOG: o e-mail da conta, sem a versão; conta inexistente nunca grava
+    # o texto cru (``_identificador_para_log``).
     identidade_log = (usuario.email if usuario is not None
                       else _identificador_para_log(entrada))
     chave = chave_conta_ip(identidade, ip)
@@ -236,7 +240,8 @@ def login(
         limitador_login.registrar_falha(chave)
         limitador_conta.registrar_falha(identidade)
         registrar(db, "login.falhou", escola_id=usuario.escola_id, usuario_id=usuario.id,
-                  detalhes={"email": identidade, "ip": ip_log, "motivo": "senha_incorreta"})
+                  detalhes={"email": identidade_log, "ip": ip_log,
+                            "motivo": "senha_incorreta"})
         _contar_falha_nos_tetos(db, rede)
         db.commit()
         raise HTTPException(status.HTTP_401_UNAUTHORIZED,
@@ -250,7 +255,7 @@ def login(
         limitador_login.registrar_falha(chave)
         limitador_conta.registrar_falha(identidade)
         registrar(db, "login.falhou", escola_id=usuario.escola_id, usuario_id=usuario.id,
-                  detalhes={"email": identidade, "ip": ip_log,
+                  detalhes={"email": identidade_log, "ip": ip_log,
                             "motivo": "senha_convencao_antiga"})
         _contar_falha_nos_tetos(db, rede)
         db.commit()
@@ -260,7 +265,8 @@ def login(
 
     if usuario.status != "ativo":
         registrar(db, "login.falhou", escola_id=usuario.escola_id, usuario_id=usuario.id,
-                  detalhes={"email": identidade, "ip": ip_log, "motivo": "conta_desativada"})
+                  detalhes={"email": identidade_log, "ip": ip_log,
+                            "motivo": "conta_desativada"})
         db.commit()
         raise HTTPException(status.HTTP_403_FORBIDDEN, "Usuário desativado.")
 
@@ -475,8 +481,11 @@ def consumir_link_reset(dados: RedefinirSenhaIn, db: Session = Depends(get_db)):
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, erro)
 
     alvo.senha_hash = novo_hash
-    # Lido sob a trava: nenhuma revogação concorrente perde o incremento.
-    alvo.token_version = (alvo.token_version or 0) + 1  # derruba sessões antigas
+    # Lido sob a trava: nenhuma revogação concorrente perde o incremento. A versão
+    # nova derruba as sessões antigas e muda a chave dos limitadores da conta
+    # (``identidade_da_conta``): quem errou a senha até travar o login entra com
+    # a nova em qualquer processo da API (o link prova a posse da conta).
+    alvo.token_version = (alvo.token_version or 0) + 1
     # Os aparelhos (push) saem com as sessões, como na troca pelo admin
     # (``admin._revogar_acessos``): o celular perdido, cuja sessão cai agora, não
     # segue recebendo os avisos da escola. O app registra de novo no login.
@@ -486,7 +495,6 @@ def consumir_link_reset(dados: RedefinirSenhaIn, db: Session = Depends(get_db)):
               usuario_id=alvo.id, entidade="usuario", entidade_id=alvo.id,
               detalhes={"email": email, "dispositivos_removidos": removidos})
     db.commit()
-    # "Já pode entrar" vale de verdade: quem errou a senha até travar o login
-    # entra com a nova (o link prova a posse da conta, como o login certo).
+    # Só libera a memória deste processo: o "já pode entrar" vem da versão nova.
     liberar_conta(email)
     return {"mensagem": "Senha redefinida. Você já pode entrar com a nova senha."}
