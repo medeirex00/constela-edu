@@ -293,8 +293,12 @@ def montar_contexto(db: Session, escola_id: int) -> str:
         for item in indices
     ]
 
-    alertas = insights.alertas_da_escola(db, escola_id)
-    linhas_alertas = [f"- [{alerta['gravidade']}] {alerta['texto']}" for alerta in alertas]
+    # "Queda de acertos nas questões" é dado do Elefante (Leitura): fora do plano,
+    # não entra (nem na seção ALERTAS, nem no total do RESUMO) — com contrato
+    # mudado ou escola movida, retratos antigos ainda o disparam.
+    alertas = [alerta for alerta in insights.alertas_da_escola(db, escola_id)
+               if com_leitura or alerta["tipo"] != "queda_acertos"]
+    linhas_alertas =[f"- [{alerta['gravidade']}] {alerta['texto']}" for alerta in alertas]
 
     resumo_escola = evolucao.resumo_escola(db, escola_id)
     linhas_turmas = [

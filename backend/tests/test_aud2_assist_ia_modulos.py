@@ -196,3 +196,78 @@ def test_escola_avulsa_mantem_as_duas_plataformas(db, avulsa):
     evolucao = _secao(contexto, "EVOLUCAO")
     assert "atividades" in evolucao and "livros" in evolucao
     assert "### FORA_DO_PLANO" not in contexto
+
+
+# --- Alerta da Leitura numa rede só com Matemática (REV2-ASSIST-2) ---------------
+#
+# "Caiu de X% para Y% de acertos nas questões" é dado do Elefante (Leitura). Com o
+# contrato mudado (ou a escola movida) e retratos antigos do Elefante, a seção
+# ALERTAS levava esse alerta — ao provedor externo e ao modo local — enquanto
+# FORA_DO_PLANO, no mesmo contexto, dizia que a Leitura não faz parte do plano.
+
+def _com_queda_de_acertos(db, escola_completa, modulo_ativo: str | None):
+    """Ana tem dois retratos do Elefante com acertos de 9/10 para 8/20 (a queda
+    dispara o alerta); os três têm Matific normal (nenhum outro alerta)."""
+    escola = escola_completa["escola"]
+    ana, joao, sofia = escola_completa["alunos"]
+    if modulo_ativo:
+        _rede_com(db, escola, modulo_ativo)
+    imp = Importacao(escola_id=escola.id, plataforma="seed", tipo="seed")
+    db.add(imp)
+    db.flush()
+    agora = _agora()
+    for dias, livros, tentativas, acertos in ((10, 3, 10, 9), (1, 5, 20, 8)):
+        db.add(SnapshotElefante(escola_id=escola.id, aluno_id=ana.id, importacao_id=imp.id,
+                                livros_unicos=livros, tempo_leitura_min=30,
+                                questoes_tentativas=tentativas, questoes_acertos=acertos,
+                                data_referencia=agora - timedelta(days=dias)))
+    for aluno in (ana, joao, sofia):
+        for dias, atividades in ((50, 1), (1, 20)):
+            db.add(SnapshotMatific(escola_id=escola.id, aluno_id=aluno.id, importacao_id=imp.id,
+                                   atividades=atividades, estrelas=5 * atividades,
+                                   pontuacao_media=3.0,
+                                   data_referencia=agora - timedelta(days=dias)))
+    db.commit()
+    scoring.recalcular_escola(db, escola.id)
+    return escola
+
+
+def test_rede_so_matematica_nao_leva_queda_de_acertos_da_leitura(db, escola_completa):
+    escola = _com_queda_de_acertos(db, escola_completa, "matematica")
+    contexto = assistente.montar_contexto(db, escola.id)
+    assert "Leitura" in _secao(contexto, "FORA_DO_PLANO")
+    assert "acertos" not in contexto, _secao(contexto, "ALERTAS")
+    # O total do RESUMO conta só os alertas que foram ao contexto.
+    assert "- Alertas ativos: 0" in _secao(contexto, "RESUMO")
+    assert "Nenhum alerta no momento" in _secao(contexto, "ALERTAS")
+
+
+def test_provedor_externo_nao_recebe_queda_de_acertos_fora_do_plano(
+        db, escola_completa, cliente, monkeypatch):
+    escola = _com_queda_de_acertos(db, escola_completa, "matematica")
+    espiao = _ProvedorEspiao()
+    monkeypatch.setattr(assistente, "_provedor_da_escola", lambda _db, _eid: espiao)
+    r = cliente.post(f"{API}/escolas/{escola.id}/assistente",
+                     json={"pergunta": "Quais alunos precisam de atenção?"})
+    assert r.status_code == 200, r.text
+    linhas = [ln for ln in espiao.sistema.splitlines() if "acertos" in ln]
+    assert not linhas, linhas
+
+
+def test_modo_local_nao_responde_queda_de_acertos_fora_do_plano(db, escola_completa):
+    escola = _com_queda_de_acertos(db, escola_completa, "matematica")
+    contexto = assistente.montar_contexto(db, escola.id)
+    resposta = _local(contexto, "quais alunos precisam de atenção?")
+    assert "acertos nas questões" not in resposta, resposta
+
+
+@pytest.mark.parametrize("modulo_ativo", ["leitura", None])
+def test_com_leitura_no_plano_a_queda_de_acertos_continua_no_contexto(
+        db, escola_completa, modulo_ativo):
+    """Rede só Leitura e escola avulsa: o alerta é da Leitura contratada e segue."""
+    escola = _com_queda_de_acertos(db, escola_completa, modulo_ativo)
+    contexto = assistente.montar_contexto(db, escola.id)
+    alertas = _secao(contexto, "ALERTAS")
+    assert "Ana Beatriz Souza caiu de 90,0% para 40,0% de acertos nas questões" in alertas, \
+        alertas
+    assert "- Alertas ativos: 1" in _secao(contexto, "RESUMO")
