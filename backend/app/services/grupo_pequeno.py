@@ -139,11 +139,16 @@ TEXTOS_ESCOLA = {
         f"matéria {_OU_POUCOS_ACIMA_DE_ZERO}: a média e os números de quem concorre "
         "continuam aparecendo."),
 }
-# Totais da REDE que deixam de fora as matérias escondidas das escolas.
+# Totais da REDE que deixam de fora as matérias escondidas das escolas. Saem os números
+# da matéria (``rede.CAMPOS_DA_MATERIA_NO_CARTAO``: livros, tempo, atividades, estrelas e
+# as médias); as CONTAGENS ficam no cartão de propósito (``rede.CONTAGENS_NO_CARTAO``,
+# ``alunos_com_dados`` e a adoção) e a rede as soma — o texto diz as duas coisas.
 TEXTO_FORA_DOS_TOTAIS_DA_REDE = (
     f"Escolas com menos de {K_MINIMO_TURMA} alunos com dado numa matéria "
     f"{_OU_POUCOS_ACIMA_DE_ZERO} ficam fora "
-    "dos totais e das médias da rede nessa matéria, para proteger as crianças.")
+    "dos livros, do tempo de leitura, das atividades, das estrelas e das médias da rede "
+    "nessa matéria, para proteger as crianças. As contagens de alunos com dados e a adoção "
+    "continuam contando essas escolas.")
 
 
 def _bloco_oculto(motivo: str | None) -> dict | None:
