@@ -51,9 +51,13 @@ async function previa() {
 const destino = (nome: string) =>
   screen.getByRole("combobox", { name: `Destino de ${nome}` }) as HTMLSelectElement;
 const AVISO = /também foi escolhido para outra linha deste relatório/;
+const opcoes = (s: HTMLSelectElement) => Array.from(s.options).map((o) => o.value);
 
 describe("O mesmo aluno escolhido em duas linhas", () => {
-  it("a opção diz que o aluno já está em outra linha, e a escolha avisa nas duas linhas", async () => {
+  // REV-IMPWEB-2: antes as duas linhas diziam "deixe a outra para a Revisão" — na do
+  // nome parecido, "a outra" é a de vínculo exato, que não tem "Deixar para a Revisão".
+  // Agora cada linha diz o que ela (ou a outra) oferece de fato.
+  it("a opção diz que o aluno já está em outra linha, e a escolha avisa nas duas linhas com a saída de cada uma", async () => {
     const ana = (mesmoAluno as unknown as Analise).linhas[0].correspondencia!.aluno_id!;
     const u = await previa();
     expect(destino("Ana Beatriz Souza").value).toBe(String(ana));
@@ -62,12 +66,18 @@ describe("O mesmo aluno escolhido em duas linhas", () => {
     expect(screen.queryByText(AVISO)).toBeNull();
 
     await u.selectOptions(destino("Ana Beatriz Sousa"), String(ana));
-    for (const nome of ["Ana Beatriz Souza", "Ana Beatriz Sousa"]) {
-      const linha = within(destino(nome).closest("tr") as HTMLElement);
-      expect(linha.getByText(AVISO).textContent).toBe(
-        "“Ana Beatriz Souza” também foi escolhido para outra linha deste relatório: só uma linha "
-        + "pode ir para cada aluno — deixe a outra para a Revisão.");
-    }
+    const aviso = (nome: string) =>
+      within(destino(nome).closest("tr") as HTMLElement).getByText(AVISO).textContent;
+    const inicio = "“Ana Beatriz Souza” também foi escolhido para outra linha deste relatório: só "
+      + "uma linha pode ir para cada aluno — ";
+    // A linha do nome parecido oferece "Deixar para a Revisão": o aviso manda usá-la nela.
+    expect(aviso("Ana Beatriz Sousa")).toBe(
+      `${inicio}deixe esta linha para a Revisão ou escolha outro destino.`);
+    expect(opcoes(destino("Ana Beatriz Sousa"))).toContain("revisao");
+    // A de vínculo exato não oferece: o aviso aponta a outra linha — que oferece.
+    expect(opcoes(destino("Ana Beatriz Souza"))).not.toContain("revisao");
+    expect(aviso("Ana Beatriz Souza")).toBe(
+      `${inicio}deixe a outra linha para a Revisão ou escolha outro destino para esta.`);
   });
 
   it("a recusa do backend (422) aparece na prévia, que continua aberta para corrigir", async () => {

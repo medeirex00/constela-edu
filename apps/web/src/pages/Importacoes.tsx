@@ -886,6 +886,20 @@ export default function Importacoes() {
   });
   const escolhidoEmOutraLinha = (alunoId: number, gi: number) =>
     (linhasPorAluno.get(alunoId) ?? []).some((i) => i !== gi);
+  /** A linha oferece "Deixar para a Revisão" — as mesmas condições do seletor. */
+  const ofereceRevisao = (gi: number) =>
+    vaiParaRevisao(grupos[gi]?.correspondencia) || turmaSemDestino(grupos[gi]?.correspondencia);
+  /** A saída que o aviso do aluno repetido dá em CADA linha — só o que existe nela ou
+   *  na outra: a linha de vínculo exato e a de aluno novo não têm "Deixar para a
+   *  Revisão". Antes as duas diziam "deixe a outra para a Revisão", e na linha do nome
+   *  parecido "a outra" era a de vínculo exato, sem essa opção. */
+  function saidaDoRepetido(alunoId: number, gi: number): string {
+    if (ofereceRevisao(gi)) return "deixe esta linha para a Revisão ou escolha outro destino.";
+    const outras = (linhasPorAluno.get(alunoId) ?? []).filter((i) => i !== gi);
+    return outras.some(ofereceRevisao)
+      ? "deixe a outra linha para a Revisão ou escolha outro destino para esta."
+      : "escolha outro destino para uma delas.";
+  }
   /** O nome do aluno de um vínculo, pelo que a prévia mostrou (correspondência ou
    *  alternativas de alguma linha). */
   function nomeDoAluno(alunoId: number): string {
@@ -1396,7 +1410,7 @@ export default function Importacoes() {
                                 <p className="max-w-[18rem] text-xs font-semibold text-rose-700 dark:text-rose-300">
                                   “{acao.alunoNome ?? nomeDoAluno(acao.alunoId)}” também foi escolhido
                                   para outra linha deste relatório: só uma linha pode ir para cada
-                                  aluno — deixe a outra para a Revisão.
+                                  aluno — {saidaDoRepetido(acao.alunoId, gi)}
                                 </p>
                               )}
                             </div>
