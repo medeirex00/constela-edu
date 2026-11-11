@@ -17,6 +17,7 @@ from pathlib import Path
 
 from fastapi import (
     APIRouter,
+    BackgroundTasks,
     Depends,
     File,
     Form,
@@ -2964,36 +2965,74 @@ def _importar_elefante_leituras(db, escola_id, importacao, aluno, linhas,
     return bool(novas) or n_eventos > 0 or retrato_mudou
 
 
-def _finalizar_importacao(db: Session, escola_id: int, *, corpo: str) -> int:
+def _finalizar_importacao(db: Session, escola_id: int, *, corpo: str,
+                          tarefas: BackgroundTasks | None = None) -> int:
     """Fecha uma importação: recalcula notas/rankings, invalida o cache do painel
     público e notifica a escola. Ponto ÚNICO de finalização — usado pelo
     /confirmar (recalcular=true) e pelo /recalcular (fim do lote), para os dois
-    nunca divergirem no que fazem ao terminar."""
+    nunca divergirem no que fazem ao terminar. ``tarefas``: as da requisição — o
+    push sai depois da resposta (``_pos_commit_importacao``)."""
     n = scoring.recalcular_escola(db, escola_id)
     # Recálculo que deu certo fecha a pendência que uma sincronização deixou
     # (dado gravado, notas não recalculadas) — vale também para o /recalcular.
     from app.sync import service as sync_service
     if sync_service.resolver_recalculo_pendente(db, escola_id):
         db.commit()
-    _pos_commit_importacao(db, escola_id, corpo=corpo)
+    _pos_commit_importacao(db, escola_id, corpo=corpo, tarefas=tarefas)
     return n
 
 
+_TITULO_PUSH_DADOS = "Novos dados no Constela Edu"
+
+
+def _notificar_depois_da_resposta(banco, escola_id: int, corpo: str,
+                                  aluno_id: int | None) -> None:
+    """O push da importação como TAREFA depois da resposta, numa sessão PRÓPRIA: a
+    da requisição já foi fechada quando a tarefa roda. ``banco`` é o mesmo da
+    requisição (``db.get_bind()``) — o engine do app, com a configuração de
+    ``SessionLocal``. Melhor esforço: uma falha aqui não tem mais resposta a
+    derrubar, então vai para o log e a sessão é desfeita e fechada."""
+    from app.core.database import SessionLocal
+
+    sessao = SessionLocal(bind=banco)
+    try:
+        push.notificar_escola(
+            sessao, escola_id, titulo=_TITULO_PUSH_DADOS,
+            corpo=corpo, dados={"tela": "ranking"}, aluno_id=aluno_id)
+    except Exception:  # noqa: BLE001 — melhor esforço, depois da resposta
+        sessao.rollback()
+        logger.exception("Push da importação falhou depois da resposta (escola %s)",
+                         escola_id)
+    finally:
+        sessao.close()
+
+
 def _pos_commit_importacao(db: Session, escola_id: int, *, corpo: str,
-                           aluno_id: int | None = None) -> None:
+                           aluno_id: int | None = None,
+                           tarefas: BackgroundTasks | None = None) -> None:
     """Efeitos que NÃO pertencem à transação: cache em memória do processo e push
     para os aparelhos. Ficam DEPOIS do commit de propósito — notificar antes de
     a transação fechar avisaria sobre dado que pode nem existir, e o próprio
     ``notificar_escola`` commita ao limpar token morto (o que abriria a transação
     do chamador no meio). Não é reversível por rollback: é melhor esforço.
 
+    ``tarefas`` (as ``BackgroundTasks`` da requisição): o push vira tarefa DEPOIS da
+    resposta, com sessão própria (``_notificar_depois_da_resposta``) — antes quem
+    importava esperava a chamada ao Expo (até 15 s por lote de 100 aparelhos) para
+    ver o resultado. Sem ``tarefas`` (a sincronização automática, que não é uma
+    requisição), o push sai na hora, na sessão de quem chama.
+
     ``aluno_id``: o aviso é de UMA criança (leva o primeiro nome) e só vai a quem a
     enxerga pela API (``push.notificar_escola``)."""
     from app.routers.publico import invalidar_cache_painel
 
     invalidar_cache_painel(escola_id)  # painel público reflete os novos dados
+    if tarefas is not None:
+        tarefas.add_task(_notificar_depois_da_resposta, db.get_bind(), escola_id,
+                         corpo, aluno_id)
+        return
     push.notificar_escola(
-        db, escola_id, titulo="Novos dados no Constela Edu",
+        db, escola_id, titulo=_TITULO_PUSH_DADOS,
         corpo=corpo, dados={"tela": "ranking"}, aluno_id=aluno_id)
 
 
@@ -3080,6 +3119,7 @@ def confirmar(
     escola_id: int = Depends(escola_autorizada),
     usuario: Usuario = Depends(exigir_papeis("admin", "coordenador")),
     db: Session = Depends(get_db),
+    tarefas: BackgroundTasks = None,  # type: ignore[assignment]  # o FastAPI injeta
 ):
     """Aplica a importação e COMMITA. O trabalho em si está em
     ``_confirmar_sem_commit``; aqui só se fecha a transação, recalcula quando
@@ -3120,7 +3160,7 @@ def confirmar(
                      "As notas já foram recalculadas.")
         else:
             corpo = f"Notas recalculadas com os dados já gravados da {plataforma_nome}."
-        _finalizar_importacao(db, escola_id, corpo=corpo)
+        _finalizar_importacao(db, escola_id, corpo=corpo, tarefas=tarefas)
         mensagem = (f"Importação concluída: {n_aplicados} alunos atualizados{resto}. "
                     "Notas recalculadas automaticamente.")
     else:
@@ -3752,12 +3792,14 @@ def recalcular_agora(
     escola_id: int = Depends(escola_autorizada),
     usuario: Usuario = Depends(exigir_papeis("admin", "coordenador")),
     db: Session = Depends(get_db),
+    tarefas: BackgroundTasks = None,  # type: ignore[assignment]  # o FastAPI injeta
 ):
     """Recalcula notas/rankings da escola uma única vez — usado ao final de
     uma importação em lote, depois de vários /confirmar com recalcular=false."""
     n = _finalizar_importacao(
         db, escola_id,
-        corpo="Importação em lote concluída. As notas já foram recalculadas.")
+        corpo="Importação em lote concluída. As notas já foram recalculadas.",
+        tarefas=tarefas)
     return {"mensagem": f"Notas recalculadas para {n} aluno(s).", "alunos": n}
 
 
@@ -4830,6 +4872,7 @@ def resolver_revisao(
     escola_id: int = Depends(escola_autorizada),
     usuario: Usuario = Depends(exigir_papeis("admin", "coordenador")),
     db: Session = Depends(get_db),
+    tarefas: BackgroundTasks = None,  # type: ignore[assignment]  # o FastAPI injeta
 ):
     """Decisão EXPLÍCITA do gestor sobre uma pendência: ``aluno_id`` (a ficha dona
     dos dados) OU ``criar_em_turma_id`` (é outra criança: ficha nova nessa turma).
@@ -5104,11 +5147,11 @@ def resolver_revisao(
 
     # DEPOIS do commit: cache do painel e push. Fora da transação de propósito —
     # avisar a escola sobre dado que ainda pode sofrer rollback seria mentira, e
-    # o próprio push commita ao limpar token morto.
+    # o próprio push commita ao limpar token morto. O push sai depois da resposta.
     if com_dados:
         _pos_commit_importacao(
             db, escola_id, corpo=push.corpo_dados_atualizados(aluno.nome),
-            aluno_id=aluno.id)
+            aluno_id=aluno.id, tarefas=tarefas)
     db.refresh(rev)
     return ResolucaoRevisaoOut(
         revisao=_revisao_out(rev), aluno_id=aluno.id,
