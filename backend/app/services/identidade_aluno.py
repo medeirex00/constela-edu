@@ -395,6 +395,11 @@ class Contexto:
     # ainda ABERTA: as duas contas sem ficha que criariam a MESMA ficha nova. A mesma
     # trava de ``criacoes_disputadas``, para os arquivos seguintes.
     criacoes_em_disputa: dict[tuple[str, str, str], set[str]] = field(default_factory=dict)
+    # Chaves de identidade (``chave_identidade``: a conta, ou nome + sala) com pendência
+    # "deixada_para_revisao" ainda ABERTA: quem confirmou uma importação pediu que um
+    # humano decida. Até a pendência ser resolvida ou descartada, a mesma identidade
+    # não associa nem cria sozinha nas importações e coletas seguintes (``decidir``).
+    deixadas_para_revisao: set[str] = field(default_factory=set)
     # (plataforma, id_externo) deste relatório que já são EFETIVOS em OUTRA escola
     # do Constela → id dessa escola. Preenchido por ``marcar_ids_de_outra_escola``
     # (com as linhas em mãos: o estado da rede inteira não é carregado).
@@ -709,6 +714,8 @@ def carregar_contexto(db: Session, escola_id: int, ano: int | None = None) -> Co
             ctx.criacoes_em_disputa.setdefault(
                 (plataforma, chave_nome(_nome_para_casar(nome or "", sala, sala_rel)), sala),
                 set()).add(str(id_externo))
+        elif motivo == "deixada_para_revisao" and chave_ident:
+            ctx.deixadas_para_revisao.add(chave_ident)
     ctx.contas_esquecidas = exclusao_aluno.marcas_esquecidas(db, escola_id)
     return ctx
 
@@ -828,7 +835,10 @@ def marcar_fichas_disputadas(ctx: Contexto, idents) -> set[tuple[str, int]]:
         if conta in ctx.identidade or conta in ctx.aposentadas or linha in vistas:
             continue
         vistas.add(linha)
-        dec = decidir(ctx, linha)
+        # A decisão do MOTOR (sem a trava de ``deixadas_para_revisao``): a conta que
+        # alguém deixou para a Revisão continua disputando a ficha — senão a OUTRA
+        # conta do relatório a levaria sozinha enquanto a decisão humana está aberta.
+        dec = _decidir(ctx, linha)
         if dec.acao == ASSOCIAR and dec.aluno_id is not None:
             por_ficha.setdefault((linha.plataforma, dec.aluno_id), set()).add(linha.id_externo)
         elif dec.acao == CRIAR:
@@ -1320,8 +1330,38 @@ def _oficial_entre_duplicatas(ctx: Contexto, linha: LinhaIdentidade,
     return oficial, sozinha.motivo
 
 
+def _deixada_para_revisao(ctx: Contexto, linha: LinhaIdentidade, chave: str) -> bool:
+    """Esta identidade tem pendência "deixada_para_revisao" aberta? A chave é a que a
+    pendência gravou (``ColetorRevisoes.adicionar``): a conta, sem sala; sem conta, o
+    nome sob a sala decidida ou sob a sala crua do relatório."""
+    if not ctx.deixadas_para_revisao:
+        return False
+    for sala in dict.fromkeys((chave, chave_sala(linha.turma_nome))):
+        if chave_identidade(linha, sala)[:400] in ctx.deixadas_para_revisao:
+            return True
+    return False
+
+
 def decidir(ctx: Contexto, linha: LinhaIdentidade) -> Decisao:
-    """A decisão ÚNICA (prévia = confirmação). Só lê ``ctx``."""
+    """A decisão ÚNICA (prévia = confirmação). Só lê ``ctx``.
+
+    "DEIXAR PARA A REVISÃO" SEGURA A IDENTIDADE: com pendência
+    ``deixada_para_revisao`` aberta, a decisão que associaria ou criaria vira a mesma
+    revisão (com a ficha que o motor acharia como candidata) — nas importações e
+    coletas seguintes, até a pendência ser resolvida ou descartada. É a trava que
+    ``contas_repetidas_no_relatorio`` já tem: o pedido foi de gente, e a coleta
+    seguinte não pode atropelá-lo. A escolha explícita de uma ficha (``aluno_id``)
+    é essa decisão humana e continua valendo; IGNORAR e as outras revisões (com o
+    motivo e a regra delas, como a do D10) não mudam."""
+    dec = _decidir(ctx, linha)
+    if (dec.acao in (ASSOCIAR, CRIAR) and linha.aluno_id is None
+            and _deixada_para_revisao(ctx, linha, dec.chave_sala)):
+        return replace(dec, acao=REVISAR, motivo="deixada_para_revisao")
+    return dec
+
+
+def _decidir(ctx: Contexto, linha: LinhaIdentidade) -> Decisao:
+    """O motor, sem a trava de ``deixadas_para_revisao`` (ver ``decidir``)."""
     # NOME INCOMPLETO (Matific sem o nome cheio — só "ANNA E"): roda a decisão de
     # sempre e só aceita o que NÃO depende do nome — a conta já vinculada, o RA, a
     # decisão humana anterior para esta identidade, a conta aposentada. Qualquer
@@ -1330,7 +1370,7 @@ def decidir(ctx: Contexto, linha: LinhaIdentidade) -> Decisao:
     # para quem for decidir. Escolha explícita de um humano (``aluno_id``) segue o
     # caminho de sempre.
     if linha.nome_incompleto and linha.aluno_id is None:
-        base = decidir(ctx, replace(linha, nome_incompleto=False))
+        base = _decidir(ctx, replace(linha, nome_incompleto=False))
         if base.acao == IGNORAR or base.via in _VIAS_SEM_NOME:
             return base
         return Decisao(REVISAR, base.aluno_id, base.via, "nome_incompleto",
@@ -1421,7 +1461,7 @@ def decidir(ctx: Contexto, linha: LinhaIdentidade) -> Decisao:
             if dono is not None:
                 cands = (dono.id,)
             else:
-                pelo_nome = decidir(ctx, replace(linha, id_externo="", nome_incompleto=False))
+                pelo_nome = _decidir(ctx, replace(linha, id_externo="", nome_incompleto=False))
                 cands = pelo_nome.candidatos or (
                     (pelo_nome.aluno_id,) if pelo_nome.aluno_id is not None else ())
             return Decisao(REVISAR, cands[0] if cands else None, "identidade",
