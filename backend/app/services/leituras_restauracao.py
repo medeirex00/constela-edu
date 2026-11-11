@@ -291,9 +291,23 @@ def _conferir(db: Session, escola_id: int, item: ItemRestauracao,
 
     # --- 10: nada a fazer é RECUSA, não sucesso silencioso. É esta regra que
     # protege os livros em que as duas fichas tinham a MESMA data: lá a fusão
-    # não perdeu nada, e "restaurar" só maquiaria um número.
+    # não perdeu nada, e "restaurar" só maquiaria um número. Quando a leitura está
+    # assim porque uma restauração JÁ foi aplicada (está no log), a recusa diz isso
+    # — e o que pode faltar: a rota grava a restauração antes de recalcular, e um
+    # recálculo que falhou deixa as notas para o "Recalcular".
     atual = _sem_tz(leitura.data)
     if atual == data_original and (leitura.tempo_leitura_min or 0) == (item.tempo_original or 0):
+        ja_restaurada = db.execute(select(LogAuditoria.id).where(
+            LogAuditoria.escola_id == escola_id, LogAuditoria.acao == ACAO_ITEM,
+            LogAuditoria.entidade == "leitura",
+            LogAuditoria.entidade_id == leitura.id).limit(1)).first() is not None
+        if ja_restaurada:
+            raise recusar(
+                f"A leitura de “{livro.titulo}” já foi restaurada para "
+                f"{atual:%d/%m/%Y %H:%M} com {leitura.tempo_leitura_min} minuto(s) — "
+                "está no log de auditoria —, então não há o que restaurar de novo. Se "
+                "as notas da escola ainda não mostram essa data, use “Recalcular” em "
+                "Importações.")
         raise recusar(
             f"A leitura de “{livro.titulo}” já está em "
             f"{atual:%d/%m/%Y %H:%M} com {leitura.tempo_leitura_min} minuto(s) "

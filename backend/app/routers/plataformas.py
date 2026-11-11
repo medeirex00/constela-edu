@@ -21,6 +21,7 @@ configuração que a própria escola desliga — ver
 ``evidencia_elefante_da_plataforma``.
 """
 import inspect
+import logging
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import func, select, update
@@ -65,6 +66,7 @@ from app.services import (dificuldade_livro, leituras_restauracao,
 from app.services.audit import registrar
 
 router = APIRouter(prefix="/escolas/{escola_id}", tags=["Plataformas"])
+logger = logging.getLogger("constela.plataformas")
 
 # Vocabulário OFICIAL de níveis do Elefante: a escada A3 (AA…Z) mais o tier
 # avançado Z+ e o A+ do catálogo. Qualquer outro código é recusado na edição.
@@ -1201,8 +1203,12 @@ def restaurar_leituras_historicas(
     a data restaurada. Dado e auditoria caem juntos no commit, que solta a trava; o
     recálculo vem em seguida, com o commit dele (a ordem da fusão — nunca pegar a
     trava do recálculo segurando a da escola). Se o recálculo falhar, a restauração
-    já está gravada e auditada, e as notas se acertam no próximo recálculo da escola
-    (Recalcular, coleta ou importação), como depois de uma fusão."""
+    já está gravada e auditada e a falha é DITA, não um "Erro interno": 200 com
+    ``recalculo_pendente`` e o aviso de usar "Recalcular", e o alerta
+    ``recalculo_pendente`` do Elefante aberto para a escola (a próxima
+    sincronização recalcula por ele; o Recalcular o fecha). Uma retentativa da
+    mesma restauração é recusada dizendo que a leitura já foi restaurada e que
+    falta recalcular (regra 10 de ``leituras_restauracao``)."""
     itens = [
         leituras_restauracao.ItemRestauracao(
             aluno_id=item.aluno_id, aluno_origem_id=item.aluno_origem_id,
@@ -1247,5 +1253,40 @@ def restaurar_leituras_historicas(
                             erro.mensagem) from erro
     # Dado e auditoria caem juntos; o commit solta a trava ANTES do recálculo.
     db.commit()
-    scoring.recalcular_escola(db, escola_id)
+    try:
+        scoring.recalcular_escola(db, escola_id)
+    except Exception as exc:  # noqa: BLE001 — a restauração já está gravada; a falha é dita
+        db.rollback()
+        logger.exception("Recálculo falhou depois da restauração histórica (escola %s)",
+                         escola_id)
+        _registrar_recalculo_pendente(db, escola_id, exc)
+        return {"dry_run": False, **resultado, "recalculo_pendente": True,
+                "aviso": _AVISO_RECALCULO_PENDENTE}
     return {"dry_run": False, **resultado}
+
+
+_AVISO_RECALCULO_PENDENTE = (
+    "A restauração foi gravada e auditada, mas as notas da escola não foram "
+    "recalculadas agora. Use “Recalcular” em Importações (ou sincronize o Elefante "
+    "de novo) para as notas e os rankings mostrarem a data restaurada.")
+
+
+def _registrar_recalculo_pendente(db: Session, escola_id: int, exc: Exception) -> None:
+    """Deixa a pendência à vista da escola: o alerta ``recalculo_pendente`` do
+    Elefante — o mesmo da sincronização que grava dado e não consegue recalcular.
+    A próxima sincronização recalcula por ele, e o “Recalcular” de Importações o
+    fecha (``sync.service.resolver_recalculo_pendente``). Se nem isso grava (a
+    conexão caiu de vez), ficam o log e o aviso da resposta."""
+    from app.sync import service as sync_service
+    try:
+        sync_service.abrir_alerta(
+            db, escola_id, "elefante", "recalculo_pendente",
+            "A restauração histórica de leituras foi gravada, mas o recálculo das "
+            f"notas falhou ({type(exc).__name__}). Rankings e notas podem estar atrás "
+            "dos dados: use “Recalcular” em Importações ou sincronize de novo.",
+            severidade="critico")
+        db.commit()
+    except Exception:  # noqa: BLE001 — o aviso da resposta continua valendo
+        db.rollback()
+        logger.exception("Não deu para registrar o recálculo pendente (escola %s)",
+                         escola_id)
