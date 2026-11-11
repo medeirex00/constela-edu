@@ -1151,9 +1151,16 @@ def montar_dashboard(db: Session, escola_id: int,
                      so_com_dado=True)
     # Professor: posição RELATIVA às turmas dele (1..N), igual ao Ranking Geral —
     # o Top 10 e a tela de ranking não podem mostrar posições diferentes.
+    # A posição sai da lista INTEIRA do professor (a mesma que `ranking_geral`
+    # e o pacote do app renumeram), e não da ordem do Top 10 já sem quem não
+    # tem dado: senão uma criança sem dado no meio dos zeros empurra o retrato
+    # zerado para 3º no Ranking Geral e o deixa 2º no Painel. A posição pode
+    # pular um número, como já acontece na gestão e no telão.
     if turma_ids is not None:
-        for posicao, item in enumerate(top10, start=1):
-            item.posicao = posicao
+        ordem = {item.aluno_id: n for n, item in enumerate(
+            _ranking(db, escola_id, ano, turma_ids=turma_ids), start=1)}
+        for item in top10:
+            item.posicao = ordem.get(item.aluno_id, item.posicao)
 
     return DashboardOut(
         escola=EscolaOut.model_validate(escola),

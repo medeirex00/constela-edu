@@ -10,7 +10,10 @@ criança (revisão de integração 5, exportacoes-notificacoes, prova 501).
 Regra travada aqui: professor — posições do app = Top 10 do pacote = web, 1..N;
 gestão — posição global, como sempre. Dados fictícios.
 """
-from app.models import Nota
+from datetime import datetime
+
+from app.models import Importacao, Nota, SnapshotMatific
+from app.services import scoring
 from tests.test_permissoes import _cliente_como, cenario_professor  # noqa: F401 — fixture
 
 
@@ -63,3 +66,58 @@ def test_app_gestao_segue_com_a_posicao_global(cenario_professor, escola_complet
            for i in c["coordenador"].get(f"{base}/sincronizacao").json()["ranking"]}
     assert web == app
     assert sorted(app.values()) == [100, 103, 105, 110]
+
+
+def test_professor_zero_legitimo_depois_de_quem_nao_tem_dado_tem_uma_posicao_so(
+        cenario_professor, escola_completa, db):  # noqa: F811
+    """O Top 10 do Painel do professor tira quem não tem dado (``so_com_dado``);
+    o Ranking Geral dele não tira (decisão do dono, RANKINGS-4-legado-geral).
+    A posição no Top 10 tem de ser a do Ranking Geral, tirada da lista INTEIRA
+    do professor, e não a ordem do Top 10 já cortado: senão, com uma criança
+    sem dado no meio dos zeros (desempate alfabético) antes de um retrato
+    zerado, a mesma criança é 2º no Painel e 3º no Ranking Geral (REV-RANK-1).
+
+    Cenário pelo motor: Ana tem retrato do Matific com atividade, João não tem
+    dado nenhum e Sofia tem retrato zerado (abriu e não produziu: zero
+    legítimo). Dados fictícios."""
+    c = cenario_professor
+    escola = escola_completa["escola"]
+    ana, joao, sofia = escola_completa["alunos"]
+    imp = Importacao(escola_id=escola.id, plataforma="matific", tipo="seed")
+    db.add(imp)
+    db.flush()
+    db.add(SnapshotMatific(escola_id=escola.id, aluno_id=ana.id, importacao_id=imp.id,
+                           data_referencia=datetime(2026, 10, 10), atividades=30,
+                           estrelas=90, pontuacao_media=3.0))
+    db.add(SnapshotMatific(escola_id=escola.id, aluno_id=sofia.id, importacao_id=imp.id,
+                           data_referencia=datetime(2026, 10, 10), atividades=0,
+                           estrelas=0, pontuacao_media=0.0))
+    db.commit()
+    scoring.recalcular_escola(db, escola.id)
+    base = f"/api/v1/escolas/{escola.id}"
+
+    web = c["professor"].get(f"{base}/ranking")
+    painel = c["professor"].get(f"{base}/dashboard")
+    pacote = c["professor"].get(f"{base}/sincronizacao")
+    assert web.status_code == 200 and painel.status_code == 200, (web.text, painel.text)
+    assert pacote.status_code == 200, pacote.text
+    pacote = pacote.json()
+
+    pos_web = {i["aluno_id"]: i["posicao"] for i in web.json()}
+    top_web = {i["aluno_id"]: i["posicao"] for i in painel.json()["top10"]}
+    pos_app = {i["aluno_id"]: i["posicao"] for i in pacote["ranking"]}
+    top_app = {i["aluno_id"]: i["posicao"] for i in pacote["dashboard"]["top10"]}
+
+    # O cenário é o do defeito: João (sem dado) fica ENTRE Ana e Sofia no
+    # Ranking Geral do professor, que continua listando quem não tem dado.
+    assert pos_web == {ana.id: 1, joao.id: 2, sofia.id: 3}, pos_web
+    assert pos_app == pos_web, ("app x web", pos_app, pos_web)
+    # O Top 10 do Painel continua sem quem não tem dado...
+    assert joao.id not in top_web and joao.id not in top_app, (top_web, top_app)
+    # ...e cada criança dele tem a MESMA posição do Ranking Geral (pode pular um
+    # número, como já acontece na gestão e no telão).
+    assert top_web == {ana.id: 1, sofia.id: 3}, ("Painel x Ranking Geral", top_web, pos_web)
+    assert top_app == top_web, ("app: Top 10 do Painel x web", top_app, top_web)
+    for aid, pos in top_app.items():
+        assert pos_app[aid] == pos, ("app: Top 10 do Painel x aba Ranking Geral",
+                                     aid, pos, pos_app[aid])
