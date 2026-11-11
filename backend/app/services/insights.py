@@ -261,12 +261,20 @@ def alertas_da_escola(db: Session, escola_id: int,
                 else (com_nota[meio - 1] + com_nota[meio]) / 2
             )
 
+    # CONTRATO (o mesmo corte do motor, `scoring._carregar_contexto`): retrato da
+    # plataforma de um módulo que a rede NÃO contratou não é dado do aluno. Sem
+    # isto, um retrato recente do Matific numa rede só com Leitura escondia o
+    # "sem novos dados" de quem parou de ler, e quem só tinha Matific aparecia
+    # "sem novos dados há N dias" em vez de "ainda não tem nenhum dado".
+    fora = {plataforma for dimensao, plataforma in scoring.DIMENSOES.items()
+            if dimensao not in contratadas}
+
     alertas: list[dict] = []
     for matricula, turma in matriculas:
         aluno_id = matricula.aluno_id
         nome = matricula.aluno.nome
-        m = serie_m.get(aluno_id, [])
-        e = serie_e.get(aluno_id, [])
+        m = [] if "matific" in fora else serie_m.get(aluno_id, [])
+        e = [] if "elefante" in fora else serie_e.get(aluno_id, [])
 
         if not m and not e:
             alertas.append({
