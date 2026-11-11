@@ -480,7 +480,9 @@ async def salvar_credenciais(plataforma: str, dados: CredenciaisIn,
     linha = await run_in_threadpool(_gravar_credencial, db, escola_id, plataforma, cred,
                                     usuario.id)
     if plataforma == "matific":
-        # O ranking ao vivo cacheado (em memória, sem banco) era da conta antiga.
+        # Depois do commit da credencial nova: libera a memória do ranking ao vivo
+        # da conta antiga neste processo (o carimbo da credencial no cache é o que
+        # impede servi-lo, também no outro worker).
         aovivo.invalidar_cache(escola_id)
 
     conector = connectors.obter(plataforma)
@@ -532,7 +534,6 @@ def remover_credenciais(plataforma: str,
     vault.remover_credencial(db, escola_id, plataforma)
     if plataforma == "matific":
         aovivo.limpar_sessao(db, escola_id)
-        aovivo.invalidar_cache(escola_id)  # não servir ranking da conta removida
     # Sem credencial não há coleta: as FALHAS dela perderam a causa — ficam no
     # histórico, resolvidas, em vez de abertas para sempre num card "Ainda não
     # configurada". O 'desatualizada' fica: com a agenda ativa, o dado continua
@@ -542,6 +543,11 @@ def remover_credenciais(plataforma: str,
     registrar(db, "sync.credencial_removida", escola_id=escola_id,
               usuario_id=usuario.id, detalhes={"plataforma": plataforma})
     db.commit()
+    if plataforma == "matific":
+        # Depois do commit: libera a memória do ranking da conta removida neste
+        # processo (quem impede servi-lo, aqui e no outro worker, é o carimbo da
+        # credencial no cache — aovivo.placar_matific).
+        aovivo.invalidar_cache(escola_id)
 
 
 # ---------------------------------------------------------------------------

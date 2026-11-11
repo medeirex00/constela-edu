@@ -237,12 +237,29 @@ def _linha_sessao(db: Session, escola_id: int) -> Configuracao | None:
     ).scalar_one_or_none()
 
 
-def _carregar_sessao(db: Session, escola_id: int, agora: datetime) -> dict | None:
-    """storage_state cifrado da última consulta, se salvo há < TTL. None se não
-    houver, expirou ou não decifra (DATA_ENCRYPTION_KEY ou SECRET_KEY trocada sem
-    recifrar)."""
+def _carimbo_vigente(db: Session, escola_id: int) -> str | None:
+    """O carimbo da credencial do Matific gravada agora (None se não houver)."""
+    linha = vault.obter_linha(db, escola_id, "matific")
+    return vault.carimbo_da_credencial(linha) if linha is not None else None
+
+
+def _carregar_sessao(db: Session, escola_id: int, agora: datetime,
+                     carimbo: str | None = None) -> dict | None:
+    """storage_state cifrado da última consulta, se salvo há < TTL e obtido com a
+    MESMA credencial (``carimbo``; sem ele, o da credencial gravada agora). None se
+    não houver, expirou, é de outra credencial ou não decifra (DATA_ENCRYPTION_KEY
+    ou SECRET_KEY trocada sem recifrar).
+
+    A sessão de outra credencial nunca volta: uma consulta que já estava em andamento
+    quando a credencial foi trocada termina depois do ``limpar_sessao`` e grava os
+    cookies da conta ANTIGA — com eles, a consulta seguinte (já com a conta nova)
+    entraria no Matific como a conta antiga e mostraria o Placar dela."""
     row = _linha_sessao(db, escola_id)
     if row is None or not isinstance(row.valor, dict):
+        return None
+    if carimbo is None:
+        carimbo = _carimbo_vigente(db, escola_id)
+    if not carimbo or row.valor.get("credencial") != carimbo:
         return None
     salvo = row.valor.get("salvo_em")
     try:
@@ -262,11 +279,16 @@ def _carregar_sessao(db: Session, escola_id: int, agora: datetime) -> dict | Non
 
 
 def _salvar_sessao(db: Session, escola_id: int, estado: dict | None,
-                   agora: datetime) -> None:
+                   agora: datetime, carimbo: str | None = None) -> None:
+    """Guarda a sessão CIFRADA, carimbada com a credencial com que foi obtida
+    (``carimbo``, lido no início da consulta; sem ele, o da credencial gravada
+    agora). Ver ``_carregar_sessao``."""
     if not estado:
         return
+    if carimbo is None:
+        carimbo = _carimbo_vigente(db, escola_id)
     valor = {"cifrado": cifrar_segredo(json.dumps(estado, ensure_ascii=False)),
-             "salvo_em": agora.isoformat()}
+             "salvo_em": agora.isoformat(), "credencial": carimbo}
     row = _linha_sessao(db, escola_id)
     if row is None:
         db.add(Configuracao(escola_id=escola_id, namespace=_NS_SESSAO,
@@ -287,37 +309,46 @@ def limpar_sessao(db: Session, escola_id: int) -> None:
 # --- Cache curto de RESULTADO (dedupe de consultas idênticas) ----------------
 # Vários usuários pedindo o MESMO período em segundos → uma única ida ao Matific.
 # Por processo (cada worker tem o seu): reduz carga sem precisar de Redis. TTL
-# curto porque o dado é "ao vivo". A tecla é (escola_id, filtro).
+# curto porque o dado é "ao vivo". A tecla é (escola_id, filtro); cada entrada leva o
+# CARIMBO da credencial com que foi obtida (``vault.carimbo_da_credencial``, lido no
+# início da consulta) e só é servida para a mesma credencial. É isso que garante
+# nunca servir o ranking da conta antiga (PII de outra conta) depois de trocar ou
+# remover a credencial — em QUALQUER worker, e também quando uma consulta que já
+# estava em andamento termina depois da troca. O ``invalidar_cache`` só libera a
+# memória do processo que atendeu o pedido.
 _CACHE_TTL_S = 60
-_cache: dict[tuple[int, str], tuple[datetime, dict]] = {}
+_cache: dict[tuple[int, str], tuple[datetime, str, dict]] = {}
 _cache_guard = threading.Lock()
 
 
-def _cache_get(escola_id: int, filtro: str, agora: datetime) -> dict | None:
+def _cache_get(escola_id: int, filtro: str, agora: datetime,
+               carimbo: str = "") -> dict | None:
     with _cache_guard:
         item = _cache.get((escola_id, filtro))
     if item is None:
         return None
-    quando, valor = item
-    if (agora - quando).total_seconds() > _CACHE_TTL_S:
+    quando, de_qual, valor = item
+    if de_qual != carimbo or (agora - quando).total_seconds() > _CACHE_TTL_S:
         return None
     return valor
 
 
-def _cache_put(escola_id: int, filtro: str, agora: datetime, valor: dict) -> None:
+def _cache_put(escola_id: int, filtro: str, agora: datetime, valor: dict,
+               carimbo: str = "") -> None:
     with _cache_guard:
-        _cache[(escola_id, filtro)] = (agora, valor)
+        _cache[(escola_id, filtro)] = (agora, carimbo, valor)
         # Poda preguiçosa: descarta entradas vencidas para não crescer sem fim.
         if len(_cache) > 512:
-            vencidos = [k for k, (q, _) in _cache.items()
+            vencidos = [k for k, (q, _c, _v) in _cache.items()
                         if (agora - q).total_seconds() > _CACHE_TTL_S]
             for k in vencidos:
                 _cache.pop(k, None)
 
 
 def invalidar_cache(escola_id: int) -> None:
-    """Descarta o cache de resultado desta escola — chamado ao trocar/remover a
-    credencial, para NUNCA servir o ranking da conta antiga (PII de outra conta)."""
+    """Descarta o cache de resultado desta escola NESTE processo — chamado ao
+    trocar/remover a credencial. Libera a memória; quem garante que o ranking da
+    conta antiga nunca é servido é o carimbo da credencial (ver acima)."""
     with _cache_guard:
         for k in [k for k in _cache if k[0] == escola_id]:
             _cache.pop(k, None)
@@ -553,24 +584,28 @@ def placar_matific(db: Session, escola_id: int, *, periodo: str | None,
 
     filtro, rotulo, _di, _df = mapa_filtro(periodo, inicio, fim, ano_letivo, hoje_br)
 
-    # Cache curto de resultado (dedupe): antes de qualquer trabalho pesado.
-    if not forcar:
-        hit = _cache_get(escola_id, filtro, agora)
-        if hit is not None:
-            return {**hit, "cache": True}
-
-    cred = vault.obter_credencial(db, escola_id, "matific")
-    if cred is None:
-        if vault.obter_linha(db, escola_id, "matific") is not None:
-            # A credencial existe, mas a cifra não abre (status 'ilegivel'): "não
-            # configurada" seria mentira. Pede o recadastro, como o /sync/agora e o
-            # diagnóstico do Elefante, sem detalhe da falha da cifra e sem gravar.
-            raise ErroConector(vault.mensagem_credencial_ilegivel(["matific"]),
-                               codigo=vault.CODIGO_CREDENCIAL_ILEGIVEL, recuperavel=False)
+    # A credencial VIGENTE vem antes de tudo, inclusive do cache: sem ela nada do
+    # cache é servido, e o carimbo dela amarra o cache e a sessão a esta conta.
+    linha = vault.obter_linha(db, escola_id, "matific")
+    if linha is None:
         raise ErroConector(
             "As credenciais do Matific não estão configuradas. Configure em "
             "Sincronização automática → Matific.", codigo="sem_credencial",
             recuperavel=False)
+    cred = vault.credencial_da_linha(linha)
+    if cred is None:
+        # A credencial existe, mas a cifra não abre (status 'ilegivel'): "não
+        # configurada" seria mentira. Pede o recadastro, como o /sync/agora e o
+        # diagnóstico do Elefante, sem detalhe da falha da cifra e sem gravar.
+        raise ErroConector(vault.mensagem_credencial_ilegivel(["matific"]),
+                           codigo=vault.CODIGO_CREDENCIAL_ILEGIVEL, recuperavel=False)
+    carimbo = vault.carimbo_da_credencial(linha)
+
+    # Cache curto de resultado (dedupe): antes de qualquer trabalho pesado.
+    if not forcar:
+        hit = _cache_get(escola_id, filtro, agora, carimbo)
+        if hit is not None:
+            return {**hit, "cache": True}
 
     conector = connectors.obter("matific")
     if conector is None or not hasattr(conector, "coletar_via_http"):
@@ -581,11 +616,11 @@ def placar_matific(db: Session, escola_id: int, *, periodo: str | None,
         # Re-checa o cache: outra requisição pode tê-lo preenchido enquanto
         # esperávamos o lock (evita duas coletas para o mesmo período).
         if not forcar:
-            hit = _cache_get(escola_id, filtro, agora)
+            hit = _cache_get(escola_id, filtro, agora, carimbo)
             if hit is not None:
                 return {**hit, "cache": True}
 
-        estado = _carregar_sessao(db, escola_id, agora)
+        estado = _carregar_sessao(db, escola_id, agora, carimbo)
         # VÍNCULO da escola externa: com ele, a consulta recusa a conta de outra
         # escola (sem ele, não aprende nada aqui — a consulta ao vivo só lê).
         vinculo = escola_externa.obter(db, escola_id, "matific")
@@ -621,7 +656,7 @@ def placar_matific(db: Session, escola_id: int, *, periodo: str | None,
         # Persiste a sessão nova (cookies renovados), se o navegador autenticou.
         if novo_estado:
             try:
-                _salvar_sessao(db, escola_id, novo_estado, agora)
+                _salvar_sessao(db, escola_id, novo_estado, agora, carimbo)
             except Exception:  # noqa: BLE001
                 db.rollback()
 
@@ -638,5 +673,7 @@ def placar_matific(db: Session, escola_id: int, *, periodo: str | None,
             "itens": itens,
             "cache": False,
         }
-        _cache_put(escola_id, filtro, agora, resultado)
+        # Com o carimbo lido no INÍCIO: se a credencial mudou durante a consulta, o
+        # resultado não vale para a nova (nem para "sem credencial").
+        _cache_put(escola_id, filtro, agora, resultado, carimbo)
         return resultado
