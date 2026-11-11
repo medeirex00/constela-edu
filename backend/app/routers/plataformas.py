@@ -1059,6 +1059,20 @@ def excluir_livro(
             "Este livro tem leituras registradas e não pode ser excluído — "
             "isso apagaria histórico de alunos.",
         )
+    # O evento (``EventoAluno.livro_id``, sem ON DELETE) também segura o livro: o
+    # saneamento dos homônimos tira a Leitura legado e MANTÉM o evento de
+    # propósito — é a prova documental que a restauração histórica usa. Sem esta
+    # conferência, o DELETE estourava a chave estrangeira (500).
+    tem_eventos = db.execute(
+        select(EventoAluno.id).where(EventoAluno.livro_id == livro_id).limit(1)
+    ).scalar_one_or_none()
+    if tem_eventos:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            "Este livro não tem leituras, mas aparece na linha do tempo de alunos "
+            "(eventos de leitura guardados como histórico) e não pode ser excluído — "
+            "isso apagaria a prova desse histórico.",
+        )
     registrar(db, "livro.excluido", escola_id=escola_id, usuario_id=usuario.id,
               entidade="livro", entidade_id=livro.id,
               detalhes={"titulo": livro.titulo, "nivel": livro.nivel_codigo,
