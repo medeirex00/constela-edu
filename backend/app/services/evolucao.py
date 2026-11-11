@@ -644,9 +644,13 @@ def ranking_evolucao(db: Session, escola_id: int, inicio: datetime | None = None
         atual_m, base_m = _janela(serie_m.get(aluno_id, []), inicio, fim,
                                   base_no_periodo=base_no_periodo,
                                   ano_letivo=ano_matific)
+        atividades_m = _delta(atual_m, base_m, "atividades")
         ganhos_m[aluno_id] = SimpleNamespace(
-            atividades=_delta(atual_m, base_m, "atividades"),
-            estrelas=_delta(atual_m, base_m, "estrelas"),
+            atividades=atividades_m,
+            # No máximo 5 estrelas por atividade do período (o teto das
+            # premiações, ``matific_destaque.limitar_estrelas``).
+            estrelas=matific_destaque.limitar_estrelas(
+                atividades_m, _delta(atual_m, base_m, "estrelas")),
             pontuacao_media=_delta(atual_m, base_m, "pontuacao_media"),
         )
         atual_e, base_e = _janela(serie_e.get(aluno_id, []), inicio, fim,
@@ -902,7 +906,7 @@ def _indicadores_atuais(db: Session, escola_id: int, aluno_ids: list[int],
         snap_m = matific.get(aluno_id)
         if snap_m:
             total["atividades"] += snap_m.atividades
-            total["estrelas"] += snap_m.estrelas
+            total["estrelas"] += scoring.estrelas_que_contam(snap_m)   # 5/atividade
             total["pontuacao_media"] += snap_m.pontuacao_media
             com_media += 1
         snap_e = elefante.get(aluno_id)

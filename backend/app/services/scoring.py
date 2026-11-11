@@ -229,6 +229,28 @@ def _entrada_nao_negativa(valor):
     return numero if numero is not None and numero >= 0 else 0
 
 
+def estrelas_que_contam(snapshot):
+    """Estrelas do Matific que CONTAM num retrato (ou num ganho): no máximo 5 por
+    atividade — ``matific_destaque.limitar_estrelas``, a fonte única do teto
+    (decisão do dono 2026-09-15: uma correção de relatório não cria estrela sem
+    atividade).
+
+    Antes só as premiações aplicavam o teto, e a nota oficial, a régua da escola,
+    o Ranking de Matemática, a Evolução, o XP e as conquistas liam o número bruto:
+    10 atividades com 5000 estrelas digitadas punham a criança em 1º num ranking e
+    em último no outro, na mesma tela. O dado coletado nunca passa do teto (a média
+    de estrelas por atividade vai de 0 a 5), então ali nada muda. Dentro do teto o
+    valor sai INTACTO (``12`` continua ``12``); acima dele, o teto."""
+    if snapshot is None:
+        return 0
+    atividades = _entrada_nao_negativa(getattr(snapshot, "atividades", 0))
+    estrelas = _entrada_nao_negativa(getattr(snapshot, "estrelas", 0))
+    teto = matific_destaque.limitar_estrelas(atividades, estrelas)
+    if teto >= estrelas:
+        return estrelas
+    return int(teto) if isinstance(estrelas, int) else teto
+
+
 def _nota_0_100(nota) -> float:
     """Nota final sempre finita em [0, 100] (arredondada a 2 casas)."""
     numero = _finito(nota)
@@ -844,7 +866,9 @@ def _referencias_auto(
     listas = {
         "atividades": [s.atividades for s in matific.values()],
         "media": [s.pontuacao_media for s in matific.values()],
-        "estrelas": [s.estrelas for s in matific.values()],
+        # Só as estrelas que contam (5 por atividade): um número digitado acima
+        # do teto não pode virar a régua de todo mundo.
+        "estrelas": [estrelas_que_contam(s) for s in matific.values()],
         "livros": [s.livros_unicos for s in elefante.values()],
         # `pontos_dificuldade` tem uma entrada por aluno PONTUADO (inclusive quem
         # não tem snapshot do Elefante, com 0). Os zeros são descartados de
@@ -955,7 +979,7 @@ def calcular_matific(
     # inexistente vale 0 (nota 0 no indicador, nunca KeyError); nota em [0, 100].
     atividades = _entrada_nao_negativa(snapshot.atividades) if snapshot else 0
     media = _entrada_nao_negativa(snapshot.pontuacao_media) if snapshot else 0.0
-    estrelas = _entrada_nao_negativa(snapshot.estrelas) if snapshot else 0
+    estrelas = estrelas_que_contam(snapshot)   # no máximo 5 por atividade
     refs = refs or {}
     ref_atividades = _entrada_nao_negativa(refs.get("max_atividades", 0.0))
     ref_media = _entrada_nao_negativa(refs.get("max_media", 0.0))
@@ -1564,7 +1588,9 @@ def recalcular_escola(db: Session, escola_id: int, *, commit: bool = True) -> in
                 atividades=snap_m.atividades if snap_m else 0,
                 pct_acertos=round(acertos / tentativas * 100, 2) if tentativas else 0.0,
                 pontos_dificuldade=pontos_dif[aluno.id],
-                estrelas=snap_m.estrelas if snap_m else 0,
+                # As estrelas que CONTAM (5 por atividade): são critério de
+                # desempate da Matemática e não podem passar do teto da nota.
+                estrelas=estrelas_que_contam(snap_m),
                 pontuacao_media=snap_m.pontuacao_media if snap_m else 0.0,
                 # AFERIDO por dimensão = a MESMA noção de "dimensão com dado" do
                 # C-01, traduzida para o vocabulário do produto. Uma definição só
@@ -1582,7 +1608,7 @@ def recalcular_escola(db: Session, escola_id: int, *, commit: bool = True) -> in
                     },
                     "matematica": {
                         "atividades": snap_m.atividades if snap_m else 0,
-                        "estrelas": snap_m.estrelas if snap_m else 0,
+                        "estrelas": estrelas_que_contam(snap_m),
                         "pontuacao_media": snap_m.pontuacao_media if snap_m else 0.0,
                     },
                 },

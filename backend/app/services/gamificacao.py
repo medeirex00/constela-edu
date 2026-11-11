@@ -194,7 +194,8 @@ def _valor_indicador(snap_m, snap_e, indicador: str) -> float:
     if indicador == "atividades":
         return float(snap_m.atividades) if snap_m else 0.0
     if indicador == "estrelas":
-        return float(snap_m.estrelas) if snap_m else 0.0
+        # Só as que contam (5 por atividade): estrela sem atividade não desbloqueia.
+        return float(scoring.estrelas_que_contam(snap_m)) if snap_m else 0.0
     if indicador == "livros_unicos":
         return float(snap_e.livros_unicos) if snap_e else 0.0
     if indicador == "tempo_leitura_min":
@@ -247,7 +248,8 @@ def xp_do_aluno(snap_m, snap_e, pesos_xp: dict) -> int:
     total = 0.0
     if snap_m:
         total += snap_m.atividades * float(pesos_xp.get("atividades", 0))
-        total += snap_m.estrelas * float(pesos_xp.get("estrelas", 0))
+        # As estrelas que contam (no máximo 5 por atividade), as mesmas da nota.
+        total += scoring.estrelas_que_contam(snap_m) * float(pesos_xp.get("estrelas", 0))
     if snap_e:
         total += snap_e.livros_unicos * float(pesos_xp.get("livros", 0))
         total += snap_e.questoes_acertos * float(pesos_xp.get("acertos", 0))

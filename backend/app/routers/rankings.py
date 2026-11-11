@@ -820,8 +820,12 @@ def ranking_matematica(
                               ano_letivo=ano)
         if atual is None:
             continue
-        estrelas = _delta(atual, base, "estrelas")
         atividades = _delta(atual, base, "atividades")
+        # No máximo 5 estrelas por atividade (o teto das premiações,
+        # ``matific_destaque.limitar_estrelas``): estrela digitada sem atividade
+        # não ordena o ranking — o mesmo dado sai na mesma ordem nas duas telas.
+        estrelas = matific_destaque.limitar_estrelas(
+            atividades, _delta(atual, base, "estrelas"))
         if estrelas == 0 and atividades == 0:
             continue  # sem atividade no período: fora do pódio do período
         # Média DO PERÍODO, derivada dos snapshots (o import acumula a média
