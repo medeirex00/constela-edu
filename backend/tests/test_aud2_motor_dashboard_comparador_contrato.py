@@ -7,9 +7,11 @@ ano, ou escola vinda de outra rede):
   * o Comparador devolve a nota e os indicadores do Matific NULOS, e a matéria
     não é "aferida" num produto que a rede não comprou.
 
-Dados 100% fictícios.
+Dados 100% fictícios. Datas FIXAS dentro do ano letivo 2026 da fixture
+(REV2-MOTOR-2): o Matific é contador do ANO, e um retrato datado pelo relógio de
+quem roda a suíte cairia fora de 2026 a partir de 01/01/2027.
 """
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 
 import pytest
 
@@ -20,6 +22,8 @@ API = "/api/v1"
 INDICADORES_MATIFIC = ("atividades", "estrelas", "pontuacao_media")
 INDICADORES_ELEFANTE = ("livros_unicos", "tempo_leitura_min", "questoes_tentativas",
                         "questoes_acertos")
+# Dia de uma coleta inventada, dentro do ano letivo 2026 (nunca o relógio).
+QUANDO = datetime(2026, 10, 10, 12, 0)
 
 
 def _cenario(db, escola_completa, ativos):
@@ -37,16 +41,15 @@ def _cenario(db, escola_completa, ativos):
     imp = Importacao(escola_id=escola.id, plataforma="seed", tipo="seed")
     db.add(imp)
     db.flush()
-    agora = datetime.now(timezone.utc).replace(tzinfo=None)
     for aluno in (ana, joao):
         db.add(SnapshotElefante(escola_id=escola.id, aluno_id=aluno.id, importacao_id=imp.id,
                                 livros_unicos=4, tempo_leitura_min=50,
                                 questoes_tentativas=10, questoes_acertos=8,
-                                data_referencia=agora - timedelta(days=2)))
+                                data_referencia=QUANDO - timedelta(days=2)))
     for aluno, atividades in ((ana, 30), (sofia, 5)):
         db.add(SnapshotMatific(escola_id=escola.id, aluno_id=aluno.id, importacao_id=imp.id,
                                atividades=atividades, estrelas=600, pontuacao_media=3.5,
-                               data_referencia=agora - timedelta(days=1)))
+                               data_referencia=QUANDO - timedelta(days=1)))
     db.commit()
     scoring.recalcular_escola(db, escola.id)
     return escola, ana, joao, escola_completa["turma"]

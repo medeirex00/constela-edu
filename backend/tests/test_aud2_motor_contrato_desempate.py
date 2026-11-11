@@ -10,8 +10,13 @@ quem sai em 1º.
 Cenário: 20 crianças; duas saturam a régua da dimensão contratada (nota 100,0
 as duas). A que tem MAIS na dimensão contratada tem de ficar à frente, como no
 ranking da própria dimensão. Dados 100% fictícios.
+
+Datas FIXAS dentro do ano letivo 2026 da fixture (REV2-MOTOR-2): o Matific é
+contador do ANO (``scoring.snapshots_matific_do_ano``), e um retrato datado pelo
+relógio de quem roda a suíte cairia fora de 2026 a partir de 01/01/2027 — o
+Matific nem entraria no cálculo e o teste passaria com a correção revertida.
 """
-from datetime import datetime, timedelta, timezone
+from datetime import datetime
 
 from app.models import (
     Aluno,
@@ -31,8 +36,8 @@ from app.services import modulos as svc_modulos, scoring
 API = "/api/v1"
 
 
-def _ontem():
-    return datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(days=1)
+# A véspera de uma coleta inventada, dentro do ano letivo 2026 (nunca o relógio).
+QUANDO = datetime(2026, 10, 9, 12, 0)
 
 
 def _rede(db, escola, desligado):
@@ -64,7 +69,7 @@ def _cenario_leitura(db, escola_completa, desligado):
     imp = Importacao(escola_id=escola.id, plataforma="seed", tipo="seed")
     db.add(imp)
     db.flush()
-    quando = _ontem()
+    quando = QUANDO
     alunos = list(escola_completa["alunos"])
     alunos += [_novo_aluno(db, escola, turma, f"Leitor Inventado {i:02d}") for i in range(15)]
     for i, a in enumerate(alunos):
@@ -95,7 +100,7 @@ def _cenario_matematica(db, escola_completa, desligado):
     imp = Importacao(escola_id=escola.id, plataforma="seed", tipo="seed")
     db.add(imp)
     db.flush()
-    quando = _ontem()
+    quando = QUANDO
     alunos = list(escola_completa["alunos"])
     alunos += [_novo_aluno(db, escola, turma, f"Calculista Inventado {i:02d}")
                for i in range(15)]
@@ -181,7 +186,7 @@ def test_rede_so_matematica_personalizada_bonus_de_leitura_nao_traz_o_elefante(
     for a in (ana, joao, sofia):
         db.add(SnapshotMatific(escola_id=escola.id, aluno_id=a.id, importacao_id=imp.id,
                                atividades=10, estrelas=30, pontuacao_media=3.0,
-                               data_referencia=_ontem()))
+                               data_referencia=QUANDO))
     segunda_9h = datetime(2026, 7, 6, 9, 0)
     for i in range(3):
         livro = Livro(escola_id=escola.id, titulo=f"Livro Inventado {i}", nivel_codigo="D")
