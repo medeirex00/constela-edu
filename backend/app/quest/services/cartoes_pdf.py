@@ -57,6 +57,46 @@ def _endereco_app() -> str:
         "http://", "").rstrip("/")
 
 
+def _quebrar_em_linhas(pdf, texto: str, largura: float,
+                       max_linhas: int) -> list[str]:
+    """Quebra ``texto`` por palavra em até ``max_linhas`` linhas que cabem em
+    ``largura`` (na fonte atual). Palavra maior que a linha é cortada por letra; o
+    que sobrar depois da última linha vira "..." no fim dela."""
+    resto = texto.split()
+    linhas: list[str] = []
+    while resto and len(linhas) < max_linhas:
+        linha = resto.pop(0)
+        if pdf.get_string_width(linha) > largura:
+            corte = len(linha) - 1
+            while corte > 1 and pdf.get_string_width(linha[:corte]) > largura:
+                corte -= 1
+            resto.insert(0, linha[corte:])
+            linha = linha[:corte]
+        while resto and pdf.get_string_width(f"{linha} {resto[0]}") <= largura:
+            linha = f"{linha} {resto.pop(0)}"
+        linhas.append(linha)
+    if resto and linhas:
+        ultima = linhas[-1]
+        while len(ultima) > 1 and pdf.get_string_width(ultima.rstrip() + "...") > largura:
+            ultima = ultima[:-1]
+        linhas[-1] = ultima.rstrip() + "..."
+    return linhas
+
+
+def _nome_em_duas_linhas(pdf, nome: str, x: float, y: float,
+                         largura: float) -> None:
+    """Nome que não cabe numa linha nem a 7 pt: duas linhas, no maior tamanho
+    (de 9 a 7 pt) em que ele sai inteiro; a 7 pt, o que ainda sobrar vira "...".
+    Ocupa de ``y`` a ``y`` + 8 mm, acima do "Meu codigo magico:" (``y`` + 9,5)."""
+    pdf.set_font_size(9)
+    while (pdf.font_size_pt > 7
+           and _quebrar_em_linhas(pdf, nome, largura, 3)[2:]):
+        pdf.set_font_size(pdf.font_size_pt - 0.5)
+    for indice, linha in enumerate(_quebrar_em_linhas(pdf, nome, largura, 2)):
+        pdf.set_xy(x, y + indice * 4)
+        pdf.cell(largura, 4, linha)
+
+
 def _desenhar_cartao(pdf, x: float, y: float, escola_nome: str,
                      turma_nome: str, cor: str, cartao: dict) -> None:
     r, g, b = _hex_para_rgb(cor)
@@ -91,14 +131,19 @@ def _desenhar_cartao(pdf, x: float, y: float, escola_nome: str,
 
     largura_texto = _LARGURA_CARTAO - lado_qr - 11
 
-    # Nome do aluno (encolhe até caber)
+    # Nome do aluno: encolhe até caber numa linha (até 7 pt). O fpdf2 não corta o
+    # texto que passa da célula: o que não cabe nem a 7 pt quebra em duas linhas e,
+    # se ainda sobrar, termina em "..." — nunca invade o QR à direita.
     pdf.set_text_color(30, 30, 30)
     pdf.set_font("helvetica", "B", 11)
     nome = _latin1(cartao["nome"])
     while pdf.get_string_width(nome) > largura_texto and pdf.font_size_pt > 7:
         pdf.set_font_size(pdf.font_size_pt - 0.5)
-    pdf.set_xy(x + 3.5, y + 12.5)
-    pdf.cell(largura_texto, 5, nome)
+    if pdf.get_string_width(nome) <= largura_texto:
+        pdf.set_xy(x + 3.5, y + 12.5)
+        pdf.cell(largura_texto, 5, nome)
+    else:
+        _nome_em_duas_linhas(pdf, nome, x + 3.5, y + 12.5, largura_texto)
 
     # Código falável, o herói do cartão — bem grande
     pdf.set_font("helvetica", "", 8)
