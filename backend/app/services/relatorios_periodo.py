@@ -115,6 +115,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
+from functools import cache
 
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
@@ -427,14 +428,42 @@ def _relidos(db: Session, escola_id: int, coorte: dict[int, dict],
     return [(aid, int(n or 0)) for aid, n in db.execute(consulta).all()]
 
 
-# Uma coleta a até ``TOLERANCIA_BORDA`` de uma borda do período é a MEDIDA dessa
-# borda. A agenda diária roda à 0h de Brasília (03:00 UTC) e grava o instante em
-# que a importação termina — medido em produção (backup de 05/10): 25.764
-# retratos do Elefante entre 00:05 e 00:50 —, e esse retrato mede o dia
-# ANTERIOR. Sem a tolerância, a coleta de 01/09 00:10 seria "depois do início"
-# e a de 01/10 00:10 "depois do fim": setembro sairia com um dia trocado (31/08
-# dentro, 30/09 fora).
+# Uma coleta perto de uma borda do período é a MEDIDA dessa borda: de
+# ``TOLERANCIA_BORDA`` ANTES dela até ``tolerancia_depois_da_borda()`` DEPOIS. A coleta
+# da MADRUGADA grava o instante em que a importação termina e mede o dia ANTERIOR —
+# sem a tolerância, a de 01/09 seria "depois do início" e a de 01/10 "depois do fim":
+# setembro sairia com um dia trocado (31/08 dentro, 30/09 fora). As coletas antigas
+# rodavam à 0h de Brasília (backup de 05/10: 25.764 retratos do Elefante entre 00:05
+# e 00:50); desde a correção de fuso (``sync/fuso.py``), a agenda diária automática
+# roda às ``HORA_AGENDA_AUTOMATICA`` (03:00) de Brasília — a janela de depois cobre as
+# duas. ANTES da borda continua 1 h (a partir das 23h da véspera); coleta mais cedo que
+# isso não mede a borda.
 TOLERANCIA_BORDA = timedelta(hours=1)
+
+
+@cache
+def tolerancia_depois_da_borda() -> timedelta:
+    """Até quanto DEPOIS da meia-noite de uma borda a coleta ainda a mede: a hora da
+    agenda diária automática da sincronização mais ``TOLERANCIA_BORDA`` (a duração
+    da coleta). Derivada da agenda, e não de um literal: mudou a hora padrão da
+    coleta da madrugada, a régua do relatório acompanha. Agenda que não é de
+    madrugada (meio-dia em diante) não estica a janela.
+
+    Importação tardia: o relatório não carrega o módulo de sincronização ao ser
+    importado (a agenda só é lida na primeira conta)."""
+    from app.sync.prerequisitos import HORA_AGENDA_AUTOMATICA
+
+    hora, minuto = (int(parte) for parte in HORA_AGENDA_AUTOMATICA.split(":"))
+    if hora >= 12:
+        return TOLERANCIA_BORDA
+    return timedelta(hours=hora, minutes=minuto) + TOLERANCIA_BORDA
+
+
+def _mede_a_borda(instante_br: datetime, borda: datetime) -> bool:
+    """A coleta em ``instante_br`` é a medida da ``borda`` (os dois em Brasília)?"""
+    return -TOLERANCIA_BORDA <= instante_br - borda <= tolerancia_depois_da_borda()
+
+
 # Primeira coleta "zerada" só prova contador zero se a conta for de fato nova:
 # os importadores gravam 0 nas questões quando o relatório não traz a coluna
 # (``importacoes._importar_elefante_resumo``) — com livros ou tempo já
@@ -503,7 +532,7 @@ def _diferenca_de_retratos(serie: list, janela: Janela, campos: tuple[str, ...],
     BRASÍLIA (a janela vem em dias de Brasília; a coleta é gravada em UTC).
 
     BORDA DO INÍCIO (``_inicio``):
-      * ``exato``    — coleta a até ``TOLERANCIA_BORDA`` do início: a medida dele;
+      * ``exato``    — coleta na tolerância do início (``_mede_a_borda``): a medida dele;
       * ``antes``    — só há coleta bem antes: o número INCLUI o que veio entre
         ela e o início (``_antecedencia``) — período AMPLIADO, nunca "completo";
       * ``contador`` — o contador parte do zero (``todo o histórico``, ou conta
@@ -513,7 +542,7 @@ def _diferenca_de_retratos(serie: list, janela: Janela, campos: tuple[str, ...],
         reconstruível). Nunca se zera a base às cegas: num contador vitalício,
         a vida inteira viraria "ganho do período".
     BORDA DO FIM (``_fim``):
-      * ``exato``        — coleta a até ``TOLERANCIA_BORDA`` do fim: a medida dele;
+      * ``exato``        — coleta na tolerância do fim (``_mede_a_borda``): a medida dele;
       * ``em_andamento`` — período que inclui hoje: vale a coleta mais recente,
         se ela é de hoje;
       * ``antes``        — a última coleta é anterior ao fim: o que veio depois
@@ -533,7 +562,7 @@ def _diferenca_de_retratos(serie: list, janela: Janela, campos: tuple[str, ...],
     medida_fim = None
     if not aberto:
         fim_excl = janela.fim + timedelta(microseconds=1)
-        perto = [p for p in pontos if abs(p.br - fim_excl) <= tol]
+        perto = [p for p in pontos if _mede_a_borda(p.br, fim_excl)]
         if perto:
             medida_fim = min(perto, key=lambda p: (abs(p.br - fim_excl), p.br))
     if not dentro and medida_fim is None:
@@ -550,7 +579,7 @@ def _diferenca_de_retratos(serie: list, janela: Janela, campos: tuple[str, ...],
     if ini is None:
         base, ini_estado = None, "contador"      # todo o histórico: o acumulado inteiro
     else:
-        perto = [p for p in pontos if abs(p.br - ini) <= tol and p.br <= atual.br]
+        perto = [p for p in pontos if _mede_a_borda(p.br, ini) and p.br <= atual.br]
         antes = [p for p in pontos if p.br < ini - tol]
         primeiro = dentro[0] if dentro else atual
         if perto:
@@ -901,7 +930,8 @@ def _intervalo_matific(janela: Janela, ini_ano: datetime, ganho) -> dict | None:
     if base is None:
         inicio = ("contador" if janela.inicio is not None and janela.inicio >= ini_ano
                   else "ano_letivo")
-    elif janela.inicio is not None and _br(base) > janela.inicio + TOLERANCIA_BORDA:
+    elif (janela.inicio is not None
+          and _br(base) > janela.inicio + tolerancia_depois_da_borda()):
         # a base oficial é uma coleta bem DENTRO do período (comparado em
         # Brasília): não havia coleta anterior, e o começo ficou de fora
         inicio = "depois"
@@ -1059,8 +1089,8 @@ def _elefante_questoes(db: Session, escola_id: int, coorte: dict[int, dict],
 
 
 def _inicio_veio_sem_questoes(excluidos: list, janela: Janela, ganho: dict) -> bool:
-    """Houve coleta no INÍCIO do período (a até ``TOLERANCIA_BORDA`` dele), mas ela veio
-    sem as questões (S9) — e por isso a conta do aluno partiu de outra coleta: de uma
+    """Houve coleta no INÍCIO do período (na tolerância dele, ``_mede_a_borda``), mas ela
+    veio sem as questões (S9) — e por isso a conta do aluno partiu de outra coleta: de uma
     anterior (``antes``: o número INCLUI esse intervalo) ou da primeira com as questões
     no período (``depois``: o que veio até ela fica fora). O número e o status não
     mudam; muda o que o aviso diz: não é "não há coleta perto do início" nem "sem coleta
@@ -1069,7 +1099,7 @@ def _inicio_veio_sem_questoes(excluidos: list, janela: Janela, ganho: dict) -> b
     if janela.inicio is None or ganho["_inicio"] not in ("antes", "depois"):
         return False
     atual = _br(ganho["_data_atual"])
-    return any(abs(p.br - janela.inicio) <= TOLERANCIA_BORDA and p.br <= atual
+    return any(_mede_a_borda(p.br, janela.inicio) and p.br <= atual
                for p in _pontos(excluidos))
 
 

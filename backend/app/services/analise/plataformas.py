@@ -17,10 +17,10 @@ as funções de uma escola):
   ``_elefante_questoes``) e o Matific pelo ganho entre retratos
   (``matific_destaque.ganho_no_periodo``, a regra das premiações) — aplicadas a cada
   aluno com SÓ os retratos que essas regras podem ler, em vez do histórico diário inteiro:
-  nas questões, as coletas em volta das bordas do período em BRASÍLIA (a até
-  ``TOLERANCIA_BORDA`` delas), a última antes e a primeira e a última dentro, uma linha
-  por execução (``_coletas_das_questoes``); no Matific, o último antes do início e o
-  primeiro e o último dentro, no instante UTC da regra das premiações
+  nas questões, as coletas em volta das bordas do período em BRASÍLIA (na tolerância
+  delas, ``relatorios_periodo._mede_a_borda``), a última antes e a primeira e a última
+  dentro, uma linha por execução (``_coletas_das_questoes``); no Matific, o último antes
+  do início e o primeiro e o último dentro, no instante UTC da regra das premiações
   (``_retratos_essenciais``);
 * o nível médio usa o nível CONGELADO da leitura (``coalesce(Leitura.nivel_codigo,
   Livro.nivel_codigo)``, o mesmo das premiações) na posição de ``scoring.POS_DO_NIVEL``.
@@ -600,7 +600,8 @@ def _questoes_em_lote(db: Session, grupos: dict[int, tuple[rp.Janela, list[int]]
                       ) -> dict[tuple[int, int], dict[int, list]]:
     """Por (grupo, escola) e aluno, as coletas do Elefante que ``_diferenca_de_retratos``
     PODE usar, em ordem de (data, id) — com o critério dela: instantes comparados em
-    BRASÍLIA, bordas medidas pela coleta a até ``TOLERANCIA_BORDA`` delas e as linhas da
+    BRASÍLIA, bordas medidas pela coleta na tolerância delas (``rp._mede_a_borda``: de
+    ``TOLERANCIA_BORDA`` antes a ``tolerancia_depois_da_borda()`` depois) e as linhas da
     MESMA execução (a até ``_MESMA_COLETA`` da anterior) contadas como uma, a primeira (o
     resumo).
 
@@ -647,17 +648,20 @@ def _partes_questoes(db: Session, grupos: dict[int, tuple[rp.Janela, list[int]]]
                            _segundos(db, t.data_referencia) - _segundos(db, t.anterior)
                            > rp._MESMA_COLETA.total_seconds())).cte("primeiras")
     p = primeiras.c
-    tol = rp.TOLERANCIA_BORDA
+    # A janela de cada borda é a de ``rp._mede_a_borda`` (mais larga DEPOIS da meia-noite:
+    # a coleta da madrugada mede o dia anterior).
+    antes, depois = rp.TOLERANCIA_BORDA, rp.tolerancia_depois_da_borda()
     partes = []
     for g, (janela, ids) in grupos.items():
         whens = []
         if janela.inicio is not None:
             ini = _utc(janela.inicio)
-            whens += [(p.data_referencia < ini - tol, 0), (p.data_referencia <= ini + tol, 1)]
+            whens += [(p.data_referencia < ini - antes, 0),
+                      (p.data_referencia <= ini + depois, 1)]
         if janela.fim is not None:
             fim_excl = _utc(janela.fim + timedelta(microseconds=1))
-            whens += [(p.data_referencia < fim_excl - tol, 2),
-                      (p.data_referencia <= fim_excl + tol, 3)]
+            whens += [(p.data_referencia < fim_excl - antes, 2),
+                      (p.data_referencia <= fim_excl + depois, 3)]
         faixa = (case(*whens, else_=4 if janela.fim is not None else 2) if whens
                  else literal_column("2"))
         particao = (p.escola_id, p.aluno_id, faixa) if whens else (p.escola_id, p.aluno_id)
