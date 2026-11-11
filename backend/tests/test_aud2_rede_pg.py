@@ -44,6 +44,10 @@ def db():
     engine.dispose()
 
 
+from tests.test_aud2_rede_adocao_contrato import (  # noqa: E402,F401
+    test_adocao_do_cartao_e_dos_totais_so_conta_o_modulo_contratado as test_pg_adocao_contrato,
+    test_rede_com_as_duas_plataformas_continua_contando_as_duas as test_pg_adocao_duas,
+)
 from tests.test_aud2_rede_indice_peso import (  # noqa: E402,F401
     test_indice_e_media_geral_da_rede_nao_pesam_as_criancas_da_fase as test_pg_indice_peso,
     test_panorama_global_pesa_redes_e_escolas_por_quem_concorre as test_pg_indice_global,

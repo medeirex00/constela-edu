@@ -303,13 +303,29 @@ def _q_com_dado(ids: list[int], modelo):
             .distinct())
 
 
-def _alunos_com_qualquer_dado(db: Session, ids: list[int]) -> dict[int, int]:
-    """Alunos DISTINTOS com dado de ALGUMA plataforma, por escola, sozinho (``_q_com_dado``;
-    os cartões o leem junto com o resto, em ``_leituras_da_rede``)."""
+# O retrato de cada módulo do catálogo: quem tem dado de um módulo, para a COBERTURA.
+_RETRATO_DO_MODULO = (("leitura", SnapshotElefante), ("matematica", SnapshotMatific))
+
+
+def _retratos_contratados(contratados) -> list:
+    """Os modelos de retrato dos módulos CONTRATADOS (``None`` = todos, como a escola
+    avulsa). A cobertura (``alunos_com_dados``) só conta a plataforma que a rede
+    assinou: o retrato antigo de um módulo fora do plano (rede que deixou de contratar
+    a Matemática, escola que veio de outra rede) não é adoção — a mesma regra das
+    médias e do índice (``_cartoes_da_rede``)."""
+    return [modelo for modulo, modelo in _RETRATO_DO_MODULO
+            if contratados is None or modulo in contratados]
+
+
+def _alunos_com_qualquer_dado(db: Session, ids: list[int],
+                              contratados: set[str] | None = None) -> dict[int, int]:
+    """Alunos DISTINTOS com dado de ALGUMA plataforma CONTRATADA, por escola, sozinho
+    (``_q_com_dado``; os cartões o leem junto com o resto, em ``_leituras_da_rede``).
+    ``contratados`` = os módulos da rede (``None`` = todos)."""
     if not ids:
         return {}
     total: dict[int, set[int]] = {}
-    for modelo in (SnapshotElefante, SnapshotMatific):
+    for modelo in _retratos_contratados(contratados):
         for escola_id, aluno_id in db.execute(_q_com_dado(ids, modelo)).all():
             total.setdefault(escola_id, set()).add(aluno_id)
     return {escola_id: len(alunos) for escola_id, alunos in total.items()}
@@ -391,7 +407,7 @@ def _leituras_da_rede(db: Session, escolas: list[Escola], contratados: set[str],
     partes.append(select(*_ramo("turma", [(Turma.escola_id, _INT), (Turma.id, _INT),
                                           (Turma.ano_escolar, _TXT)], larg_a))
                   .where(Turma.escola_id.in_(ids)))
-    for modelo in (SnapshotElefante, SnapshotMatific):
+    for modelo in _retratos_contratados(contratados):
         # A turma da matrícula do ano vai junto: é por ela que se sabe quem CONCORRE.
         q = _q_com_dado(ids, modelo)
         partes.append(q.with_only_columns(*_ramo(
@@ -475,8 +491,8 @@ def _cartoes_da_rede(db: Session, rede_id: int, *, com_contribuintes: bool = Fal
                      ) -> tuple[list[dict], dict[int, int]]:
     """Cartão resumido de CADA escola da rede (contagens + médias + totais brutos
     das plataformas do ano letivo ativo da própria escola), agregado no banco.
-    ``adocao`` = % de alunos ativos com nota (proxy de engajamento). Escolas sem
-    dados entram com zeros. NUNCA expõe PII: só agregados por escola.
+    ``adocao`` = % de alunos ativos com dado de alguma plataforma CONTRATADA (proxy
+    de engajamento). Escolas sem dados entram com zeros. NUNCA expõe PII: só agregados por escola.
 
     ``com_contribuintes`` (só a resposta da Secretaria pede) acrescenta a cada
     cartão a chave INTERNA ``_contribuintes`` (``_contribuintes_do_cartao``),
