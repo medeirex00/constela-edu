@@ -6,8 +6,9 @@ Regras inegociáveis:
   * O modelo recebe instruções para responder apenas com base nesse
     contexto e recusar qualquer outra coisa.
   * Toda conversa fica registrada em `conversas_ia`/`mensagens_ia`.
-  * Se o provedor externo falhar, o provedor local responde — o assistente
-    nunca sai do ar por causa de terceiros.
+  * Se o provedor externo falhar (erro de rede, chave recusada, resposta fora do
+    formato ou qualquer outra exceção dele), o provedor local responde — o
+    assistente nunca sai do ar por causa de terceiros.
 
 Provedor externo e LGPD (dados de crianças — decisão documentada):
   * O provedor PADRÃO é `local`: determinístico, sem rede, sem chave. Por
@@ -70,6 +71,11 @@ from app.services.ia import ErroProvedorIA, obter_provedor
 from app.services.ia.provedores import LocalProvedor
 
 PROVEDORES_VALIDOS = ("local", "anthropic", "openai")
+CONTINGENCIA = "local (contingência)"
+
+
+class ConversaNaoEncontrada(LookupError):
+    """A conversa pedida não existe ou não é de quem pergunta (a rota responde 404)."""
 
 
 def _config_row(db: Session, escola_id: int) -> Configuracao | None:
@@ -468,14 +474,58 @@ def _reidentificar(texto: str, mapa: dict[str, str]) -> str:
     return texto
 
 
+def _contingencia(sistema: str, mensagens: list[dict]) -> tuple[str, str]:
+    return LocalProvedor().responder(sistema, mensagens), CONTINGENCIA
+
+
+def _responder(db: Session, escola_id: int, sistema: str,
+               mensagens: list[dict]) -> tuple[str, str]:
+    """(resposta, quem respondeu) pelo provedor da escola. Quando o externo falha,
+    responde o modo local (``CONTINGENCIA``): o assistente nunca sai do ar."""
+    try:
+        # A criação pode falhar (ex.: chave ausente/errada): cai no modo local.
+        provedor = _provedor_da_escola(db, escola_id)
+    except ErroProvedorIA as erro:
+        logger.warning("Provedor de IA indisponível; usando modo local: %s",
+                       erro, exc_info=True)
+        return _contingencia(sistema, mensagens)
+    if provedor.nome not in _PROVEDORES_EXTERNOS:
+        return provedor.responder(sistema, mensagens), provedor.nome
+
+    # LGPD: nenhum dado identificável de criança (nome, pedaço de nome, RA,
+    # e-mail, nº de documento) sai para provedor externo. Limpa contexto +
+    # conversa inteira (histórico incluso); reidentifica aqui.
+    mapa = _mapa_pseudonimos(db, escola_id)
+    pseudonimizar = _Pseudonimizador(mapa, _identificadores_da_ficha(db, escola_id))
+    sistema_env = pseudonimizar(sistema, conversa=False) + _NOTA_PSEUDONIMO
+    mensagens_env = [
+        {"papel": m["papel"], "conteudo": pseudonimizar(m["conteudo"])}
+        for m in mensagens
+    ]
+    try:
+        resposta = _reidentificar(provedor.responder(sistema_env, mensagens_env), mapa)
+    except ErroProvedorIA as erro:
+        logger.warning("Provedor de IA indisponível; usando modo local: %s",
+                       erro, exc_info=True)
+        return _contingencia(sistema, mensagens)
+    except Exception:  # noqa: BLE001 — terceiro fora do contrato: o plano B responde
+        # Exceção que o provedor não converteu em ErroProvedorIA (formato novo da
+        # resposta, defeito do SDK): vai ao log de erro, e quem pergunta não vê 500.
+        logger.exception("Falha inesperada no provedor de IA externo; usando modo local")
+        return _contingencia(sistema, mensagens)
+    return resposta, provedor.nome
+
+
 def perguntar(db: Session, escola_id: int, usuario_id: int,
               pergunta: str, conversa_id: int | None = None) -> dict:
-    """Fluxo completo: contexto → provedor → registro da conversa."""
+    """Fluxo completo: contexto → provedor → registro da conversa.
+
+    Levanta ``ConversaNaoEncontrada`` quando ``conversa_id`` não é de quem pergunta."""
     if conversa_id is not None:
         conversa = db.get(ConversaIA, conversa_id)
         if conversa is None or conversa.escola_id != escola_id \
                 or conversa.usuario_id != usuario_id:
-            raise ValueError("Conversa não encontrada.")
+            raise ConversaNaoEncontrada("Conversa não encontrada.")
     else:
         titulo = pergunta.strip()[:80] or "Nova conversa"
         conversa = ConversaIA(escola_id=escola_id, usuario_id=usuario_id, titulo=titulo)
@@ -492,32 +542,7 @@ def perguntar(db: Session, escola_id: int, usuario_id: int,
     mensagens.append({"papel": "usuario", "conteudo": pergunta})
 
     sistema = INSTRUCOES + montar_contexto(db, escola_id)
-
-    try:
-        # A criação pode falhar (ex.: chave ausente/errada) — por isso fica
-        # dentro do try: o assistente nunca sai do ar.
-        provedor = _provedor_da_escola(db, escola_id)
-        if provedor.nome in _PROVEDORES_EXTERNOS:
-            # LGPD: nenhum dado identificável de criança (nome, pedaço de nome,
-            # RA, e-mail, nº de documento) sai para provedor externo. Limpa
-            # contexto + conversa inteira (histórico incluso); reidentifica aqui.
-            mapa = _mapa_pseudonimos(db, escola_id)
-            pseudonimizar = _Pseudonimizador(
-                mapa, _identificadores_da_ficha(db, escola_id))
-            sistema_env = pseudonimizar(sistema, conversa=False) + _NOTA_PSEUDONIMO
-            mensagens_env = [
-                {"papel": m["papel"], "conteudo": pseudonimizar(m["conteudo"])}
-                for m in mensagens
-            ]
-            resposta = _reidentificar(provedor.responder(sistema_env, mensagens_env), mapa)
-        else:
-            resposta = provedor.responder(sistema, mensagens)
-        provedor_usado = provedor.nome
-    except ErroProvedorIA as erro:
-        logger.warning("Provedor de IA indisponível; usando modo local: %s",
-                       erro, exc_info=True)
-        resposta = LocalProvedor().responder(sistema, mensagens)
-        provedor_usado = "local (contingência)"
+    resposta, provedor_usado = _responder(db, escola_id, sistema, mensagens)
 
     conversa.provedor = provedor_usado
     db.add(MensagemIA(conversa_id=conversa.id, papel="usuario", conteudo=pergunta))

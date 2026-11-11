@@ -29,8 +29,8 @@ class AnthropicProvedor(ProvedorIA):
     def responder(self, sistema: str, mensagens: list[dict]) -> str:
         import anthropic
 
-        cliente = anthropic.Anthropic(api_key=self._api_key)
         try:
+            cliente = anthropic.Anthropic(api_key=self._api_key)
             resposta = cliente.messages.create(
                 model=self._modelo,
                 max_tokens=settings.AI_MAX_TOKENS,
@@ -46,13 +46,22 @@ class AnthropicProvedor(ProvedorIA):
                     for m in mensagens
                 ],
             )
-        except anthropic.APIError as erro:
+        except anthropic.AnthropicError as erro:
             raise ErroProvedorIA(f"Falha no provedor Anthropic: {erro}") from erro
-        if resposta.stop_reason == "refusal":
-            return "Não posso responder a essa pergunta."
-        return "".join(
-            bloco.text for bloco in resposta.content if bloco.type == "text"
-        ).strip()
+        # Um 200 fora do formato também é falha do provedor: a página HTML de um
+        # proxy no caminho (o SDK a devolve como TEXTO cru, sem ``stop_reason``),
+        # o JSON sem os campos, a resposta sem nenhum bloco de texto.
+        try:
+            if resposta.stop_reason == "refusal":
+                return "Não posso responder a essa pergunta."
+            texto = "".join(
+                bloco.text for bloco in resposta.content if bloco.type == "text"
+            ).strip()
+        except (AttributeError, TypeError) as erro:
+            raise ErroProvedorIA("Resposta inesperada do provedor Anthropic.") from erro
+        if not texto:
+            raise ErroProvedorIA("Resposta vazia do provedor Anthropic.")
+        return texto
 
 
 class OpenAIProvedor(ProvedorIA):
@@ -87,11 +96,19 @@ class OpenAIProvedor(ProvedorIA):
             )
             resposta.raise_for_status()
             dados = resposta.json()
-            return dados["choices"][0]["message"]["content"].strip()
         except httpx.HTTPError as erro:
             raise ErroProvedorIA(f"Falha no provedor OpenAI: {erro}") from erro
-        except (KeyError, IndexError) as erro:
+        except ValueError as erro:
+            # 200 com corpo que não é JSON (página HTML de um proxy/CDN no caminho).
             raise ErroProvedorIA("Resposta inesperada do provedor OpenAI.") from erro
+        try:
+            conteudo = dados["choices"][0]["message"]["content"]
+        except (KeyError, IndexError, TypeError) as erro:
+            raise ErroProvedorIA("Resposta inesperada do provedor OpenAI.") from erro
+        if not isinstance(conteudo, str) or not conteudo.strip():
+            # ``content`` nulo (recusa, chamada de ferramenta) ou vazio.
+            raise ErroProvedorIA("Resposta vazia do provedor OpenAI.")
+        return conteudo.strip()
 
 
 def _plano(texto: str) -> str:
