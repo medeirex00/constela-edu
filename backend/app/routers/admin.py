@@ -913,7 +913,10 @@ def restaurar_backup(
                             "Arquivo de backup acima do tamanho máximo (25 MB).")
     try:
         dados = json.loads(conteudo.decode("utf-8"))
-    except (UnicodeDecodeError, json.JSONDecodeError, RecursionError):
+    except (ValueError, RecursionError):
+        # ValueError cobre o UnicodeDecodeError, o JSONDecodeError e o número
+        # inteiro acima do limite de dígitos do Python (4.300), que o json.loads
+        # levanta como ValueError comum; RecursionError, o aninhamento profundo.
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "O arquivo não é um backup JSON válido.")
     if not isinstance(dados, dict):
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "O arquivo não é um backup JSON válido.")
