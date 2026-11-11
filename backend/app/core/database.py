@@ -251,6 +251,13 @@ class DataHoraUTC(TypeDecorator):
             return self
         return self.impl_instance.coerce_compared_value(op, value)
 
+    @property
+    def python_type(self):
+        # O ``TypeDecorator`` não repassa o tipo Python do ``impl`` (levanta
+        # NotImplementedError); quem pergunta o tipo da coluna — o backup, para voltar as
+        # datas do arquivo a ``datetime`` na restauração — precisa da resposta do DateTime.
+        return self.impl_instance.python_type
+
 
 class Base(DeclarativeBase):
     # Toda coluna ``Mapped[datetime]`` dos modelos (Constela Edu e Quest) é ``DataHoraUTC``.
