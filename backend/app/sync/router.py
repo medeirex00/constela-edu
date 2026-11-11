@@ -14,6 +14,7 @@ from datetime import datetime, timedelta, timezone
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
+from starlette.concurrency import run_in_threadpool
 
 logger = logging.getLogger("constela.sync")
 
@@ -416,6 +417,58 @@ def _registrar_validacao(db: Session, escola_id: int, plataforma: str, linha,
                          severidade=severidade)
 
 
+# AS ROTAS DE CREDENCIAL SÃO ``async`` (o login na plataforma é um ``await`` longo), mas
+# a sessão do banco é SÍNCRONA: o corpo de uma rota async roda na thread do event loop
+# do worker, e cada consulta/commit ali parava o worker inteiro (todas as escolas e
+# perfis que caem nele, inclusive o /api/health — ~0,2 s por ida ao banco em produção).
+# Todo trabalho de banco delas roda no threadpool (``run_in_threadpool``), nas funções
+# abaixo; no loop fica só o ``await`` do login. A sessão é usada por uma thread de cada
+# vez (nunca ao mesmo tempo), como numa rota ``def``.
+def _gravar_credencial(db: Session, escola_id: int, plataforma: str, cred: Credenciais,
+                       usuario_id: int):
+    """"Salvar e validar", antes do login: grava a credencial CIFRADA e commita."""
+    linha = vault.salvar_credencial(db, escola_id, plataforma, cred)
+    # A senha recém-cifrada abre com as chaves deste servidor: o alerta "senha
+    # salva ilegível" de uma execução anterior perdeu a causa, qualquer que seja o
+    # resultado do login abaixo (a recusa abre o alerta PRÓPRIO dela).
+    service.resolver_alertas(db, escola_id, plataforma, ("credencial_ilegivel",))
+    if plataforma == "matific":
+        aovivo.limpar_sessao(db, escola_id)     # esquece sessão da credencial antiga
+    registrar(db, "sync.credencial_salva", escola_id=escola_id, usuario_id=usuario_id,
+              entidade="plataforma", detalhes={"plataforma": plataforma})  # sem senha
+    db.commit()
+    return linha
+
+
+def _credencial_para_testar(db: Session, escola_id: int,
+                            plataforma: str) -> tuple[Credenciais | None, bool]:
+    """"Testar conexão", antes do login: ``(credencial decifrada, há linha gravada)``.
+    Solta a conexão do pool antes do ``await`` de I/O longo (navegador)."""
+    cred = vault.obter_credencial(db, escola_id, plataforma)
+    gravada = cred is not None or vault.obter_linha(db, escola_id, plataforma) is not None
+    db.rollback()
+    return cred, gravada
+
+
+def _concluir_validacao(db: Session, escola_id: int, plataforma: str,
+                        resultado: ResultadoValidacao, *, linha_salva=None,
+                        ligar_agenda: bool = False) -> ResultadoTeste:
+    """Depois do login: grava o resultado da validação e monta a resposta."""
+    # Relê a linha DEPOIS do await (I/O longo): não sobrescreve um status que
+    # uma execução concorrente possa ter mudado nesse intervalo (lost update).
+    linha = vault.obter_linha(db, escola_id, plataforma) or linha_salva
+    if linha is not None:
+        _registrar_validacao(db, escola_id, plataforma, linha, resultado)
+    if ligar_agenda and resultado.ok:
+        # Credencial válida → liga a sincronização DIÁRIA automática (se ainda não
+        # houver cadência), para o banco local do ano ficar em dia sozinho.
+        _garantir_agenda_diaria(db, escola_id, plataforma)
+    db.commit()
+    return ResultadoTeste(ok=resultado.ok, mensagem=resultado.mensagem,
+                          codigo=resultado.codigo,
+                          **_conferencia_da_escola(db, escola_id, plataforma, resultado))
+
+
 @router.put("/credenciais/{plataforma}", response_model=ResultadoTeste)
 async def salvar_credenciais(plataforma: str, dados: CredenciaisIn,
                              escola_id: int = Depends(escola_autorizada),
@@ -424,17 +477,11 @@ async def salvar_credenciais(plataforma: str, dados: CredenciaisIn,
     """Grava a credencial CIFRADA e valida IMEDIATAMENTE, com erro claro."""
     _validar_plataforma(plataforma)
     cred = Credenciais(usuario=dados.usuario, senha=dados.senha, extra=dados.extra)
-    linha = vault.salvar_credencial(db, escola_id, plataforma, cred)
-    # A senha recém-cifrada abre com as chaves deste servidor: o alerta "senha
-    # salva ilegível" de uma execução anterior perdeu a causa, qualquer que seja o
-    # resultado do login abaixo (a recusa abre o alerta PRÓPRIO dela).
-    service.resolver_alertas(db, escola_id, plataforma, ("credencial_ilegivel",))
+    linha = await run_in_threadpool(_gravar_credencial, db, escola_id, plataforma, cred,
+                                    usuario.id)
     if plataforma == "matific":
-        aovivo.limpar_sessao(db, escola_id)     # esquece sessão da credencial antiga
-        aovivo.invalidar_cache(escola_id)       # e o ranking cacheado da conta antiga
-    registrar(db, "sync.credencial_salva", escola_id=escola_id, usuario_id=usuario.id,
-              entidade="plataforma", detalhes={"plataforma": plataforma})  # sem senha
-    db.commit()
+        # O ranking ao vivo cacheado (em memória, sem banco) era da conta antiga.
+        aovivo.invalidar_cache(escola_id)
 
     conector = connectors.obter(plataforma)
     try:
@@ -450,18 +497,8 @@ async def salvar_credenciais(plataforma: str, dados: CredenciaisIn,
             mensagem=("Credenciais salvas, mas não foi possível validar o login "
                       "agora. Tente validar novamente mais tarde."),
             codigo="erro_navegador")
-    # Relê a linha DEPOIS do await (I/O longo): não sobrescreve um status que
-    # uma execução concorrente possa ter mudado nesse intervalo (lost update).
-    linha = vault.obter_linha(db, escola_id, plataforma) or linha
-    _registrar_validacao(db, escola_id, plataforma, linha, resultado)
-    if resultado.ok:
-        # Credencial válida → liga a sincronização DIÁRIA automática (se ainda não
-        # houver cadência), para o banco local do ano ficar em dia sozinho.
-        _garantir_agenda_diaria(db, escola_id, plataforma)
-    db.commit()
-    return ResultadoTeste(ok=resultado.ok, mensagem=resultado.mensagem,
-                          codigo=resultado.codigo,
-                          **_conferencia_da_escola(db, escola_id, plataforma, resultado))
+    return await run_in_threadpool(_concluir_validacao, db, escola_id, plataforma,
+                                   resultado, linha_salva=linha, ligar_agenda=True)
 
 
 @router.post("/credenciais/{plataforma}/testar", response_model=ResultadoTeste)
@@ -470,9 +507,10 @@ async def testar_credenciais(plataforma: str,
                              usuario: Usuario = Depends(exigir_papeis("admin", "coordenador")),
                              db: Session = Depends(get_db)):
     _validar_plataforma(plataforma)
-    cred = vault.obter_credencial(db, escola_id, plataforma)
+    cred, gravada = await run_in_threadpool(_credencial_para_testar, db, escola_id,
+                                            plataforma)
     if cred is None:
-        if vault.obter_linha(db, escola_id, plataforma) is not None:
+        if gravada:
             # Há credencial, mas a cifra não abre (chaves trocadas sem recifrar):
             # nada a testar, e "nenhuma configurada" seria mentira. Não grava nada
             # (o /status já deriva 'ilegivel') e não diz por que a cifra falhou.
@@ -481,15 +519,8 @@ async def testar_credenciais(plataforma: str,
         raise HTTPException(status.HTTP_400_BAD_REQUEST,
                             "Nenhuma credencial configurada para esta plataforma.")
     conector = connectors.obter(plataforma)
-    db.rollback()  # solta a conexão do pool antes do await de I/O longo (navegador)
     resultado = await conector.testar_credenciais(cred, _ctx_efemero(escola_id))
-    linha = vault.obter_linha(db, escola_id, plataforma)  # relê fresco após o await
-    if linha is not None:
-        _registrar_validacao(db, escola_id, plataforma, linha, resultado)
-    db.commit()
-    return ResultadoTeste(ok=resultado.ok, mensagem=resultado.mensagem,
-                          codigo=resultado.codigo,
-                          **_conferencia_da_escola(db, escola_id, plataforma, resultado))
+    return await run_in_threadpool(_concluir_validacao, db, escola_id, plataforma, resultado)
 
 
 @router.delete("/credenciais/{plataforma}", status_code=status.HTTP_204_NO_CONTENT)
