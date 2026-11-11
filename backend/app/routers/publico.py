@@ -733,15 +733,24 @@ def perfil_publico(token: str, aluno_id: int, response: Response,
     # CONTRATO: nota de plataforma de módulo fora do plano sai nula (mesma regra
     # de ``rankings._ranking`` e do perfil autenticado).
     fora = svc_modulos.plataformas_fora_do_plano(svc_modulos.modulos_da_escola(db, escola))
+    # AUSÊNCIA NÃO É ZERO (scoring.py, invariante 2): o motor grava 0.0 na nota
+    # da matéria em que a criança NÃO é aferida. Sem o corte, quem só usa o
+    # Matific aparecia com "Leitura 0,0" nesta página aberta a qualquer um. A
+    # nota sai nula (a página mostra "—") e o `aferido_*` vai junto, como no
+    # Ranking Geral; o retrato ZERADO (aferido, abriu e não produziu) segue 0,0.
+    aferido_l = bool(nota is not None and nota.aferido_leitura)
+    aferido_m = bool(nota is not None and nota.aferido_matematica)
     return {
         "nome": svc_gami.anonimizar_nome(aluno.nome) if anonimizar else aluno.nome,
         # K-anonimato: turma omitida no modo anônimo (não reidentificar).
         "turma": None if anonimizar else (matricula[1].nome if matricula else None),
         "posicao": nota.posicao if nota else None,
-        "nota_matific": (None if "matific" in fora
-                         else (nota.nota_matific if nota else 0.0)),
-        "nota_elefante": (None if "elefante" in fora
-                          else (nota.nota_elefante if nota else 0.0)),
+        "nota_matific": (nota.nota_matific
+                         if aferido_m and "matific" not in fora else None),
+        "nota_elefante": (nota.nota_elefante
+                          if aferido_l and "elefante" not in fora else None),
+        "aferido_leitura": aferido_l,
+        "aferido_matematica": aferido_m,
         "nota_geral": nota.nota_geral if nota else 0.0,
         "nivel": gamificacao["nivel"],
         "xp": gamificacao["xp"],
