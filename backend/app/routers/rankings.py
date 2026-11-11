@@ -690,7 +690,10 @@ def ranking_leitura(
     # Elefante (SnapshotElefante) — que a sincronização por API popula de forma
     # AGREGADA (livros/tempo por aluno, sem uma linha por livro com data). Sem
     # isso, a aba Leitura ficava vazia para escolas que só têm o import por turma.
-    if periodo == "tudo":
+    # Decide pelo INTERVALO resolvido, não pelo texto do preset: "personalizado"
+    # ainda sem datas e preset desconhecido também viram "Todo o histórico" em
+    # `periodos.resolver` — a mesma condição de `premiacoes._leitura_no_periodo`.
+    if ini is None and fim_dt is None:
         # Snapshot ATUAL por (data_referencia, id) — não por max(id): um import
         # de período antigo (backfill) grava id maior com data menor e NÃO pode
         # virar o estado atual. Mesma régua do ranking/scoring (fonte única).
