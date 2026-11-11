@@ -108,6 +108,8 @@ describe("Panorama de uma rede — só os módulos contratados", () => {
     expect(colunas).toEqual(["Escola", "Índice", "Geral", "Leitura", "Matific", "Engaj."]);
     expect(card.textContent).toContain("Geral · Leitura · Matific (0–100)");
     const media = screen.getByText("Média geral").parentElement!;
-    expect(media.textContent).toContain("Matific 0,0 · Elefante 72,0");
+    // Nenhum aluno com nota do Matific (alunos_com_nota_matific = 0): "sem dado", não 0,0
+    // (G_ANALISE-6, Aud2RedeMediaSemDado.test.tsx).
+    expect(media.textContent).toContain("Matific sem dado · Elefante 72,0");
   });
 });
