@@ -8,11 +8,15 @@ NÃO muda nada no cálculo — ele DECLARA a idade do dado, para a tela poder di
 
 Duas datas, com papéis diferentes:
 
-* ``dado_mais_recente_em`` — a data de referência mais recente entre os retratos
-  ATUAIS dos alunos que concorrem: os mesmos que o motor usa (ativos,
-  matriculados no ano letivo, turma premiável — as Fases não concorrem — e, no
-  Matific, só retrato do ano letivo, porque o contador é do ano). É ela que
-  decide o estado: é o que o número da tela de fato reflete;
+* ``dado_mais_recente_em`` — a data mais recente entre as DATAS DO DADO dos alunos
+  que concorrem: os mesmos que o motor usa (ativos, matriculados no ano letivo,
+  turma premiável — as Fases não concorrem — e, no Matific, só retrato do ano
+  letivo, porque o contador é do ano). A data do dado de um aluno é a da última
+  COLETA dele: o ajuste manual (o botão Editar) não é coleta e não renova a data
+  — o aluno que só tem ajuste manual fica com a data dele, o único dado que há.
+  É ela que decide o estado: é de quando o número da tela de fato é. O ajuste
+  manual mais novo que a última coleta vem à parte, em
+  ``ajuste_manual_mais_recente_em``;
 * ``ultima_sincronizacao_ok_em`` — a última sincronização que APLICOU dado
   (status ``concluida``, ou ``parcial`` com ao menos um aluno aplicado — o
   "último sucesso" do contrato da ETAPA 2, a mesma definição de
@@ -24,11 +28,11 @@ Duas datas, com papéis diferentes:
 Estados — nunca "Funcionando":
 
 * ``sem_dados``     — nenhum aluno que concorre tem retrato. Ausência, nunca zero;
-* ``desatualizado`` — o retrato mais recente tem mais de
+* ``desatualizado`` — o dado mais recente tem mais de
   :data:`LIMITE_DIAS_DADO_ATUAL` dias;
-* ``parcial``       — o mais recente está em dia, mas há aluno cujo retrato atual
-  passou do limite (a última coleta não o trouxe: a nota dele é antiga);
-* ``em_dia``        — todos os retratos usados estão dentro do limite.
+* ``parcial``       — o mais recente está em dia, mas há aluno cujo dado passou
+  do limite (a última coleta não o trouxe: a nota dele é antiga);
+* ``em_dia``        — todos os dados usados estão dentro do limite.
 
 O DIA de um retrato é o dia de BRASÍLIA (:func:`dia_do_retrato`). O banco grava
 ``data_referencia`` e ``finalizada_em`` em UTC naive (``sync/fuso.py``), e o
@@ -51,12 +55,14 @@ from sqlalchemy.orm import Session
 from app.models import (
     Aluno,
     Escola,
+    Importacao,
     Matricula,
     SnapshotElefante,
     SnapshotMatific,
 )
 from app.models.sincronizacao import SincronizacaoExecucao
 from app.services import elegibilidade, matific_destaque, modulos as svc_modulos
+from app.services.evolucao import IMPORTACAO_AJUSTE_MANUAL
 from app.sync import fuso
 
 #: Um dado com MAIS do que estes dias é "desatualizado" na tela de ranking.
@@ -102,11 +108,22 @@ def _janela_matific(escolas: list[Escola]):
 def _datas_por_escola(db: Session, escolas: list[Escola], modelo,
                       premiaveis: list[int], turma_ids: list[int] | None,
                       corte: datetime) -> dict[int, tuple]:
-    """``{escola_id: (mais_recente, mais_antigo, n_alunos, n_antigos)}`` sobre o
-    retrato ATUAL (data_referencia, id) de cada aluno que concorre.
+    """``{escola_id: (mais_recente, mais_antigo, n_alunos, n_antigos, ajuste_manual)}``
+    sobre a DATA DO DADO de cada aluno que concorre.
 
-    UMA consulta para todas as escolas (window function por escola+aluno, a
-    mesma régua de ``scoring.ids_snapshots_atuais``), nunca uma por escola."""
+    A data do dado de um aluno é a da última COLETA dele (retrato que não é ajuste
+    manual — ``Importacao.tipo == "manual"``, o botão Editar das telas Matific/
+    Elefante). O ajuste manual não é coleta: o número digitado hoje para uma criança
+    não diz que o dado da escola chegou hoje — com a coleta parada há 20 dias, ele
+    fazia a escola inteira parecer "em dia"/"parcial", no selo, no cartaz e no
+    certificado. Quem SÓ tem ajuste manual (a escola sem integração, que digita os
+    números) fica com a data do ajuste mais recente: ali ele é o único dado.
+
+    ``ajuste_manual``: o ajuste manual mais recente que ainda vale (mais novo que a
+    última coleta do aluno) — informado à parte, sem mudar o estado.
+
+    UMA consulta para todas as escolas (``GROUP BY`` escola+aluno: o maior
+    ``data_referencia`` de cada origem), nunca uma por escola."""
     ids = [e.id for e in escolas]
     concorre = (
         select(Matricula.id)
@@ -123,27 +140,32 @@ def _datas_por_escola(db: Session, escolas: list[Escola], modelo,
     filtro = [modelo.escola_id.in_(ids), concorre.exists()]
     if modelo is SnapshotMatific:
         filtro.append(_janela_matific(escolas))
-    numerado = (
+    manual = Importacao.tipo == IMPORTACAO_AJUSTE_MANUAL
+    coletado = or_(Importacao.tipo.is_(None), Importacao.tipo != IMPORTACAO_AJUSTE_MANUAL)
+    por_aluno = (
         select(
             modelo.escola_id.label("escola_id"),
-            modelo.data_referencia.label("data"),
-            func.row_number().over(
-                partition_by=(modelo.escola_id, modelo.aluno_id),
-                order_by=(modelo.data_referencia.desc(), modelo.id.desc()),
-            ).label("pos"),
+            func.max(case((coletado, modelo.data_referencia))).label("coleta"),
+            func.max(case((manual, modelo.data_referencia))).label("ajuste"),
         )
+        .select_from(modelo)
+        .outerjoin(Importacao, Importacao.id == modelo.importacao_id)
         .where(*filtro)
+        .group_by(modelo.escola_id, modelo.aluno_id)
         .subquery()
     )
+    c = por_aluno.c
+    data = func.coalesce(c.coleta, c.ajuste)
+    # O ajuste que ainda vale e não é a própria data do dado (aluno com coleta).
+    ajuste_em_vigor = case((and_(c.coleta.is_not(None), c.ajuste > c.coleta), c.ajuste),
+                           else_=None)
     linhas = db.execute(
-        select(numerado.c.escola_id, func.max(numerado.c.data),
-               func.min(numerado.c.data), func.count(),
-               func.sum(case((numerado.c.data < corte, 1), else_=0)))
-        .where(numerado.c.pos == 1)
-        .group_by(numerado.c.escola_id)
+        select(c.escola_id, func.max(data), func.min(data), func.count(),
+               func.sum(case((data < corte, 1), else_=0)), func.max(ajuste_em_vigor))
+        .group_by(c.escola_id)
     ).all()
-    return {eid: (maior, menor, int(n or 0), int(antigos or 0))
-            for eid, maior, menor, n, antigos in linhas}
+    return {eid: (maior, menor, int(n or 0), int(antigos or 0), ajuste)
+            for eid, maior, menor, n, antigos, ajuste in linhas}
 
 
 #: Estados finais de execução que podem ter APLICADO dado (contrato da ETAPA 2):
@@ -204,11 +226,13 @@ def _bloco(plataforma: str, contratada: bool, datas: tuple | None,
         # "sem dados" (a mesma regra dos rankings e da lista de não aferidos).
         bloco.update(estado=None, dado_mais_recente_em=None, dado_mais_antigo_em=None,
                      dias_desde_dado=None, alunos_com_dado=0, alunos_com_dado_antigo=0,
+                     ajuste_manual_mais_recente_em=None,
                      ultima_sincronizacao_ok_em=None, dias_desde_sincronizacao_ok=None)
         return bloco
-    maior, menor, alunos, antigos = datas or (None, None, 0, 0)
+    maior, menor, alunos, antigos, ajuste = datas or (None, None, 0, 0, None)
     dia_maior, dia_menor, dia_sync = (dia_do_retrato(maior), dia_do_retrato(menor),
                                       dia_do_retrato(sync_ok))
+    dia_ajuste = dia_do_retrato(ajuste)
     dias = (hoje - dia_maior).days if dia_maior else None
     bloco.update(
         estado=_estado(alunos, dias, antigos, limite),
@@ -217,6 +241,9 @@ def _bloco(plataforma: str, contratada: bool, datas: tuple | None,
         dias_desde_dado=dias,
         alunos_com_dado=alunos,
         alunos_com_dado_antigo=antigos,
+        # O ajuste manual mais novo que a última coleta da criança: não renova a
+        # data do dado nem o estado — a tela só o menciona.
+        ajuste_manual_mais_recente_em=dia_ajuste.isoformat() if dia_ajuste else None,
         ultima_sincronizacao_ok_em=sync_ok.isoformat() if sync_ok else None,
         dias_desde_sincronizacao_ok=(hoje - dia_sync).days if dia_sync else None,
     )

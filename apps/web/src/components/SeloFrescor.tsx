@@ -11,6 +11,11 @@
  *   - `desatualizado` → selo + aviso: o dado mais recente passou do limite;
  *   - `sem_dados`     → "sem dados ainda" — ausência, nunca zero.
  *
+ * A data é a da última COLETA: o ajuste manual de uma criança (o botão Editar) não a
+ * renova; o mais novo que a última coleta aparece à parte ("ajuste manual em …"). O
+ * aviso de `parcial` diz que PARTE dos dados é antiga — numa escola sem integração ele
+ * acontece sem nenhuma coleta, então o texto não fala em "coleta".
+ *
  * O limite (`limite_dias`) vem da resposta: a tela não tem número próprio que
  * possa divergir do backend. Nunca diz "Funcionando": a última sincronização
  * concluída aparece como informação, não como garantia de dado atual.
@@ -43,6 +48,9 @@ export interface BlocoFrescor {
   dias_desde_dado: number | null;
   alunos_com_dado: number;
   alunos_com_dado_antigo: number;
+  /** Dia do ajuste manual (botão Editar) mais novo que a última coleta de alguma
+   *  criança: não renova a data do dado nem o estado — o selo só o menciona. */
+  ajuste_manual_mais_recente_em?: string | null;
   ultima_sincronizacao_ok_em: string | null;
   dias_desde_sincronizacao_ok: number | null;
 }
@@ -102,6 +110,8 @@ function LinhaDimensao({ dimensao, bloco, limite }: {
     >
       <CalendarClock size={13} aria-hidden className="shrink-0 text-indigo-500 dark:text-indigo-300" />
       {nome}: dados de {dataDoDia(bloco.dado_mais_recente_em)}{idade(bloco.dias_desde_dado)}
+      {bloco.ajuste_manual_mais_recente_em
+        ? `; ajuste manual em ${dataDoDia(bloco.ajuste_manual_mais_recente_em)}` : null}
     </span>
   );
 
@@ -114,7 +124,7 @@ function LinhaDimensao({ dimensao, bloco, limite }: {
         pode não refletir a situação atual.
       </>
     : <>
-        Coleta parcial: {numero(bloco.alunos_com_dado_antigo)} de {numero(bloco.alunos_com_dado)} aluno(s)
+        Parte dos dados é antiga: {numero(bloco.alunos_com_dado_antigo)} de {numero(bloco.alunos_com_dado)} aluno(s)
         têm o último dado de antes de {dias(limite)} atrás (o mais antigo é de{" "}
         {dataDoDia(bloco.dado_mais_antigo_em)}) — a posição deles reflete um retrato antigo.
       </>;
@@ -184,7 +194,7 @@ export interface FrescorRede {
  *
  *  Com `escolaId`: o selo daquela escola (o panorama de UMA escola da rede).
  *  Sem: a faixa de datas do dado entre as escolas, por dimensão, e — quando há —
- *  quais escolas passaram do limite (ou tiveram coleta parcial). As médias e os
+ *  quais escolas passaram do limite (ou têm parte dos dados antiga). As médias e os
  *  totais do painel somam escolas com dados de dias diferentes; sem isto, a
  *  escola parada há três semanas entrava na média com a mesma cara das outras.
  *  Falha ao buscar: nada aparece (não derruba o painel nem inventa estado).
@@ -234,8 +244,8 @@ function SeloDaRede({ redeId, escolaId, dimensoes }: {
         >
           <AlertTriangle size={14} className="mt-0.5 shrink-0" aria-hidden />
           <span>
-            {numero(atrasadas.length)} escola(s) com dado de mais de {dias(dados.limite_dias)} (ou coleta
-            parcial) entram nestes números com um retrato antigo: {atrasadas.map((e) => e.nome).join("; ")}.
+            {numero(atrasadas.length)} escola(s) com dado de mais de {dias(dados.limite_dias)} (ou parte
+            dos dados antiga) entram nestes números com um retrato antigo: {atrasadas.map((e) => e.nome).join("; ")}.
           </span>
         </p>
       )}
