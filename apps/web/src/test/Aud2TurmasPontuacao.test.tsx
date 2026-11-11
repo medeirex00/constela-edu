@@ -9,8 +9,8 @@ import { renderComApp, responder, screen, turmaFake, userEvent } from "./utils";
 const RECUSA = "A turma “3 ANO A” tem pontuação por nível própria, definida pelo Admin Global, "
   + "diferente da turma “3º Ano A”: consolidar apagaria essa configuração e mudaria os pontos "
   + "de dificuldade dos alunos. Por isso este grupo não é consolidado — peça ao Admin Global "
-  + "para deixar as turmas com a mesma pontuação por nível (Configurações › Pontuação por "
-  + "turma) e consolide depois.";
+  + "para deixar as turmas com a mesma pontuação por nível (Critérios › Elefante Letrado › "
+  + "Dificuldade por turma) e consolide depois.";
 
 test("o grupo com pontuação por turma na duplicada mostra o motivo e vem desmarcado", async () => {
   responder("GET", "/escolas/1/turmas", [turmaFake()]);

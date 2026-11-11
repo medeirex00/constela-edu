@@ -79,8 +79,8 @@ def motivo_da_recusa(db: Session, escola_id: int, canonica: Turma,
             f"Global, diferente da turma “{canonica.nome}”: consolidar apagaria essa "
             "configuração e mudaria os pontos de dificuldade dos alunos. Por isso este "
             "grupo não é consolidado — peça ao Admin Global para deixar as turmas com "
-            "a mesma pontuação por nível (Configurações › Pontuação por turma) e "
-            "consolide depois.")
+            "a mesma pontuação por nível (Critérios › Elefante Letrado › Dificuldade "
+            "por turma) e consolide depois.")
 
 # Palavras administrativas que, no NOME da turma, indicam a forma "longa" (menos
 # canônica). Usadas só para pontuar qual nome do grupo é o preferido.
