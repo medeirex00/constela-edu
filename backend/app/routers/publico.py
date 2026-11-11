@@ -50,6 +50,21 @@ PADRAO = {
 }
 
 
+def _slides_limpos(slides) -> list[str]:
+    """Os slides de uma config: só os VÁLIDOS, sem repetição, na ordem em que a
+    escola os escolheu. Vale na gravação e em toda leitura — uma config gravada
+    antes do teto (com a lista repetida milhares de vezes) não pode continuar
+    servindo essa lista ao telão sem login a cada consulta. Valor que não é
+    lista (config corrompida) volta ao padrão."""
+    if not isinstance(slides, (list, tuple)):
+        return list(SLIDES_VALIDOS)
+    limpos: list[str] = []
+    for slide in slides:
+        if slide in SLIDES_VALIDOS and slide not in limpos:
+            limpos.append(slide)
+    return limpos
+
+
 def _config_row(db: Session, escola_id: int) -> Configuracao | None:
     return db.execute(
         select(Configuracao).where(
@@ -141,7 +156,9 @@ config_router = APIRouter(prefix="/escolas/{escola_id}/painel-publico",
 
 class PainelConfigIn(BaseModel):
     ativo: bool
-    slides: list[str] = Field(default=SLIDES_VALIDOS)
+    # Teto = os slides que existem: a tela manda caixas de seleção sem repetição;
+    # uma lista maior só vem de chamada direta (ou cliente com defeito).
+    slides: list[str] = Field(default=SLIDES_VALIDOS, max_length=len(SLIDES_VALIDOS))
     intervalo_s: int = Field(default=12, ge=4, le=120)
     max_posicoes: int = Field(default=10, ge=3, le=50)
     # Padrão seguro: anonimiza o nome no telão público (ver PADRAO).
@@ -231,7 +248,7 @@ def _com_url(valores: dict, origem: str | None = None) -> dict:
     token = valores.get("token")
     return {
         "ativo": valores.get("ativo", False),
-        "slides": valores.get("slides", SLIDES_VALIDOS),
+        "slides": _slides_limpos(valores.get("slides", SLIDES_VALIDOS)),
         "intervalo_s": valores.get("intervalo_s", 12),
         "max_posicoes": valores.get("max_posicoes", 10),
         "anonimizar": valores.get("anonimizar", True),
@@ -259,7 +276,7 @@ def salvar_config(
     usuario: Usuario = Depends(exigir_papeis("admin", "coordenador")),
     db: Session = Depends(get_db),
 ):
-    slides = [s for s in dados.slides if s in SLIDES_VALIDOS]
+    slides = _slides_limpos(dados.slides)
     if not slides:
         raise HTTPException(status.HTTP_400_BAD_REQUEST,
                             "Escolha pelo menos um slide para o painel.")
@@ -384,7 +401,7 @@ def _slides_ativos(config: dict) -> set[str]:
     token é público, então desligar o slide do ranking tem de tirar o ranking
     da resposta (e o perfil público de quem só aparecia nele), não só do
     carrossel."""
-    return set(config.get("slides", SLIDES_VALIDOS))
+    return set(_slides_limpos(config.get("slides", SLIDES_VALIDOS)))
 
 
 def _com_algum_dado():
@@ -520,7 +537,7 @@ def _dados_publicos(db: Session, escola: Escola, config: dict) -> dict:
             "nome": escola.nome,
             "cor_primaria": svc_relatorios.cor_primaria(db, escola.id),
         },
-        "slides": config.get("slides", SLIDES_VALIDOS),
+        "slides": _slides_limpos(config.get("slides", SLIDES_VALIDOS)),
         "intervalo_s": config.get("intervalo_s", 12),
         "ranking": [
             {
@@ -574,7 +591,7 @@ def _assinatura_config(config: dict) -> tuple:
     requisição seguinte, não só depois do TTL."""
     return (
         bool(config.get("anonimizar", True)),
-        tuple(config.get("slides", SLIDES_VALIDOS)),
+        tuple(_slides_limpos(config.get("slides", SLIDES_VALIDOS))),
         int(config.get("max_posicoes", 10)),
         config.get("intervalo_s", 12),
     )
