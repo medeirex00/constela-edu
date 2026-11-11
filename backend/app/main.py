@@ -303,15 +303,19 @@ def _parar_mantenedor_do_pool() -> None:
 # --- Health checks e métricas (SaaS) -----------------------------------------
 
 def _banco_ok() -> bool:
+    """``SELECT 1``. A queda e a volta do banco vão para o log uma vez cada, junto com as
+    do readiness (o mesmo objeto de prontidão): o healthcheck sonda a cada poucos
+    segundos."""
     db = next(get_db())
     try:
         db.execute(text("SELECT 1"))
-        return True
-    except Exception:  # noqa: BLE001
-        logger.exception("Healthcheck: banco de dados inacessível")
+    except Exception as erro:  # noqa: BLE001
+        prontidao.banco_inacessivel(erro)
         return False
     finally:
         db.close()
+    prontidao.banco_respondeu()
+    return True
 
 
 # HEAD nas duas sondas: o @app.get do FastAPI não registra HEAD, e o monitor de
