@@ -19,7 +19,10 @@ APAGADO (é dado da criança e não sustenta nenhuma obrigação):
     exclusão reverter, nenhum arquivo some. O original só sai se for um arquivo
     que o servidor gravou para ESTA escola (nenhuma importação de outra escola
     aponta para ele) e que não traz dado de criança que continua;
-  * as conversas da IA que citam o nome (``conversas_ia_que_citam``).
+  * as conversas da IA que citam o nome (``conversas_ia_que_citam``);
+  * a conta dela no cursor da coleta incremental (``configuracoes``, namespace
+    ``sync_incremental``: ``{id da conta na plataforma: total}``), que saía também
+    no backup da escola (``_tirar_do_cursor_da_sincronizacao``).
 ANONIMIZADO (o nome vira ``[removido]``; o resto do registro fica):
   * revisão de OUTRA criança que a listava como candidata: a candidata excluída
     sai da lista, o nome dela some dos dados;
@@ -457,6 +460,45 @@ def apagar_arquivos_apos_commit(db: Session, caminhos: list[Path],
 
 
 # ---------------------------------------------------------------------------
+# Cursor da coleta incremental
+# ---------------------------------------------------------------------------
+
+# O namespace do cursor (``app/sync/service._NS_INCREMENTAL``): uma linha por escola
+# e plataforma, ``{id da conta na plataforma: total}`` — no Elefante, ``{studentId:
+# totalBooksRead}``. Guarda o id da conta da criança, e o backup leva a linha inteira.
+NAMESPACE_CURSOR_DA_SINCRONIZACAO = "sync_incremental"
+
+
+def _tirar_do_cursor_da_sincronizacao(db: Session, escola_id: int,
+                                      identidades: set[tuple[str, str]]) -> int:
+    """Tira do cursor da coleta incremental de ``escola_id`` as contas
+    ``identidades`` ({(plataforma, id externo)}) da criança. Sem a conta no cursor,
+    a coleta seguinte só a busca inteira (é o que faz com conta nova) — nunca
+    perde nem duplica nada. Devolve quantas contas saíram."""
+    from app.models import Configuracao
+
+    contas: dict[str, set[str]] = {}
+    for plataforma, id_externo in identidades:
+        if plataforma and str(id_externo or "").strip():
+            contas.setdefault(plataforma, set()).add(str(id_externo).strip())
+    if not contas:
+        return 0
+    tiradas = 0
+    for linha in db.execute(select(Configuracao).where(
+            Configuracao.escola_id == escola_id,
+            Configuracao.namespace == NAMESPACE_CURSOR_DA_SINCRONIZACAO,
+            Configuracao.chave.in_(sorted(contas)))).scalars():
+        if not isinstance(linha.valor, dict):
+            continue
+        fica = {chave: total for chave, total in linha.valor.items()
+                if str(chave).strip() not in contas[linha.chave]}
+        if len(fica) != len(linha.valor):
+            tiradas += len(linha.valor) - len(fica)
+            linha.valor = fica   # reatribui → o JSON é regravado
+    return tiradas
+
+
+# ---------------------------------------------------------------------------
 # Ponto de entrada
 # ---------------------------------------------------------------------------
 
@@ -509,6 +551,8 @@ def esquecer_fora_do_cadastro(db: Session, escola_id: int, nomes: dict[int, str]
         _esquecer_originais_individuais(db, escola_id, alvos, ids)
         if alvos else (0, [], []))
     contagens["importacoes_redigidas"] = redigidas
+    contagens["contas_tiradas_do_cursor"] = _tirar_do_cursor_da_sincronizacao(
+        db, escola_id, identidades)
     copias = _copias_em_exports()
     contagens["arquivos_a_apagar"] = len(originais) + len(copias)
     if renomear:

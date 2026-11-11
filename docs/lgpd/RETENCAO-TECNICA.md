@@ -124,6 +124,13 @@ contadores parados há mais de 1 dia e sem bloqueio vigente.
 - revisões de identidade **dela**: resolvidas para ela, da identidade externa dela
   (plataforma + id), ou com o nome dela quando **nenhuma outra criança da escola** tem
   o mesmo nome (com homônimo vivo, o nome também é do outro e a revisão fica);
+- a conta dela no **cursor da coleta incremental** (`configuracoes`, namespace
+  `sync_incremental`, uma linha por plataforma: `{id da conta: total}` — no Elefante,
+  `{studentId: totalBooksRead}`), que o backup da escola leva inteiro
+  (`exclusao_aluno._tirar_do_cursor_da_sincronizacao`). As contas das outras crianças
+  ficam; sem a dela no cursor, a coleta seguinte só a buscaria inteira, como conta nova.
+  Limite: a coleta seguinte ainda regrava no cursor a conta marcada como esquecida
+  (ver "Marca de esquecimento", abaixo) — pendência da sincronização;
 - o arquivo original de um relatório **individual** dela (o nome do arquivo traz o nome
   dela, o arquivo foi gravado pelo servidor para esta escola e a importação não trouxe
   dado de criança que fica) e **todas** as cópias em `exports/` (não há como saber quais
@@ -275,6 +282,9 @@ a exclusão de turma com alunos não grava a marca)
 
 Teste: `tests/test_exclusao_alcance_total.py` varre **todas** as tabelas e colunas de
 texto/JSON depois da exclusão (dados fictícios) e falha se sobrar o nome ou o id;
+`tests/test_aud3_lgpd_esquecimento_cursor_elefante.py` faz o mesmo com o id da conta do
+Elefante (cursor e backup) e `tests/test_aud3_lgpd_esquecimento_absorvida_fora_do_log.py`
+com o nome da ficha absorvida por fusão;
 `tests/test_exclusao_escopo_e_homonimos.py` prova que o esquecimento não passa do que
 é da criança (log global, homônimo e nome maior de quem fica, conversas da IA,
 original de outra escola, original com dado de quem fica);
