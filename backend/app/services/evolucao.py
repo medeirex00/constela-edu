@@ -1321,6 +1321,15 @@ def _lado_aluno(db: Session, escola_id: int, aluno_id: int) -> dict | None:
         select(Nota).where(Nota.aluno_id == aluno_id,
                            Nota.ano_letivo == escola.ano_letivo_ativo)
     ).scalar_one_or_none()
+    # Quem está FORA do ranking vigente (ficha inativa, sem matrícula do ano, turma de
+    # Fase) não tem posição: a gravada na Nota é de um cálculo antigo e hoje pertence a
+    # outra criança — a mesma regra do Perfil (``scoring.no_ranking_vigente``).
+    turma_do_ano = db.execute(
+        select(Turma).join(Matricula, Matricula.turma_id == Turma.id)
+        .where(Matricula.aluno_id == aluno_id,
+               Matricula.ano_letivo == escola.ano_letivo_ativo)
+    ).scalars().first()
+    no_ranking = nota is not None and scoring.no_ranking_vigente(aluno, turma_do_ano)
     elefante = scoring._snapshots_atuais(db, escola_id, SnapshotElefante)
     # Aferido em Matemática = Matific DO ANO, a definição do motor: a criança
     # que só tem coleta do ano anterior aparece "sem dado", e não "0,0".
@@ -1332,8 +1341,9 @@ def _lado_aluno(db: Session, escola_id: int, aluno_id: int) -> dict | None:
     # lado de "3º" na outra parece comparável — é exatamente o que o
     # denominador existe para impedir (spec §2). Zero consulta a mais: o número
     # já viaja dentro da linha de `notas` que acabou de ser lida. Os lados
-    # TURMA e ESCOLA já mandavam o deles.
-    detalhes_dim = ((nota.detalhes or {}).get("dimensoes") or {}) if nota else {}
+    # TURMA e ESCOLA já mandavam o deles. Fora do ranking vigente ele sai com a
+    # posição: era o "de N" do cálculo antigo.
+    detalhes_dim = ((nota.detalhes or {}).get("dimensoes") or {}) if no_ranking else {}
     n_aferidos = {d: (detalhes_dim.get(d) or {}).get("n_aferidos")
                   for d in DIMENSOES}
     contratadas = scoring.dimensoes_contratadas(db, escola)
@@ -1348,8 +1358,8 @@ def _lado_aluno(db: Session, escola_id: int, aluno_id: int) -> dict | None:
             contratadas, aferido,
             {"leitura": nota.nota_elefante if nota else None,
              "matematica": nota.nota_matific if nota else None},
-            {"leitura": nota.posicao_leitura if nota else None,
-             "matematica": nota.posicao_matematica if nota else None},
+            {"leitura": nota.posicao_leitura if no_ranking else None,
+             "matematica": nota.posicao_matematica if no_ranking else None},
             n_aferidos=n_aferidos),
         # LEGADO: as chaves antigas, preservadas bit a bit para os clientes que
         # ainda as leem. `geral` e `posicao` são a ordem única (§ Aprovação 2).
@@ -1357,7 +1367,7 @@ def _lado_aluno(db: Session, escola_id: int, aluno_id: int) -> dict | None:
             "matific": nota.nota_matific if nota else 0.0,
             "elefante": nota.nota_elefante if nota else 0.0,
             "geral": nota.nota_geral if nota else 0.0,
-            "posicao": nota.posicao if nota else None,
+            "posicao": nota.posicao if no_ranking else None,
         },
     }, contratadas)
 

@@ -1192,6 +1192,20 @@ def _chave_ordenacao_dimensao(resultado: ResultadoAluno, criterios: list[str]):
 # Recalculo integral (PRD §43)
 # ---------------------------------------------------------------------------
 
+def no_ranking_vigente(aluno: Aluno, turma_do_ano: Turma | None) -> bool:
+    """A criança está na POPULAÇÃO do ranking do ano — a mesma de
+    ``_carregar_contexto``: ficha ativa, com matrícula no ano letivo ativo
+    (``turma_do_ano`` é a turma dessa matrícula, ou None), numa turma que concorre
+    (1º ao 5º ano, ``elegibilidade``).
+
+    Fora dela, a Nota pode continuar com a posição de um cálculo antigo (a linha
+    gravada antes de o recálculo limpar a posição de quem sai fica até o próximo
+    recálculo da escola) — que hoje pertence a outra criança. Quem lê a posição
+    de UMA criança confere aqui antes de mostrá-la."""
+    return (aluno.status == "ativo" and turma_do_ano is not None
+            and elegibilidade.participa_de_premiacao(turma_do_ano.ano_escolar))
+
+
 def _carregar_contexto(db: Session, escola_id: int):
     """Carrega tudo que o cálculo precisa: matrículas do ano ativo,
     snapshots mais recentes por aluno e pontos de dificuldade por série."""
