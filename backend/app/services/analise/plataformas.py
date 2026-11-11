@@ -71,9 +71,9 @@ from collections import OrderedDict
 from dataclasses import dataclass, field, fields, replace
 from datetime import date, datetime, timedelta, timezone
 
-from sqlalchemy import (BigInteger, DateTime, Integer, String, and_, case, cast, extract, func,
-                        literal_column, null, or_, select, union_all)
-from sqlalchemy.orm import Session
+from sqlalchemy import (BigInteger, DateTime, Integer, String, and_, case, cast, exists, extract,
+                        func, literal_column, not_, null, or_, select, union_all)
+from sqlalchemy.orm import Session, aliased
 
 from app.core.tempo import FUSO_BR, para_br
 from app.models import (Aluno, Escola, EventoAluno, Importacao, Leitura, Livro, Matricula,
@@ -86,6 +86,7 @@ from app.services.analise import K_MINIMO, AnaliseInvalida, validar_anos
 from app.services.analise.indicadores import (ano_letivo_de_referencia, anos_letivos_medidos,
                                               escolas_da_rede, ordem_nome)
 from app.services.elegibilidade import ANOS_PREMIAVEIS, ano_premiavel
+from app.services.evolucao import IMPORTACAO_AJUSTE_MANUAL
 from app.services.indicadores.ica import arredondar
 from app.services.scoring import NIVEIS_ORDENADOS, POS_DO_NIVEL
 
@@ -655,6 +656,9 @@ def _partes_retratos(modelo, campos: tuple[str, ...],
                modelo.aluno_id.label("aluno_id"), modelo.data_referencia.label("data_referencia"),
                *[getattr(modelo, c).label(c) for c in campos]).where(
             modelo.escola_id.in_(sorted({i for *_, ids in grupos.values() for i in ids})),
+            # Sem o AJUSTE MANUAL do Matific que uma coleta posterior do mesmo ano já
+            # desmentiu (``_ajuste_desmentido``), ANTES de numerar as vizinhas.
+            *([not_(_ajuste_desmentido())] if modelo is SnapshotMatific else []),
             # Fora de TODOS os grupos (antes do menor piso, depois do maior fim): a linha não
             # é lida por nenhum, e a vizinha que falta vale como "outra faixa".
             *([modelo.data_referencia >= min(pisos)] if None not in pisos else []),
@@ -675,6 +679,27 @@ def _partes_retratos(modelo, campos: tuple[str, ...],
             .where(b.escola_id.in_(ids),
                    or_(and_(f == 0, ultima(0)), and_(f == 1, or_(primeira(1), ultima(1))))))
     return partes
+
+
+def _ajuste_desmentido():
+    """Retrato do Matific que é AJUSTE MANUAL (``Importacao.tipo == "manual"``) com uma
+    COLETA (retrato que não é ajuste) do mesmo aluno e escola DEPOIS dele no mesmo ano civil
+    — a regra de ``matific_destaque.sem_ajustes_superados`` (premiações, Relatório por
+    Período), em SQL. Sem o corte ``d <= fim``: a coleta que desmente pode vir depois do fim
+    da janela. Sem isto a Análise lia o ajuste como base ou estado atual do período e
+    atribuía a ele o degrau até a coleta seguinte (G_AJUSTE-1)."""
+    posterior = aliased(SnapshotMatific)
+    manuais = select(Importacao.id).where(Importacao.plataforma == "matific",
+                                          Importacao.tipo == IMPORTACAO_AJUSTE_MANUAL)
+    return and_(SnapshotMatific.importacao_id.in_(manuais), exists().where(
+        posterior.escola_id == SnapshotMatific.escola_id,
+        posterior.aluno_id == SnapshotMatific.aluno_id,
+        posterior.importacao_id.not_in(manuais),
+        extract("year", posterior.data_referencia)
+        == extract("year", SnapshotMatific.data_referencia),
+        or_(posterior.data_referencia > SnapshotMatific.data_referencia,
+            and_(posterior.data_referencia == SnapshotMatific.data_referencia,
+                 posterior.id > SnapshotMatific.id))))
 
 
 def _vizinhos(consulta, nome: str):
