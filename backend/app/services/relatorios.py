@@ -1625,6 +1625,46 @@ _MEDIAS_DO_BOLETIM = (("matematica", "Matific", "media_matific"),
                       ("leitura", "Elefante", "media_elefante"))
 
 
+# O DENOMINADOR de cada média de plataforma do cartão: quantos alunos que concorrem
+# têm nota dela. Zero = nada medido (o cartão manda a média 0,0 por ausência).
+_ALUNOS_COM_A_MEDIA = {"media_matific": "alunos_com_nota_matific",
+                       "media_elefante": "alunos_com_nota_elefante"}
+# A média de uma escola sem nenhum aluno com nota da plataforma. Por extenso, como nas
+# telas da rede: "0,0" se lia como nota zero, e o "—" do Boletim é a matéria escondida
+# para proteger as crianças (grupo pequeno), outro motivo.
+SEM_DADO = "sem dado"
+
+
+def _sem_nota(cartao: dict, campo: str) -> bool:
+    """A média ``campo`` (de plataforma ou a geral) da escola não mediu ninguém?
+    A geral é a média das plataformas com dado: sem nota em nenhuma, não há geral.
+    Cartão sem os contadores (dado montado fora do ``dashboard_rede``) = medida."""
+    contadores = ([_ALUNOS_COM_A_MEDIA[campo]] if campo in _ALUNOS_COM_A_MEDIA
+                  else list(_ALUNOS_COM_A_MEDIA.values()))
+    valores = [cartao[c] for c in contadores if c in cartao]
+    return bool(valores) and not any(valores)
+
+
+def _fmt_media_da_escola(cartao: dict, campo: str) -> str:
+    """Uma média 0–100 da escola no Boletim: '—' se nula (matéria escondida da
+    Secretaria), ``SEM_DADO`` se ninguém tem nota dela (``_sem_nota``), senão a nota."""
+    valor = cartao.get(campo)
+    if valor is not None and _sem_nota(cartao, campo):
+        return SEM_DADO
+    return _fmt_nota(valor)
+
+
+def _rede_sem_nota(dados: dict) -> bool:
+    """A média geral da REDE não mediu ninguém? Ela só pondera as escolas
+    comparadas (``rede._media_geral_das_comparadas``): nenhuma delas com aluno com
+    nota = 0,0 por ausência. Cartões sem os contadores = não dá para saber (medida)."""
+    escolas = dados.get("escolas") or []
+    contadores = list(_ALUNOS_COM_A_MEDIA.values())
+    if not any(c in e for e in escolas for c in contadores):
+        return False
+    return not any(e.get(c) for e in escolas if _escola_comparada(e) for c in contadores)
+
+
 def _medias_do_boletim(dados: dict) -> list[tuple[str, str]]:
     """``(rótulo, campo)`` das médias de plataforma que o Boletim mostra: só as
     dos módulos contratados (``dados['modulos']``; sem a chave — dado montado fora
@@ -1643,9 +1683,10 @@ def linhas_boletim_rede(dados: dict) -> tuple[list[str], list[list]]:
     posição nem índice a mostrar. Só as médias das plataformas contratadas
     (``_medias_do_boletim``).
 
-    As médias saem por ``_fmt_nota``, como na tabela HTML: a média nula (matéria
-    escondida da Secretaria, grupo pequeno) vira '—', nunca 'None'. O índice
-    segue número (é ele que ordena a tabela)."""
+    As médias saem por ``_fmt_media_da_escola``, como na tabela HTML: a média nula
+    (matéria escondida da Secretaria, grupo pequeno) vira '—', nunca 'None'; a da
+    plataforma em que nenhum aluno da escola tem nota vira ``SEM_DADO``, nunca
+    '0,0'. O índice segue número (é ele que ordena a tabela)."""
     # A coluna que ORDENA a tabela é o Índice (per capita, comparável entre
     # escolas) — sem ela, a Secretaria leria "1º lugar com Geral 25,8" acima de
     # "2º lugar com Geral 100" e concluiria que o boletim está quebrado. As
@@ -1655,8 +1696,8 @@ def linhas_boletim_rede(dados: dict) -> tuple[list[str], list[list]]:
                  *(rotulo for rotulo, _ in medias), "Geral"]
     linhas = [
         [e.get("posicao", ""), e["nome"], e["total_alunos"], e["adocao"],
-         e.get("pontuacao_geral", 0), *(_fmt_nota(e[campo]) for _, campo in medias),
-         _fmt_nota(e["media_geral"])]
+         e.get("pontuacao_geral", 0), *(_fmt_media_da_escola(e, campo) for _, campo in medias),
+         _fmt_media_da_escola(e, "media_geral")]
         for e in dados.get("escolas", []) if _escola_comparada(e)
     ]
     return cabecalho, linhas
@@ -1677,13 +1718,15 @@ def _shell_boletim_rede(rede_nome: str, dados: dict,
                         logos: tuple[str, str] | None = None) -> str:
     t = dados.get("totais", {})
     eq = dados.get("equidade", {})
+    media_da_rede = (SEM_DADO if t.get("media_geral") is not None and _rede_sem_nota(dados)
+                     else _fmt_nota(t.get("media_geral")))
     # Documento para reuniões: cada quadro diz O QUE mede. "adoção" e "média
     # geral" soltos eram lidos como desempenho escolar.
     tiles = [
         (str(t.get("escolas", 0)), "escolas na rede"),
         (f'{int(t.get("alunos", 0)):,}'.replace(",", "."), "alunos"),
         (_fmt_nota(t.get("adocao")) + "%", "alunos com dado de alguma plataforma"),
-        (_fmt_nota(t.get("media_geral")), "média das notas do Constela (0–100)"),
+        (media_da_rede, "média das notas do Constela (0–100)"),
     ]
     # Sem a chave (dado montado fora do ``dashboard_rede``) = tudo contratado,
     # como em ``services/modulos``.
@@ -1733,8 +1776,8 @@ def _shell_boletim_rede(rede_nome: str, dados: dict,
             f'<td>{_esc_html(str(e["total_alunos"]))}</td>'
             f'<td>{_fmt_nota(e["adocao"])}%</td>'
             f'<td><b>{_fmt_nota(e.get("pontuacao_geral", 0))}</b></td>'
-            + "".join(f"<td>{_fmt_nota(e[campo])}</td>" for _, campo in medias)
-            + f'<td>{_fmt_nota(e["media_geral"])}</td></tr>')
+            + "".join(f"<td>{_fmt_media_da_escola(e, campo)}</td>" for _, campo in medias)
+            + f'<td>{_fmt_media_da_escola(e, "media_geral")}</td></tr>')
     corpo.append('</tbody></table>')
     medidas = " e ".join(medida for _, medida in plataformas)
     colunas_0_100 = " · ".join([*(rotulo for rotulo, _ in medias), "Geral"])

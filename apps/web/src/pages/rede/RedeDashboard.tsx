@@ -131,6 +131,37 @@ function escolaComparada(e: EscolaCartao & { comparada?: boolean }): boolean {
   return e.alunos_com_dados > 0;
 }
 
+/** Quantos alunos têm a nota de uma média 0–100 (o denominador dela). Plataforma: o
+ *  contador dela; a geral (`"geral"`): os das duas somados. `undefined` = o cartão não
+ *  traz os contadores (API anterior pelo cache do PWA) — aí vale o número, como antes. */
+function alunosComNota(
+  c: { alunos_com_nota_elefante?: number | null; alunos_com_nota_matific?: number | null },
+  qual: "elefante" | "matific" | "geral",
+): number | undefined {
+  const ele = c.alunos_com_nota_elefante ?? undefined;
+  const mat = c.alunos_com_nota_matific ?? undefined;
+  if (qual === "elefante") return ele;
+  if (qual === "matific") return mat;
+  return ele === undefined && mat === undefined ? undefined : (ele ?? 0) + (mat ?? 0);
+}
+
+/** Uma média 0–100 que pode não ter medido ninguém: o backend manda 0,0 quando nenhum aluno
+ *  tem nota daquela plataforma (ausência). Aqui é "sem dado", por extenso, como na tela das
+ *  plataformas — "0,0" se lia como nota zero. Nula (escondida) = "—", como sempre. */
+function mediaOuSemDado(valor: number | null | undefined, comNota: number | undefined): string {
+  if (valor != null && comNota === 0) return "sem dado";
+  return nota(valor);
+}
+
+/** Soma de um contador entre cartões; `undefined` se nenhum cartão o traz. */
+function somaComNota(
+  cartoes: { alunos_com_nota_elefante?: number | null; alunos_com_nota_matific?: number | null }[],
+  qual: "elefante" | "matific" | "geral",
+): number | undefined {
+  const valores = cartoes.map((c) => alunosComNota(c, qual)).filter((n): n is number => n !== undefined);
+  return valores.length === 0 ? undefined : valores.reduce((soma, n) => soma + n, 0);
+}
+
 // Cor da escola FORA da comparação (sem aluno do 1º–5º ano com dado): neutra.
 // Pintada pela faixa do índice, o 0 dela sairia vermelho, como "pior escola".
 const COR_FORA_DA_COMPARACAO = "#8A8EA9"; // zinc-400 da v2 (3,2:1 sobre o branco)
@@ -738,17 +769,21 @@ function ComparativoRede({ escolas, aoAbrir, modulos }: {
                 <td className="px-4 py-3 text-right text-base font-bold text-indigo-700 dark:text-indigo-300">
                   {numero(Math.round(e.pontuacao_geral ?? 0))}
                 </td>
-                <td className="px-4 py-3 text-right text-zinc-700 dark:text-zinc-200">{nota(e.media_geral)}</td>
+                <td className="px-4 py-3 text-right text-zinc-700 dark:text-zinc-200">
+                  {mediaOuSemDado(e.media_geral, alunosComNota(e, "geral"))}
+                </td>
                 {temLeitura && (
                   <td className="px-4 py-3 text-right text-zinc-700 dark:text-zinc-200">
                     {e.oculto?.leitura && !e.oculto.leitura.parcial
-                      ? <ValorProtegido bloco={e.oculto.leitura} /> : nota(e.media_elefante)}
+                      ? <ValorProtegido bloco={e.oculto.leitura} />
+                      : mediaOuSemDado(e.media_elefante, alunosComNota(e, "elefante"))}
                   </td>
                 )}
                 {temMatematica && (
                   <td className="px-4 py-3 text-right text-zinc-700 dark:text-zinc-200">
                     {e.oculto?.matematica && !e.oculto.matematica.parcial
-                      ? <ValorProtegido bloco={e.oculto.matematica} /> : nota(e.media_matific)}
+                      ? <ValorProtegido bloco={e.oculto.matematica} />
+                      : mediaOuSemDado(e.media_matific, alunosComNota(e, "matific"))}
                   </td>
                 )}
                 <td className="px-4 py-3 text-right text-zinc-700 dark:text-zinc-200">{nota(e.adocao)}%</td>
@@ -887,6 +922,11 @@ function PainelRede({ redeId, modo }: { redeId: number; modo: "analise" | "secre
   const temMatematica = mods.includes("matematica");
   const eq = dados.equidade;
   const kpisPrincipais = 2 + (temLeitura ? 1 : 0) + (temMatematica ? 1 : 0);
+  // As médias da rede com o denominador de cada uma (o mesmo do backend): a de cada
+  // plataforma pesa os alunos com nota dela em todas as escolas; a geral, só nas comparadas.
+  const mediaGeralDaRede = mediaOuSemDado(t.media_geral, somaComNota(dados.escolas.filter(escolaComparada), "geral"));
+  const mediaMatificDaRede = mediaOuSemDado(t.media_matific, somaComNota(dados.escolas, "matific"));
+  const mediaElefanteDaRede = mediaOuSemDado(t.media_elefante, somaComNota(dados.escolas, "elefante"));
 
   return (
     <div className="space-y-6">
@@ -934,9 +974,9 @@ function PainelRede({ redeId, modo }: { redeId: number; modo: "analise" | "secre
         <KpiCompacto rotulo="Adoção" valor={`${nota(t.adocao)}%`} detalhe="alunos com dados" />
         <KpiCompacto
           rotulo="Média geral"
-          valor={nota(t.media_geral)}
-          detalhe={[...(temMatematica ? [`Matific ${nota(t.media_matific)}`] : []),
-                    ...(temLeitura ? [`Elefante ${nota(t.media_elefante)}`] : [])].join(" · ") || undefined}
+          valor={mediaGeralDaRede}
+          detalhe={[...(temMatematica ? [`Matific ${mediaMatificDaRede}`] : []),
+                    ...(temLeitura ? [`Elefante ${mediaElefanteDaRede}`] : [])].join(" · ") || undefined}
           titulo="Média interna (0–100): cada escola é medida contra os próprios alunos"
         />
       </Card>
@@ -981,7 +1021,7 @@ function PainelRede({ redeId, modo }: { redeId: number; modo: "analise" | "secre
             { rotulo: "Atividades", valor: numero(t.atividades) },
             { rotulo: "Alunos com dados", valor: numero(t.ativos_matific),
               titulo: "Alunos com retrato do Matific (inclui quem ainda não fez atividade)" },
-            { rotulo: "Média", valor: nota(t.media_matific) },
+            { rotulo: "Média", valor: mediaMatificDaRede },
           ]}
           escolas={dados.escolas}
           campoTop="estrelas"
@@ -1114,6 +1154,9 @@ interface RedeCartao {
   media_geral: number;
   media_matific: number;
   media_elefante: number;
+  /** Alunos com nota de cada plataforma na rede (o denominador da média dela). */
+  alunos_com_nota_elefante?: number;
+  alunos_com_nota_matific?: number;
   livros: number;
   atividades: number;
   estrelas: number;
@@ -1227,8 +1270,9 @@ function ConteudoGlobal({ aoAbrirRede }: { aoAbrirRede: (id: number) => void }) 
         <KpiCompacto
           className="col-span-2 sm:col-span-1"
           rotulo="Média geral"
-          valor={nota(t.media_geral)}
-          detalhe={`Matific ${nota(t.media_matific)} · Elefante ${nota(t.media_elefante)}`}
+          valor={mediaOuSemDado(t.media_geral, somaComNota(dados.redes, "geral"))}
+          detalhe={`Matific ${mediaOuSemDado(t.media_matific, somaComNota(dados.redes, "matific"))}`
+                   + ` · Elefante ${mediaOuSemDado(t.media_elefante, somaComNota(dados.redes, "elefante"))}`}
           titulo="Média interna (0–100): cada escola é medida contra os próprios alunos"
         />
       </Card>
@@ -1288,8 +1332,12 @@ function ConteudoGlobal({ aoAbrirRede }: { aoAbrirRede: (id: number) => void }) 
                     {m.indice ? numero(Math.round(Number(r[m.chave] ?? 0))) : nota(Number(r[m.chave] ?? 0))}
                     {m.sufixo ?? ""}
                   </td>
-                  <td className="whitespace-nowrap px-3 py-2.5 text-right">{nota(r.media_elefante)}</td>
-                  <td className="whitespace-nowrap px-3 py-2.5 text-right">{nota(r.media_matific)}</td>
+                  <td className="whitespace-nowrap px-3 py-2.5 text-right">
+                    {mediaOuSemDado(r.media_elefante, alunosComNota(r, "elefante"))}
+                  </td>
+                  <td className="whitespace-nowrap px-3 py-2.5 text-right">
+                    {mediaOuSemDado(r.media_matific, alunosComNota(r, "matific"))}
+                  </td>
                   <td className="whitespace-nowrap px-3 py-2.5 text-right">{nota(r.adocao)}%</td>
                 </tr>
               ))}
