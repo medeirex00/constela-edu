@@ -146,9 +146,11 @@ def _bimestre(preset: str, hoje: date, ano_letivo: int | None = None):
     if not bimestres.ano_com_calendario(ano):
         return _bimestre_aproximado(numero, ano, rotulo_aproximado)
     inicio, fim = bimestres.intervalo(numero, ano)
-    # O numerado de um ano letivo que não é o do calendário de hoje diz o ano: em
-    # janeiro, "4º bimestre (05/10 a 31/12)" pode ser lido como o do ano novo.
-    de_outro_ano = f" de {ano}" if numerado and ano != hoje.year else ""
+    # O bimestre de um ano que não é o do calendário de hoje diz o ano: em janeiro,
+    # "4º bimestre (05/10 a 31/12)" pode ser lido como o do ano novo. Vale para o
+    # numerado de um ano letivo anterior e para o "Bimestre passado" de janeiro (o 4º
+    # do ano passado): a MESMA janela tem o MESMO rótulo.
+    de_outro_ano = f" de {ano}" if ano != hoje.year else ""
     return _ini(inicio), _fim(fim), (f"{bimestres.rotulo(numero)}{de_outro_ano} "
                                     f"({inicio:%d/%m} a {fim:%d/%m})")
 

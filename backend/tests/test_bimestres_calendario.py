@@ -56,7 +56,8 @@ def test_bimestre_anterior_em_janeiro_usa_o_calendario_oficial_do_ano_passado():
     for hoje in (date(2027, 1, 15), date(2027, 2, 27)):
         i, f, rotulo = periodos.resolver("bimestre_anterior", hoje, 2027)
         assert (i.date(), f.date()) == (date(2026, 10, 5), date(2026, 12, 31)), hoje
-        assert rotulo == "4º bimestre (05/10 a 31/12)"
+        # O 4º do ano PASSADO diz o ano, como o "4º bimestre" numerado (REG_NUMEROS-8).
+        assert rotulo == "4º bimestre de 2026 (05/10 a 31/12)"
         assert "aproximado" not in rotulo
 
 
@@ -71,7 +72,7 @@ def test_bimestre_anterior_sem_nenhum_dos_dois_calendarios_continua_aproximado()
     assert rotulo == "Bimestre anterior (aproximado: sem calendário oficial de 2027)"
     i, f, rotulo = periodos.resolver("bimestre_anterior", date(2027, 3, 10), 2027)
     assert (i.date(), f.date()) == (date(2026, 10, 5), date(2026, 12, 31))
-    assert rotulo == "4º bimestre (05/10 a 31/12)"
+    assert rotulo == "4º bimestre de 2026 (05/10 a 31/12)"
 
 
 def test_calendario_configurado_por_variavel_de_ambiente(monkeypatch):

@@ -53,7 +53,7 @@ def test_bimestre_passado_no_1o_aproximado_e_o_4o_oficial_do_ano_passado():
     """Março/2027 é do 1º pelo mapa por mês: o anterior é o 4º de 2026, que TEM
     calendário — e não jan/fev de 2027 (o bloco civil de antes)."""
     assert _datas("bimestre_anterior", date(2027, 3, 10)) == (
-        date(2026, 10, 5), date(2026, 12, 31), "4º bimestre (05/10 a 31/12)")
+        date(2026, 10, 5), date(2026, 12, 31), "4º bimestre de 2026 (05/10 a 31/12)")
 
 
 def test_sem_nenhum_dos_dois_calendarios_o_anterior_e_out_a_dez():
