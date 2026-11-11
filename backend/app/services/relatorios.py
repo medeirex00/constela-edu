@@ -193,7 +193,17 @@ def celula_segura(valor):
 def _celula_xlsx(ws, linha: int, coluna: int, valor):
     """``ws.cell`` que nunca grava fórmula: o openpyxl transforma em fórmula todo
     ``str`` que começa com '=' — aqui ele fica TEXTO (data_type 's'). '+', '-', '@' e
-    os de controle já são gravados como texto pelo openpyxl, que o Excel não avalia."""
+    os de controle já são gravados como texto pelo openpyxl, que o Excel não avalia.
+
+    Caractere de controle C0 que o Excel não aceita (``ILLEGAL_CHARACTERS_RE``: um
+    nome colado de um PDF, vindo da plataforma...) sai do texto ANTES de gravar —
+    o openpyxl levantava ``IllegalCharacterError`` e UM nome derrubava a exportação
+    da escola inteira. A limpeza vem antes da proteção contra fórmula, que vale
+    para o texto já limpo."""
+    from openpyxl.cell.cell import ILLEGAL_CHARACTERS_RE
+
+    if isinstance(valor, str):
+        valor = ILLEGAL_CHARACTERS_RE.sub("", valor)
     celula = ws.cell(row=linha, column=coluna, value=valor)
     if isinstance(valor, str) and celula.data_type == "f":
         celula.data_type = "s"
