@@ -1189,7 +1189,20 @@ def restaurar_leituras_historicas(
     ``dry_run`` é o padrão e devolve o plano conferido sem escrever. Aplicar é
     ação RETROATIVA do Admin Global — mesma régua do ``aplicar_ao_historico`` do
     catálogo —, auditada item a item com de/para e evento-fonte, e recalcula a
-    escola na MESMA transação."""
+    escola.
+
+    NA FILA DA ESCOLA. Aplicar pede a trava da escola (4711) — a mesma da fusão, da
+    importação, da coleta e do ajuste manual — ANTES de ler a ficha e a leitura. A
+    fusão segura essa trava enquanto descarta a leitura repetida da ficha absorvida e
+    apaga a ficha: sem a fila, a restauração no meio de uma fusão caía com erro
+    interno (o UPDATE da linha apagada), ou respondia "restaurada" e a fusão apagava a
+    leitura registrando no log a data VELHA. Agora quem chega depois espera e relê:
+    a restauração recusa explicando que a ficha não existe mais, ou a fusão encontra
+    a data restaurada. Dado e auditoria caem juntos no commit, que solta a trava; o
+    recálculo vem em seguida, com o commit dele (a ordem da fusão — nunca pegar a
+    trava do recálculo segurando a da escola). Se o recálculo falhar, a restauração
+    já está gravada e auditada, e as notas se acertam no próximo recálculo da escola
+    (Recalcular, coleta ou importação), como depois de uma fusão."""
     itens = [
         leituras_restauracao.ItemRestauracao(
             aluno_id=item.aluno_id, aluno_origem_id=item.aluno_origem_id,
@@ -1222,6 +1235,8 @@ def restaurar_leituras_historicas(
             f"Confirmação inválida. Digite “{_CONFIRMA_RESTAURACAO}” para "
             "reescrever a data das leituras — e rode antes com “dry_run” para "
             "ler o de/para de cada livro.")
+    # A fila da escola ANTES de qualquer leitura da ficha (ver o docstring).
+    bloquear_escola_para_importacao(db, escola_id)
     try:
         resultado = leituras_restauracao.restaurar(
             db, escola_id, itens, usuario.id,
@@ -1230,8 +1245,7 @@ def restaurar_leituras_historicas(
         db.rollback()
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY,
                             erro.mensagem) from erro
-    # Dado, auditoria e nota caem juntos: ``commit=False`` deixa o COMMIT para
-    # esta rota, então um erro no recálculo desfaz a restauração também.
-    scoring.recalcular_escola(db, escola_id, commit=False)
+    # Dado e auditoria caem juntos; o commit solta a trava ANTES do recálculo.
     db.commit()
+    scoring.recalcular_escola(db, escola_id)
     return {"dry_run": False, **resultado}

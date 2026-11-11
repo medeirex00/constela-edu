@@ -35,7 +35,9 @@ inteira é recusada. É o oposto de "completar" um número que não fechou.
 GOVERNANÇA. Reescrever histórico é ação retroativa, então vale a mesma régua do
 ``aplicar_ao_historico`` do catálogo: só o Admin Global, com motivo escrito,
 auditada item a item com o de/para e o evento-fonte, e numa transação única.
-Este módulo NÃO commita — quem chama confirma, igual a ``alunos_fusao``.
+Este módulo NÃO commita — quem chama confirma, igual a ``alunos_fusao``, e quem
+aplica segura antes a trava da escola (a da fusão), para que a conferência e a
+escrita vejam a ficha que existe de fato.
 """
 from __future__ import annotations
 
@@ -157,9 +159,16 @@ def _conferir(db: Session, escola_id: int, item: ItemRestauracao,
             f"mesma ({item.aluno_id}). Uma restauração histórica só faz sentido "
             "quando o dado veio de OUTRA ficha — a que a fusão absorveu.")
 
-    # --- 1 e 2: o aluno existe, é desta escola e está ativo
+    # --- 1 e 2: o aluno existe, é desta escola e está ativo. A ficha que não existe
+    # é, quase sempre, a que uma fusão absorveu depois do ensaio: dizer "não é desta
+    # escola" mandaria procurar o erro no lugar errado.
     aluno = db.get(Aluno, item.aluno_id)
-    if aluno is None or aluno.escola_id != escola_id:
+    if aluno is None:
+        raise recusar(
+            f"A ficha {item.aluno_id} do item {indice + 1} não existe: ela pode ter sido "
+            "fundida em outra ficha ou excluída. Nada foi alterado — confira a ficha que "
+            "ficou e refaça o ensaio.")
+    if aluno.escola_id != escola_id:
         raise recusar(
             f"A ficha {item.aluno_id} do item {indice + 1} não é desta escola.")
     if aluno.status != "ativo":
@@ -359,7 +368,8 @@ def restaurar(db: Session, escola_id: int, itens: list[ItemRestauracao],
 
     Confere o lote inteiro ANTES de tocar em qualquer linha: se o item 14 não se
     sustenta, os 13 primeiros nem chegam a ser escritos. Com commit do chamador,
-    a transação única garante que auditoria, dados e recálculo caem juntos.
+    a transação única garante que auditoria e dados caem juntos (a rota recalcula
+    a escola depois do commit, que solta a trava da escola).
     """
     plano = planejar(db, escola_id, itens,
                      permitir_fora_do_ano_letivo=permitir_fora_do_ano_letivo)

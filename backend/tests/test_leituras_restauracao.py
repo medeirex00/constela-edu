@@ -404,7 +404,7 @@ def test_rota_recalcula_sem_mexer_na_formula(cliente_global, db, escola_completa
     pesos_depois = {c.namespace: dict(c.valor) for c in db.execute(
         select(Configuracao).where(Configuracao.escola_id == escola.id)).scalars()}
     assert pesos_depois == pesos_antes
-    # e a nota do aluno foi recalculada na mesma transação
+    # e a nota do aluno foi recalculada (logo depois do commit da restauração)
     from app.models import Nota
     nota = db.execute(select(Nota).where(Nota.aluno_id == aluno.id)).scalars().first()
     assert nota is not None
@@ -540,6 +540,8 @@ def test_aluno_inexistente(db, escola_completa):
     evento = _evento(db, escola.id, aluno.id, livro)
     db.commit()
     item = _item(99999, livro.id, evento)
-    with pytest.raises(lr.RestauracaoInvalida, match="não é desta escola"):
+    # A ficha que não existe (quase sempre absorvida por uma fusão) é dita assim —
+    # "não é desta escola" mandava procurar o erro no lugar errado (S_G_AJUSTE-4).
+    with pytest.raises(lr.RestauracaoInvalida, match="não existe: ela pode ter sido fundida"):
         lr.restaurar(db, escola.id, [item], usuario_id=None)
     assert db.get(Aluno, 99999) is None
