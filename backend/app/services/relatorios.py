@@ -1714,6 +1714,24 @@ _PLATAFORMAS_DO_BOLETIM = {
 }
 
 
+def _aviso_anos_letivos_do_boletim(dados: dict) -> str:
+    """O parágrafo do Boletim para a rede com escolas em ANOS LETIVOS diferentes
+    (``anos_letivos`` do ``dashboard_rede`` com mais de um ano), com as escolas de
+    cada ano; ``""`` quando a rede está num ano só (ou o dado não traz os anos)."""
+    anos = dados.get("anos_letivos") or []
+    if len(anos) < 2:
+        return ""
+    por_ano = "".join(
+        f" Em {ano}: " + ", ".join(_esc_html(e["nome"]) for e in dados.get("escolas", [])
+                                   if e.get("ano_letivo") == ano) + "."
+        for ano in anos)
+    return ('<p style="font-size:.72em;color:#5b6474;margin-top:.4em">'
+            '<b>Anos letivos:</b> as escolas da rede estão em anos letivos diferentes ('
+            + ", ".join(map(str, anos)) + '): cada escola é medida no ano letivo dela, '
+            'e a comparação junta anos diferentes até todas passarem para o mesmo ano.'
+            + por_ano + '</p>')
+
+
 def _shell_boletim_rede(rede_nome: str, dados: dict,
                         logos: tuple[str, str] | None = None) -> str:
     t = dados.get("totais", {})
@@ -1790,6 +1808,12 @@ def _shell_boletim_rede(rede_nome: str, dados: dict,
         f'<b>{colunas_0_100}</b> (0–100): nota INTERNA de cada escola, '
         'calculada contra os próprios alunos dela — servem para acompanhar a escola '
         'ao longo do tempo, não para compará-la com outra.</p>')
+    # Na virada do ano, a rede tem escolas em anos letivos diferentes: cada uma é
+    # medida no ano dela (``rede.dashboard_rede``), e a tabela acima as compara
+    # assim mesmo. O documento diz isso e quem está em cada ano.
+    aviso_anos = _aviso_anos_letivos_do_boletim(dados)
+    if aviso_anos:
+        corpo.append(aviso_anos)
     # Secretaria: os totais e as médias da rede deixam de fora a matéria das
     # escolas com menos de k alunos com dado (grupo pequeno), e o número difere do
     # que o Admin Global vê. O documento diz isso, com o texto do painel.

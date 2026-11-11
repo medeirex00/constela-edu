@@ -577,6 +577,10 @@ def _cartoes_da_rede(db: Session, rede_id: int, *, com_contribuintes: bool = Fal
         cartoes.append({
             "escola_id": escola.id, "nome": escola.nome, "cidade": escola.cidade,
             "status": escola.status,
+            # O ANO LETIVO em que a escola é medida (coorte, Notas e a janela do
+            # Matific são os do ano ativo DELA): na virada do ano, a rede passa dias
+            # com escolas em anos diferentes, e quem compara precisa saber disso.
+            "ano_letivo": escola.ano_letivo_ativo,
             "latitude": escola.latitude, "longitude": escola.longitude,
             "total_turmas": int(turmas.get(escola.id, 0)),
             "total_professores": int(professores.get(escola.id, 0)),
@@ -1035,6 +1039,11 @@ def dashboard_rede(db: Session, rede_id: int, *, secretaria: bool = False) -> di
     índice. A escola não comparada continua na lista — a cobertura (alunos, com
     dados, adoção) é dela também —, mas vai para o fim e sem ``posicao``.
 
+    ANO LETIVO: cada escola é medida no PRÓPRIO ano ativo (o cartão traz
+    ``ano_letivo``) e ``anos_letivos`` lista os anos da rede. Na virada do ano
+    (mais de um), a comparação junta anos diferentes — quem mostra avisa; a
+    escola continua na comparação (tirá-la seria outra regra).
+
     ``secretaria``: os cartões passam por ``_proteger_cartoes`` (grupo pequeno)
     e os totais da rede deixam de fora as matérias escondidas. A resposta ganha
     ``ocultas`` (as escolas com alguma matéria escondida) e
@@ -1124,6 +1133,11 @@ def dashboard_rede(db: Session, rede_id: int, *, secretaria: bool = False) -> di
         # Módulos contratados — a interface inteira (cards, abas, rankings,
         # explicador) se adapta a partir daqui.
         "modulos": sorted(contratados),
+        # Os ANOS LETIVOS em que as escolas da rede estão (cada cartão traz o seu
+        # ``ano_letivo``). Mais de um = a virada do ano em andamento: cada escola é
+        # medida no ano dela, e o painel, o Ranking da Rede e o Boletim dizem isso
+        # (como a análise de plataformas, ``analise/plataformas._limitacoes``).
+        "anos_letivos": sorted({c["ano_letivo"] for c in cartoes}),
         "totais": {
             "escolas": len(cartoes),
             "escolas_ativas": sum(1 for c in cartoes if c["status"] == "ativa"),
@@ -1303,7 +1317,10 @@ def ranking_escolas(db: Session, rede_id: int, limite: int = 50,
     (``dimensoes_pontuadas`` diz quais). Em TODA métrica, inclusive a
     ``engajamento`` (cobertura, que não tem número escondido), sai também a
     escola sem nenhuma matéria pontuada visível (``comparada = False`` no
-    painel): é a mesma marca de quem a Secretaria compara."""
+    painel): é a mesma marca de quem a Secretaria compara.
+
+    Cada item traz o ``ano_letivo`` em que a escola é medida; os anos da rede
+    inteira estão em ``anos_letivos`` do ``/dashboard``."""
     chave = METRICAS_RANKING.get(metrica, "pontuacao_geral")
     desempate = DESEMPATE_DA_DIMENSAO.get(DIMENSAO_DA_METRICA.get(metrica), "adocao")
     cartoes = [c for c in cartoes_da_rede(db, rede_id, secretaria=secretaria)

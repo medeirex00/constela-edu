@@ -41,6 +41,9 @@ export interface EscolaCartao {
   nome: string;
   cidade: string | null;
   status: string;
+  /** O ano letivo em que a escola é medida (o ano ativo DELA: coorte, notas e Matific). Na
+   *  virada do ano, as escolas da rede podem estar em anos diferentes. Ausente = API anterior. */
+  ano_letivo?: number;
   latitude: number | null;
   longitude: number | null;
   total_turmas: number;
@@ -135,6 +138,9 @@ export interface DashboardRede {
   rede_id: number;
   /** Módulos CONTRATADOS pela rede — a interface se adapta a partir daqui. */
   modulos?: string[];
+  /** Os anos letivos em que as escolas da rede estão (cada cartão traz o seu `ano_letivo`).
+   *  Mais de um = a virada do ano em andamento. Ausente = API anterior. */
+  anos_letivos?: number[];
   totais: {
     escolas: number;
     escolas_ativas: number;
@@ -210,6 +216,36 @@ export function AvisoTotaisParciais({ totais }: { totais: DashboardRede["totais"
     <p className="flex items-start gap-1.5 rounded-xl bg-ouro-50 px-3 py-2 text-xs text-ouro-800 dark:bg-ouro-400/10 dark:text-ouro-200">
       <span aria-hidden>ⓘ</span>
       <span>{g.texto}</span>
+    </p>
+  );
+}
+
+/** Os anos letivos da rede quando há MAIS DE UM (a virada do ano em andamento: cada escola é
+ *  medida no ano letivo dela); `null` com a rede num ano só ou sem a informação (API anterior). */
+export function anosLetivosMistos(dados: Pick<DashboardRede, "anos_letivos"> | null | undefined): number[] | null {
+  const anos = dados?.anos_letivos ?? [];
+  return anos.length > 1 ? anos : null;
+}
+
+/** Rede com escolas em anos letivos DIFERENTES (`anosLetivosMistos`): a comparação entre elas
+ *  junta anos diferentes, e a tela diz isso junto dos números (o mesmo que a análise de
+ *  plataformas e o Boletim dizem). `escolas` (opcional): diz quem está em cada ano — sem elas,
+ *  quem chama marca o ano de cada escola na própria lista. Num ano só, nada. */
+export function AvisoAnosLetivos({ anos, escolas }: { anos: number[] | null; escolas?: EscolaCartao[] }) {
+  if (!anos) return null;
+  const porAno = escolas
+    ? anos.map((ano) => ({ ano, nomes: escolas.filter((e) => e.ano_letivo === ano).map((e) => e.nome) }))
+      .filter((grupo) => grupo.nomes.length > 0)
+    : [];
+  return (
+    <p data-testid="aviso-anos-letivos"
+       className="flex items-start gap-1.5 rounded-xl bg-ouro-50 px-3 py-2 text-xs text-ouro-800 dark:bg-ouro-400/10 dark:text-ouro-200">
+      <span aria-hidden>ⓘ</span>
+      <span>
+        As escolas da rede estão em anos letivos diferentes ({anos.join(", ")}): cada escola é medida no ano letivo
+        dela, e a comparação junta anos diferentes até todas passarem para o mesmo ano.
+        {porAno.map(({ ano, nomes }) => ` Em ${ano}: ${nomes.join(", ")}.`).join("")}
+      </span>
     </p>
   );
 }

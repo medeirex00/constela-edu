@@ -92,6 +92,7 @@ import { nota, numero, tempoLeitura } from "../../lib/formato";
 import { SeloNatureza } from "../analise/comum";
 import type { EstadoDaVisaoEscola } from "../VisaoEscola";
 import {
+  AvisoAnosLetivos,
   AvisoTotaisParciais,
   EnvolucroRede,
   INICIO_GLOBAL,
@@ -101,6 +102,7 @@ import {
   TituloCartao,
   ValorProtegido,
   VitrinePublica,
+  anosLetivosMistos,
   valorParaOrdenar,
   type DashboardRede,
   type EscolaCartao,
@@ -927,6 +929,9 @@ function PainelRede({ redeId, modo }: { redeId: number; modo: "analise" | "secre
   const mediaGeralDaRede = mediaOuSemDado(t.media_geral, somaComNota(dados.escolas.filter(escolaComparada), "geral"));
   const mediaMatificDaRede = mediaOuSemDado(t.media_matific, somaComNota(dados.escolas, "matific"));
   const mediaElefanteDaRede = mediaOuSemDado(t.media_elefante, somaComNota(dados.escolas, "elefante"));
+  // Na virada do ano, escolas em anos letivos diferentes: cada uma é medida no ano dela, e o
+  // painel compara assim mesmo. O aviso diz isso e quem está em cada ano (nos dois modos).
+  const avisoAnos = <AvisoAnosLetivos anos={anosLetivosMistos(dados)} escolas={dados.escolas} />;
 
   return (
     <div className="space-y-6">
@@ -943,6 +948,7 @@ function PainelRede({ redeId, modo }: { redeId: number; modo: "analise" | "secre
                            dimensoes={[...(temLeitura ? ["leitura" as const] : []),
                                        ...(temMatematica ? ["matematica" as const] : [])]} />
       </div>
+      {avisoAnos}
 
       {/* Indicadores PRINCIPAIS (os quatro da referência); o que não foi contratado
           não aparece, nem zerado. Nenhuma pílula de variação: não há série. */}
@@ -1068,6 +1074,7 @@ function PainelRede({ redeId, modo }: { redeId: number; modo: "analise" | "secre
       {/* --- PAINEL DA REDE (/rede): funções administrativas + mapa/navegação. --- */}
       {modo === "secretaria" && (
       <>
+      {avisoAnos}
       {/* Metas: o PROGRESSO (a conclusão, que antes só aparecia no Panorama antigo) ao
           lado do cadastro, com uma leitura só — salvar uma meta atualiza os dois. */}
       <MetasDaRede redeId={redeId} />

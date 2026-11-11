@@ -69,7 +69,7 @@ import { nomeArquivoCsv, type TabelaCsv } from "../../lib/csvRanking";
 import { nota, numero, tempoLeitura } from "../../lib/formato";
 import { SeloNatureza } from "../analise/comum";
 import type { EstadoDaVisaoEscola } from "../VisaoEscola";
-import { EnvolucroRede, type DashboardRede, type EscolaCartao } from "./comum";
+import { AvisoAnosLetivos, EnvolucroRede, anosLetivosMistos, type DashboardRede, type EscolaCartao } from "./comum";
 
 type ChaveAba = "geral" | "leitura" | "matematica" | "engajamento";
 
@@ -553,11 +553,18 @@ function plataformasDoRanking(modulos: string[]): string {
   return "o Elefante e o Matific";
 }
 
+/** De QUAL ano letivo são os alunos: o corrente, ou — na virada do ano, com as escolas em anos
+ *  diferentes (`anosLetivosMistos`) — o de cada escola (cada uma é medida no ano dela). */
+function alunosDoAno(anosMistos: boolean): string {
+  return anosMistos ? "alunos do ano letivo de cada escola" : "alunos do ano letivo corrente";
+}
+
 /** DE QUANDO são os números da pontuação, pelos MÓDULOS CONTRATADOS (as mesmas palavras da tela
  *  das plataformas): os alunos são os do ano letivo corrente, mas o contador do Elefante é
  *  vitalício e só o Matific é cortado no ano letivo. Chamar tudo de "ano letivo" punha os livros
- *  de anos anteriores na conta da escola sem dizer. */
-function periodoDoRanking(modulos: string[]): string {
+ *  de anos anteriores na conta da escola sem dizer. `anosMistos`: as escolas estão em anos
+ *  letivos diferentes ("o ano letivo corrente" seria um só). */
+function periodoDoRanking(modulos: string[], anosMistos = false): string {
   const leitura = modulos.includes("leitura");
   const matematica = modulos.includes("matematica");
   const elefante = "Elefante: acumulado desde o início da conta";
@@ -565,7 +572,7 @@ function periodoDoRanking(modulos: string[]): string {
   const plataformas = leitura && !matematica ? elefante
     : matematica && !leitura ? matific
     : `${elefante}; ${matific}`;
-  return `alunos do ano letivo corrente (${plataformas})`;
+  return `${alunosDoAno(anosMistos)} (${plataformas})`;
 }
 
 /** A escola entra na comparação? A marca `comparada` do backend (a mesma régua do ranking e
@@ -582,10 +589,11 @@ function comparada(e: EscolaCartao): boolean {
  * escola). Conclusão numa frase, o porquê embaixo. Sem o campo (API anterior), nada; com
  * menos de duas escolas comparadas, diz que não há diferença a medir (nunca um 0 solto).
  */
-function DiferencaEntreEscolas({ equidade, escolasComparadas, modulos }: {
+function DiferencaEntreEscolas({ equidade, escolasComparadas, modulos, anosMistos }: {
   equidade: DashboardRede["equidade"] | null | undefined;
   escolasComparadas: number;
   modulos: string[];
+  anosMistos: boolean;
 }) {
   if (equidade?.gap_indice == null) return null;
   return (
@@ -619,7 +627,7 @@ function DiferencaEntreEscolas({ equidade, escolasComparadas, modulos }: {
             <p className="text-xs text-zinc-500 dark:text-zinc-400">
               Quanto menor a diferença, mais parecidas as escolas estão nesta pontuação. Medida no Índice Geral (a
               pontuação do Constela, de 0 a 1000), em qualquer aba — não uma avaliação oficial. Período:{" "}
-              {periodoDoRanking(modulos)}.
+              {periodoDoRanking(modulos, anosMistos)}.
             </p>
           </>
         )}
@@ -699,6 +707,11 @@ function ConteudoRankingDaRede({ redeId }: { redeId: number }) {
   }
   if (!dados) return null;
 
+  // Na virada do ano, escolas em anos letivos diferentes: cada uma é medida no ano dela. A tela
+  // avisa, marca o ano de cada escola e não fala de "o ano letivo corrente", como se fosse um só.
+  const anosMistos = anosLetivosMistos(dados);
+  const comAno = anosMistos !== null;
+
   // O "Voltar" da Visão da Escola traz de volta a este ranking (com o `?rede=` do global).
   const abrir = (id: number) => {
     selecionarEscola(id);
@@ -710,15 +723,16 @@ function ConteudoRankingDaRede({ redeId }: { redeId: number }) {
   // Exportar: a tabela desta aba, na ordem do backend (só agregados por escola).
   const csv: TabelaCsv | null = !ranking || ranked.length === 0 ? null : {
     nomeArquivo: nomeArquivoCsv(`ranking-da-rede-${aba.rotulo}`),
-    cabecalho: ["Posição", "Escola", ...aba.colunas.map((c) => c.rotulo)],
-    linhas: ranked.map((e) => [e.posicao, e.nome, ...aba.colunas.map((c) => c.valor(e))]),
+    cabecalho: ["Posição", "Escola", ...(comAno ? ["Ano letivo"] : []), ...aba.colunas.map((c) => c.rotulo)],
+    linhas: ranked.map((e) => [e.posicao, e.nome, ...(comAno ? [e.ano_letivo ?? ""] : []),
+      ...aba.colunas.map((c) => c.valor(e))]),
   };
 
   return (
     <div className="space-y-5">
       <PageHeader
         titulo="🏆 Ranking da Rede"
-        descricao={`${dados.escolas.length} escola(s) • ${periodoDoRanking(mods)} • comparação proporcional ao tamanho da escola`}
+        descricao={`${dados.escolas.length} escola(s) • ${periodoDoRanking(mods, comAno)} • comparação proporcional ao tamanho da escola`}
         acoes={(
           // `contents`: do sm em diante os botões continuam filhos diretos da caixa de
           // ações (o mesmo layout de antes); no celular viram uma coluna de mesma largura.
@@ -752,6 +766,9 @@ function ConteudoRankingDaRede({ redeId }: { redeId: number }) {
       <AvisoFrescorRede frescor={frescor} aba={aba}
                         ids={new Set(ranked.map((e) => e.escola_id))} />
 
+      {/* Escolas em anos letivos diferentes (a virada do ano): o ano de cada uma vai na linha dela. */}
+      <AvisoAnosLetivos anos={anosMistos} />
+
       <Card className="overflow-hidden">
         {/* Falha da ORDEM fica dentro do cartão: cabeçalho, abas e explicador
             (que vêm do /dashboard) continuam de pé — sem inventar uma ordem
@@ -765,7 +782,7 @@ function ConteudoRankingDaRede({ redeId }: { redeId: number }) {
           <Vazio
             icone={Trophy}
             titulo="Sem dados ainda"
-            descricao="Nenhuma escola da rede tem dados das plataformas para os alunos do ano letivo corrente."
+            descricao={`Nenhuma escola da rede tem dados das plataformas para os ${alunosDoAno(comAno)}.`}
           />
         ) : (
           <TabelaRolavel rotulo={`Ranking das escolas por ${aba.rotulo}: tabela completa`}>
@@ -820,6 +837,14 @@ function ConteudoRankingDaRede({ redeId }: { redeId: number }) {
                           {e.nome}
                         </button>
                         <span className="mt-1 flex flex-wrap items-center gap-1.5 empty:hidden">
+                          {comAno && e.ano_letivo != null && (
+                            <span
+                              className="rounded-full bg-zinc-100 px-2 py-0.5 text-[11px] font-semibold text-zinc-700 dark:bg-zinc-800 dark:text-zinc-200"
+                              title="As escolas da rede estão em anos letivos diferentes; esta é medida neste ano."
+                            >
+                              ano letivo {e.ano_letivo}
+                            </span>
+                          )}
                           {e.dimensoes_pontuadas?.length === 1 && (
                             <span
                               className="rounded-full bg-amber-100 px-2 py-0.5 text-[11px] font-semibold text-amber-800 dark:bg-amber-500/15 dark:text-amber-300"
@@ -892,12 +917,12 @@ function ConteudoRankingDaRede({ redeId }: { redeId: number }) {
       {foraDaComparacao.length > 0 && (
         <p className="px-1 text-xs text-zinc-600 dark:text-zinc-300">
           Fora da comparação (nenhum aluno do 1º ao 5º ano com dado das plataformas contratadas,
-          entre os alunos do ano letivo corrente):{" "}
+          entre os {alunosDoAno(comAno)}):{" "}
           {foraDaComparacao.map((e) => e.nome).join(", ")}.
         </p>
       )}
 
-      <DiferencaEntreEscolas equidade={dados.equidade} modulos={mods}
+      <DiferencaEntreEscolas equidade={dados.equidade} modulos={mods} anosMistos={comAno}
                              escolasComparadas={(dados.escolas ?? []).filter(comparada).length} />
 
       <p className="px-1 text-xs text-zinc-500 dark:text-zinc-400">

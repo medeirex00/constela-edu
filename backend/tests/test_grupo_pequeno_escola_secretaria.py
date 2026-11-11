@@ -39,9 +39,10 @@ CAMPOS_LEITURA = ("media_elefante", "livros", "tempo_leitura_min", "livros_por_a
                   "livros_premiaveis", "tempo_premiaveis_min", "livros_por_matricula",
                   "tempo_por_matricula_min", "pontuacao_leitura")
 # As chaves de sempre (as de antes desta correção) — o Admin Global e a gestão
-# não podem ganhar nenhuma.
-CHAVES_PAINEL = {"rede_id", "modulos", "totais", "equidade", "escolas", "atencao",
-                 "recalculo_pendente"}
+# não podem ganhar nenhuma da proteção. (``anos_letivos``, G_VIRADA-6, é de todos os
+# perfis: os anos letivos em que as escolas da rede estão.)
+CHAVES_PAINEL = {"rede_id", "modulos", "anos_letivos", "totais", "equidade", "escolas",
+                 "atencao", "recalculo_pendente"}
 CHAVES_LADO_ESCOLA = {"tipo", "id", "nome", "total_alunos", "indicadores", "dimensoes",
                       "alcance", "notas"}
 _SENHA = "s3nh4"
