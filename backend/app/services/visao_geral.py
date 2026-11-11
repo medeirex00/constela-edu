@@ -17,9 +17,10 @@ O QUE É "ALUNO ATIVO" (a mesma regra nas duas rotas):
   leitura do espelho (``EventoAluno.ocorrido_em``) dentro dela, os dois eixos de
   ``relatorios_periodo._elefante``.
 * Matemática: GANHO > 0 de atividades na janela. Ter retrato não é ter atividade: toda
-  coleta grava retrato de todo aluno, e contar "tem retrato" (o viés de
-  ``relatorios_periodo.gerar`` em ``alunos.com_atividade``) faria a escola parecer
-  inteira ativa. Ganho de estrelas sem atividade não existe (``limitar_estrelas``).
+  coleta grava retrato de todo aluno, e contar "tem retrato" faria a escola parecer
+  inteira ativa. É a mesma regra do Relatório por Período (``matific.alunos_com_atividade``
+  e ``alunos.com_atividade`` de ``relatorios_periodo.gerar``). Ganho de estrelas sem
+  atividade não existe (``limitar_estrelas``).
 * Ativos = a união dos dois conjuntos (só das plataformas contratadas e com dado).
 
 AUSÊNCIA NÃO É ZERO. Sem coleta, o número é ``None`` (lacuna), nunca 0:
