@@ -14,6 +14,7 @@ import io
 import ipaddress
 import logging
 import socket
+import zipfile
 from datetime import datetime, timedelta, timezone
 from itertools import islice
 from typing import Callable, Iterator
@@ -25,6 +26,7 @@ from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.models import AvaliacaoExterna, Escola, FonteAvaliacao, ResultadoAvaliacao
+from app.services import planilhas
 from app.services.codificacao import decodificar_texto
 
 logger = logging.getLogger(__name__)
@@ -187,15 +189,119 @@ def _nao_vazia(linha: list) -> bool:
 # oficiais por escola têm poucos MB; 150MB é folga larga).
 _MAX_ZIP_INTERNO = 150 * 1024 * 1024
 
+# Planilha inflada (bomba de descompressão) — a defesa única é
+# ``planilhas.exigir_xlsx_contido``, conferida ANTES do openpyxl, com teto próprio:
+# o .xlsx do Ideb por escola é GRANDE (~50 MB comprimidos, 126 colunas, ~65 mil
+# escolas). Numa planilha fictícia no mesmo formato, o XML descomprimido dá ~8x o
+# comprimido — ~400 MB para o arquivo real —; 1 GB dá folga e ainda barra o abuso. A
+# razão de compressão (``planilhas.XLSX_MAX_RAZAO``) vale sempre. A aba é lida em
+# streaming (``read_only``); o que o openpyxl carrega INTEIRO é a tabela de textos
+# (sharedStrings) — nomes de escola e de município, alguns MB no arquivo real —, que
+# tem teto próprio: dentro do 1 GB, uma tabela de centenas de MB derrubaria o worker.
+_MB = 1024 * 1024
+_XLSX_MAX_DESCOMPRIMIDO = 1024 * _MB
+_XLSX_MAX_TEXTOS = 64 * _MB
+_MAX_TIPOS_DE_CONTEUDO = _MB     # [Content_Types].xml: poucos KB numa planilha real
+# A leitura das linhas não passa do limite do Excel (a dimensão declarada e o número
+# da linha no XML são do próprio arquivo) nem de ``planilhas.MAX_COLUNAS_LIDAS``
+# colunas (o arquivo do INEP tem 126).
+_MAX_LINHAS_EXCEL = 1_048_576
+
+
+def exigir_xlsx_contido(conteudo: bytes, max_total: int | None = None) -> None:
+    """Recusa (``ImportacaoRecusada``, 400 nas rotas) o .xlsx inflado ANTES de o
+    openpyxl abri-lo: ``planilhas.exigir_xlsx_contido`` (partes, compactação, razão e
+    o descomprimido real) com o teto ``max_total`` (padrão: o das avaliações), e a
+    tabela de textos (sharedStrings) até ``_XLSX_MAX_TEXTOS``. O que não é zip legível
+    passa: o openpyxl recusa como sempre."""
+    if max_total is None:
+        max_total = _XLSX_MAX_DESCOMPRIMIDO
+    try:
+        with zipfile.ZipFile(io.BytesIO(conteudo)) as pacote:
+            declarado = sum(info.file_size for info in pacote.infolist())
+    except Exception:  # noqa: BLE001 — não é zip legível: o leitor da planilha recusa
+        return
+    if declarado > max_total:
+        raise ImportacaoRecusada(
+            f"A planilha passa de {max_total // _MB} MB depois de descompactada e foi "
+            "recusada. Confira se é o arquivo oficial, como baixado, e envie de novo. "
+            "Nada foi gravado.")
+    try:
+        planilhas.exigir_xlsx_contido(conteudo, max_total=max_total)
+    except planilhas.PlanilhaRecusada as exc:
+        raise ImportacaoRecusada(f"{exc} Nada foi gravado.") from exc
+    _exigir_textos_contidos(conteudo)
+
+
+def _exigir_textos_contidos(conteudo: bytes) -> None:
+    """A tabela de textos que o openpyxl vai carregar inteira — achada como ele a acha
+    (``ExcelReader.read_strings``: o Override de [Content_Types].xml com o tipo de
+    sharedStrings) — não passa de ``_XLSX_MAX_TEXTOS``. O tamanho declarado basta: a
+    leitura do zip para nele (e confere o CRC). Roda DEPOIS da guarda única, que já
+    recusou a compactação sem teto por leitura."""
+    from openpyxl.packaging.manifest import Manifest
+    from openpyxl.xml.constants import ARC_CONTENT_TYPES, SHARED_STRINGS
+    from openpyxl.xml.functions import fromstring
+
+    try:
+        with zipfile.ZipFile(io.BytesIO(conteudo)) as pacote:
+            with pacote.open(ARC_CONTENT_TYPES) as entrada:
+                tipos = entrada.read(_MAX_TIPOS_DE_CONTEUDO + 1)
+            if len(tipos) > _MAX_TIPOS_DE_CONTEUDO:
+                raise ImportacaoRecusada(
+                    "A planilha tem a estrutura interna fora do normal e foi recusada. "
+                    "Abra o arquivo no Excel, salve de novo e envie outra vez. Nada foi "
+                    "gravado.")
+            parte = Manifest.from_tree(fromstring(tipos)).find(SHARED_STRINGS)
+            if parte is None:
+                return
+            tamanho = pacote.getinfo(parte.PartName[1:]).file_size
+    except ImportacaoRecusada:
+        raise
+    except Exception:  # noqa: BLE001 — pacote incompleto/ilegível: o openpyxl recusa
+        return
+    if tamanho > _XLSX_MAX_TEXTOS:
+        raise ImportacaoRecusada(
+            f"A tabela de textos da planilha passa de {_XLSX_MAX_TEXTOS // _MB} MB e foi "
+            "recusada — muito maior que a de um arquivo oficial. Confira se é o arquivo "
+            "certo, como baixado, e envie de novo. Nada foi gravado.")
+
+
+def _linhas_xlsx(conteudo: bytes) -> Iterator[list]:
+    """As linhas da 1ª aba com teto do que é PERCORRIDO: no máximo
+    ``_MAX_LINHAS_EXCEL`` linhas e ``planilhas.MAX_COLUNAS_LIDAS`` colunas, passados
+    ao openpyxl — a dimensão declarada (A1:XFD1048576 em 2 KB) e o número da linha no
+    XML não alargam a leitura. Com dimensão declarada, cada linha tem a largura dela
+    (até o teto), como antes; sem, vai até a última célula preenchida. A linha toda
+    vazia é pulada sem custo em Python (``count`` roda em C)."""
+    from openpyxl import load_workbook
+
+    wb = load_workbook(io.BytesIO(conteudo), read_only=True, data_only=True)
+    try:
+        aba = wb.active
+        declaradas = aba.max_column
+        max_col = min(declaradas or planilhas.MAX_COLUNAS_LIDAS, planilhas.MAX_COLUNAS_LIDAS)
+        max_row = min(aba.max_row or _MAX_LINHAS_EXCEL, _MAX_LINHAS_EXCEL)
+        for row in aba.iter_rows(values_only=True, max_row=max_row, max_col=max_col):
+            fim = len(row)
+            if row.count(None) == fim:
+                continue
+            if not declaradas:
+                while row[fim - 1] is None:
+                    fim -= 1
+            yield list(row[:fim])
+    finally:
+        wb.close()
+
 
 def _iterar_grade(conteudo: bytes, nome: str) -> Iterator[list]:
     """GERA as linhas não-vazias do arquivo (1ª aba do XLSX, ou CSV) em STREAMING
     — não materializa a grade inteira (senão um XLSX comprimido explodiria em
     memória). Arquivos oficiais do INEP vêm em ZIP: extrai o 1º XLSX/CSV de dentro.
-    Nunca levanta por conteúdo: arquivo ilegível → não gera nada."""
+    Arquivo ilegível → não gera nada. LEVANTA ``ImportacaoRecusada`` (antes da 1ª
+    linha, nada gravado) só para o .xlsx inflado (``exigir_xlsx_contido``)."""
     nome_l = (nome or "").lower()
     if nome_l.endswith(".zip"):
-        import zipfile
         try:
             with zipfile.ZipFile(io.BytesIO(conteudo)) as zf:
                 interno = next(
@@ -210,17 +316,14 @@ def _iterar_grade(conteudo: bytes, nome: str) -> Iterator[list]:
             return
         yield from _iterar_grade(dados, interno)  # recursa com o arquivo de dentro
         return
+    eh_xlsx = nome_l.endswith((".xlsx", ".xlsm"))
+    if eh_xlsx:
+        exigir_xlsx_contido(conteudo)   # fora do try: a recusa chega a quem chamou
     try:
-        if nome_l.endswith((".xlsx", ".xlsm")):
-            from openpyxl import load_workbook
-            wb = load_workbook(io.BytesIO(conteudo), read_only=True, data_only=True)
-            try:
-                for row in wb.active.iter_rows(values_only=True):
-                    linha = list(row)
-                    if _nao_vazia(linha):
-                        yield linha
-            finally:
-                wb.close()
+        if eh_xlsx:
+            for linha in _linhas_xlsx(conteudo):
+                if _nao_vazia(linha):
+                    yield linha
         else:
             # O CSV do Excel em português vem em Windows-1252 (e o "Texto Unicode" em
             # UTF-16): o componente lido da coluna é chave gravada.
