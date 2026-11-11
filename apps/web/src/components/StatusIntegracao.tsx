@@ -579,11 +579,16 @@ export function situacaoIntegracao(
     const alunos = contagem && temContagemPorAluno(contagem) ? contagem.qtd_alunos : null;
     const falhas = typeof contagem?.qtd_falhas === "number" ? contagem.qtd_falhas : null;
     const aplicados = alunos !== null ? ` (${plural(alunos, "aluno atualizado", "alunos atualizados")})` : "";
-    // Parte que falhou por MUDANÇA DE FORMATO (alerta "Formato do relatório mudou"
-    // aberto): a próxima coleta lê o mesmo formato, então repetir não completa — o
-    // alerta do servidor também não manda repetir (35993e13).
+    // Com o alerta "Formato do relatório mudou" aberto, a tela não sabe se a parte que
+    // falhou NESTA coleta foi só a do formato (repetir não completa — 35993e13), se
+    // houve também uma turma que falhou de passagem (o servidor diz as duas coisas:
+    // "Sincronize de novo para completar" e "o que veio em outro formato não volta"),
+    // ou se o alerta de formato ficou aberto de uma coleta anterior (a parcial com
+    // falha não o fecha) e esta falhou só por tempo esgotado. Quem diz, por execução,
+    // é o alerta "Coleta parcial" (_mensagem_parcial no servidor): a frase manda lê-lo
+    // e repete só o que vale nos três casos (REV2-SYNC2-1).
     const proximoPasso = alertasAbertos.some((a) => a.tipo === "parser_incompativel")
-      ? `Veja o alerta “${TIPO_ALERTA.parser_incompativel}”: sincronizar de novo não completa.`
+      ? `Veja os alertas: o “${TIPO_ALERTA.coleta_parcial}” diz se sincronizar de novo completa o que falhou; o que veio em outro formato não volta com outra coleta (alerta “${TIPO_ALERTA.parser_incompativel}”).`
       : "Veja o alerta e sincronize de novo para completar.";
     if (alunos === 0 && motivoUltimo === "coleta_parcial") {
       // D2(6): falhou só o endpoint acessório (nomes do Matific) e as contas já

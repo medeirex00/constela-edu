@@ -3,12 +3,20 @@ import { describe, expect, it } from "vitest";
 import { situacaoIntegracao } from "../components/StatusIntegracao";
 import type { Execucao, PlataformaStatus } from "../components/StatusIntegracao";
 
-// Coleta parcial em que uma parte falhou por MUDANÇA DE FORMATO (alerta
-// "Formato do relatório mudou", tipo parser_incompativel, aberto): sincronizar de
-// novo não completa — a próxima coleta lê o mesmo formato. Desde 35993e13 a turma do
-// Elefante cujos livros vêm sem data em todas as linhas sai 'parcial/coleta_parcial'
-// com essa falha, e o alerta do servidor já não manda repetir; a frase da tela ainda
-// mandava "sincronize de novo para completar".
+// Coleta parcial com o alerta "Formato do relatório mudou" (tipo parser_incompativel)
+// aberto. A tela não sabe, por execução, se o que falhou foi SÓ a mudança de formato:
+// - só formato: repetir não completa (o alerta "Coleta parcial" do servidor não manda
+//   repetir — 35993e13);
+// - MISTA (uma turma falhou de passagem — http 502, tempo esgotado — e outra veio em
+//   outro formato): o servidor diz as duas coisas, "Sincronize de novo para completar"
+//   e "O que veio em outro formato não volta com outra coleta" (contrato de
+//   test_aud_sync_matific_numero_ilegivel.py::
+//   test_formato_ao_lado_de_falha_que_repetir_completa_diz_as_duas_coisas);
+// - alerta de formato que ficou aberto de uma coleta ANTERIOR (a parcial com falha
+//   não o fecha) e a parcial nova só por tempo esgotado: repetir completa.
+// O cartão não pode afirmar nem "não completa" nem "completa": manda ler o "Coleta
+// parcial" (que diz, por execução, se repetir completa) e repete o que o servidor diz
+// do formato. (REV2-SYNC2-1, sobre PEND-9.)
 
 function execucao(over: Partial<Execucao> = {}): Execucao {
   return {
@@ -33,24 +41,48 @@ function plataforma(e: Execucao): PlataformaStatus {
 }
 
 const FORMATO = [{ tipo: "coleta_parcial" }, { tipo: "parser_incompativel" }];
+const PROXIMO_PASSO =
+  "Veja os alertas: o “Coleta parcial” diz se sincronizar de novo completa o que falhou; "
+  + "o que veio em outro formato não volta com outra coleta (alerta “Formato do relatório mudou”).";
 
-describe("parcial com o formato do relatório mudado não manda sincronizar de novo", () => {
-  it("com alunos aplicados", () => {
+/** Nem "não completa" nem "completa": quem diz, por execução, é o "Coleta parcial". */
+function naoAfirmaSeRepetirCompleta(frase: string) {
+  expect(frase).not.toMatch(/não completa/);
+  expect(frase).not.toMatch(/sincronize de novo para completar/i);
+  expect(frase).toContain(PROXIMO_PASSO);
+}
+
+describe("parcial com o alerta de formato aberto não afirma se repetir completa", () => {
+  it("só formato, com alunos aplicados", () => {
     const s = situacaoIntegracao(plataforma(execucao()), "Elefante Letrado", FORMATO);
     expect(s.chave).toBe("parcial");
     expect(s.frase).toContain("7 alunos atualizados");
-    expect(s.frase).not.toMatch(/sincronize de novo para completar/);
-    expect(s.frase).toContain(
-      "Veja o alerta “Formato do relatório mudou”: sincronizar de novo não completa.");
+    naoAfirmaSeRepetirCompleta(s.frase);
   });
 
   it("sem aluno aplicado (contas conferidas)", () => {
     const s = situacaoIntegracao(plataforma(execucao({ qtd_alunos: 0 })), "Elefante Letrado",
       FORMATO);
     expect(s.rotulo).toBe("Verificado em parte");
-    expect(s.frase).not.toMatch(/sincronize de novo para completar/);
-    expect(s.frase).toContain(
-      "Veja o alerta “Formato do relatório mudou”: sincronizar de novo não completa.");
+    naoAfirmaSeRepetirCompleta(s.frase);
+  });
+
+  it("MISTA: uma turma falhou de passagem e outra veio em outro formato (2 falhas)", () => {
+    // O servidor diz ali "Sincronize de novo para completar." E "O que veio em outro
+    // formato não volta…": o cartão não pode dizer "sincronizar de novo não completa".
+    const s = situacaoIntegracao(plataforma(execucao({ qtd_falhas: 2 })), "Elefante Letrado",
+      FORMATO);
+    expect(s.chave).toBe("parcial");
+    expect(s.frase).toContain("(2 falhas)");
+    naoAfirmaSeRepetirCompleta(s.frase);
+  });
+
+  it("alerta de formato de uma coleta anterior e parcial nova só por tempo esgotado", () => {
+    // A parcial com falha não fecha o parser_incompativel aberto antes: repetir
+    // completa a turma desta coleta.
+    const s = situacaoIntegracao(plataforma(execucao({ id: 31, qtd_falhas: 1 })),
+      "Elefante Letrado", FORMATO);
+    naoAfirmaSeRepetirCompleta(s.frase);
   });
 
   it("sem o alerta de formato, a frase de sempre", () => {
