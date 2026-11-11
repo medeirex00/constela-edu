@@ -56,7 +56,10 @@ efeitos colaterais conhecidos:
   `tests/test_import_casamento_roster.py:173`.
 
 Já minimizado de vez (código do Quest): `quest.nome_escolhido` não grava mais o nome que
-a criança escolheu (o valor vigente está no perfil e some com ele); `quest.login` e
+a criança escolheu (o valor vigente está no perfil e some com ele); `quest.avatar` (uma
+entrada por toque no vestiário) grava só os `slots` trocados, não a aparência (tom de
+pele, cabelo, acessórios) — antes guardava o avatar inteiro a cada toque; as entradas
+antigas perdem o `avatar` na exclusão permanente da criança (seção 2.3); `quest.login` e
 `quest.login_falhou` já mascaravam o IP e não gravam o código.
 
 ### 2.2 Expurgo por categoria — desligado (todos os prazos = 0)
@@ -156,7 +159,9 @@ contadores parados há mais de 1 dia e sem bloqueio vigente.
   (`aluno.fundido`), as duas datas de `aluno.nascimento_divergente` e os valores dos
   itens de nascimento e de RA das `divergencias` de `aluno.fundido_com_conflito` viram
   `[removido]` (os itens ficam "nascimento [removido]" e "RA [removido]": o registro de
-  que houve conflito continua, a data e o número saem);
+  que houve conflito continua, a data e o número saem); e o `avatar` inteiro das
+  entradas `quest.avatar` gravadas antes da minimização do vestiário (seção 2.1) vira
+  `[removido]` (a entrada, com a data da troca, fica);
 - o RA da linha da Lista Piloto em `aluno.identidade_vinculada` (a importação o grava
   em todo vínculo que troca o nome, qualquer que seja o motivo) também vira
   `[removido]`: o log não guarda a via do casamento, então o número não prova ser o

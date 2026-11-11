@@ -1006,6 +1006,12 @@ _PREFIXOS_DE_DADO_NA_DIVERGENCIA = (_PREFIXO_NASCIMENTO, _PREFIXO_RA)
 _CHAVES_DE_RETRATO = frozenset({"foto_pre_fusao"})
 _CAMPO_FICHA_DO_RETRATO = "ficha"
 
+# A aparência da criança no Quest (``quest.avatar``): até a minimização do
+# vestiário, cada troca gravava o avatar INTEIRO (tom de pele, cabelo...) no log
+# permanente. Hoje a entrada guarda só os ``slots`` trocados; nas entradas antigas
+# da própria criança, o ``avatar`` inteiro vira "[removido]" (o fato e a data ficam).
+_CHAVES_DE_APARENCIA = frozenset({"avatar"})
+
 
 def _divergencia_sem_dado(texto):
     """"RA 123 × 456" → "RA [removido]"; "nascimento A × B" → "nascimento [removido]"."""
@@ -1036,8 +1042,9 @@ def _anonimizar_logs_do_aluno(db: Session, escola_id: int,
     porquê técnico (decisão, motivo, turma, a origem de um vínculo) — continuam
     intactos; só o nome de pessoa (e o dado pessoal de ``_CHAVES_DE_DADO_PESSOAL``
     — com o RA do ``aluno.identidade_vinculada`` —, os valores dos itens de
-    nascimento e de RA de ``divergencias`` e a ``ficha`` da ``foto_pre_fusao``, com
-    o RA dela) vira ``"[removido]"``. O ``entidade_id`` fica como referência
+    nascimento e de RA de ``divergencias``, a ``ficha`` da ``foto_pre_fusao``, com
+    o RA dela, e o ``avatar`` do Quest — ``_CHAVES_DE_APARENCIA``) vira
+    ``"[removido]"``. O ``entidade_id`` fica como referência
     anônima.
     ``logs_auditoria`` é permanente por design (``models/nota.py``).
 
@@ -1138,6 +1145,8 @@ def _anonimizar_logs_do_aluno(db: Session, escola_id: int,
                       or (por_chave and (chave in _CHAVES_SO_DE_NOME
                                          or _parece_nome_do_alvo(item)))))
                 or (por_chave and chave in _CHAVES_DE_DADO_PESSOAL and item.strip())):
+            return _MARCA_REMOVIDO
+        if por_chave and chave in _CHAVES_DE_APARENCIA and isinstance(item, dict) and item:
             return _MARCA_REMOVIDO
         redigido = _redigir(item, por_chave=por_chave)
         if por_chave and chave in _CHAVES_DE_DIVERGENCIA and isinstance(redigido, list):
