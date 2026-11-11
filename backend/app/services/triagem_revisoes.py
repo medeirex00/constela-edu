@@ -70,8 +70,12 @@ TEXTO = {
                                 "sem conta concorrente",
     SEM_CANDIDATO: "nenhum aluno corresponde — criar ficha é decisão de gestão",
     CONFLITO_IDENTIDADE: "a conta da plataforma pertence a outra ficha",
-    MULTI_IDENTIDADE: "a ficha já tem outra conta nesta plataforma — pode ser "
-                      "conta duplicada ou outra criança",
+    # Três situações (``_triar_um`` e a disputa entre pendências seguras): a ficha
+    # já tem outra conta, ou outra conta numa pendência aberta leva a ela — nesta,
+    # a ficha pode não ter conta nenhuma. O ``conflitos`` diz qual é.
+    MULTI_IDENTIDADE: "outra conta desta plataforma também leva a esta ficha (já "
+                      "vinculada a ela ou numa pendência aberta) — pode ser conta "
+                      "duplicada ou outra criança",
     AMBIGUA: "mais de um candidato e nenhuma evidência objetiva desempata",
     SERIE_INCOMPATIVEL: "a série do relatório não é a da ficha",
     SERIE_INDETERMINADA: "não dá para ler a série dos dois lados e não há "

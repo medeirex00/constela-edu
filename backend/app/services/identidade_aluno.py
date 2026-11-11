@@ -95,7 +95,13 @@ CAMPO_ID_EXTERNO = {"matific": "matific_uuid", "elefante": "elefante_student_id"
 MOTIVOS = {
     "identidade_de_ficha_inativa": "a identidade da plataforma pertence a uma ficha inativa",
     "identidade_de_outro_aluno": "a identidade da plataforma já pertence a outro aluno",
-    "outra_identidade_na_plataforma": "o aluno encontrado já tem outra conta nesta plataforma",
+    # Três caminhos (``_para_aluno`` e o passo 1 de ``decidir``): a ficha já tem
+    # outra conta; outra conta DESTE relatório leva a ela; ou a leva uma conta numa
+    # pendência aberta. Nos dois últimos a ficha pode não ter conta nenhuma.
+    "outra_identidade_na_plataforma":
+        "outra conta nesta plataforma também leva a este aluno (já vinculada à ficha, "
+        "neste relatório ou numa pendência em Revisões de identidade): não dá para "
+        "saber qual delas é a criança",
     "ficha_inativa": "o único candidato está com a ficha inativa",
     "correspondencia_insegura": "nome parecido, mas a correspondência não é segura",
     "candidatos_multiplos": "mais de um aluno plausível na sala",
