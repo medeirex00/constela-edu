@@ -16,9 +16,9 @@ produção.
 
 | Dado | Onde | Prazo hoje | Mecanismo |
 |---|---|---|---|
-| Cópias de relatórios (contêm nomes) | `exports/` | **7 dias** (`EXPORTS_RETENCAO_DIAS`; 0 desliga) | expurgo a cada nova exportação (`routers/relatorios.py`) |
+| Cópias de relatórios (contêm nomes) | `exports/` | **7 dias** (`EXPORTS_RETENCAO_DIAS`; 0 desliga) | expurgo no boot e a cada hora (`core/expurgo_arquivos.py`), além de a cada nova exportação |
 | Conversas do assistente de IA | `conversas_ia`, `mensagens_ia` | **90 dias** (`IA_RETENCAO_DIAS`; mínimo 1 — ao contrário das `RETENCAO_*`, 0 NÃO desliga: a purga recusa e não apaga nada, o boot com `ENV=producao` recusa e o de dev avisa no log) | no boot e por `python -m scripts.purgar_ia` (o que sai para o provedor externo e quem o liga: `ASSISTENTE-IA.md`) |
-| Prévia de importação não confirmada | `uploads/temporarios/` | **24 h** (`IDADE_MAXIMA_TEMP_S`) | a cada nova análise |
+| Prévia de importação não confirmada | `uploads/temporarios/` | **24 h** (`IDADE_MAXIMA_TEMP_S`) | no boot e a cada hora (`core/expurgo_arquivos.py`), além de a cada nova análise de PDF/XLSX; some em até 25 h |
 | Original de importação confirmada | `uploads/<plataforma>/` | **sem prazo** | — |
 | Link de redefinição de senha | `tokens_reset_senha` (só o hash) | **60 min** (`RESET_SENHA_EXPIRA_MIN`), uso único | validade no token |
 | Sessão do Edu (JWT) | navegador (`localStorage`) / celular (SecureStore) | **8 h** (`ACCESS_TOKEN_EXPIRE_MINUTES`) | expiração + `token_version` |
@@ -240,7 +240,7 @@ a exclusão de turma com alunos não grava a marca)
   renomeado (pode ser dela — `arquivo_original` também guarda o nome que o cliente
   mandou — e o `/confirmar` não marca qual linha o servidor gravou); só a linha desta
   escola fica `[removido]`. O arquivo fica no disco com o nome. Pergunta 9 da seção 5;
-- prévias não confirmadas em `uploads/temporarios/` (expiram em 24 h);
+- prévias não confirmadas em `uploads/temporarios/` (expiram em 24 h; o expurgo de fundo as apaga em até 25 h);
 - logs da aplicação (Railway) e eventos do Sentry;
 - cópias fora do sistema (downloads, e-mail) e a **plataforma de origem**: a conta
   continua ativa lá até ser encerrada. O Constela passa a ignorá-la nas coletas (marca

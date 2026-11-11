@@ -36,10 +36,10 @@ arquivo nas duas pastas fica, por mais velho que seja — em desenvolvimento, se
 Ficam de fora, ainda, os originais confirmados (#2, prazo a decidir: ver a seção 5), os
 arquivos que começam com ponto (`.gitkeep`) e as subpastas de `EXPORTS_DIR`. A suíte de
 testes do backend aponta `UPLOADS_DIR` e `EXPORTS_DIR` para uma pasta temporária da sessão
-(`backend/tests/conftest.py`) e nunca mexe nas pastas do repositório. Ainda falta: a limpeza
-que a própria exportação faz (`routers/relatorios.py`) e a que a análise de PDF/XLSX faz
-(`routers/importacoes.py`) não usam esta regra — na ação delas, ainda apagam qualquer arquivo
-vencido do primeiro nível de `EXPORTS_DIR` e qualquer PDF/XLSX vencido de `temporarios`.
+(`backend/tests/conftest.py`) e nunca mexe nas pastas do repositório. A limpeza que a
+própria exportação faz (`routers/relatorios.py`) e a que a análise de PDF/XLSX faz
+(`routers/importacoes.py`) chamam as mesmas funções (`expurgar_exports`, `limpar_temporarios`):
+também só apagam o que o app grava.
 
 Logs não ficam no disco, mas ficam guardados fora dele (Railway). Até este pacote, a
 linha de acesso do uvicorn levava a URL crua — token do painel público, token do link

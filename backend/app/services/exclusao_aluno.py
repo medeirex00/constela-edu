@@ -55,7 +55,9 @@ tem como ser reconhecida: a tela avisa.
 
 FORA DO ALCANCE DESTE CÓDIGO (docs/lgpd/RETENCAO-TECNICA.md): backups já feitos,
 originais de relatório de TURMA (várias crianças no mesmo arquivo), prévias não
-confirmadas em uploads/temporarios (expiram sozinhas), logs da aplicação/Sentry,
+confirmadas em uploads/temporarios (expiram em 24 h: o expurgo de fundo,
+app/core/expurgo_arquivos.py, as apaga em até 25 h, no boot e a cada hora), logs da
+aplicação/Sentry,
 cópias fora do sistema e a plataforma de origem, onde a conta continua ativa até ser
 encerrada lá (o Constela só passa a ignorá-la).
 
