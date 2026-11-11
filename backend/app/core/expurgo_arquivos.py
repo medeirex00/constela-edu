@@ -18,14 +18,19 @@ cada ``INTERVALO_S`` (1 h). O prazo efetivo é, então, o prazo mais até uma ho
 workers apagando o mesmo arquivo não é problema (``missing_ok``). Nunca derruba o boot nem a
 API: um erro de disco num arquivo pula o arquivo; um erro numa pasta não impede a outra.
 
+Só são apagados os arquivos com o NOME que o próprio app grava (``NOME_DA_PREVIA``,
+``NOME_DA_COPIA``). Em desenvolvimento, sem ``DADOS_DIR``, ``EXPORTS_DIR`` é
+``<raiz do repositório>/exports`` — onde o dono guarda as entregas — e o expurgo roda em todo
+boot: um arquivo com outro nome ali ou em ``temporarios`` (do dono, do operador) fica, por mais
+velho que seja.
 Os ORIGINAIS confirmados (``UPLOADS_DIR/<plataforma>/``) NÃO entram: o prazo deles é decisão
 do dono (ARMAZENAMENTO.md, seção 5). Também ficam os arquivos que começam com ponto
 (``.gitkeep``) e as subpastas de ``EXPORTS_DIR``.
 """
 from __future__ import annotations
 
-import itertools
 import logging
+import re
 import threading
 import time
 from collections.abc import Callable
@@ -41,8 +46,21 @@ IDADE_MAXIMA_TEMP_S = 24 * 3600
 INTERVALO_S = 3600.0
 _DIA_S = 86_400
 
+#: O nome da prévia: o token que ``routers/importacoes._guardar_temporario`` grava (também
+#: pela sincronização) e que a confirmação aceita (``importacoes._TOKEN_VALIDO``, a mesma
+#: regra; um teste trava as duas juntas).
+NOME_DA_PREVIA = re.compile(r"^[0-9a-f]{32}\.(pdf|xlsx)$")
+#: O nome da cópia de relatório: ``<tipo>_AAAAMMDD_HHMMSS.<formato>`` de
+#: ``routers/relatorios`` (``ranking``, ``alunos``, ``livros``, ``ranking_cartaz``,
+#: ``ranking_cartaz_<matéria>``). ``[0-9]`` e não ``\d``, que aceita outros dígitos Unicode.
+NOME_DA_COPIA = re.compile(r"^[a-z_]+_[0-9]{8}_[0-9]{6}\.(csv|xlsx|pdf)$")
 
-def _apagar_se_mais_velho(arquivo: Path, limite: float) -> bool:
+
+def _apagar_se_mais_velho(arquivo: Path, limite: float, nome: re.Pattern[str]) -> bool:
+    """Apaga ``arquivo`` se ele tem o ``nome`` que o app grava e é mais velho que
+    ``limite``. Arquivo de outro nome (do dono, do operador) nunca é tocado."""
+    if not nome.fullmatch(arquivo.name):
+        return False
     try:
         if arquivo.is_file() and arquivo.stat().st_mtime < limite:
             arquivo.unlink(missing_ok=True)
@@ -53,27 +71,27 @@ def _apagar_se_mais_velho(arquivo: Path, limite: float) -> bool:
 
 
 def limpar_temporarios(agora: float | None = None) -> int:
-    """Apaga as prévias (PDF/XLSX) com mais de ``IDADE_MAXIMA_TEMP_S`` em
-    ``UPLOADS_DIR/temporarios``. Devolve quantas apagou."""
+    """Apaga as prévias (PDF/XLSX com o nome ``NOME_DA_PREVIA``) com mais de
+    ``IDADE_MAXIMA_TEMP_S`` em ``UPLOADS_DIR/temporarios``. Devolve quantas apagou."""
     pasta = Path(settings.UPLOADS_DIR) / "temporarios"
     if not pasta.is_dir():
         return 0
     limite = (time.time() if agora is None else agora) - IDADE_MAXIMA_TEMP_S
-    return sum(_apagar_se_mais_velho(arquivo, limite)
-               for arquivo in itertools.chain(pasta.glob("*.pdf"), pasta.glob("*.xlsx")))
+    return sum(_apagar_se_mais_velho(arquivo, limite, NOME_DA_PREVIA)
+               for arquivo in pasta.iterdir())
 
 
 def expurgar_exports(agora: float | None = None) -> int:
     """Apaga as cópias de relatório com mais de ``EXPORTS_RETENCAO_DIAS`` em ``EXPORTS_DIR``
-    (só os arquivos do primeiro nível, menos os que começam com ponto). ``0`` desliga.
-    Devolve quantas apagou."""
+    (só os arquivos do primeiro nível com o nome ``NOME_DA_COPIA``; as subpastas e qualquer
+    outro arquivo ficam). ``0`` desliga. Devolve quantas apagou."""
     dias = settings.EXPORTS_RETENCAO_DIAS
     pasta = Path(settings.EXPORTS_DIR)
     if dias <= 0 or not pasta.is_dir():
         return 0
     limite = (time.time() if agora is None else agora) - dias * _DIA_S
-    return sum(_apagar_se_mais_velho(arquivo, limite)
-               for arquivo in pasta.iterdir() if not arquivo.name.startswith("."))
+    return sum(_apagar_se_mais_velho(arquivo, limite, NOME_DA_COPIA)
+               for arquivo in pasta.iterdir())
 
 
 def expurgar(agora: float | None = None) -> tuple[int, int]:

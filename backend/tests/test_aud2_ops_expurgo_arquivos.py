@@ -13,6 +13,7 @@ o prazo deles é decisão do dono. Tudo fictício, em pastas temporárias do tes
 """
 import os
 import time
+from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
@@ -160,3 +161,95 @@ def test_o_prazo_da_previa_e_o_mesmo_da_rota_de_importacao():
     assert expurgo_arquivos.IDADE_MAXIMA_TEMP_S == 24 * HORA
     assert getattr(importacoes, "IDADE_MAXIMA_TEMP_S",
                    expurgo_arquivos.IDADE_MAXIMA_TEMP_S) == expurgo_arquivos.IDADE_MAXIMA_TEMP_S
+
+
+# ---------------------------------------------------------------------------
+# REV2-OPS-1: só os arquivos com o NOME que o próprio app grava
+# ---------------------------------------------------------------------------
+# Em desenvolvimento (sem DADOS_DIR), EXPORTS_DIR é <raiz do repositório>/exports — a
+# pasta onde o dono guarda as entregas — e o expurgo roda em todo boot do app. Antes, ele
+# apagava QUALQUER arquivo de primeiro nível de EXPORTS_DIR (e qualquer *.pdf/*.xlsx de
+# temporarios) mais velho que o prazo: um arquivo solto do dono sumia em 7 dias.
+
+
+def test_boot_so_apaga_os_arquivos_com_o_nome_que_o_app_grava(pastas, monkeypatch):
+    temporarios = settings.UPLOADS_DIR / "temporarios"
+    previa_do_app = _arquivo(temporarios / ("0123456789abcdef" * 2 + ".xlsx"), 72 * HORA)
+    copias_do_app = [
+        _arquivo(settings.EXPORTS_DIR / nome, 30 * DIA)
+        for nome in ("ranking_20261001_120000.csv", "alunos_20261001_120000.xlsx",
+                     "livros_20261001_120000.pdf", "ranking_cartaz_20261001_120000.pdf",
+                     "ranking_cartaz_matematica_20261001_120000.pdf")]
+    de_outro_dono = [
+        _arquivo(settings.EXPORTS_DIR / nome, 30 * DIA)
+        for nome in ("PROPOSTA-ficticia.pdf", "contrato_ficticio.pdf", "notas.txt",
+                     "Ranking_20261001_120000.pdf", "alunos_20261001_120000.docx",
+                     "alunos-copia_20261001_120000.pdf", "alunos_20261001_1200.pdf",
+                     "alunos_20261001_120000.pdf.bak")]
+    de_outro_dono += [
+        _arquivo(temporarios / nome, 30 * DIA)
+        for nome in ("anotacao-do-operador.pdf", "g" * 32 + ".pdf", "a" * 31 + ".pdf",
+                     "a" * 32 + ".csv", "A" * 32 + ".pdf", "a" * 32 + ".pdf.bak")]
+
+    _boot_do_app(monkeypatch)
+
+    assert not previa_do_app.exists(), "a prévia vencida com o nome do app sobreviveu"
+    sobreviventes = [c.name for c in copias_do_app if c.exists()]
+    assert not sobreviventes, f"cópias vencidas com o nome do app sobreviveram: {sobreviventes}"
+    apagados = [a.name for a in de_outro_dono if not a.exists()]
+    assert not apagados, f"o expurgo apagou arquivos que o app não grava: {apagados}"
+
+
+def test_o_padrao_da_previa_e_o_mesmo_token_da_rota_de_importacao(pastas):
+    """O nome que ``_guardar_temporario`` grava (também pela sincronização) é o que o
+    expurgo reconhece; e a regra é a mesma que a confirmação aceita (``_TOKEN_VALIDO``)."""
+    from app.core import expurgo_arquivos
+    from app.routers import importacoes
+
+    assert expurgo_arquivos.NOME_DA_PREVIA.pattern == importacoes._TOKEN_VALIDO.pattern
+    for extensao in ("pdf", "xlsx"):
+        token = importacoes._guardar_temporario(b"conteudo ficticio", extensao)
+        assert token and (settings.UPLOADS_DIR / "temporarios" / token).is_file()
+        assert expurgo_arquivos.NOME_DA_PREVIA.fullmatch(token), token
+
+
+def test_as_copias_que_as_rotas_gravam_tem_o_nome_que_o_expurgo_reconhece(pastas, cliente,
+                                                                         escola_completa,
+                                                                         monkeypatch):
+    """Cada relatório exportado (os 3 tipos, nos 3 formatos que não abrem navegador) e os 3
+    cartazes deixam em EXPORTS_DIR uma cópia com nome que o expurgo reconhece — senão a
+    cópia, com nomes de crianças, nunca expiraria."""
+    from app.core import expurgo_arquivos
+    from app.services import relatorios as svc
+
+    monkeypatch.setattr(svc, "gerar_cartaz_ranking", lambda *a, **k: b"%PDF-1.4 ficticio")
+    monkeypatch.setattr(svc, "gerar_lista_alunos_pdf", lambda *a, **k: b"%PDF-1.4 ficticio")
+    monkeypatch.setattr(svc, "gerar_catalogo_livros_pdf",
+                        lambda *a, **k: b"%PDF-1.4 ficticio")
+    base = f"/api/v1/escolas/{escola_completa['escola'].id}"
+    urls = [f"{base}/relatorios/{tipo}?formato={formato}"
+            for tipo in sorted(svc.FONTES) for formato in ("csv", "xlsx")]
+    urls += [f"{base}/relatorios/{tipo}?formato=pdf" for tipo in sorted(svc.FONTES)]
+    urls += [f"{base}/ranking/cartaz", f"{base}/ranking/cartaz?dimensao=leitura",
+             f"{base}/ranking/cartaz?dimensao=matematica"]
+    for url in urls:
+        resposta = cliente.get(url)
+        assert resposta.status_code == 200, (url, resposta.status_code, resposta.text[:200])
+
+    copias = sorted(a.name for a in settings.EXPORTS_DIR.iterdir() if a.is_file())
+    assert len(copias) == len(urls), copias
+    fora = [nome for nome in copias if not expurgo_arquivos.NOME_DA_COPIA.fullmatch(nome)]
+    assert not fora, f"cópias que o expurgo não reconhece (nunca expirariam): {fora}"
+
+
+def test_a_suite_nao_grava_nas_pastas_do_checkout():
+    """Sem DADOS_DIR, UPLOADS_DIR e EXPORTS_DIR seriam as pastas do repositório, e todo
+    ``with TestClient(app)`` (o boot liga o expurgo) e toda exportação de teste mexeria
+    nelas. O conftest aponta as duas para uma pasta temporária da sessão."""
+    from app.core.config import PROJECT_ROOT
+
+    raiz = PROJECT_ROOT.resolve()
+    for pasta in (settings.UPLOADS_DIR, settings.EXPORTS_DIR):
+        assert not Path(pasta).resolve().is_relative_to(raiz), pasta
+    assert os.environ.get("UPLOADS_DIR") == str(settings.UPLOADS_DIR)  # subprocessos herdam
+    assert os.environ.get("EXPORTS_DIR") == str(settings.EXPORTS_DIR)

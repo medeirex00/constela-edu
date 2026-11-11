@@ -2,13 +2,28 @@
 import io
 import logging
 import os
+import shutil
 import sys
+import tempfile
 
 # Sem saída para a internet a partir do runner: o app.main dispara no import o
 # diagnóstico do robô (GET a ipinfo.io/ipapi.co e o Chromium abrindo as páginas de
 # login). Antes de QUALQUER import do app: o Settings lê o ambiente uma vez, no import
 # de app.core.config. Os subprocessos dos testes herdam o valor.
 os.environ["AUTOMACAO_VERIFICAR_NO_BOOT"] = "false"
+
+# As pastas que a API grava (UPLOADS_DIR, EXPORTS_DIR) numa pasta temporária da sessão,
+# nunca no checkout. Sem DADOS_DIR elas seriam <raiz do repositório>/uploads e /exports —
+# onde ficam as entregas do dono —, e o expurgo de fundo (app/core/expurgo_arquivos.py)
+# roda em todo boot do app, isto é, em todo ``with TestClient(app)``; e toda exportação de
+# teste deixaria lá uma cópia. As duas explícitas, e não DADOS_DIR: um UPLOADS_DIR ou
+# EXPORTS_DIR do .env de quem roda ganharia de DADOS_DIR. Antes de QUALQUER import do app,
+# pelo mesmo motivo de acima; os subprocessos dos testes herdam. Apagada no fim da sessão
+# (``pytest_unconfigure``). Quem precisa de pastas próprias continua trocando as duas no
+# ``settings`` com monkeypatch.
+_PASTA_DE_DADOS_DA_SESSAO = tempfile.mkdtemp(prefix="constela-testes-dados-")
+os.environ["UPLOADS_DIR"] = os.path.join(_PASTA_DE_DADOS_DA_SESSAO, "uploads")
+os.environ["EXPORTS_DIR"] = os.path.join(_PASTA_DE_DADOS_DA_SESSAO, "exports")
 
 import pytest
 from fastapi.testclient import TestClient
@@ -101,6 +116,7 @@ def pytest_unconfigure(config):
     está nele sai no fim, como sempre, e o que vier depois vai para ``sys.__stderr__``,
     que o pytest nunca fecha. FileHandler fica como está (tem arquivo próprio), e um
     buffer em memória (o do caplog) não é stream da captura."""
+    shutil.rmtree(_PASTA_DE_DADOS_DA_SESSAO, ignore_errors=True)
     stderr_real = sys.__stderr__
     if stderr_real is None:                        # pythonw: não há para onde mandar
         return

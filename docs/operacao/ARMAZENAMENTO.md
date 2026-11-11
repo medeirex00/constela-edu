@@ -27,8 +27,19 @@ com mais de 24 h e a cópia de relatório com mais de `EXPORTS_RETENCAO_DIAS` (0
 esta). Roda numa thread por processo: uma passada logo no boot e depois a cada hora, sem
 depender de alguém analisar ou exportar de novo (antes, o prazo só valia nessas ações, e nas
 férias ou numa escola que importa pouco o arquivo ficava sem prazo). O prazo efetivo é o
-prazo mais até uma hora. Ficam de fora os originais confirmados (#2, prazo a decidir: ver a
-seção 5), os arquivos que começam com ponto (`.gitkeep`) e as subpastas de `EXPORTS_DIR`.
+prazo mais até uma hora. Só são apagados os arquivos com o nome que o próprio app grava: a
+prévia `<uuid>.pdf|xlsx` (32 caracteres de `0-9` e `a-f`, o mesmo token que a confirmação
+aceita) e a cópia `<tipo>_AAAAMMDD_HHMMSS.csv|xlsx|pdf` (por exemplo
+`alunos_20261110_093000.pdf` ou `ranking_cartaz_leitura_20261110_093000.pdf`). Qualquer outro
+arquivo nas duas pastas fica, por mais velho que seja — em desenvolvimento, sem `DADOS_DIR`,
+`EXPORTS_DIR` é a pasta `exports/` do repositório, onde também ficam entregas guardadas à mão.
+Ficam de fora, ainda, os originais confirmados (#2, prazo a decidir: ver a seção 5), os
+arquivos que começam com ponto (`.gitkeep`) e as subpastas de `EXPORTS_DIR`. A suíte de
+testes do backend aponta `UPLOADS_DIR` e `EXPORTS_DIR` para uma pasta temporária da sessão
+(`backend/tests/conftest.py`) e nunca mexe nas pastas do repositório. Ainda falta: a limpeza
+que a própria exportação faz (`routers/relatorios.py`) e a que a análise de PDF/XLSX faz
+(`routers/importacoes.py`) não usam esta regra — na ação delas, ainda apagam qualquer arquivo
+vencido do primeiro nível de `EXPORTS_DIR` e qualquer PDF/XLSX vencido de `temporarios`.
 
 Logs não ficam no disco, mas ficam guardados fora dele (Railway). Até este pacote, a
 linha de acesso do uvicorn levava a URL crua — token do painel público, token do link
