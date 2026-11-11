@@ -904,6 +904,22 @@ function ModalPermanente({ rotulo, quantidade, ocupado, aoFechar, aoConfirmar }:
             completo: cadastro, histórico, importações, leituras, dados da Matific e do
             Elefante Letrado, rankings, XP, medalhas e conquistas. Não há como desfazer.
           </p>
+          {/* O mesmo aviso do AcoesAluno (G_LGPD-1): a conta na plataforma continua
+              existindo — o Constela passa a ignorá-la nas coletas, mas só a plataforma
+              a encerra, e uma linha só com o nome não tem como ser reconhecida. */}
+          <p className="mt-2">
+            {quantidade === 1 ? (
+              <>Se a criança ainda tiver conta no Matific ou no Elefante Letrado, peça o
+              encerramento dela na plataforma. Até lá, o Constela ignora nas próximas coletas
+              as contas ligadas a este cadastro. Um relatório ou planilha que traga só o nome,
+              sem a conta da plataforma, pode cadastrar a criança de novo.</>
+            ) : (
+              <>Se as crianças ainda tiverem conta no Matific ou no Elefante Letrado, peça o
+              encerramento delas na plataforma. Até lá, o Constela ignora nas próximas coletas
+              as contas ligadas a estes cadastros. Um relatório ou planilha que traga só o nome,
+              sem a conta da plataforma, pode cadastrar as crianças de novo.</>
+            )}
+          </p>
         </div>
       </div>
       <div className="mt-4">
