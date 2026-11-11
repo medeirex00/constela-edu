@@ -489,12 +489,21 @@ def exigir_merito(db: Session, preparo: PreparoCertificado) -> Nota:
     return nota
 
 
+#: O 503 da arte da plataforma sem vaga de navegador no prazo
+#: (``svc.NavegadorOcupado``). O lote o reconhece pelo status e devolve o pedido
+#: inteiro, em vez de recusar a criança.
+NAVEGADOR_OCUPADO = ("Muitos documentos estão sendo gerados agora. Tente de novo "
+                     "em alguns instantes.")
+
+
 def conteudo_certificado(db: Session, preparo: PreparoCertificado,
                          modelo: str | None, bimestre: int | None, *,
                          antes_de_desenhar: Callable[[], None] | None = None) -> bytes:
     """O PDF do certificado de UM aluno que já passou por
     :func:`preparar_certificado`. Pode LEVANTAR a guarda de mérito (409/422) no
-    Geral — inclusive quando a arte da plataforma falha e a emissão cai nele.
+    Geral — inclusive quando a arte da plataforma falha e a emissão cai nele — e
+    503 (:data:`NAVEGADOR_OCUPADO`) quando a arte não acha vaga de navegador no
+    prazo: aí ela NÃO cai no Geral.
 
     ``antes_de_desenhar`` é chamado depois das leituras do banco e logo antes de cada
     renderização (o Chromium, segundos): o lote o usa para fechar a transação das
@@ -535,6 +544,17 @@ def conteudo_certificado(db: Session, preparo: PreparoCertificado,
         try:
             return svc.gerar_certificado_plataforma(escola_nome, aluno_nome,
                                                     modelo, bimestre=bimestre)
+        except svc.NavegadorOcupado:
+            # FILA CHEIA NÃO É "SEM CHROMIUM". Todas as vagas de navegador seguiram
+            # ocupadas pela espera inteira (pico de PDFs): a arte existe e sai daqui a
+            # pouco. Cair no Geral, como na falha de render abaixo, trocaria o
+            # documento de participação por um de MÉRITO — com a guarda dele: a
+            # criança sem Nota levaria um 409/422 que não vale para a arte (e, no
+            # lote, ficaria de fora como recusada), e a com Nota, um certificado que
+            # não foi o pedido. Quem pediu tenta de novo.
+            logger.warning("arte do certificado %s sem vaga de navegador; 503", modelo)
+            raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE,
+                                NAVEGADOR_OCUPADO) from None
         except Exception:  # noqa: BLE001 — sem Chromium/erro de render: cai no geral
             logger.warning("arte do certificado %s falhou; caindo no geral", modelo,
                            exc_info=True)

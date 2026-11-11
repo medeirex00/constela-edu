@@ -13,6 +13,11 @@ inteiro), aluno da escola e do professor (404), situação ativa, turma de 1º a
 Lista Piloto (409) e, só no Geral, mérito (409/422). O fallback também é o dela, aluno a
 aluno: se a arte da plataforma falhar, cai no Geral com as guardas de mérito.
 
+FILA DE NAVEGADORES CHEIA É DO PEDIDO, NÃO DA CRIANÇA. Quando a arte não acha vaga de
+navegador no prazo, a rota individual responde 503 (``emissao.NAVEGADOR_OCUPADO``) em
+vez de cair no Geral; aqui esse 503 devolve o lote inteiro, para tentar de novo — virar
+recusa deixaria a criança de fora, e recusado não é substituído.
+
 SEM TRANSAÇÃO ABERTA DURANTE O DESENHO. Cada certificado leva ~1,5 s de Chromium, e o
 lote vai até 50: a transação que as leituras das guardas abrem é fechada antes de cada
 renderização (``_fechar_leituras``), e a auditoria vai numa transação curta no fim. Antes,
@@ -134,6 +139,8 @@ def certificados_lote(
                 db, preparo, pedido.modelo, pedido.bimestre,
                 antes_de_desenhar=lambda: _fechar_leituras(db))
         except HTTPException as exc:
+            if exc.status_code == status.HTTP_503_SERVICE_UNAVAILABLE:
+                raise    # sem vaga de navegador: o pedido inteiro volta (ver acima)
             itens.append(_recusado(db, escola, aluno_id, exc))
             continue
         itens.append(_apto(preparo))

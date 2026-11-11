@@ -642,8 +642,10 @@ def _tam_fonte_aluno_certificado(nome: str) -> int:
 # máximo ``NAVEGADORES_SIMULTANEOS`` por processo; o excesso espera a vez até
 # ``ESPERA_POR_NAVEGADOR_S`` e, esgotado o prazo, ``NavegadorOcupado`` — que quem chama
 # já trata como "sem Chromium": cai no PDF simples de reserva (fpdf), com os mesmos
-# números. Ajustáveis no ambiente: PDF_NAVEGADORES_SIMULTANEOS e
-# PDF_ESPERA_POR_NAVEGADOR_S.
+# números. A exceção é a arte do certificado da plataforma, que não tem reserva
+# equivalente (a dela seria o Geral, de MÉRITO): lá a falta de vaga vira 503 "tente de
+# novo" (``routers/relatorios.conteudo_certificado``). Ajustáveis no ambiente:
+# PDF_NAVEGADORES_SIMULTANEOS e PDF_ESPERA_POR_NAVEGADOR_S.
 # ---------------------------------------------------------------------------
 
 def _numero_do_ambiente(nome: str, padrao: float, minimo: float) -> float:
