@@ -671,10 +671,26 @@ class RedeOut(ORMModel):
     status: str = "ativa"
 
 
+def _codigo_ibge_valido(valor: str | None) -> str | None:
+    """O código IBGE do município: exatamente 7 dígitos (o que a importação dos
+    indicadores oficiais confere), sem completar nem cortar. "" = sem código."""
+    if valor is None:
+        return None
+    valor = valor.strip()
+    if valor and not re.fullmatch(r"\d{7}", valor):
+        raise ValueError("O código IBGE do município tem 7 dígitos, só números "
+                         "(ex.: 3510500). Nada foi alterado.")
+    return valor
+
+
+# Sem ``max_length``: o validador já recusa o que não tem 7 dígitos, com a mensagem acima.
+CodigoIbge = Annotated[str | None, AfterValidator(_codigo_ibge_valido)]
+
+
 class RedeCreate(BaseModel):
     nome: str = Field(min_length=2, max_length=200)
     uf: str | None = Field(default=None, max_length=2)
-    codigo_ibge: str | None = Field(default=None, max_length=7)
+    codigo_ibge: CodigoIbge = None
     # Só dígitos (o CODMUN da SEDUC; Caraguatatuba = 254). "" = sem código.
     codigo_municipio_estadual: str | None = Field(default=None, pattern=r"^\d{0,8}$")
 
@@ -683,7 +699,8 @@ class RedeUpdate(BaseModel):
     """Atualização parcial — só o que foi enviado muda."""
     nome: str | None = Field(default=None, min_length=2, max_length=200)
     uf: str | None = Field(default=None, max_length=2)
-    codigo_ibge: str | None = Field(default=None, max_length=7)
+    # 7 dígitos; "" limpa (a importação dos indicadores volta a pedir o código).
+    codigo_ibge: CodigoIbge = None
     # CODMUN da SEDUC-SP, só dígitos; "" limpa. Nunca deduzido do nome do município.
     codigo_municipio_estadual: str | None = Field(default=None, pattern=r"^\d{0,8}$")
     status: str | None = Field(default=None, pattern="^(ativa|inativa)$")

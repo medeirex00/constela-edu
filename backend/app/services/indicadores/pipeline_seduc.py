@@ -70,8 +70,8 @@ from app.models import Escola, ImportacaoIndicador, IndicadorReferencia, Rede, R
 from app.services.avaliacoes import ImportacaoRecusada, normalizar_inep, obter_avaliacao
 from app.services.indicadores import seduc
 from app.services.indicadores.pipeline import (MSG_SEM_PLANO, _exigir_codigo, carregar_planos,
-                                               codigo_ibge_da_rede, plano_desfazer,
-                                               planos_da_lista)
+                                               codigo_ibge_da_rede, feita_pela_rede,
+                                               plano_desfazer, planos_da_lista)
 
 AVALIACAO_IMPORTACAO = seduc.AVALIACAO_SARESP    # a importação fica sob o SARESP
 FONTE_NOME = {
@@ -560,17 +560,19 @@ def previa(db: Session, rede: Rede, conteudo: bytes, nome: str, *, usuario_id: i
     if familia.desempate_por_data:
         leitura.avisos.extend(_avisos_data_anterior(plano, imp))
     imp.contadores = _contadores(plano, leitura)
-    imp.resumo = {**_resumo(leitura, edicao, codmun=_codmun(rede),
+    imp.resumo = {**_resumo(leitura, edicao, rede_id=rede.id, codmun=_codmun(rede),
                             substituicoes=_assinatura_substituicoes(plano)),
                   **lido.resumo_extra}
     return _saida(imp, plano=plano)
 
 
-def _resumo(leitura: seduc.LeituraSeduc, edicao_informada: int | None, *,
+def _resumo(leitura: seduc.LeituraSeduc, edicao_informada: int | None, *, rede_id: int,
             codmun: str | None, substituicoes: list[list]) -> dict:
     """``codmun_seduc`` (só no SARESP por município: o recorte que a prévia mostrou) e
-    ``substituicoes_previa`` (a assinatura da D2) são conferidos na aplicação."""
+    ``substituicoes_previa`` (a assinatura da D2) são conferidos na aplicação;
+    ``rede_id`` é a rede que importou (``feita_pela_rede``)."""
     return {"avisos": list(leitura.avisos), "territorios": dict(leitura.territorios),
+            "rede_id": rede_id,
             "colunas_ignoradas": list(leitura.colunas_ignoradas),
             "encoding": leitura.encoding, "edicao_informada": edicao_informada,
             "escolas_casadas": list(leitura.escolas_casadas),
@@ -591,8 +593,7 @@ def _da_rede(db: Session, rede: Rede, importacao_id: int,
              familia: Familia | None = None) -> ImportacaoIndicador:
     familia = familia or SEDUC
     imp = db.get(ImportacaoIndicador, importacao_id)
-    if (imp is None or imp.parser not in familia.parsers
-            or imp.codigo_territorio_alvo != codigo_ibge_da_rede(rede)):
+    if imp is None or imp.parser not in familia.parsers or not feita_pela_rede(imp, rede):
         raise LookupError(f"Importação do {familia.rotulo} não encontrada para esta rede.")
     return imp
 
@@ -675,7 +676,8 @@ def aplicar(db: Session, rede: Rede, previa_id: int, conteudo: bytes, nome: str,
     imp.contadores = {**_contadores(plano, leitura),
                       "substituicoes_aplicadas": n_subst - recusadas,
                       "substituicoes_mantidas": recusadas}
-    imp.resumo = {**_resumo(leitura, edicao, codmun=_codmun(rede), substituicoes=assinatura),
+    imp.resumo = {**_resumo(leitura, edicao, rede_id=rede.id, codmun=_codmun(rede),
+                            substituicoes=assinatura),
                   **lido.resumo_extra,
                   "substituir_calculadas": substituir_calculadas,
                   # As etapas de TODAS as chaves do plano (iguais inclusive): a consulta
@@ -857,12 +859,13 @@ def listar(db: Session, rede: Rede, *, familia: Familia = SEDUC) -> list[dict]:
     codigo = codigo_ibge_da_rede(rede)
     if codigo is None:
         return []
-    linhas = db.execute(
+    # Do município, as feitas por ESTA rede (``feita_pela_rede``), as 50 mais recentes.
+    linhas = [i for i in db.execute(
         select(ImportacaoIndicador)
         .where(ImportacaoIndicador.parser.in_(familia.parsers),
                ImportacaoIndicador.codigo_territorio_alvo == codigo)
         .order_by(ImportacaoIndicador.created_at.desc(), ImportacaoIndicador.id.desc())
-        .limit(50)).scalars().all()
+        ).scalars() if feita_pela_rede(i, rede)][:50]
     aplicadas = _aplicadas(db, familia.parsers)
     # Os planos (coluna deferred) que a lista lê, num SELECT — não um por importação.
     carregar_planos(db, planos_da_lista(linhas, aplicadas))

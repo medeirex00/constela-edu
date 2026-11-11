@@ -49,7 +49,7 @@ from app.services.avaliacoes import CATALOGO, normalizar_inep
 from app.services.indicadores import escalas, seduc
 from app.services.indicadores import leituras_da_requisicao as leituras
 from app.services.indicadores.consulta import _fonte
-from app.services.indicadores.pipeline import codigo_ibge_da_rede
+from app.services.indicadores.pipeline import codigo_ibge_da_rede, feita_pela_rede
 
 ETAPAS = seduc.ETAPAS                               # ("2_ano", "5_ano")
 COMPONENTES = ("lp", "mt")
@@ -265,12 +265,16 @@ def _niveis(edicoes: set[int]) -> dict:
     }
 
 
-def _iee_aplicadas(db: Session, codigo: str | None) -> dict[int, list[ImportacaoIndicador]]:
-    """As importações APLICADAS do IEE de cada edição, para esta rede, da que VALE (a
-    aplicada por último: o SARESP não desempata pela data do arquivo) para a mais antiga."""
+def _iee_aplicadas(db: Session, rede: Rede,
+                   codigo: str | None) -> dict[int, list[ImportacaoIndicador]]:
+    """As importações APLICADAS do IEE de cada edição, feitas por esta rede
+    (``feita_pela_rede``: as de outra rede com o mesmo código IBGE não casaram as escolas
+    desta), da que VALE (a aplicada por último: o SARESP não desempata pela data do
+    arquivo) para a mais antiga."""
     if codigo is None:
         return {}
-    imps = leituras.aplicadas_do_territorio(db, codigo, (seduc.PARSER_IEE,))
+    imps = [i for i in leituras.aplicadas_do_territorio(db, codigo, (seduc.PARSER_IEE,))
+            if feita_pela_rede(i, rede)]
     saida: dict[int, list[ImportacaoIndicador]] = {}
     for imp in sorted(imps, key=lambda i: (i.aplicado_em or datetime.min, i.id), reverse=True):
         saida.setdefault(imp.edicao_arquivo, []).append(imp)
@@ -458,7 +462,7 @@ def saresp_da_rede(db: Session, rede: Rede) -> dict:
             elif r.valor is not None and (r.etapa in ETAPAS or not r.etapa):
                 estimativas.setdefault(r.escola_id, []).append(r)
 
-    iee_todas = _iee_aplicadas(db, codigo)
+    iee_todas = _iee_aplicadas(db, rede, codigo)
     iee = {edicao: lista[0] for edicao, lista in iee_todas.items()}   # a que vale na edição
     ids_imp = ({ln.importacao_id for ln in territorio}
                | {ln.importacao_id for lns in por_inep.values() for ln in lns}

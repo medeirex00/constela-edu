@@ -39,6 +39,7 @@ from app.services import push as svc_push
 from app.services import relatorios as svc_relatorios
 from app.services import rede as svc_rede
 from app.services.audit import registrar
+from app.services.indicadores import ica
 
 _MAX_BYTES_INEP = 150 * 1024 * 1024  # mesmo teto do IDEB (arquivo oficial ~97 MB)
 
@@ -122,6 +123,8 @@ def criar_rede(
     if repetida is not None:
         raise HTTPException(status.HTTP_409_CONFLICT,
                             f"Já existe uma rede chamada “{repetida.nome}”.")
+    if dados.codigo_ibge:
+        _exigir_ibge_livre(db, None, dados.codigo_ibge)
     rede = Rede(nome=nome, uf=(dados.uf or None), codigo_ibge=(dados.codigo_ibge or None),
                 codigo_municipio_estadual=(dados.codigo_municipio_estadual or None))
     db.add(rede)
@@ -149,6 +152,12 @@ def atualizar_rede(
     if "codigo_municipio_estadual" in alteracoes:
         # "" limpa (o SARESP por município volta a pedir o código na prévia).
         alteracoes["codigo_municipio_estadual"] = alteracoes["codigo_municipio_estadual"] or None
+    if "codigo_ibge" in alteracoes:
+        # "" limpa (a importação dos indicadores oficiais volta a pedir o código).
+        alteracoes["codigo_ibge"] = alteracoes["codigo_ibge"] or None
+        novo = alteracoes["codigo_ibge"]
+        if novo and novo != ica.normalizar_codigo_ibge(rede.codigo_ibge):
+            _exigir_ibge_livre(db, rede.id, novo)
     for campo, valor in alteracoes.items():
         setattr(rede, campo, valor)
     registrar(db, "rede.atualizada", usuario_id=usuario.id, entidade="rede",
@@ -156,6 +165,24 @@ def atualizar_rede(
     db.commit()
     db.refresh(rede)
     return rede
+
+
+def _exigir_ibge_livre(db: Session, rede_id: int | None, codigo: str) -> None:
+    """409 quando o código IBGE (7 dígitos, já validado) é de OUTRA rede. As importações
+    dos indicadores oficiais (Ideb, Saeb, SARESP, ICA) são recortadas pelo município da
+    rede: duas redes com o mesmo código veriam, listariam e desfariam as importações uma
+    da outra, e o Ideb oficial das escolas de uma sumiria a cada importação da outra. A
+    comparação é pelo código normalizado (um cadastro antigo com espaço também conta).
+    Regravar o código que a rede já tem não passa por aqui (redes antigas que já
+    repetem o código continuam editáveis)."""
+    for outra_id, outra_nome, outro_codigo in db.execute(
+            select(Rede.id, Rede.nome, Rede.codigo_ibge).where(Rede.codigo_ibge.isnot(None))):
+        if outra_id != rede_id and ica.normalizar_codigo_ibge(outro_codigo) == codigo:
+            raise HTTPException(
+                status.HTTP_409_CONFLICT,
+                f"O código IBGE {codigo} já é da rede “{outra_nome}” (id {outra_id}). Cada "
+                "rede tem o seu município: confira o código ou tire-o primeiro da outra "
+                "rede. Nada foi alterado.")
 
 
 @router.get("/{rede_id}/modulos")

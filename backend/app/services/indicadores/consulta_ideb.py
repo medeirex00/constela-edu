@@ -72,7 +72,7 @@ from app.services.indicadores.consulta_saresp import (MOTIVO_CADASTRADO_DEPOIS,
                                                       MOTIVO_INEP_ALTERADO,
                                                       MOTIVO_SEM_IMPORTACAO,
                                                       _arquivo_da_escola, _descarte)
-from app.services.indicadores.pipeline import codigo_ibge_da_rede
+from app.services.indicadores.pipeline import codigo_ibge_da_rede, feita_pela_rede
 
 # Campos por escola em `resultados_avaliacao` (componente gravado → campo da API).
 CAMPOS_RESULTADO = ("ideb", "saeb_lp", "saeb_mt")
@@ -198,11 +198,15 @@ def _mesmo_inep(r: ResultadoAvaliacao, inep: str | None) -> bool:
 
 # --- Importações -----------------------------------------------------------------
 
-def _aplicadas(db: Session, codigo: str | None) -> list[ImportacaoIndicador]:
-    """As importações APLICADAS do Ideb por escola para o município da rede."""
+def _aplicadas(db: Session, rede: Rede, codigo: str | None) -> list[ImportacaoIndicador]:
+    """As importações APLICADAS do Ideb por escola para o município da rede, feitas por
+    ESTA rede (``feita_pela_rede``): as escolas de outra rede com o mesmo código IBGE não
+    estão nas casadas da importação dela, e conferi-las contra ela esconderia o Ideb
+    oficial com o motivo falso "cadastrada depois da importação"."""
     if codigo is None:
         return []
-    return sorted(leituras.aplicadas_do_territorio(db, codigo, (ideb.PARSER,)),
+    return sorted((i for i in leituras.aplicadas_do_territorio(db, codigo, (ideb.PARSER,))
+                   if feita_pela_rede(i, rede)),
                   key=lambda i: (i.aplicado_em or datetime.min, i.id))
 
 
@@ -397,7 +401,7 @@ def ideb_da_rede(db: Session, rede: Rede) -> dict:
         for ln in linhas:
             referencia[(ln.codigo_inep, ln.edicao, ln.indicador, ln.etapa)] = ln
 
-    aplicadas = _aplicadas(db, codigo)
+    aplicadas = _aplicadas(db, rede, codigo)
     # A REDE MUNICIPAL, a UF e o Brasil (E8b): Ideb do território, Saeb da planilha e o
     # contexto amostral — pelo código IBGE, nunca pela média das escolas.
     nome_mun = _nome_do_municipio(db, codigo, aplicadas)
