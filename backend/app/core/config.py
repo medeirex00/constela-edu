@@ -582,8 +582,8 @@ class Settings(BaseSettings):
     # "ligado" = desligado). Como bool, um "sim" ou um valor vazio no painel do
     # deploy levantava ValidationError no import e derrubava a API no boot.
     AVALIACOES_ROBO_HABILITADO: str = "false"
-    # Janela do pré-requisito do agendador (prerequisitos.teto_coerente e
-    # execucoes_presas) e do sinal de vida de quem espera na FILA. Bem acima do teto
+    # Janela do pré-requisito do agendador (prerequisitos.teto_coerente e, para a
+    # FILA, execucoes_presas) e do sinal de vida de quem espera na FILA. Bem acima do teto
     # real de uma execução: precisa passar do SYNC_TETO_EXECUCAO_S (45 min, só a
     # coleta) com folga para a aplicação e o recálculo. Duas vezes este valor é
     # também por quanto tempo uma execução viva continua dando sinal de vida.
@@ -591,7 +591,9 @@ class Settings(BaseSettings):
     # Uma execução em "executando" sem nenhum registro no log dela há mais que isto
     # é considerada ÓRFÃ (worker morto/redeploy no meio) e é liberada. Quem está vivo
     # dá sinal 6 vezes nessa janela (service._sinal_de_vida_enquanto_roda), então uma
-    # coleta longa não é reivindicada e a morta sai em minutos.
+    # coleta longa não é reivindicada e a morta sai em minutos. É também a regra do
+    # pré-requisito execucoes_presas para a execução em "executando"
+    # (prerequisitos._v_execucoes_presas).
     SYNC_SEM_SINAL_S: int = 900       # 15 min
 
     # Proxy de SAÍDA do robô (Playwright). VAZIO por padrão e sem uso em
