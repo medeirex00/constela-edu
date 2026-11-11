@@ -10,12 +10,11 @@
  *   - "Gerar PDF" chama apiDownloadPost com o caminho e o corpo do contrato;
  *   - erros do backend aparecem com a mensagem dele.
  */
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import GerarCertificados from "../components/GerarCertificados";
 import { useApp } from "../context/AppContext";
 import type { GerarCertificadosProps } from "../components/GerarCertificados";
-import { bimestreDeHoje } from "../lib/calendarioBimestres";
 import { bimestreDoPeriodo } from "../lib/tiposCertificados";
 import type { AlunoParaCertificado, ItemPreviaCertificado } from "../lib/tiposCertificados";
 import {
@@ -33,6 +32,23 @@ import {
 
 const PREVIA = "/escolas/1/certificados/lote/previa";
 const LOTE = "/escolas/1/certificados/lote";
+
+// Relógio (só a data) fixo em 15/10/2026, 4º bimestre do calendário que a web já conhece.
+// O seletor do bimestre abre pelo calendário do ANO DE HOJE, e estes testes não simulam a
+// rota do calendário: com o relógio de verdade, a partir de 01/01/2027 o seletor abria
+// vazio e a arte da plataforma ficava travada à espera da escolha — "Gerar PDF" desabilitado
+// e o número esperado virava "null" — sem nenhuma mudança de código (REV-PER-2). Quem
+// precisa de outro dia troca o relógio dentro do próprio teste.
+const HOJE_FIXO = new Date(2026, 9, 15, 12, 0, 0);
+
+beforeEach(() => {
+  vi.useFakeTimers({ toFake: ["Date"] });
+  vi.setSystemTime(HOJE_FIXO);
+});
+
+afterEach(() => {
+  vi.useRealTimers();
+});
 
 const LISTA: AlunoParaCertificado[] = [
   { aluno_id: 101, nome: "Ana Beatriz Souza", turma: "3º Ano A", posicao: 1 },
@@ -243,7 +259,7 @@ describe("GerarCertificados — prévia e geração", () => {
     responderPreviaComRecusa();
     const { u } = await renderizar();
     const bimestre = screen.getByLabelText("Bimestre impresso");
-    expect(bimestre).toHaveValue(String(bimestreDeHoje(new Date())));
+    expect(bimestre).toHaveValue("4"); // 15/10/2026 (HOJE_FIXO): 4º bimestre
     await u.selectOptions(bimestre, "3");
 
     // Antes de verificar não há o que gerar.
