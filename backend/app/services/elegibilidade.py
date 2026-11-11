@@ -100,13 +100,23 @@ def turmas_premiaveis(db: Session, escola_id: int,
     Devolve uma lista de ids para usar em ``.in_(...)``, em vez de tentar
     expressar a regra em SQL: o rótulo é texto livre e a decisão depende de
     normalização (acento, "4ºB", "2° Ano", por extenso) que já existe em Python.
-    Uma consulta barata por chamada, e a regra continua num lugar só.
+    Uma consulta barata por chamada, e a regra continua num lugar só — e uma só
+    por requisição dentro de ``scoring.leituras_da_requisicao`` (o pacote do app
+    pedia a mesma lista quatro vezes: o mural, o ranking, o painel e o Top 10).
     """
+    from app.services.scoring import memoria_da_requisicao
+
+    memoria = memoria_da_requisicao(db, "turmas_premiaveis")
+    if memoria is not None and (escola_id, ano_letivo) in memoria:
+        return list(memoria[(escola_id, ano_letivo)])
     consulta = select(Turma.id, Turma.ano_escolar).where(Turma.escola_id == escola_id)
     if ano_letivo is not None:
         consulta = consulta.where(Turma.ano_letivo == ano_letivo)
-    return [tid for tid, rotulo in db.execute(consulta).all()
-            if participa_de_premiacao(rotulo)]
+    premiaveis = [tid for tid, rotulo in db.execute(consulta).all()
+                  if participa_de_premiacao(rotulo)]
+    if memoria is not None:
+        memoria[(escola_id, ano_letivo)] = tuple(premiaveis)
+    return premiaveis
 
 
 def turmas_premiaveis_da_rede(db: Session, escola_ids: list[int] | None = None,

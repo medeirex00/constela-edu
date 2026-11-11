@@ -555,6 +555,7 @@ def anonimizar_nome(nome: str | None) -> str:
     return f"{partes[0]} {partes[1][0]}."
 
 
+@scoring.com_leituras_da_requisicao
 def mural(db: Session, escola_id: int,
           serie_m: dict | None = None, serie_e: dict | None = None,
           mapa_dif: dict | None = None, anonimizar: bool = False,

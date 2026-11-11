@@ -218,73 +218,79 @@ def sincronizar(
     """
     if permissoes.e_secretaria(usuario):
         raise HTTPException(status.HTTP_403_FORBIDDEN, SINCRONIZACAO_SEM_SECRETARIA)
-    escola = db.get(Escola, escola_id)
-    permitidas = permissoes.turmas_permitidas(db, escola_id, usuario)
-    # AS FASES NÃO CONCORREM: a evolução e o mural do app recortam as turmas
-    # premiáveis, como o telão e a web (`routers/evolucao.ranking_evolucao`). O
-    # escopo do professor não muda (interseção); a régua segue a da escola.
-    premiaveis = elegibilidade.turmas_premiaveis(db, escola_id, escola.ano_letivo_ativo)
-    concorrem = set(premiaveis)
-    recorte = (premiaveis if permitidas is None
-               else [t for t in permitidas if t in concorrem])
+    # Uma leitura só, do começo ao fim do pacote: o mural (dia, semana e mês), a
+    # aba de evolução, os alertas, o ranking e o painel pediam cada um a mesma
+    # configuração da escola, o mesmo contrato da rede, as mesmas turmas que
+    # concorrem e a mesma coorte — 69 idas ao banco (~14 s em produção), 42
+    # repetidas. Nada aqui grava (`scoring.leituras_da_requisicao`).
+    with scoring.leituras_da_requisicao(db):
+        escola = db.get(Escola, escola_id)
+        permitidas = permissoes.turmas_permitidas(db, escola_id, usuario)
+        # AS FASES NÃO CONCORREM: a evolução e o mural do app recortam as turmas
+        # premiáveis, como o telão e a web (`routers/evolucao.ranking_evolucao`). O
+        # escopo do professor não muda (interseção); a régua segue a da escola.
+        premiaveis = elegibilidade.turmas_premiaveis(db, escola_id, escola.ano_letivo_ativo)
+        concorrem = set(premiaveis)
+        recorte = (premiaveis if permitidas is None
+                   else [t for t in permitidas if t in concorrem])
 
-    # Carrega UMA vez as varreduras caras (séries de snapshot + dificuldade) e
-    # injeta em todos os consumidores desta request (alertas, mural, evolução) —
-    # antes, cada um relia as tabelas de snapshot (~3x cada por request). Mesma
-    # estratégia do mural/M4.
-    serie_m, serie_e, mapa_dif = evolucao.series_e_dificuldade(db, escola_id)
+        # Carrega UMA vez as varreduras caras (séries de snapshot + dificuldade) e
+        # injeta em todos os consumidores desta request (alertas, mural, evolução) —
+        # antes, cada um relia as tabelas de snapshot (~3x cada por request). Mesma
+        # estratégia do mural/M4.
+        serie_m, serie_e, mapa_dif = evolucao.series_e_dificuldade(db, escola_id)
 
-    alertas = insights.alertas_da_escola(db, escola_id, serie_m=serie_m, serie_e=serie_e)
-    if permitidas is None:
-        # Acesso total (admin/coordenador): mural da vitrine da escola inteira.
-        eventos_mural = gamificacao.mural(
-            db, escola_id, serie_m=serie_m, serie_e=serie_e, mapa_dif=mapa_dif,
-            turma_ids=premiaveis)["eventos"]
-    else:
-        # Professor restrito: sem mural (é vitrine da escola inteira, como no
-        # web, que o bloqueia com negar_restrito) e alertas só das turmas dele.
-        eventos_mural = []
-        alunos = permissoes.alunos_permitidos(db, escola_id,
-                                              escola.ano_letivo_ativo, permitidas)
-        alertas = permissoes.filtrar_por_aluno(alertas, alunos)
+        alertas = insights.alertas_da_escola(db, escola_id, serie_m=serie_m, serie_e=serie_e)
+        if permitidas is None:
+            # Acesso total (admin/coordenador): mural da vitrine da escola inteira.
+            eventos_mural = gamificacao.mural(
+                db, escola_id, serie_m=serie_m, serie_e=serie_e, mapa_dif=mapa_dif,
+                turma_ids=premiaveis)["eventos"]
+        else:
+            # Professor restrito: sem mural (é vitrine da escola inteira, como no
+            # web, que o bloqueia com negar_restrito) e alertas só das turmas dele.
+            eventos_mural = []
+            alunos = permissoes.alunos_permitidos(db, escola_id,
+                                                  escola.ano_letivo_ativo, permitidas)
+            alertas = permissoes.filtrar_por_aluno(alertas, alunos)
 
-    # Aba "Ranking Geral": a mesma lista da web (`rankings.ranking_geral`), só com
-    # quem tem dado de alguma dimensão — sem posição nem 0,0 para a ausência.
-    ranking = _ranking(db, escola_id, escola.ano_letivo_ativo, turma_ids=permitidas,
-                       so_com_dado=True)
-    if permitidas is not None:
-        # Professor: posição RELATIVA às turmas dele (1..N), como a web
-        # (`rankings.ranking_geral`) e o Top 10 deste mesmo pacote
-        # (`montar_dashboard`) — a aba "Ranking Geral" e o Painel do app não
-        # podem dar duas posições à mesma criança. Gestão: a posição global.
-        for posicao, item in enumerate(ranking, start=1):
-            item.posicao = posicao
+        # Aba "Ranking Geral": a mesma lista da web (`rankings.ranking_geral`), só com
+        # quem tem dado de alguma dimensão — sem posição nem 0,0 para a ausência.
+        ranking = _ranking(db, escola_id, escola.ano_letivo_ativo, turma_ids=permitidas,
+                           so_com_dado=True)
+        if permitidas is not None:
+            # Professor: posição RELATIVA às turmas dele (1..N), como a web
+            # (`rankings.ranking_geral`) e o Top 10 deste mesmo pacote
+            # (`montar_dashboard`) — a aba "Ranking Geral" e o Painel do app não
+            # podem dar duas posições à mesma criança. Gestão: a posição global.
+            for posicao, item in enumerate(ranking, start=1):
+                item.posicao = posicao
 
-    return {
-        "gerado_em": datetime.now(timezone.utc).isoformat(),
-        # CONTRATO: os módulos que valem para ESTA escola (a mesma régua do motor,
-        # `scoring.dimensoes_contratadas`). O Painel do app esconde o cartão do
-        # módulo fora do plano — ele não aparece nem zerado — e o pacote fica em
-        # cache, então a informação viaja com ele.
-        "modulos": scoring.dimensoes_contratadas(db, escola),
-        "dashboard": montar_dashboard(db, escola_id, turma_ids=permitidas),
-        "ranking": ranking,
-        "evolucao": [
-            {
-                "posicao": item.posicao,
-                "aluno_id": item.aluno_id,
-                "nome": item.nome,
-                "turma": item.turma,
-                "nota_evolucao": item.nota_evolucao,
-            }
-            # Régua JUSTA (`base_no_periodo=True`), a mesma da web
-            # (`routers/evolucao.ranking_evolucao`) e do telão: sem retrato
-            # anterior à janela, o acumulado de vida não vira "evolução" — só
-            # quem cresceu de verdade nos 30 dias sobe.
-            for item in evolucao.ranking_evolucao(
-                db, escola_id, dias=30, turma_ids=recorte, base_no_periodo=True,
-                serie_m=serie_m, serie_e=serie_e, mapa_dif=mapa_dif)[:20]
-        ],
-        "alertas": alertas,
-        "mural": eventos_mural,
-    }
+        return {
+            "gerado_em": datetime.now(timezone.utc).isoformat(),
+            # CONTRATO: os módulos que valem para ESTA escola (a mesma régua do motor,
+            # `scoring.dimensoes_contratadas`). O Painel do app esconde o cartão do
+            # módulo fora do plano — ele não aparece nem zerado — e o pacote fica em
+            # cache, então a informação viaja com ele.
+            "modulos": scoring.dimensoes_contratadas(db, escola),
+            "dashboard": montar_dashboard(db, escola_id, turma_ids=permitidas),
+            "ranking": ranking,
+            "evolucao": [
+                {
+                    "posicao": item.posicao,
+                    "aluno_id": item.aluno_id,
+                    "nome": item.nome,
+                    "turma": item.turma,
+                    "nota_evolucao": item.nota_evolucao,
+                }
+                # Régua JUSTA (`base_no_periodo=True`), a mesma da web
+                # (`routers/evolucao.ranking_evolucao`) e do telão: sem retrato
+                # anterior à janela, o acumulado de vida não vira "evolução" — só
+                # quem cresceu de verdade nos 30 dias sobe.
+                for item in evolucao.ranking_evolucao(
+                    db, escola_id, dias=30, turma_ids=recorte, base_no_periodo=True,
+                    serie_m=serie_m, serie_e=serie_e, mapa_dif=mapa_dif)[:20]
+            ],
+            "alertas": alertas,
+            "mural": eventos_mural,
+        }

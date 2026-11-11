@@ -180,8 +180,23 @@ def _ranking(db: Session, escola_id: int, ano: int, turma_id=None, ano_escolar=N
     if limite:
         consulta = consulta.limit(limite)
 
+    # Dentro de ``scoring.leituras_da_requisicao`` a MESMA lista pedida de novo (o
+    # pacote do app do professor: a aba "Ranking Geral" e a posição do Top 10 do
+    # painel) sai do banco uma vez. Os itens são refeitos a cada chamada — quem
+    # chama os renumera sem mexer na lista de outro.
+    memoria = scoring.memoria_da_requisicao(db, "ranking_legado")
+    chave = (escola_id, ano, turma_id, ano_escolar, limite,
+             None if turma_ids is None else tuple(turma_ids), dimensao, turno,
+             so_com_dado)
+    if memoria is not None and chave in memoria:
+        linhas = memoria[chave]
+    else:
+        linhas = tuple(db.execute(consulta).all())
+        if memoria is not None:
+            memoria[chave] = linhas
+
     itens = []
-    for nota, aluno, turma in db.execute(consulta).all():
+    for nota, aluno, turma in linhas:
         item = RankingItemOut(
             posicao=nota.posicao or 0,
             aluno_id=aluno.id,
@@ -1045,6 +1060,7 @@ def _desempenho_da_escola(db: Session, escola_id: int, ano: int,
     }
 
 
+@scoring.com_leituras_da_requisicao
 def montar_dashboard(db: Session, escola_id: int,
                      turma_ids: list[int] | None = None) -> DashboardOut:
     """Indicadores do painel inicial (PRD §19, §48).

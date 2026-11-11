@@ -19,17 +19,14 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import select
-from sqlalchemy.orm import Session, selectinload
+from sqlalchemy.orm import Session
 
 from app.core.tempo import para_br
 from app.models import (
-    Aluno,
     Escola,
-    Matricula,
     Nota,
     SnapshotElefante,
     SnapshotMatific,
-    Turma,
 )
 from app.services import dificuldade_livro, evolucao, scoring
 from app.services import dimensoes as svc_dimensoes
@@ -71,6 +68,7 @@ def _percentil_rank(ordenados_ativos: list[float], valor: float) -> float:
     return round(100.0 * abaixo / len(ordenados_ativos), 1)
 
 
+@scoring.com_leituras_da_requisicao
 def indices_da_escola(db: Session, escola_id: int,
                       serie_m: dict[int, list] | None = None,
                       serie_e: dict[int, list] | None = None,
@@ -127,17 +125,9 @@ def indices_da_escola(db: Session, escola_id: int,
         valor = bruto.get(aluno_id, 0.0)
         return _percentil_rank(ativos, valor) if valor > 0 else 0.0
 
-    # selectinload(Matricula.aluno): o laço lê matricula.aluno.nome; sem isto,
-    # cada aluno dispararia um SELECT lazy (N+1). Carrega todos em 1 consulta.
-    matriculas = db.execute(
-        select(Matricula, Turma)
-        .join(Turma, Matricula.turma_id == Turma.id)
-        .join(Aluno, Matricula.aluno_id == Aluno.id)
-        .options(selectinload(Matricula.aluno))
-        .where(Matricula.escola_id == escola_id,
-               Matricula.ano_letivo == escola.ano_letivo_ativo,
-               Aluno.status == "ativo")
-    ).all()
+    # O laço lê matricula.aluno.nome: a coorte vem com o aluno carregado (sem um
+    # SELECT por aluno) e é a MESMA das quatro janelas acima (uma ida no bloco).
+    matriculas = evolucao.matriculas_ativas(db, escola_id, escola.ano_letivo_ativo)
 
     # PERSISTÊNCIA SEMANAL pelo ritmo do PRÓPRIO aluno (decisão de produto):
     # compara o crescimento da SEMANA ATUAL (segunda→agora) com o ritmo semanal
@@ -194,6 +184,7 @@ def indices_da_escola(db: Session, escola_id: int,
     return itens
 
 
+@scoring.com_leituras_da_requisicao
 def alertas_da_escola(db: Session, escola_id: int,
                       serie_m: dict[int, list] | None = None,
                       serie_e: dict[int, list] | None = None) -> list[dict]:
@@ -208,18 +199,10 @@ def alertas_da_escola(db: Session, escola_id: int,
     agora = datetime.now(timezone.utc)
     corte_atividade = agora - timedelta(days=DIAS_SEM_ATIVIDADE)
 
-    # selectinload(Matricula.aluno): idem indices_da_escola — o laço lê
-    # matricula.aluno.nome; evita N+1. Rota também usada pela sincronização
-    # mobile e pelo contexto do Assistente.
-    matriculas = db.execute(
-        select(Matricula, Turma)
-        .join(Turma, Matricula.turma_id == Turma.id)
-        .join(Aluno, Matricula.aluno_id == Aluno.id)
-        .options(selectinload(Matricula.aluno))
-        .where(Matricula.escola_id == escola_id,
-               Matricula.ano_letivo == ano,
-               Aluno.status == "ativo")
-    ).all()
+    # Idem indices_da_escola — o laço lê matricula.aluno.nome; a coorte vem com
+    # o aluno carregado. Rota também usada pela sincronização mobile e pelo
+    # contexto do Assistente (no pacote do app, a mesma coorte do mural).
+    matriculas = evolucao.matriculas_ativas(db, escola_id, ano)
 
     if serie_m is None:
         serie_m = evolucao._series_por_aluno(db, escola_id, SnapshotMatific)

@@ -70,16 +70,27 @@ def modulos_da_rede(db: Session, rede_id: int | None) -> set[str]:
 
     Lê a tabela esparsa e aplica a regra de ouro: só sai da lista o módulo com
     linha explícita ``ativo=False``. Módulo fora do catálogo é ignorado (um
-    registro antigo de módulo removido não vira erro)."""
+    registro antigo de módulo removido não vira erro).
+
+    Dentro de ``scoring.leituras_da_requisicao`` (as telas de leitura que montam o
+    ranking várias vezes), o contrato de cada rede sai do banco uma vez só."""
     if rede_id is None:
         return set(TODOS)
+    from app.services.scoring import memoria_da_requisicao
+
+    memoria = memoria_da_requisicao(db, "modulos_rede")
+    if memoria is not None and rede_id in memoria:
+        return set(memoria[rede_id])
     desligados = {
         m for (m,) in db.execute(
             select(ModuloRede.modulo).where(ModuloRede.rede_id == rede_id,
                                             ModuloRede.ativo.is_(False))
         ).all()
     }
-    return {chave for chave in TODOS if chave not in desligados}
+    ativos = {chave for chave in TODOS if chave not in desligados}
+    if memoria is not None:
+        memoria[rede_id] = frozenset(ativos)
+    return ativos
 
 
 def modulos_da_escola(db: Session, escola: Escola | None) -> set[str]:

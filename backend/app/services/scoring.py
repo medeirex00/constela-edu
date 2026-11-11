@@ -36,7 +36,9 @@ passar a lê-las: a regra é travada por `tests/test_legado_nota_geral.py`
 """
 from __future__ import annotations
 
+import functools
 import math
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import time
 
@@ -428,10 +430,77 @@ def referencias_robustas(
 
 
 # ---------------------------------------------------------------------------
+# Leituras que se REPETEM numa requisição de leitura, feitas uma vez só
+# ---------------------------------------------------------------------------
+# Em produção a API fica a ~0,2 s do banco por consulta. As telas que montam o
+# ranking de evolução várias vezes (o pacote do app: mural do dia, da semana e do
+# mês + a aba de 30 dias; o /insights; o mural da web) reliam, a CADA chamada, a
+# mesma configuração da escola (perfil de scoring e pesos: quatro namespaces), o
+# mesmo contrato da rede (`modulos_rede`), as mesmas turmas que concorrem e o
+# mesmo elenco (matrículas e alunos, quem tem leitura) — 69 idas no pacote do
+# app, 42 delas repetidas. Dentro de ``leituras_da_requisicao(db)`` essas
+# leituras saem do banco uma vez e são servidas da memória (em ``db.info``, o
+# mesmo padrão de ``indicadores.leituras_da_requisicao``); FORA dele (as rotas
+# que gravam, o recálculo, os importadores), cada função consulta o banco como
+# sempre — nada fica velho depois de uma gravação. O bloco só pode envolver
+# LEITURA: quem grava configuração, contrato, turma ou matrícula não o abre.
+_MEMORIA_DO_MOTOR = "motor_leituras_da_requisicao"
+
+
+@contextmanager
+def leituras_da_requisicao(db: Session):
+    """Liga a leitura única durante o bloco. Aninhado, o bloco de dentro não faz
+    nada: a memória é de quem abriu o primeiro e some quando ele fecha."""
+    info = getattr(db, "info", None)
+    if not isinstance(info, dict) or _MEMORIA_DO_MOTOR in info:
+        yield
+        return
+    info[_MEMORIA_DO_MOTOR] = {}
+    try:
+        yield
+    finally:
+        info.pop(_MEMORIA_DO_MOTOR, None)
+
+
+def com_leituras_da_requisicao(funcao):
+    """Decorador: a função (de LEITURA, ``db`` como 1º argumento) roda dentro de
+    ``leituras_da_requisicao`` — o que ela relê várias vezes sai do banco uma vez,
+    e quem a chama dentro de um bloco maior reaproveita a memória dele."""
+    @functools.wraps(funcao)
+    def _dentro_do_bloco(db, *args, **kwargs):
+        with leituras_da_requisicao(db):
+            return funcao(db, *args, **kwargs)
+    return _dentro_do_bloco
+
+
+def memoria_da_requisicao(db: Session, compartimento: str) -> dict | None:
+    """O ``compartimento`` da memória do bloco aberto (um dicionário que quem chama
+    preenche), ou ``None`` fora de ``leituras_da_requisicao`` — e aí quem chama
+    consulta o banco como sempre."""
+    info = getattr(db, "info", None)
+    memoria = info.get(_MEMORIA_DO_MOTOR) if isinstance(info, dict) else None
+    return None if memoria is None else memoria.setdefault(compartimento, {})
+
+
+# ---------------------------------------------------------------------------
 # Leitura de configurações
 # ---------------------------------------------------------------------------
 
 def obter_config(db: Session, escola_id: int, namespace: str, chave: str, padrao):
+    memoria = memoria_da_requisicao(db, "configuracoes")
+    if memoria is not None:
+        # Dentro do bloco: TODAS as configurações da escola numa ida só (o perfil
+        # de scoring, os quatro namespaces de pesos, o desempate e a gamificação
+        # saíam uma consulta cada, a cada chamada). Mesma linha que a consulta
+        # direta acharia — (escola, namespace, chave) é única (`uq_config`).
+        if escola_id not in memoria:
+            memoria[escola_id] = {
+                (row.namespace, row.chave): row for row in db.execute(
+                    select(Configuracao).where(Configuracao.escola_id == escola_id)
+                ).scalars()
+            }
+        row = memoria[escola_id].get((namespace, chave))
+        return row.valor if row is not None else padrao
     row = db.execute(
         select(Configuracao).where(
             Configuracao.escola_id == escola_id,

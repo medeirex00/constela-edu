@@ -411,10 +411,57 @@ class ItemEvolucao:
 def _alunos_com_leituras(db: Session, escola_id: int) -> set[int]:
     """Quem tem QUALQUER leitura individual registrada. Varredura INDEPENDENTE
     da janela — um chamador que rode várias janelas (o /insights: 30d/90d/semana/
-    base) carrega UMA vez e injeta em `_leituras_no_periodo`/`ranking_evolucao`."""
-    return set(db.execute(
+    base) carrega UMA vez e injeta em `_leituras_no_periodo`/`ranking_evolucao`.
+    Dentro de ``scoring.leituras_da_requisicao``, uma vez por requisição mesmo
+    sem injeção (o mural do dia, da semana e do mês)."""
+    memoria = scoring.memoria_da_requisicao(db, "alunos_com_leituras")
+    if memoria is not None and escola_id in memoria:
+        return set(memoria[escola_id])
+    alunos = set(db.execute(
         select(Leitura.aluno_id).where(Leitura.escola_id == escola_id).distinct()
     ).scalars().all())
+    if memoria is not None:
+        memoria[escola_id] = frozenset(alunos)
+    return alunos
+
+
+def _agora_da_requisicao(db: Session) -> datetime:
+    """O instante (UTC) de onde contam as janelas pedidas em ``dias``. Dentro de
+    ``scoring.leituras_da_requisicao`` é um só para a requisição inteira: o dia, a
+    semana e o mês do mural e a aba de 30 dias do app medem a partir do MESMO
+    agora (e a mesma janela lê as leituras uma vez); fora do bloco, o relógio."""
+    memoria = scoring.memoria_da_requisicao(db, "instante")
+    if memoria is None:
+        return datetime.now(timezone.utc)
+    if "agora" not in memoria:
+        memoria["agora"] = datetime.now(timezone.utc)
+    return memoria["agora"]
+
+
+def matriculas_ativas(db: Session, escola_id: int, ano_letivo: int) -> list:
+    """``(Matricula, Turma)`` de cada aluno ATIVO matriculado no ano letivo, com o
+    aluno já carregado (``selectinload``: quem lê ``matricula.aluno.nome`` não
+    dispara uma consulta por aluno). A coorte do ranking de evolução, dos índices
+    e dos alertas — a mesma consulta nos três. Dentro de
+    ``scoring.leituras_da_requisicao`` sai do banco uma vez por requisição (o
+    pacote do app a pedia cinco vezes)."""
+    memoria = scoring.memoria_da_requisicao(db, "matriculas_ativas")
+    if memoria is not None and (escola_id, ano_letivo) in memoria:
+        return list(memoria[(escola_id, ano_letivo)])
+    linhas = db.execute(
+        select(Matricula, Turma)
+        .join(Turma, Matricula.turma_id == Turma.id)
+        .join(Aluno, Matricula.aluno_id == Aluno.id)
+        .where(
+            Matricula.escola_id == escola_id,
+            Matricula.ano_letivo == ano_letivo,
+            Aluno.status == "ativo",
+        )
+        .options(selectinload(Matricula.aluno))  # evita N+1
+    ).all()
+    if memoria is not None:
+        memoria[(escola_id, ano_letivo)] = tuple(linhas)
+    return linhas
 
 
 def _leituras_no_periodo(db: Session, escola_id: int,
@@ -433,9 +480,14 @@ def _leituras_no_periodo(db: Session, escola_id: int,
         foi realmente lido.
 
     `alunos_com_leituras` (independente da janela) pode ser injetado para não
-    repetir o DISTINCT a cada janela."""
+    repetir o DISTINCT a cada janela. Dentro de ``scoring.leituras_da_requisicao``,
+    a MESMA janela pedida duas vezes (o mural do mês e a aba de 30 dias do app)
+    lê as leituras uma vez."""
     if alunos_com_leituras is None:
         alunos_com_leituras = _alunos_com_leituras(db, escola_id)
+    memoria = scoring.memoria_da_requisicao(db, "leituras_no_periodo")
+    if memoria is not None and (escola_id, inicio, fim) in memoria:
+        return alunos_com_leituras, memoria[(escola_id, inicio, fim)]
 
     # NÍVEL CONGELADO da leitura; nulo (leitura anterior a esta versão) cai no
     # nível ATUAL do livro. Mesma ``coalesce`` do motor, do /ranking/leitura e das
@@ -468,6 +520,8 @@ def _leituras_no_periodo(db: Session, escola_id: int,
             # título, senão o mesmo livro valeria números diferentes conforme a
             # tela (livro renomeado na escola, ou homônimo do catálogo).
             item["itens"].append((titulo or "", chave, 0, elefante_id))
+    if memoria is not None:
+        memoria[(escola_id, inicio, fim)] = dados
     return alunos_com_leituras, dados
 
 
@@ -516,6 +570,7 @@ def _referencias_por_dimensao(
     return refs, k_vol
 
 
+@scoring.com_leituras_da_requisicao
 def ranking_evolucao(db: Session, escola_id: int, inicio: datetime | None = None,
                      fim: datetime | None = None, turma_id: int | None = None,
                      ano_escolar: str | None = None,
@@ -572,7 +627,12 @@ def ranking_evolucao(db: Session, escola_id: int, inicio: datetime | None = None
     pode carregá-las UMA vez e injetá-las aqui, em vez de o serviço relê-las a
     cada chamada. `alunos_com_leituras` (o DISTINCT de quem tem leitura, também
     independente da janela) idem. Só a AGREGAÇÃO por janela de
-    `_leituras_no_periodo` continua por chamada (depende do intervalo)."""
+    `_leituras_no_periodo` continua por chamada (depende do intervalo).
+
+    Roda dentro de ``scoring.leituras_da_requisicao``: o perfil de scoring e os
+    pesos (os quatro ``pesos_efetivos`` abaixo), o contrato da rede e a coorte
+    saem do banco uma vez — e, quando quem chama já abriu o bloco (o mural, o
+    pacote do app, os índices), uma vez para todas as janelas."""
     escola = db.get(Escola, escola_id)
     if escola is None:
         return []
@@ -581,21 +641,10 @@ def ranking_evolucao(db: Session, escola_id: int, inicio: datetime | None = None
         # definição — não há por que calcular a escola inteira para devolver [].
         return []
     if inicio is None and dias is not None:
-        inicio = (datetime.now(timezone.utc) - timedelta(days=dias)).replace(tzinfo=None)
+        inicio = (_agora_da_requisicao(db) - timedelta(days=dias)).replace(tzinfo=None)
 
     # COORTE COMPLETA da escola — base dos ganhos e da régua. Sem filtro aqui.
-    consulta = (
-        select(Matricula, Turma)
-        .join(Turma, Matricula.turma_id == Turma.id)
-        .join(Aluno, Matricula.aluno_id == Aluno.id)
-        .where(
-            Matricula.escola_id == escola_id,
-            Matricula.ano_letivo == escola.ano_letivo_ativo,
-            Aluno.status == "ativo",
-        )
-    )
-    consulta = consulta.options(selectinload(Matricula.aluno))  # evita N+1
-    matriculas = db.execute(consulta).all()
+    matriculas = matriculas_ativas(db, escola_id, escola.ano_letivo_ativo)
 
     permitidas = set(turma_ids) if turma_ids is not None else None
 
