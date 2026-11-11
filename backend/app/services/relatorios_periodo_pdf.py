@@ -13,13 +13,11 @@ Chromium com o CSS e o rodapé numerado oficiais) e a reserva é o mesmo
 ``gerar_pdf`` em fpdf que a exportação já usa quando não há Chromium — o padrão
 copiado de ``gerar_lista_alunos_pdf``.
 
-  Nota de acoplamento: importamos de ``app.services.relatorios``, que está entre
-  as alterações paralelas não commitadas. Importar não é modificar, e as funções
-  usadas aqui foram conferidas uma a uma: são IDÊNTICAS na versão commitada e na
-  versão da árvore de trabalho. A única que difere entre as duas é ``_latin1``
-  (a versão nova mapeia o travessão "—" para hífen), e por isso este módulo
-  NUNCA imprime travessão: onde não há dado, escreve por extenso. Assim a saída
-  é a mesma com ou sem o trabalho paralelo presente.
+  Nota de acoplamento: importamos de ``app.services.relatorios`` (a moldura e o
+  ``gerar_pdf`` da reserva). Importar não é modificar. O texto da reserva vai para
+  as fontes nativas do fpdf2 em cp1252 (``relatorios._latin1`` →
+  ``services.texto_pdf``): o travessão, as aspas curvas e o apóstrofo tipográfico
+  sobrevivem; ``_sem_tipografia`` (abaixo) só troca o que o cp1252 não tem.
 
 A RESERVA CARREGA OS MESMOS NÚMEROS. Sem Chromium o PDF sai simples, mas não sai
 pobre: ``linhas_resumo`` é a fonte única das duplas (rótulo, valor) e alimenta os
@@ -37,10 +35,10 @@ from app.core.tempo import agora_br, para_br
 from app.services.relatorios import (_esc_html, _relatorio_html_pdf,
                                      _relatorio_shell, gerar_pdf)
 
-# Onde não há dado, escrevemos por extenso. Nunca "—" (o travessão não existe em
-# latin-1, e as duas versões de `_latin1` o tratam de formas diferentes) e nunca
-# "0" (zero é uma afirmação: a criança foi medida e não produziu). "Não calculado"
-# é a etiqueta da tela para o que o motor classifica como NÃO SUPORTADO.
+# Onde não há dado, escrevemos por extenso. Nunca um traço ("—"), que não diz se
+# faltou o dado ou se o relatório não calcula aquilo, e nunca "0" (zero é uma
+# afirmação: a criança foi medida e não produziu). "Não calculado" é a etiqueta da
+# tela para o que o motor classifica como NÃO SUPORTADO; "sem dado", a da ausência.
 SEM_SUPORTE = "não calculado"
 SEM_DADO = "sem dado"
 
@@ -935,29 +933,25 @@ def _detalhe_matific(bloco: dict) -> str:
             f"{_num(bloco.get('estrelas', 0))} estrelas")
 
 
-# Tipografia que NÃO existe em latin-1 e, portanto, não sobrevive ao PDF de
-# reserva (fpdf usa fontes latin-1). Mapeamos para o equivalente ASCII antes de
-# entregar a célula — senão vira "?" e o leitor lê defeito do relatório.
-_FORA_DO_LATIN1 = {
-    "—": "-", "–": "-", "―": "-",            # travessões
-    "“": '"', "”": '"', "„": '"',            # aspas curvas
-    "‘": "'", "’": "'",                       # apóstrofos curvos
-    "…": "...", "•": "-", "→": "->", "≈": "~",
+# Tipografia que NÃO existe no cp1252 das fontes nativas da reserva (fpdf2,
+# ``services.texto_pdf``) e que o motor ou este módulo escrevem. Sem equivalente na
+# fonte, ``texto_pdf`` a transformaria em "?" e o leitor leria defeito do
+# relatório; aqui vira o equivalente ASCII. O travessão, o meia-risca, as aspas
+# curvas, o apóstrofo tipográfico, as reticências e o marcador existem no cp1252 e
+# passam intactos: o nome da criança (Sant’Anna) sai como é (REV2-COSTURA-4).
+_FORA_DO_CP1252 = {
+    "―": "-",                                 # barra horizontal
+    "→": "->", "≈": "~",
 }
 
 
 def _sem_tipografia(texto) -> str:
-    """Texto pronto para a fonte latin-1 do PDF de reserva.
-
-    Isto não é zelo estético: o motor escreve travessão nos motivos de
-    "não suportado" (`MOTIVO_MATIFIC_QUESTOES`), e as DUAS versões de `_latin1`
-    em `services/relatorios.py` tratam o travessão de formas diferentes — a
-    commitada o transforma em "?". Normalizando aqui, a saída é a mesma com ou
-    sem o trabalho paralelo presente, que é o que a nota de acoplamento no topo
-    deste módulo promete.
-    """
+    """Texto pronto para a fonte cp1252 do PDF de reserva: só troca o que ela não
+    tem (``_FORA_DO_CP1252``). Antes, com as fontes em latin-1, trocava também o
+    travessão, as aspas curvas e o apóstrofo, inclusive no nome da criança, da
+    turma e da escola ("Sant’Anna" saía "Sant'Anna")."""
     texto = str(texto if texto is not None else "")
-    for de, para in _FORA_DO_LATIN1.items():
+    for de, para in _FORA_DO_CP1252.items():
         texto = texto.replace(de, para)
     return texto
 

@@ -304,9 +304,9 @@ def legenda_data_dos_dados(frescor: dict | None, dimensoes) -> str | None:
     de ontem; a data de emissão não diz isso. Nenhuma fórmula muda.
 
     Só dimensões contratadas; sem retrato, "sem dados"; acima do limite do selo,
-    "(mais de N dias)". Texto latin-1 puro (a reserva do PDF usa as fontes
-    nativas do fpdf: nada de reticências, travessão ou aspas curvas). ``None``
-    quando não há o que declarar (frescor indisponível)."""
+    "(mais de N dias)". Texto latin-1 puro, sem reticências, travessão ou aspas
+    curvas (o teste da legenda confere). ``None`` quando não há o que declarar
+    (frescor indisponível)."""
     if not frescor:
         return None
     limite = frescor.get("limite_dias")
@@ -337,7 +337,7 @@ def legenda_data_dos_dados(frescor: dict | None, dimensoes) -> str | None:
 
 def _couber(pdf, texto, largura: float) -> str:
     """Corta o texto para caber na LARGURA REAL da célula (não em nº fixo de
-    letras), terminando com '...' (o '…' não existe em latin-1)."""
+    letras), terminando com '...'."""
     texto = _latin1(texto)
     if pdf.get_string_width(texto) <= largura - 2:
         return texto
@@ -367,8 +367,8 @@ def gerar_pdf(titulo: str, escola_nome: str, cor: str,
               nota_dados: str | None = None) -> bytes:
     """PDF simples de tabela (fpdf). ``nota_dados`` = a linha "Dados das
     plataformas: ..." (``legenda_data_dos_dados``) logo abaixo da faixa. Valor
-    ausente (``None`` — ex.: nota da plataforma que a criança não usa) sai "-"
-    (o "—" não existe nas fontes latin-1), nunca "None"."""
+    ausente (``None`` — ex.: nota da plataforma que a criança não usa) sai "-",
+    nunca "None"."""
     linhas = [["-" if valor is None else valor for valor in linha] for linha in linhas]
     pdf = _novo_fpdf(orientation="P", unit="mm", format="A4")
     pdf.set_auto_page_break(auto=True, margin=15)

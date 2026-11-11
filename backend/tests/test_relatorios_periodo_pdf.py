@@ -701,10 +701,12 @@ def test_reserva_com_recorte_do_professor_tambem_nao_corta_o_cuidado(db, cenario
 
 def test_cada_curto_cabe_na_coluna_da_reserva():
     """Guarda de quem edita os textos: cada ``curto`` (de "Como ler" e de "O que este
-    relatório não responde") mede até ``LARGURA_DO_CURTO_MM`` na fonte da reserva."""
-    from fpdf import FPDF
+    relatório não responde") mede até ``LARGURA_DO_CURTO_MM`` na fonte da reserva —
+    a mesma codificação dela (cp1252, ``relatorios._novo_fpdf``): com o FPDF padrão
+    (latin-1), um curto com travessão ou aspas curvas derrubava a medida."""
+    from app.services.relatorios import _novo_fpdf
 
-    medida = FPDF()
+    medida = _novo_fpdf()
     medida.add_page()
     medida.set_font("helvetica", "", 9)
     largos = {}
