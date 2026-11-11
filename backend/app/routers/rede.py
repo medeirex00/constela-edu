@@ -325,8 +325,14 @@ def atualizar_local_escola(
     alteracoes = dados.model_dump(exclude_unset=True)
     if "codigo_inep" in alteracoes:
         bruto = (alteracoes["codigo_inep"] or "").strip()
-        # "" limpa; caso contrário normaliza p/ 8 dígitos (recusa lixo).
-        alteracoes["codigo_inep"] = svc_avaliacoes.normalizar_inep(bruto) if bruto else None
+        # "" limpa. O resto tem de ser um código de 8 dígitos (``inep_digitado``: nunca
+        # corta nem completa); senão, 400 e o código de antes fica.
+        alteracoes["codigo_inep"] = svc_avaliacoes.inep_digitado(bruto) if bruto else None
+        if bruto and alteracoes["codigo_inep"] is None:
+            raise HTTPException(
+                status.HTTP_400_BAD_REQUEST,
+                "O código INEP da escola tem 8 dígitos, só números (ex.: 35012345): "
+                "confira o código digitado. Nada foi alterado.")
         if alteracoes["codigo_inep"]:
             _exigir_inep_livre(db, escola, alteracoes["codigo_inep"])
     for campo, valor in alteracoes.items():

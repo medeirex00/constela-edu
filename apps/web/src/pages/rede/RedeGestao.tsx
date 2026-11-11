@@ -93,6 +93,18 @@ function inepNormalizado(valor: string | null | undefined): string {
   return digitos ? digitos.padStart(8, "0").slice(-8) : "";
 }
 
+// O código DIGITADO só vale com os seus 8 dígitos (o `inep_digitado` do backend): saem os
+// separadores (ponto, traço, barra, espaço), o ".0" do número colado do Excel e o "0" à
+// esquerda do cadastro antigo com 9 dígitos — nada é cortado, completado ou ignorado.
+// `null` = não é um código INEP (um dígito a mais ou a menos, uma letra).
+function inepDigitado(valor: string): string | null {
+  const s = valor.trim().replace(/\.0$/, "").replace(/[\s./-]/g, "");
+  const codigo = s.length === 9 && s.startsWith("0") ? s.slice(1) : s;
+  return /^[0-9]{8}$/.test(codigo) ? codigo : null;
+}
+
+const MSG_INEP_8_DIGITOS = "o código INEP tem 8 dígitos, só números (ex.: 35012345). Não foi salvo.";
+
 // Troca (A↔B) ou ciclo (A→B→C→A) dentro do MESMO lote: cada 409 diz "corrija primeiro a
 // outra escola", o que é circular — a outra também espera. O que resolve é liberar um código.
 const DICA_TROCA_INEP = "Como resolver: os códigos estão sendo trocados entre escolas deste "
@@ -722,15 +734,26 @@ export default function RedeGestao() {
       .sort((a, b) => Number(a.valor !== "") - Number(b.valor !== ""));
     let ok = 0;
     const erros: string[] = [];
+    // O que não tem 8 dígitos nem vai ao backend (que também o recusa): fica como erro,
+    // com o nome da escola, e o código de antes continua gravado.
+    fila = fila.filter(({ e, valor }) => {
+      if (valor === "" || inepDigitado(valor) !== null) return true;
+      erros.push(`${e.nome}: ${MSG_INEP_8_DIGITOS}`);
+      return false;
+    });
     while (fila.length > 0) {
       const conflitos: { item: (typeof fila)[number]; msg: string }[] = [];
       for (const item of fila) {
         try {
-          await api(`/redes/escolas/${item.e.id}`, {
+          const salvo = await api<{ codigo_inep?: string | null }>(`/redes/escolas/${item.e.id}`, {
             method: "PATCH", body: JSON.stringify({ codigo_inep: item.valor }),
           });
           ok += 1;
           atual.set(item.e.id, inepNormalizado(item.valor));
+          // O campo passa a mostrar o código GRAVADO (ex.: "035012345" vira "35012345").
+          if (salvo && "codigo_inep" in salvo) {
+            setInep((m) => ({ ...m, [item.e.id]: salvo.codigo_inep ?? "" }));
+          }
         } catch (err) {
           // A recusa do backend, como veio (o 409 diz de qual escola é o código).
           const msg = err instanceof ApiError ? err.message : "não foi possível salvar.";

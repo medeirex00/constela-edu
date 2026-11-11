@@ -13,6 +13,7 @@ import csv
 import io
 import ipaddress
 import logging
+import re
 import socket
 import zipfile
 from datetime import datetime, timedelta, timezone
@@ -366,6 +367,27 @@ def normalizar_inep(valor) -> str | None:
     if not s:
         return None
     return s.zfill(8)[-8:]
+
+
+_SEPARADORES_INEP = re.compile(r"[\s./-]")
+
+
+def inep_digitado(valor) -> str | None:
+    """O código INEP DIGITADO no cadastro, com os seus 8 dígitos — ou None quando o texto
+    não é um código INEP. Ao contrário de ``normalizar_inep`` (que casa a célula da
+    planilha e por isso corta para os 8 últimos dígitos, completa com zeros e ignora
+    letras), aqui nada é cortado, completado ou ignorado: só saem os separadores (ponto,
+    traço, barra e espaço), o '.0' de um número colado do Excel e o '0' à esquerda do
+    cadastro antigo com 9 dígitos. Um dígito a mais, a menos ou uma letra: None."""
+    if valor is None:
+        return None
+    s = str(valor).strip()
+    if s.endswith(".0"):
+        s = s[:-2]
+    s = _SEPARADORES_INEP.sub("", s)
+    if len(s) == 9 and s.startswith("0"):
+        s = s[1:]
+    return s if re.fullmatch(r"[0-9]{8}", s) else None
 
 
 def _num(valor):

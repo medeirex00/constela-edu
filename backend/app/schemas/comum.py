@@ -744,5 +744,6 @@ class EscolaLocalIn(BaseModel):
     endereco: str | None = Field(default=None, max_length=200)
     latitude: float | None = Field(default=None, ge=-90, le=90)
     longitude: float | None = Field(default=None, ge=-180, le=180)
-    # "" limpa o código; qualquer valor é normalizado p/ 8 dígitos no endpoint.
+    # "" limpa o código; o resto tem de ter 8 dígitos (o endpoint recusa com 400 o que
+    # não tem: ``avaliacoes.inep_digitado`` nunca corta nem completa).
     codigo_inep: str | None = Field(default=None, max_length=20)
