@@ -241,7 +241,8 @@ docker compose exec backend python -m scripts.purgar_ia
 
 No Railway, crie um **Cron Job** (ou uma segunda "service" agendada) executando
 `python -m scripts.purgar_ia`. O prazo é configurável pela variável
-`IA_RETENCAO_DIAS` (padrão `90`). Além disso, ao **excluir permanentemente um
+`IA_RETENCAO_DIAS` (padrão `90`, mínimo `1`; `0` não desliga a purga: ela recusa sem
+apagar nada). Além disso, ao **excluir permanentemente um
 aluno**, as conversas do assistente que citam o nome completo dele são removidas
 na mesma operação (direito ao esquecimento).
 

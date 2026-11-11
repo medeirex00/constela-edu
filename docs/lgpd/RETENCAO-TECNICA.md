@@ -17,7 +17,7 @@ produção.
 | Dado | Onde | Prazo hoje | Mecanismo |
 |---|---|---|---|
 | Cópias de relatórios (contêm nomes) | `exports/` | **7 dias** (`EXPORTS_RETENCAO_DIAS`; 0 desliga) | expurgo a cada nova exportação (`routers/relatorios.py`) |
-| Conversas do assistente de IA | `conversas_ia`, `mensagens_ia` | **90 dias** (`IA_RETENCAO_DIAS`) | no boot e por `python -m scripts.purgar_ia` (o que sai para o provedor externo e quem o liga: `ASSISTENTE-IA.md`) |
+| Conversas do assistente de IA | `conversas_ia`, `mensagens_ia` | **90 dias** (`IA_RETENCAO_DIAS`; mínimo 1 — ao contrário das `RETENCAO_*`, 0 NÃO desliga: a purga recusa e não apaga nada, o boot com `ENV=producao` recusa e o de dev avisa no log) | no boot e por `python -m scripts.purgar_ia` (o que sai para o provedor externo e quem o liga: `ASSISTENTE-IA.md`) |
 | Prévia de importação não confirmada | `uploads/temporarios/` | **24 h** (`IDADE_MAXIMA_TEMP_S`) | a cada nova análise |
 | Original de importação confirmada | `uploads/<plataforma>/` | **sem prazo** | — |
 | Link de redefinição de senha | `tokens_reset_senha` (só o hash) | **60 min** (`RESET_SENHA_EXPIRA_MIN`), uso único | validade no token |

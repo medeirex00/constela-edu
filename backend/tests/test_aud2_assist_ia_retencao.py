@@ -100,3 +100,25 @@ def test_dev_avisa_da_retencao_invalida_e_o_padrao_nao_avisa(sem_variaveis_do_pr
     assert [a for a in avisos if "IA_RETENCAO_DIAS" in a], avisos
     padrao = _settings("producao")
     assert padrao.IA_RETENCAO_DIAS == 90 and padrao.riscos_de_producao() == []
+
+
+def test_o_comando_de_purga_recusa_o_prazo_invalido_sem_traceback(monkeypatch, capsys):
+    """G_SCRIPTS-8 (opcional): ``python -m scripts.purgar_ia`` com IA_RETENCAO_DIAS
+    inválido diz o que corrigir e sai com código 2 — antes terminava com o traceback
+    do ValueError no log do cron. Nada é apagado (a purga recusa antes do banco)."""
+    from scripts import purgar_ia
+
+    fechadas = []
+
+    class _Sessao:
+        def close(self):
+            fechadas.append(True)
+
+    monkeypatch.setattr(purgar_ia, "SessionLocal", _Sessao)
+    monkeypatch.setattr(settings, "IA_RETENCAO_DIAS", 0)
+    with pytest.raises(SystemExit) as saida:
+        purgar_ia.main()
+    assert saida.value.code == 2
+    erro = capsys.readouterr().err
+    assert "nada foi apagado" in erro and "IA_RETENCAO_DIAS" in erro
+    assert fechadas == [True]
