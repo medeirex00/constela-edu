@@ -26,7 +26,7 @@ from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
 
 from app.models import Aluno, Turma
-from app.services.importacao import chave_nome, normalizar_nome
+from app.services.importacao import chave_nome, normalizar_nome, sem_controle
 from app.services.planilhas import (
     MAX_COLUNAS_LIDAS,
     OrcamentoLeitura,
@@ -298,8 +298,9 @@ _MARCADORES_NOME = " \t*#•·‧∙°º"
 
 
 def _limpar_nome(bruto: str) -> str:
-    """Colapsa espaços e tira marcadores de rodapé das pontas do nome."""
-    return " ".join((bruto or "").split()).strip(_MARCADORES_NOME)
+    """Colapsa espaços, troca caractere de controle invisível por espaço
+    (``importacao.sem_controle``) e tira marcadores de rodapé das pontas do nome."""
+    return " ".join(sem_controle(bruto or "").split()).strip(_MARCADORES_NOME)
 
 
 def _casar_coluna(rotulo: str, ja_usadas: set[str]) -> str | None:
@@ -384,8 +385,9 @@ _RE_TURMA = re.compile(r"^\s*(\d+)\s*[ºªo°]?\s*ano\s*([A-Za-z])?\s*$", re.IGN
 
 def _canonizar_turma(nome: str) -> tuple[str, str]:
     """(nome_turma, serie) canônicos. '1º ANO B' → ('1º Ano B', '1º Ano').
-    Formatos fora do padrão "Nº Ano X" ficam como estão (série = nome)."""
-    nome = " ".join(nome.split())
+    Formatos fora do padrão "Nº Ano X" ficam como estão (série = nome). O
+    caractere de controle invisível vira espaço, como no nome do aluno."""
+    nome = " ".join(sem_controle(nome).split())
     casado = _RE_TURMA.match(nome)
     if not casado:
         return nome, re.sub(r"\s+[A-Za-z]$", "", nome).strip() or nome
@@ -577,7 +579,8 @@ def _extrair_turma(nome_aba: str, topo: list[list]) -> TurmaMatriculas:
                 sed = v.strip()
     nome_turma, serie = _canonizar_turma(nome or nome_aba)
     return TurmaMatriculas(nome=nome_turma, ano_escolar=serie,
-                           turno=turno, professor=professor, sed=sed, aba=nome_aba)
+                           turno=turno, professor=sem_controle(professor), sed=sed,
+                           aba=nome_aba)
 
 
 def _aluno_cabe_nas_colunas(analise: ListaPilotoAnalise, turma: TurmaMatriculas,

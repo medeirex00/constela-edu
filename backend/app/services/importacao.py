@@ -36,18 +36,37 @@ from difflib import SequenceMatcher
 
 from sqlalchemy.orm import Session
 
+from app.schemas.comum import _nome_sem_controle
 from app.services.codificacao import ILEGIVEL
 
 # --------------------------------------------------------------------------
 # Normalização de texto e números
 # --------------------------------------------------------------------------
 
+# Espaço OU caractere de controle (C0 e DEL): para a comparação, o controle
+# invisível colado num nome separa palavras como um espaço — "Ana\x02Beatriz" é
+# "Ana Beatriz", a mesma leitura que ``sem_controle`` grava.
+_RE_ESPACO_OU_CONTROLE = re.compile(r"[\s\x00-\x1f\x7f]+")
+
+
+def sem_controle(texto: str) -> str:
+    """Nome SEM caractere de controle invisível (C0 e DEL): cada trecho com um deles
+    vira UM espaço, sem os das pontas — a MESMA regra do cadastro manual
+    (``schemas.comum._nome_sem_controle``). Entra pelas importações (nome colado de
+    PDF, planilha ou vindo da plataforma), e o ``' '.join(split())`` não o tira:
+    ``split()`` não separa em ``\\x01``–``\\x08``, ``\\x0e``–``\\x1b`` nem ``\\x7f``.
+    Um nome desses derruba a exportação Excel da escola. Texto sem controle passa
+    intacto."""
+    return _nome_sem_controle(texto)
+
+
 def normalizar_nome(texto: str) -> str:
-    """Remove acentos, caixa e espaços repetidos — base de toda comparação."""
+    """Remove acentos, caixa e espaços repetidos — base de toda comparação. Caractere
+    de controle conta como espaço (ver ``sem_controle``)."""
     sem_acento = "".join(
         c for c in unicodedata.normalize("NFD", texto) if unicodedata.category(c) != "Mn"
     )
-    return re.sub(r"\s+", " ", sem_acento).strip().casefold()
+    return _RE_ESPACO_OU_CONTROLE.sub(" ", sem_acento).strip().casefold()
 
 
 def _numero(celula: str) -> float:
@@ -264,6 +283,11 @@ class LinhaImportacao:
     erros: list[str] = field(default_factory=list)
     avisos: list[str] = field(default_factory=list)
     correspondencia: dict | None = None
+
+    def __post_init__(self) -> None:
+        # Todo parser (texto, PDF, planilha, APIs das plataformas) passa por aqui:
+        # o nome da prévia e da sincronização já sai sem caractere de controle.
+        self.nome = sem_controle(self.nome)
 
 
 @dataclass

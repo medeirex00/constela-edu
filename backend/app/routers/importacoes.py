@@ -788,8 +788,10 @@ def _turma_pelo_nome(db: Session, escola_id: int, ano: int, nome: str,
     no mesmo arquivo colapsam.
     ``permitir_criar=False`` (sincronização automática) NÃO cria turma que não exista
     no cadastro — só reaproveita a canônica; turma desconhecida vira aviso p/ análise
-    (gate anti-turma-fantasma). A Lista Piloto e o import manual (opt-in) passam True."""
-    nome_cru = (nome or "").strip()
+    (gate anti-turma-fantasma). A Lista Piloto e o import manual (opt-in) passam True.
+    O caractere de controle invisível do nome (vindo do relatório) vira espaço antes
+    de casar e de criar (``importacao.sem_controle``)."""
+    nome_cru = svc.sem_controle(nome or "").strip()
     if not nome_cru:
         return None
     codigo = matriculas.codigo_externo_do_nome(nome_cru)
@@ -4546,8 +4548,10 @@ def _revisao_out(rev: RevisaoIdentidade, triagem: dict | None = None,
 def _nome_da_ficha_nova(rev: RevisaoIdentidade, turma_nome: str) -> str:
     """O nome que "Criar novo aluno" grava na turma escolhida: o recebido, sem o
     sufixo de turma digitado junto (A10) — o da sala da turma escolhida ou o da sala
-    que a linha informou (a mesma regra da criação pela importação)."""
-    return ida.nome_sem_sufixo_de_turma(rev.nome_recebido, ida.chave_sala(turma_nome),
+    que a linha informou (a mesma regra da criação pela importação). Sem caractere de
+    controle invisível: uma pendência antiga pode guardar o nome recebido com ele."""
+    return ida.nome_sem_sufixo_de_turma(svc.sem_controle(rev.nome_recebido),
+                                        ida.chave_sala(turma_nome),
                                         ida.chave_sala(rev.turma_informada or ""))
 
 
@@ -4556,7 +4560,7 @@ def _nomes_da_ficha_nova(db: Session, escola_id: int, revisoes: list[RevisaoIden
     """Para a tela prometer o nome que o /resolver grava: por pendência, o nome padrão
     e ``{turma_id: nome}`` só das turmas em que ele muda (o sufixo daquela sala sai).
     Sufixo de turma tem dígito: nome sem dígito é o recebido, sem conta nenhuma."""
-    saida = {r.id: ((r.nome_recebido or "").strip(), {}) for r in revisoes}
+    saida = {r.id: (svc.sem_controle(r.nome_recebido or "").strip(), {}) for r in revisoes}
     com_digito = [r for r in revisoes if any(c.isdigit() for c in (r.nome_recebido or ""))]
     if not com_digito:
         return saida

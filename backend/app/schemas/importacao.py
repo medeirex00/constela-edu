@@ -1,9 +1,10 @@
 """Schemas do fluxo de importação (PRD §15–§16, §50–§52)."""
 from datetime import datetime
+from typing import Annotated
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, BeforeValidator, Field
 
-from app.schemas.comum import ORMModel
+from app.schemas.comum import ORMModel, _nome_sem_controle
 
 
 class CorrespondenciaOut(BaseModel):
@@ -76,14 +77,17 @@ class AnaliseOut(BaseModel):
 
 
 class LinhaConfirmacao(BaseModel):
-    nome: str
+    # O corpo vem do cliente (e da sincronização): o nome — da criança e da turma
+    # nova — perde o caractere de controle invisível, a mesma regra do cadastro
+    # manual (``schemas.comum._nome_sem_controle``). É o nome que fica na ficha.
+    nome: Annotated[str, BeforeValidator(_nome_sem_controle)]
     dados: dict
     aluno_id: int | None = None
     criar_em_turma_id: int | None = None
     # Nome de turma AINDA INEXISTENTE (a lida do PDF): a confirmação cria a
     # turma uma única vez e matricula o aluno nela — primeiro import da escola
     # funciona sem cadastrar turmas antes.
-    criar_em_turma_nome: str | None = None
+    criar_em_turma_nome: Annotated[str | None, BeforeValidator(_nome_sem_controle)] = None
     # COMO o aluno foi identificado (uuid|exato|provavel): a sincronização usa
     # para só mover de turma quem casou com segurança (só vem da sync automática).
     via: str | None = None
