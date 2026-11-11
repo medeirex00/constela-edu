@@ -180,9 +180,16 @@ app.add_middleware(
 # aceita, o de saída (``allow_nan=False``) não, e o 422 virava 500. A resposta leva no
 # máximo os primeiros ``_ERROS_MAXIMOS_NO_422`` erros: uma lista de N itens inválidos
 # gera N erros, e as telas só mostram as mensagens (sem repetir). O resto é a resposta
-# do FastAPI.
+# do FastAPI. O ``loc`` (onde está o erro) e o ``msg`` também ecoavam: num campo
+# dict[str, ...], a CHAVE que o cliente mandou entra inteira no ``loc`` (uma de 30 MB dava
+# 422 de 31,5 MB), e os validadores que citam as chaves inválidas (pesos, referências)
+# a repetem no ``msg``. Texto do ``loc`` com mais de ``_LOC_MAXIMO_NO_422`` caracteres e
+# ``msg`` com mais de ``_MSG_MAXIMO_NO_422`` voltam só com o começo e "…"; os números
+# (posição na lista), os nomes dos campos e as mensagens comuns ficam como estão.
 _INPUT_MAXIMO_NO_422 = 256
 _ERROS_MAXIMOS_NO_422 = 20
+_LOC_MAXIMO_NO_422 = 64
+_MSG_MAXIMO_NO_422 = 512
 
 
 def _input_que_pode_voltar(bruto: object) -> bool:
@@ -193,6 +200,15 @@ def _input_que_pode_voltar(bruto: object) -> bool:
     return isinstance(bruto, str) and len(bruto) <= _INPUT_MAXIMO_NO_422
 
 
+def _curto(texto: str, teto: int) -> str:
+    return texto if len(texto) <= teto else texto[:teto] + "…"
+
+
+def _loc_curto(loc) -> tuple:
+    return tuple(_curto(parte, _LOC_MAXIMO_NO_422) if isinstance(parte, str) else parte
+                 for parte in loc)
+
+
 @app.exception_handler(RequestValidationError)
 async def _erro_de_validacao(request: Request, exc: RequestValidationError) -> JSONResponse:
     erros = []
@@ -200,6 +216,10 @@ async def _erro_de_validacao(request: Request, exc: RequestValidationError) -> J
         erro = dict(erro)
         if "input" in erro and not _input_que_pode_voltar(erro["input"]):
             erro.pop("input")
+        if "loc" in erro:
+            erro["loc"] = _loc_curto(erro["loc"])
+        if isinstance(erro.get("msg"), str):
+            erro["msg"] = _curto(erro["msg"], _MSG_MAXIMO_NO_422)
         erros.append(erro)
     return JSONResponse(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
                         content={"detail": jsonable_encoder(erros)})

@@ -111,3 +111,62 @@ def test_numero_nao_finito_no_lugar_de_texto_e_422_e_nao_500(db):
             content=f'{{"token": {literal}, "nova_senha": "x"}}',
             headers={"content-type": "application/json"})
         assert r.status_code == 422, f"{literal}: {r.status_code} {r.text[:120]}"
+
+
+# --- REV-INFRA-3: o eco pelo ``loc`` -------------------------------------------------------
+# Num campo dict[str, ...] com valor inválido, a CHAVE que o cliente mandou entra no ``loc``
+# do erro. Sem teto, uma chave de 500 mil caracteres voltava inteira no 422 (e uma de 30 MB,
+# 31,5 MB de resposta). Só as rotas com login têm campo assim (AlunoCreate.ficha,
+# PesosUpdate.valores, valores_manuais, nome_ficha_nova_por_turma).
+
+
+def test_chave_longa_de_dict_nao_volta_inteira_pelo_loc(cliente, escola_completa):
+    chave = "CHAVE-ECO-" * 50_000                       # 500 mil caracteres
+    r = cliente.post(f"{API}/escolas/{escola_completa['escola'].id}/alunos",
+                     json={"nome": "Aluno Ficticio", "turma_id": escola_completa["turma"].id,
+                           "ficha": {chave: 1}})
+    assert r.status_code == 422, r.text[:200]
+    assert len(r.content) < 2_000, f"422 de {len(r.content)} bytes ecoa a chave pelo loc"
+    assert chave not in r.text
+    erro = r.json()["detail"][0]
+    # Continua dizendo ONDE está o erro: o campo e o começo da chave.
+    assert erro["loc"][:2] == ["body", "ficha"]
+    assert erro["loc"][2] == chave[:main._LOC_MAXIMO_NO_422] + "…"
+
+
+def test_loc_encurta_so_o_texto_longo():
+    longo = "K" * 100_000
+    no_limite = "c" * main._LOC_MAXIMO_NO_422
+    detalhe = _responder([
+        {"type": "t", "loc": ("body", "ficha", longo), "msg": "m", "input": 1},
+        {"type": "t", "loc": ("body", "ids", 3), "msg": "m", "input": "x"},
+        {"type": "t", "loc": ("body", "valores", no_limite), "msg": "m", "input": "x"},
+    ])["detail"]
+    assert [e["loc"] for e in detalhe] == [
+        ["body", "ficha", "K" * main._LOC_MAXIMO_NO_422 + "…"],
+        ["body", "ids", 3],
+        ["body", "valores", no_limite],
+    ]
+
+
+def test_mensagem_do_validador_nao_ecoa_a_chave_longa(cliente_global, escola_completa):
+    """Os validadores de PesosUpdate.valores e ReferenciasUpdate.valores_manuais citam as
+    chaves inválidas na mensagem (o ``msg``): a chave enviada voltava inteira por ali."""
+    chave = "CHAVE-MSG-" * 50_000                       # 500 mil caracteres
+    r = cliente_global.put(
+        f"{API}/escolas/{escola_completa['escola'].id}/configuracoes/referencias",
+        json={"modo": "manual", "valores_manuais": {chave: -1}})
+    assert r.status_code == 422, r.text[:200]
+    assert len(r.content) < 2_000, f"422 de {len(r.content)} bytes ecoa a chave pelo msg"
+    assert chave not in r.text
+    # A mensagem continua explicando o erro.
+    assert r.json()["detail"][0]["msg"].startswith(
+        "Value error, Valor de referência manual não pode ser negativo")
+
+
+def test_mensagem_curta_fica_inteira(cliente_global, escola_completa):
+    r = cliente_global.put(
+        f"{API}/escolas/{escola_completa['escola'].id}/configuracoes/referencias",
+        json={"modo": "manual", "valores_manuais": {"max_tempo": -1}})
+    assert r.status_code == 422, r.text[:200]
+    assert r.json()["detail"][0]["msg"].endswith(": max_tempo.")
