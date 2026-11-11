@@ -700,7 +700,9 @@ def capturar_excecao(erro: BaseException) -> None:
 
 
 # --- Extração de contexto da requisição --------------------------------------
-_RE_ESCOLA = re.compile(r"/escolas/(\d+)")
+# Teto de 18 dígitos: o caminho vem de qualquer um, sem login, e o Python recusa converter
+# texto com mais de 4300 dígitos (ValueError). Um número maior que isso não é id de escola.
+_RE_ESCOLA = re.compile(r"/escolas/(\d{1,18})(?!\d)")
 
 
 def _escola_id_do_caminho(caminho: str) -> int | None:
@@ -1767,16 +1769,23 @@ class ObservabilidadeMiddleware:
         correlation_id = (headers.get(b"x-correlation-id", b"").decode("latin-1")
                           or request_id)
         caminho = scope.get("path", "")
-        escola_id = _escola_id_do_caminho(caminho)
-        usuario_id = _usuario_id_do_token(headers)
-
         ctx_request_id.set(request_id)
         ctx_correlation_id.set(correlation_id)
-        if escola_id is not None:
-            ctx_escola_id.set(escola_id)
-        if usuario_id is not None:
-            ctx_usuario_id.set(usuario_id)
-        _marcar_sentry(request_id, correlation_id, usuario_id, escola_id)
+        # O resto do contexto (escola do caminho, usuário do token, marcas do Sentry) só
+        # serve ao rastreio e vem do pedido de qualquer um, antes do ``try`` da rede de
+        # segurança: uma falha aqui escaparia do middleware (500 em texto puro, sem
+        # X-Request-ID nem CORS). Falhou, segue sem esse contexto.
+        try:
+            escola_id = _escola_id_do_caminho(caminho)
+            usuario_id = _usuario_id_do_token(headers)
+            if escola_id is not None:
+                ctx_escola_id.set(escola_id)
+            if usuario_id is not None:
+                ctx_usuario_id.set(usuario_id)
+            _marcar_sentry(request_id, correlation_id, usuario_id, escola_id)
+        except Exception:  # noqa: BLE001 — contexto é best-effort; a requisição segue
+            logger.warning("contexto_da_requisicao_falhou", exc_info=True,
+                           extra={"caminho": redigir_caminho(caminho)})
 
         metodo = scope.get("method", "?")
         inicio = time.perf_counter()
