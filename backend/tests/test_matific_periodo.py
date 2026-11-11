@@ -14,6 +14,7 @@ from datetime import datetime, time, timedelta
 from sqlalchemy import select
 
 from app.models import SnapshotMatific
+from app.models.base import agora
 from app.services.evolucao import _janela
 from app.services.perfis_pdf import Pagina, Palavra, PerfilMatific
 
@@ -467,8 +468,11 @@ def test_evolucao_ordena_por_data_apos_backfill(cliente, db, escola_completa):
     serie = _series_por_aluno(db, escola_id, SnapshotMatific)[ana.id]
     datas = [s.data_referencia for s in serie]
     assert datas == sorted(datas)                     # cronológica
-    # "atual" de uma janela até HOJE é o acumulado, não o mês backfillado.
-    atual, _ = _janela(serie, datetime(2026, 6, 1), datetime(2026, 12, 31))
+    # "atual" de uma janela até HOJE é o acumulado, não o mês backfillado. O fim é o
+    # fim do dia de hoje em UTC (o acumulado é gravado com agora(), em UTC): uma data
+    # escrita no código (31/12/2026 00:00) deixava de cobrir "hoje" a partir de 31/12.
+    hoje_fim = datetime.combine(agora().date(), time.max)
+    atual, _ = _janela(serie, datetime(2026, 6, 1), hoje_fim)
     assert atual.estrelas == 900
 
 

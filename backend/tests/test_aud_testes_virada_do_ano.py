@@ -5,10 +5,12 @@ escrito no código (2026: a ``escola_completa`` do conftest e as fixtures própr
 módulos). O produto mede o ano letivo pela janela civil do dado (o contador do ANO do
 Matific, ranking, painel público, retenção de queda do sync): a partir de 01/01/2027
 00:00 UTC — 31/12 às 21h em Brasília, a hora do runner do CI — o dado de "agora" saía do
-ano da escola e mais de cem testes ficavam vermelhos sem nenhuma mudança de código.
+ano da escola e mais de cem testes ficavam vermelhos sem nenhuma mudança de código. Uma
+janela escrita no código (``datetime(2026, 12, 31)``) já quebrava em 31/12.
 
 A CORREÇÃO (``tests._ano_letivo``): o teste que grava "agora" põe a escola no ano de hoje
-(``ANO``, que segue o relógio); o de datas fixas segue no ano delas.
+(``ANO``, que segue o relógio); o de datas fixas segue no ano delas; a janela "até hoje"
+acaba no fim de hoje.
 
 A GUARDA. Representantes de cada causa rodam num processo novo com o relógio ADIANTADO
 (``tests._relogio_adiantado``): na noite de 31/12 em Brasília, no começo de janeiro e no
@@ -27,7 +29,7 @@ BACKEND = Path(__file__).resolve().parents[1]
 
 #: Um ou dois por causa: a escola de teste no ano de hoje (a ``escola_completa`` e a
 #: fixture própria do módulo; o dado que o próprio fluxo do app grava "agora" na
-#: importação e na sync; a data "no futuro").
+#: importação e na sync; a data "no futuro"), e a janela escrita no código.
 REPRESENTANTES = [
     "tests/test_publico.py::test_painel_publico_sem_login",
     "tests/test_scoring.py::test_nota_matific_com_pesos_padrao",
@@ -36,6 +38,7 @@ REPRESENTANTES = [
     "tests/test_sync_integridade_resultados_ponta_a_ponta.py"
     "::test_retrato_gravado_chega_a_nota_aos_rankings_e_as_premiacoes",
     "tests/test_leituras_restauracao.py::test_recusa_data_no_futuro[ano_de_hoje]",
+    "tests/test_matific_periodo.py::test_evolucao_ordena_por_data_apos_backfill",
 ]
 
 INSTANTES = [
