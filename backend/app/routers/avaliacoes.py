@@ -399,6 +399,10 @@ def _fonte_saida(f: FonteAvaliacao, av: AvaliacaoExterna | None) -> dict:
         "proxima_coleta": f.proxima_coleta.isoformat() if f.proxima_coleta else None,
         "ultimo_status": f.ultimo_status, "ultimo_erro": f.ultimo_erro,
         "ultimo_resumo": f.ultimo_resumo,
+        # O robô AUTOMÁTICO está ligado neste servidor? Desligado (o padrão), a fonte
+        # mensal não é coletada sozinha e a "próxima coleta" não acontece: só o
+        # "Coletar agora". A tela usa isto para não prometer a coleta automática.
+        "robo_habilitado": svc.robo_habilitado(),
     }
 
 

@@ -84,6 +84,9 @@ interface Fonte {
   ultima_coleta: string | null; proxima_coleta: string | null;
   ultimo_status: string; ultimo_erro: string | null;
   ultimo_resumo: Record<string, unknown> | null;
+  // O robô AUTOMÁTICO está ligado no servidor? Desligado (o padrão), a fonte mensal não é
+  // coletada sozinha: só o "Coletar agora".
+  robo_habilitado?: boolean;
 }
 
 const rotuloSerie = (s: SerieOpcao) =>
@@ -389,7 +392,7 @@ function ImportarAvaliacao({ catalogo, aoImportar, ehGlobal, aoSalvarFonte }: {
       if (linhaCabecalho && Object.values(cabecalho).every((t) => t.length <= 200)) {
         mapeamento.cabecalho = cabecalho;
       }
-      await api<Fonte>("/avaliacoes/fontes", {
+      const criada = await api<Fonte>("/avaliacoes/fontes", {
         method: "POST",
         body: JSON.stringify({
           avaliacao, nome: `${catalogo.find((c) => c.chave === avaliacao)?.nome ?? avaliacao} ${edicao}`,
@@ -397,7 +400,7 @@ function ImportarAvaliacao({ catalogo, aoImportar, ehGlobal, aoSalvarFonte }: {
           cadencia, mapeamento,
         }),
       });
-      setMsgFonte({ tipo: "ok", texto: "Fonte salva. O robô passa a baixar e importar sozinho." });
+      setMsgFonte({ tipo: "ok", texto: textoFonteSalva(cadencia, criada?.robo_habilitado === true) });
       setUrlFonte("");
       aoSalvarFonte?.();
     } catch (e) {
@@ -534,9 +537,10 @@ function ImportarAvaliacao({ catalogo, aoImportar, ehGlobal, aoSalvarFonte }: {
                 <Bot size={16} /> Automatizar (montar o robô com este mapeamento)
               </h3>
               <p className="text-xs text-zinc-600 dark:text-zinc-400">
-                Guarde o endereço <b>fixo</b> do arquivo oficial (a URL de download do INEP/SEDUC).
-                O sistema passa a baixar dessa URL e importar sozinho, com o <b>mesmo mapeamento</b>{" "}
-                que você conferiu acima — sem ninguém subir arquivo de novo.
+                Guarde o endereço <b>fixo</b> do arquivo oficial (a URL de download do INEP/SEDUC),
+                com o <b>mesmo mapeamento</b> que você conferiu acima: “Coletar agora”, na lista das
+                fontes, baixa dessa URL e importa sem ninguém subir arquivo de novo. A coleta mensal
+                automática só acontece com o robô ligado no servidor (ele vem desligado).
               </p>
               <p className="flex items-start gap-1.5 text-xs text-amber-700 dark:text-amber-400">
                 <AlertTriangle size={13} className="mt-0.5 shrink-0" />
@@ -552,7 +556,7 @@ function ImportarAvaliacao({ catalogo, aoImportar, ehGlobal, aoSalvarFonte }: {
                 </div>
                 <Campo rotulo="Cadência">
                   <select className={estiloInput} value={cadencia} onChange={(e) => setCadencia(e.target.value)}>
-                    <option value="mensal">Mensal (verifica sozinho)</option>
+                    <option value="mensal">Mensal (automática, se o robô estiver ligado)</option>
                     <option value="manual">Manual (só quando eu clicar)</option>
                   </select>
                 </Campo>
@@ -578,6 +582,18 @@ const _STATUS_TOM: Record<string, "ok" | "alerta" | "neutro"> = {
 
 function quando(iso: string | null): string {
   return dataDia(iso);
+}
+
+/** O aviso depois de salvar a fonte: só promete a coleta automática quando ela acontece
+ *  (cadência mensal com o robô ligado no servidor). */
+function textoFonteSalva(cadencia: string, roboLigado: boolean): string {
+  if (cadencia !== "mensal") {
+    return "Fonte salva. Ela é baixada e importada quando você clicar em “Coletar agora”, na lista das fontes.";
+  }
+  return roboLigado
+    ? "Fonte salva. O robô passa a baixar e importar sozinho, uma vez por mês."
+    : "Fonte salva. A coleta automática está desligada neste servidor: para baixar e importar, "
+      + "use “Coletar agora”, na lista das fontes.";
 }
 
 function FontesAutomaticas({ fontes, carregando, erro, recarregar }: {
@@ -662,7 +678,9 @@ function FontesAutomaticas({ fontes, carregando, erro, recarregar }: {
                     <Clock size={12} /> última: {quando(f.ultima_coleta)}
                   </span>
                   <span>cadência: {f.cadencia}</span>
-                  {f.cadencia === "mensal" && f.ativo && <span>próxima: {quando(f.proxima_coleta)}</span>}
+                  {f.cadencia === "mensal" && f.ativo && (f.robo_habilitado
+                    ? <span>próxima: {quando(f.proxima_coleta)}</span>
+                    : <span>coleta automática desligada: use “Coletar agora”</span>)}
                   {f.ultimo_status === "erro" && f.ultimo_erro && (
                     <span className="text-amber-600 dark:text-amber-400">{f.ultimo_erro}</span>
                   )}
