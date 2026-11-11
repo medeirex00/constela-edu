@@ -259,6 +259,11 @@ def configurar_logging(settings) -> None:
         handler.setFormatter(FormatadorTexto(
             "%(asctime)s %(levelname)s %(name)s: %(message)s"))
     raiz.addHandler(handler)
+    # Avisos do Python (``warnings.warn``: o openpyxl avisa ao abrir uma Lista Piloto com
+    # lista suspensa do Excel) iriam crus para o stderr, em duas linhas, fora do JSON: o
+    # Railway os pintaria de ERRO. Passam pelo logger "py.warnings" e saem por este
+    # handler, em WARNING (uma linha JSON, com o request_id quando houver).
+    logging.captureWarnings(True)
     instalar_ganchos_de_excecao()
     # Uvicorn: manda o log de erro para a nossa formatação.
     for nome in ("uvicorn", "uvicorn.error"):
