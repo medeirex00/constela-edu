@@ -19,7 +19,12 @@ from sqlalchemy.orm import Session
 
 from app.core.database import get_db
 from app.core.deps import escola_autorizada, get_usuario_atual
-from app.core.rate_limit import LimitadorTentativas, ip_do_cliente
+from app.core.rate_limit import (
+    LimitadorTentativas,
+    ip_do_cliente,
+    minutos_de_espera,
+    rede_para_limite,
+)
 from app.models import DispositivoMovel, Escola, Usuario
 from app.models.base import agora
 from app.routers.rankings import _ranking, montar_dashboard
@@ -143,6 +148,9 @@ def remover_dispositivo(
 # Descadastro SEM login: tentativas por IP numa janela (todas contam, achando ou não
 # o aparelho). Folgado para a escola inteira atrás de um IP só saindo do app; curto
 # para quem tentasse adivinhar tokens (que, de todo modo, são aleatórios e longos).
+# A chave é ``rede_para_limite(ip)``, como no teto de falhas do login: o IPv6 conta
+# pelo /64 do assinante (que troca de endereço de graça dentro dele), o IPv4 pelo
+# endereço.
 limitador_descadastro = LimitadorTentativas(max_tentativas=30, janela_s=600)
 
 
@@ -169,12 +177,12 @@ def descadastrar_dispositivo(
     cadastrado (o token é único — como no ``/remover``), porque o app troca de
     escola sem cadastrar de novo. A resposta é a mesma exista o token ou não: a rota
     não diz quais aparelhos estão cadastrados."""
-    chave = ip_do_cliente(request)
+    chave = rede_para_limite(ip_do_cliente(request))
     if limitador_descadastro.bloqueado(chave):
         espera = limitador_descadastro.segundos_restantes(chave)
         raise HTTPException(
             status.HTTP_429_TOO_MANY_REQUESTS,
-            f"Muitas tentativas. Aguarde {max(1, espera // 60)} minuto(s) e "
+            f"Muitas tentativas. Aguarde {minutos_de_espera(espera)} minuto(s) e "
             "tente novamente.",
             headers={"Retry-After": str(max(1, espera))})
     limitador_descadastro.registrar_falha(chave)
