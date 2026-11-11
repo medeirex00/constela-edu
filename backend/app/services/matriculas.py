@@ -637,8 +637,51 @@ def aviso_ano_da_lista(ano_lista: int | None, origem: str | None, ano_escola: in
             f"{onde_corrigir} e envie de novo.")
 
 
+#: Situação de uma ficha que não está ativa, como os avisos da importação a descrevem.
+_SITUACAO_DA_FICHA = {"arquivado": "arquivada", "transferido": "marcada como transferida",
+                      "fora_lista_piloto": "fora da Lista Piloto"}
+
+
+@dataclass(frozen=True)
+class FichaCandidata:
+    """Onde está a ficha que um aviso manda abrir: a situação (``Aluno.status``) e a
+    turma da matrícula mais recente (a do ano letivo ativo, quando houver).
+
+    ``turma_a_vista``: a turma aparece em Minha Escola › Turmas sem ligar "Mostrar
+    arquivadas e de outros anos" (turma ativa, do ano letivo ativo)."""
+    nome: str
+    status: str = "ativo"
+    turma: str | None = None
+    ano: int | None = None
+    turma_a_vista: bool = True
+
+
+def como_abrir_ficha_inativa(ficha: FichaCandidata) -> str:
+    """A frase que diz como ABRIR uma ficha que não está ativa. A pesquisa do topo da
+    página só acha fichas ativas (``routers.sistema.pesquisa_global``), e a lista de
+    Alunos só mostra os ativos do ano: o caminho é o painel da turma da ficha, com
+    "Mostrar arquivados" (``GET /turmas/{id}/alunos?incluir_inativos``), que lista a
+    turma pelas matrículas do ano DELA — inclusive a de um ano anterior."""
+    situacao = _SITUACAO_DA_FICHA.get(ficha.status, "inativa")
+    if not ficha.turma:
+        # Sem matrícula nenhuma, nenhuma tela de lista a mostra: não prometer caminho.
+        return (f"A ficha “{ficha.nome}” está {situacao} e sem turma, por isso não "
+                "aparece na pesquisa do topo da página nem nas turmas: para abri-la, "
+                "fale com a equipe que implantou o Constela (Suporte › Ainda precisa "
+                "de ajuda?).")
+    if ficha.turma_a_vista:
+        turma = f"abra a turma {ficha.turma}"
+    else:
+        turma = ("ligue “Mostrar arquivadas e de outros anos”, abra a turma "
+                 f"{ficha.turma}" + (f" de {ficha.ano}" if ficha.ano else ""))
+    return (f"A ficha “{ficha.nome}” está {situacao} e por isso não aparece na pesquisa "
+            f"do topo da página: para abri-la, vá a Minha Escola › Turmas, {turma}, "
+            "ligue “Mostrar arquivados” e use “Visualizar” na linha dela.")
+
+
 def aviso_revisao(nome_linha: str, turma: str, nomes_candidatos: str,
-                  motivo: str = "", *, previa: bool = False) -> str:
+                  motivo: str = "", *, previa: bool = False,
+                  ficha: FichaCandidata | None = None) -> str:
     """O aviso da linha que foi para REVISÃO (nada criado nem alterado nela).
 
     ``mudanca_de_sala_sem_prova`` (nome idêntico em outra sala, ou numa ficha sem turma
@@ -650,19 +693,31 @@ def aviso_revisao(nome_linha: str, turma: str, nomes_candidatos: str,
     Os outros motivos (nomes parecidos na mesma sala, disputa entre linhas) continuam
     em "Fundir duplicatas".
 
+    ``ficha``: onde está a ficha candidata. Quando ela NÃO está ativa (arquivada,
+    transferida, fora da Lista Piloto), a pesquisa do topo não a acha: o aviso diz a
+    situação, como abri-la (``como_abrir_ficha_inativa``) e que, depois de levá-la à
+    turma, é preciso "Reativar". Sem ``ficha`` (ou com a ficha ativa), o texto de antes.
+
     ``previa=True``: a redação da PRÉVIA (nada foi gravado ainda) — "Esta linha
     ficará para revisão: nada será criado nem alterado nela"."""
     nada = ("Esta linha ficará para revisão: nada será criado nem alterado nela"
             if previa else "Nada foi criado nem alterado nesta linha")
     if motivo == "mudanca_de_sala_sem_prova":
+        if ficha is not None and ficha.status != "ativo":
+            mesma = (f"{como_abrir_ficha_inativa(ficha)} Se for a mesma criança, nos três "
+                     f"pontinhos da ficha › Editar dados, escolha a turma {turma} e, "
+                     "depois, nos três pontinhos, use “Reativar”; no próximo envio desta "
+                     "planilha, a ficha recebe os dados da linha.")
+        else:
+            mesma = ("Se for a mesma criança, procure o nome na "
+                     "pesquisa do topo da página, abra a ficha e, nos três pontinhos › "
+                     f"Editar dados, escolha a turma {turma}; no próximo envio desta "
+                     "planilha, a ficha recebe os dados da linha.")
         return (f"“{nome_linha}” (turma {turma}) tem o mesmo nome de um aluno já "
                 "cadastrado em outra turma ou sem turma neste ano letivo "
                 f"({nomes_candidatos}), mas nenhum dado dos dois registros (RA ou data "
-                f"de nascimento) confirma que é a mesma criança. {nada}. "
-                "Se for a mesma criança, procure o nome na "
-                "pesquisa do topo da página, abra a ficha e, nos três pontinhos › "
-                f"Editar dados, escolha a turma {turma}; no próximo envio desta "
-                "planilha, a ficha recebe os dados da linha. Se forem crianças "
+                f"de nascimento) confirma que é a mesma criança. {nada}. {mesma} "
+                "Se forem crianças "
                 "diferentes, registre a data de nascimento de cada uma (na ficha, em "
                 "Editar dados, e na planilha) e envie de novo: com datas diferentes, a "
                 "linha vira um cadastro novo.")

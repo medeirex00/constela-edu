@@ -3970,6 +3970,10 @@ class _EstadoEscola:
     alunos_por_id: dict[int, Aluno]                # ORM — usado na persistência
     matricula_ano: dict[int, Matricula | None]
     ctx: matriculas.ContextoCasamento              # índices do MOTOR ÚNICO
+    # Turma da matrícula mais RECENTE de cada aluno (a do ano ativo, quando houver):
+    # é por ela que o aviso diz como abrir a ficha que não está ativa (a pesquisa do
+    # topo da página só acha as ativas) — ver ``_ficha_candidata``.
+    turma_recente: dict[int, Turma] = field(default_factory=dict)
 
     def registrar(self, aluno: Aluno, chave_sala: str | None = None) -> None:
         """Reflete no índice do motor o aluno recém-criado/alterado — as linhas
@@ -4010,10 +4014,23 @@ def _carregar_estado(db: Session, escola_id: int, ano: int) -> _EstadoEscola:
             select(Matricula).where(Matricula.escola_id == escola_id,
                                     Matricula.ano_letivo == ano)).scalars()
     }
-    chave_da_turma: dict[int, str] = {
-        t.id: _chave_turma(t.nome) for t in db.execute(
+    turmas_da_escola: dict[int, Turma] = {
+        t.id: t for t in db.execute(
             select(Turma).where(Turma.escola_id == escola_id)).scalars()
     }
+    chave_da_turma: dict[int, str] = {
+        tid: _chave_turma(t.nome) for tid, t in turmas_da_escola.items()}
+    # Turma da matrícula mais recente de cada aluno; a do ano ativo vale sobre as outras.
+    turma_recente: dict[int, Turma] = {}
+    for aid, tid in db.execute(
+        select(Matricula.aluno_id, Matricula.turma_id)
+        .where(Matricula.escola_id == escola_id)
+        .order_by(Matricula.ano_letivo, Matricula.id)).all():
+        if tid in turmas_da_escola:
+            turma_recente[aid] = turmas_da_escola[tid]
+    for aid, m in matricula_ano.items():
+        if m is not None and m.turma_id in turmas_da_escola:
+            turma_recente[aid] = turmas_da_escola[m.turma_id]
     # Sala de cada aluno: SÓ a do ano ativo. Quem não tem matrícula no ano fica sem
     # sala (não herda a da matrícula de um ano anterior: a mesma série+letra, no ano
     # novo, é outra turma de crianças) e é reconhecido pelo RA ou pela mudança de
@@ -4029,7 +4046,23 @@ def _carregar_estado(db: Session, escola_id: int, ano: int) -> _EstadoEscola:
             ctx.registrar_ra(ident)     # só o RA identifica um excluído
             continue
         ctx.registrar(ident, sala_de.get(a.id))
-    return _EstadoEscola(alunos_por_id, matricula_ano, ctx)
+    return _EstadoEscola(alunos_por_id, matricula_ano, ctx, turma_recente)
+
+
+def _ficha_candidata(estado: _EstadoEscola, aluno_id: int | None,
+                     ano: int) -> matriculas.FichaCandidata | None:
+    """Onde está a ficha que o aviso manda abrir: a situação e a turma da matrícula
+    mais recente (``matriculas.como_abrir_ficha_inativa`` diz o caminho até ela)."""
+    aluno = estado.alunos_por_id.get(aluno_id) if aluno_id is not None else None
+    if aluno is None:
+        return None
+    turma = estado.turma_recente.get(aluno.id)
+    return matriculas.FichaCandidata(
+        nome=aluno.nome, status=aluno.status,
+        turma=turma.nome if turma is not None else None,
+        ano=turma.ano_letivo if turma is not None else None,
+        turma_a_vista=(turma is not None and ida.turma_ativa(turma)
+                       and turma.ano_letivo == ano))
 
 
 def _resolver_turmas(db: Session, escola_id: int, ano: int, turmas_analise,
@@ -4250,8 +4283,9 @@ def _persistir_linhas(db: Session, escola_id: int, ano: int, usuario: Usuario,
             nomes = ", ".join(sorted(
                 estado.alunos_por_id[i].nome for i in decisao.candidatos
                 if i in estado.alunos_por_id)) or "cadastro já existente"
-            aviso = matriculas.aviso_revisao(parsed.nome, turma.nome, nomes,
-                                             decisao.motivo, previa=simular)
+            aviso = matriculas.aviso_revisao(
+                parsed.nome, turma.nome, nomes, decisao.motivo, previa=simular,
+                ficha=_ficha_candidata(estado, decisao.aluno_id, ano))
             res.avisos.append(aviso)
             res.avisos_revisao.append(aviso)
             auditar("aluno.revisao_necessaria", escola_id=escola_id,
@@ -4303,6 +4337,7 @@ def _persistir_linhas(db: Session, escola_id: int, ano: int, usuario: Usuario,
                               "decisao": "NEW_STUDENT", "motivo": decisao.motivo,
                               "fonte": "importacao_matriculas"})
             estado.matricula_ano[aluno.id] = None
+            estado.turma_recente[aluno.id] = turma
             ja_alocado.add(aluno.id)
             res.vistos.add(aluno.id)
             estado.registrar(aluno, linha.chave_sala)
@@ -4392,6 +4427,7 @@ def _persistir_linhas(db: Session, escola_id: int, ano: int, usuario: Usuario,
                 estado.matricula_ano[existente.id] = None
             elif mat is not None and mat.turma_id != turma.id and not simular:
                 mat.turma_id = turma.id   # a planilha é a fonte da verdade
+            estado.turma_recente[existente.id] = turma
             ja_alocado.add(existente.id)
             # Auditoria: todo vínculo que TROCA a identidade fica rastreável.
             # Compara com o nome REALMENTE gravado (a linha pode ter sido
