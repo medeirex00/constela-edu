@@ -3068,8 +3068,8 @@ def _exigir_uma_linha_por_ficha_fixada(db: Session, escola_id: int,
         + ", ".join(f"“{n}”" for n in nomes)
         + "), com contas da plataforma ou números diferentes. Só uma linha pode ir "
         "para cada aluno: a importação guardaria apenas a última e ligaria as duas "
-        "contas à mesma ficha. Ligue o aluno a uma linha só e deixe a outra para a "
-        "Revisão de identidade. Nada foi gravado.")
+        "contas à mesma ficha. Ligue o aluno a uma linha só e escolha outro destino "
+        "para a outra. Nada foi gravado.")
 
 
 @router.post("/confirmar", response_model=ImportacaoResultadoOut)
