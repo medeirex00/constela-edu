@@ -23,7 +23,7 @@ from itertools import groupby
 from sqlalchemy import delete, insert, select
 from sqlalchemy.orm import Session
 
-from app.models import EventoAluno, LogAuditoria
+from app.models import Aluno, EventoAluno, LogAuditoria
 from app.services.audit import registrar
 
 
@@ -150,6 +150,38 @@ def ingerir_eventos(db: Session, aluno_id: int, plataforma: str,
     if novos:
         db.execute(insert(EventoAluno), novos)
     return len(novos)
+
+
+def fichas_absorvidas(db: Session, aluno_ids) -> dict[int, set[int]]:
+    """Para cada ficha de ``aluno_ids``, as que ela absorveu em fusões — direta ou
+    em cadeia —, pelo log ``aluno.fundido`` (``entidade_id`` = a que ficou,
+    ``removido.id`` = a absorvida). Junto com a própria ficha, são as origens
+    possíveis das chaves dos eventos que estão nela hoje. Lê só as entradas da
+    cadeia dessas fichas, não o log inteiro (a fusão chama isto a cada par).
+
+    Id absorvido que hoje é de uma ficha VIVA não entra nem é percorrido: a
+    absorvida foi apagada, então o id em uso é reaproveitamento (outra criança) —
+    a mesma regra de ``exclusao_aluno.fichas_absorvidas``."""
+    resultado: dict[int, set[int]] = {}
+    for raiz in dict.fromkeys(aluno_ids):
+        vistas: set[int] = set()
+        fronteira = {raiz}
+        while fronteira:
+            novas: set[int] = set()
+            for (detalhes,) in db.execute(select(LogAuditoria.detalhes).where(
+                    LogAuditoria.acao == "aluno.fundido",
+                    LogAuditoria.entidade_id.in_(sorted(fronteira)))):
+                removido = (((detalhes if isinstance(detalhes, dict) else {})
+                             .get("removido") or {}).get("id"))
+                if isinstance(removido, int) and removido != raiz and removido not in vistas:
+                    novas.add(removido)
+            if novas:
+                novas -= set(db.execute(select(Aluno.id).where(
+                    Aluno.id.in_(sorted(novas)))).scalars())
+            vistas |= novas
+            fronteira = novas
+        resultado[raiz] = vistas
+    return resultado
 
 
 def _fichas_absorvidas(db: Session, escola_id: int | None) -> dict[int, set[int]]:

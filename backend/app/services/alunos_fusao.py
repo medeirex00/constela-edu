@@ -49,6 +49,7 @@ from app.services import bimestres
 from app.services.audit import registrar
 from app.services.eventos import (
     conteudo_evento,
+    fichas_absorvidas,
     origem_comprovada,
     primeiras_ocorrencias,
 )
@@ -316,15 +317,21 @@ def fundir_par(db: Session, escola_id: int, manter: Aluno, remover: Aluno,
     # sem ela, a posterior passaria por primeira e a restauração aceitaria a data
     # errada. Se as duas cópias são assim, ficam as duas; cópia cuja origem a
     # chave não prova também fica. A cópia descartada vai para o log.
+    # A origem de cada lado é a própria ficha OU uma que ela absorveu antes,
+    # direta ou em cadeia (log ``aluno.fundido``): sem isso, a mesma linha vinda
+    # de duas fichas absorvidas antes (D ← Z, X ← Y, depois D ← X) não tinha
+    # origem provada em nenhum lado e ficava duas vezes.
     eventos_do_manter = db.execute(
         select(EventoAluno).where(EventoAluno.aluno_id == manter.id)
     ).scalars().all()
     eventos_do_remover = db.execute(
         select(EventoAluno).where(EventoAluno.aluno_id == remover.id)
     ).scalars().all()
+    absorvidas = fichas_absorvidas(db, (manter.id, remover.id))
     origem_de: dict[int, int | None] = {}
-    for eventos_da_ficha, origens in ((eventos_do_manter, (manter.id,)),
-                                      (eventos_do_remover, (remover.id,))):
+    for eventos_da_ficha, ficha in ((eventos_do_manter, manter.id),
+                                    (eventos_do_remover, remover.id)):
+        origens = (ficha, *sorted(absorvidas[ficha]))
         for evento in eventos_da_ficha:
             origem_de[evento.id] = origem_comprovada(evento, origens)
     protegidas = primeiras_ocorrencias(
