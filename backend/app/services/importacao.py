@@ -596,15 +596,21 @@ def detectar_tipo(conteudo: bytes, nome_arquivo: str = "",
     """Formato do arquivo: 'pdf' | 'xlsx' | 'texto'. FONTE ÚNICA de verdade,
     usada pelo upload manual (analisar) E pela sincronização (orchestrator) —
     para as duas detecções nunca divergirem. Reconhece PDF por magic bytes,
-    planilha por .xlsx/.xlsm/.xls, content-type de spreadsheet, ZIP ('PK') e o
-    OLE2 do .xls antigo."""
+    planilha por ZIP ('PK') e o OLE2 do .xls antigo, por .xlsx/.xlsm/.xls e por
+    content-type de spreadsheet. A assinatura do conteúdo vem antes da extensão de
+    texto (.csv/.txt/.tsv), e esta antes do content-type: o navegador do Windows com
+    o Excel instalado manda o .csv como "application/vnd.ms-excel", e o .csv ia para
+    o leitor de .xlsx (400 "Não foi possível abrir a planilha")."""
     nome = (nome_arquivo or "").lower()
     ct = content_type or ""
     if nome.endswith(".pdf") or ct == "application/pdf" or conteudo[:5] == b"%PDF-":
         return "pdf"
+    if conteudo[:2] == b"PK" or conteudo[:4] == b"\xd0\xcf\x11\xe0":
+        return "xlsx"
+    if nome.endswith((".csv", ".txt", ".tsv")):
+        return "texto"
     if (nome.endswith((".xlsx", ".xlsm", ".xls")) or "spreadsheet" in ct
-            or ct == "application/vnd.ms-excel" or conteudo[:2] == b"PK"
-            or conteudo[:4] == b"\xd0\xcf\x11\xe0"):
+            or ct == "application/vnd.ms-excel"):
         return "xlsx"
     return "texto"
 
