@@ -22,6 +22,11 @@ const estado = vi.hoisted(() => ({
   chamadas: [] as string[],
   corpos: [] as { chave: string; corpo: unknown }[],
   semRede: false,
+  // Tabela de aparelhos do servidor, aplicada na ordem em que cada pedido é PROCESSADO.
+  cadastrados: new Set<string>(),
+  // Rede lenta: o registro do push só é processado quando o teste o liberar.
+  registroPendurado: false,
+  liberarRegistro: null as null | (() => void),
 }));
 
 vi.mock("react", async () => {
@@ -94,11 +99,26 @@ async function servidorFalso(url: string, init?: RequestInit): Promise<Response>
   }
   if (caminho === "/auth/me") return responder(USUARIO);
   if (caminho === "/escolas") return responder(ESCOLAS);
-  if (caminho === "/escolas/1/dispositivos") return responder({ id: 1, plataforma: "android" });
+  if (caminho === "/escolas/1/dispositivos") {
+    const autenticado = Boolean((init?.headers as Record<string, string> | undefined)?.Authorization);
+    if (!autenticado) return responder({ detail: "Sessão expirada. Entre novamente." }, 401);
+    if (estado.registroPendurado) {
+      await new Promise<void>((liberar) => {
+        estado.liberarRegistro = liberar;
+      });
+    }
+    estado.cadastrados.add((JSON.parse(String(init?.body)) as { token_push: string }).token_push);
+    estado.chamadas.push("PROCESSADO registro");
+    return responder({ id: 1, plataforma: "android" });
+  }
   if (caminho === "/escolas/1/dispositivos/descadastrar" && statusDescadastro !== 200) {
     return responder({ detail: "recusado" }, statusDescadastro);
   }
-  if (caminho.startsWith("/escolas/1/dispositivos/")) return responder({ mensagem: "Dispositivo removido." });
+  if (caminho.startsWith("/escolas/1/dispositivos/")) {
+    estado.cadastrados.delete((JSON.parse(String(init?.body)) as { token_push: string }).token_push);
+    estado.chamadas.push("PROCESSADO descadastro");
+    return responder({ mensagem: "Dispositivo removido." });
+  }
   return responder({ detail: "não simulado" }, 404);
 }
 
@@ -151,6 +171,9 @@ beforeEach(() => {
   estado.chamadas.length = 0;
   estado.corpos.length = 0;
   estado.semRede = false;
+  estado.cadastrados.clear();
+  estado.registroPendurado = false;
+  estado.liberarRegistro = null;
   sessaoRevogada = false;
   statusDescadastro = 200;
   onlineManager.setOnline(true);
@@ -253,6 +276,47 @@ describe("'Sair' sem rede (MOBILE-3)", () => {
     const ordem = estado.corpos.map((c) => c.chave);
     const ultimoRegistro = ordem.lastIndexOf("POST /escolas/1/dispositivos");
     expect(ordem.slice(ultimoRegistro + 1).filter((c) => /dispositivos\//.test(c))).toEqual([]);
+  });
+});
+
+describe("'Sair' com o registro do push ainda a caminho do servidor (REV-MOBILE-2)", () => {
+  it("o registro processado depois do descadastro não deixa o aparelho cadastrado", async () => {
+    estado.registroPendurado = true;
+    montar();
+    await waitFor(() => expect(ctx.carregando).toBe(false));
+    await act(async () => {
+      await ctx.entrar("prof@ficticio.local", "senha-ficticia");
+    });
+    // O registro saiu COM a sessão e está pendurado na rede.
+    await waitFor(() => expect(estado.liberarRegistro).not.toBeNull());
+    await sairEEsperar(); // o descadastro chega e é processado primeiro
+    expect(estado.chamadas).toContain("PROCESSADO descadastro");
+    expect(estado.chamadas).not.toContain("PROCESSADO registro");
+
+    await act(async () => {
+      estado.liberarRegistro!(); // só agora o servidor processa o registro atrasado
+      await esperar(50);
+    });
+    expect(ctx.usuario).toBeNull();
+    expect([...estado.cadastrados]).toEqual([]);
+    const ordem = estado.chamadas.filter((c) => c.startsWith("PROCESSADO"));
+    expect(ordem.slice(-1)).toEqual(["PROCESSADO descadastro"]); // o último a valer
+    expect(estado.cofre.has("constela_push_descadastro_v1")).toBe(false); // nada pendente
+
+    // Rede que cai e volta e nova abertura do app não mudam o resultado.
+    await act(async () => {
+      onlineManager.setOnline(false);
+      onlineManager.setOnline(true);
+      await esperar(30);
+    });
+    cleanup();
+    montar();
+    await waitFor(() => expect(ctx.carregando).toBe(false));
+    await act(async () => {
+      await esperar(30);
+    });
+    expect(ctx.usuario).toBeNull();
+    expect([...estado.cadastrados]).toEqual([]);
   });
 });
 

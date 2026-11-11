@@ -11,11 +11,14 @@
  *   - o pedido vai para /dispositivos/descadastrar, que só pede o token do
  *     aparelho (o JWT já foi apagado, ou venceu);
  *   - se não der agora (sem rede, servidor fora), o descadastro fica PENDENTE e é
- *     repetido quando a rede volta e na próxima abertura do app.
+ *     repetido quando a rede volta e na próxima abertura do app;
+ *   - o registro que ainda estava a caminho do servidor no "Sair" pode ser
+ *     processado DEPOIS do descadastro: quando a resposta dele chega e a sessão já
+ *     acabou, o descadastro é marcado de novo.
  * Os dois ficam no SecureStore, fora do armazenamento cifrado do cache: o "Sair"
  * troca a chave do cache (esquecerChave) e o que estivesse lá ficaria ilegível.
  */
-import { ApiError, api } from "@constela/core";
+import { ApiError, api, obterToken } from "@constela/core";
 import { onlineManager } from "@tanstack/react-query";
 import Constants from "expo-constants";
 import * as Device from "expo-device";
@@ -44,9 +47,11 @@ const CHAVE_REGISTRO = "constela_push_registro_v1";
 /** Descadastro pedido e ainda não confirmado pelo servidor. */
 const CHAVE_DESCADASTRO = "constela_push_descadastro_v1";
 
-// Registro e descadastro mexem nas mesmas duas chaves e falam com o servidor sobre
-// o mesmo token: um passo de cada vez, para um descadastro atrasado nunca tirar o
-// registro que veio depois dele.
+// Registro e descadastro mexem nas mesmas duas chaves: um passo de cada vez, para um
+// descadastro atrasado nunca tirar o registro que veio depois dele. A chamada do
+// descadastro ao servidor também vai na sequência; a do REGISTRO não (pode ficar
+// presa na rede, e o "Sair" não espera por ela): o registro confere, na volta, se
+// a sessão acabou enquanto ele ia ao servidor (registrarParaPush).
 let ultimoPasso: Promise<unknown> = Promise.resolve();
 
 function emSequencia<T>(passo: () => Promise<T>): Promise<T> {
@@ -105,6 +110,17 @@ export async function registrarParaPush(escolaId: number): Promise<string | null
       token_push: token,
       plataforma: Platform.OS === "ios" ? "ios" : "android",
     });
+    // A sessão acabou ("Sair" ou sessão expirada) enquanto o registro ia ao
+    // servidor: o descadastro do "Sair" pode ter sido processado ANTES dele, e o
+    // aparelho voltou a ficar cadastrado para a conta. Marca o descadastro de novo,
+    // agora depois da resposta do registro.
+    if (!(await obterToken())) {
+      await emSequencia(async () => {
+        const registro: RegistroPush = { escolaId, token };
+        await SecureStore.setItemAsync(CHAVE_DESCADASTRO, JSON.stringify(registro));
+      });
+      void descadastrarPendente();
+    }
     return token;
   } catch {
     return null; // push é opcional — nunca bloqueia o uso do app
