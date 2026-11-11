@@ -1725,14 +1725,33 @@ def _vincular_identidade(db: Session, escola_id: int, aluno_id: int,
                          ctx: "ida.Contexto | None" = None,
                          usuario_id: int | None = None) -> bool:
     """Grava o vínculo aluno ↔ id externo (UUID do Matific / studentId do
-    Elefante). Idempotente e seguro sob concorrência (savepoint na unique).
+    Elefante). Idempotente e seguro sob concorrência (a unique decide a corrida).
 
     NUNCA tira a identidade de outra ficha existente (ativa ou inativa) — isso só
     acontece por decisão explícita de um gestor na fila de revisão. A única
     reatribuição automática é a de uma ficha EXCLUÍDA (que não é reutilizada e,
-    portanto, não pode segurar a identidade) — e fica auditada."""
+    portanto, não pode segurar a identidade) — e fica auditada.
+
+    Com o ``ctx`` da importação (lido sob a trava da escola, com TODOS os vínculos
+    dela e mantido a cada vínculo gravado), o caso de toda linha não vai ao banco: o
+    vínculo que já é desta ficha devolve True e a conta aposentada, False — antes
+    era um SELECT por criança, ~0,2 s cada em produção. A conta que o contexto não
+    conhece vira INSERT direto (``_inserir_vinculo``); só a ligada a OUTRA ficha
+    segue pela consulta abaixo."""
     if not (plataforma and id_externo):
         return False
+    if ctx is not None:
+        chave = (plataforma, id_externo)
+        if chave in ctx.aposentadas:
+            return False
+        dono_no_contexto = ctx.identidade.get(chave)
+        if dono_no_contexto == aluno_id:
+            return True
+        if dono_no_contexto is None:
+            if not _inserir_vinculo(db, escola_id, aluno_id, plataforma, id_externo):
+                return False  # corrida: outro processo vinculou primeiro — não rouba
+            ctx.vincular(aluno_id, plataforma, id_externo)
+            return True
     ja = db.execute(select(IdentidadeExterna).where(
         IdentidadeExterna.escola_id == escola_id,
         IdentidadeExterna.plataforma == plataforma,
@@ -1758,15 +1777,45 @@ def _vincular_identidade(db: Session, escola_id: int, aluno_id: int,
         if ctx is not None:
             ctx.vincular(aluno_id, plataforma, id_externo)
         return True
-    try:
-        with db.begin_nested():
-            db.add(IdentidadeExterna(escola_id=escola_id, aluno_id=aluno_id,
-                                     plataforma=plataforma, id_externo=id_externo))
-            db.flush()
-    except IntegrityError:
+    if not _inserir_vinculo(db, escola_id, aluno_id, plataforma, id_externo):
         return False  # corrida: outro processo vinculou primeiro — não rouba
     if ctx is not None:
         ctx.vincular(aluno_id, plataforma, id_externo)
+    return True
+
+
+def _inserir_vinculo(db: Session, escola_id: int, aluno_id: int, plataforma: str,
+                     id_externo: str) -> bool:
+    """INSERT do vínculo novo; False se a conta já tem vínculo na escola (a unique
+    ``uq_identidade_externa`` decide a corrida — quem chegou primeiro fica).
+
+    No PostgreSQL e no SQLite, ``INSERT ... ON CONFLICT DO NOTHING``: uma ida ao
+    banco, em vez de SAVEPOINT + INSERT + RELEASE (três) por conta nova. O que está
+    pendente na sessão (a ficha recém-criada, a matrícula) vai antes, como o
+    SAVEPOINT fazia — o vínculo aponta para a ficha."""
+    db.flush()
+    valores = {"escola_id": escola_id, "aluno_id": aluno_id, "plataforma": plataforma,
+               "id_externo": id_externo}
+    dialeto = db.get_bind().dialect.name
+    if dialeto in ("postgresql", "sqlite"):
+        if dialeto == "postgresql":
+            from sqlalchemy.dialects.postgresql import insert as insert_do_banco
+        else:
+            from sqlalchemy.dialects.sqlite import insert as insert_do_banco
+        tabela = IdentidadeExterna.__table__
+        comando = (insert_do_banco(tabela).values(**valores)
+                   .on_conflict_do_nothing(
+                       index_elements=["escola_id", "plataforma", "id_externo"])
+                   .returning(tabela.c.id))
+        # No conflito nada volta. (O ``rowcount`` não serve de prova: no PostgreSQL
+        # ele não dizia 1 mesmo com a linha gravada.)
+        return db.execute(comando).scalar_one_or_none() is not None
+    try:
+        with db.begin_nested():
+            db.add(IdentidadeExterna(**valores))
+            db.flush()
+    except IntegrityError:
+        return False
     return True
 
 
@@ -1849,7 +1898,8 @@ def _sincronizar_turma_matific(db: Session, escola_id: int, ano: int,
         via = getattr(linha, "via", None)
         if not via:
             continue  # não passou pela porta única de identidade: não toca em nada
-        _vincular_identidade(db, escola_id, aluno.id, "matific", uuid)  # idempotente
+        _vincular_identidade(db, escola_id, aluno.id, "matific", uuid,  # idempotente
+                             ctx=ctx)
         if via != "identidade":
             continue  # 1ª vez (casou por nome): só vincula; move pela identidade
         if (linha.dados or {}).get("turma_ambigua"):
@@ -3987,7 +4037,10 @@ def _persistir_linhas(db: Session, escola_id: int, ano: int, usuario: Usuario,
                           data_nascimento=nasc, ficha=dict(parsed.ficha),
                           da_lista_piloto=True)
             db.add(aluno)
-            db.flush()
+            # Só a ficha, para o id (o índice do motor o usa nas linhas seguintes):
+            # a matrícula e a auditoria pendentes vão juntas no fim, agrupadas — o
+            # flush completo aqui as mandava uma a uma, por criança.
+            db.flush([aluno])
             db.add(Matricula(escola_id=escola_id, aluno_id=aluno.id,
                              turma_id=turma.id, ano_letivo=ano))
             res.criados += 1
