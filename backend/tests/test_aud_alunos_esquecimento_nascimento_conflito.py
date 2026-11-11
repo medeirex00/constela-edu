@@ -9,7 +9,8 @@ e as chaves de dado pessoal, e ``divergencias`` não é nenhuma delas.
 
 O CONSERTO. Nas entradas da própria criança, o item de nascimento de
 ``divergencias`` vira "nascimento [removido]": o porquê técnico (houve conflito de
-nascimento) fica; a data sai. O RA continua como está — decisão do dono.
+nascimento) fica; a data sai. O item de RA segue a mesma regra ("RA [removido]",
+DEC-14 — ``test_aud2_lgpd_esquecimento_ra.py``).
 
 Dados fictícios.
 """

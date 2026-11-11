@@ -8,9 +8,9 @@ dela: sobravam no log da escola o nome abreviado, o nascimento e as observaçõe
 criança que pediu esquecimento — e o RETENCAO-TECNICA §2.3 diz que o log fica
 "sem nome".
 
-O RA fica de fora destes testes de propósito: o docstring de
-``_anonimizar_logs_do_aluno`` declara o RA como "porquê técnico" que continua
-intacto, e mudar isso é decisão do dono.
+O RA da ficha absorvida (``foto_pre_fusao.ficha``) também sai (DEC-14, decidido na
+auditoria): é retrato do cadastro, não o motivo de nenhuma decisão — ver
+``test_aud2_lgpd_esquecimento_ra.py``.
 
 Dados fictícios.
 """
@@ -77,7 +77,7 @@ def test_esquecer_crianca_que_absorveu_duplicata(cliente, cliente_global, db, es
     _excluir(cliente_global, escola.id, oficial_id)
     assert db.get(Aluno, oficial_id) is None
 
-    sobras = _sobras(db, escola.id, (NASC, OBS, FOTO, "ANA B. SOUZA"))
+    sobras = _sobras(db, escola.id, (NASC, OBS, FOTO, "ANA B. SOUZA", RA))
     print("DADOS DA CRIANCA ESQUECIDA QUE FICARAM NO LOG:", sobras)
     assert not sobras
 

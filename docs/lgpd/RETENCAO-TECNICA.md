@@ -138,13 +138,14 @@ contadores parados há mais de 1 dia e sem bloqueio vigente.
   nome de uma criança que continua na escola. Id de ficha absorvida que hoje é de uma
   ficha viva (id reaproveitado) fica de fora;
 - dado pessoal que não é nome, nas entradas da própria criança e das fichas absorvidas:
-  nascimento, observações e foto da `foto_pre_fusao` (`aluno.fundido`), as duas datas de
-  `aluno.nascimento_divergente` e as duas datas do item de nascimento das `divergencias`
-  de `aluno.fundido_com_conflito` viram `[removido]` (o item fica
-  "nascimento [removido]": o registro de que houve conflito continua, a data sai);
-- exceção — o RA **não** é anonimizado: onde aparece no log (por exemplo, na ficha da
-  `foto_pre_fusao` e no item "RA … × …" das `divergencias`), continua, tratado como o
-  "porquê técnico" do registro — decisão do dono, ver `_anonimizar_logs_do_aluno`;
+  nascimento, observações, foto e a `ficha` (o RA) da `foto_pre_fusao`
+  (`aluno.fundido`), as duas datas de `aluno.nascimento_divergente` e os valores dos
+  itens de nascimento e de RA das `divergencias` de `aluno.fundido_com_conflito` viram
+  `[removido]` (os itens ficam "nascimento [removido]" e "RA [removido]": o registro de
+  que houve conflito continua, a data e o número saem);
+- o RA que é o **motivo** de uma decisão (o vínculo feito pelo RA,
+  `aluno.identidade_vinculada`) continua, como o "porquê técnico" do registro — ver
+  `_anonimizar_logs_do_aluno`;
 - revisões de **outra** criança: a excluída sai da lista de candidatos; a candidata de
   quem **continua** (ficha existente) fica intacta, e a de ficha que não existe mais
   (duplicata já fundida) perde o nome se ele era o da excluída;

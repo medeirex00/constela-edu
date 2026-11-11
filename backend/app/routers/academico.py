@@ -892,12 +892,41 @@ _MARCA_REMOVIDO = "[removido]"
 
 # ``aluno.fundido_com_conflito`` guarda em ``divergencias``, em texto, os sinais
 # de serem crianças diferentes que a gestão aceitou passar por cima
-# (``_divergencias_de_identidade``): "nascimento 2017-04-10 × 2017-04-09", o RA, o
-# nº de chamada. Nas entradas da própria criança, o item de nascimento perde as
-# datas e fica "nascimento [removido]": o porquê técnico (houve conflito de
-# nascimento) continua; a data de nascimento, não. O RA fica (decisão do dono).
+# (``_divergencias_de_identidade``): "nascimento 2017-04-10 × 2017-04-09", "RA … ×
+# …", o nº de chamada. Nas entradas da própria criança, os itens de nascimento e de
+# RA perdem os valores e ficam "nascimento [removido]" / "RA [removido]": o porquê
+# técnico (houve conflito de nascimento, de RA) continua; a data e o número, não.
 _CHAVES_DE_DIVERGENCIA = frozenset({"divergencias"})
 _PREFIXO_NASCIMENTO = "nascimento "
+_PREFIXO_RA = "RA "
+_PREFIXOS_DE_DADO_NA_DIVERGENCIA = (_PREFIXO_NASCIMENTO, _PREFIXO_RA)
+
+# ``aluno.fundido`` → ``foto_pre_fusao`` → ``ficha``: o retrato do cadastro da
+# ficha absorvida (pela minimização da Lista Piloto, hoje só o RA). Não é o motivo
+# de nenhuma decisão: nas entradas da própria criança, todo valor dela vira
+# "[removido]" (as chaves ficam). O RA que é o MOTIVO de uma decisão — o vínculo
+# feito pelo RA, ``aluno.identidade_vinculada`` — continua.
+_CHAVES_DE_RETRATO = frozenset({"foto_pre_fusao"})
+_CAMPO_FICHA_DO_RETRATO = "ficha"
+
+
+def _divergencia_sem_dado(texto):
+    """"RA 123 × 456" → "RA [removido]"; "nascimento A × B" → "nascimento [removido]"."""
+    if isinstance(texto, str):
+        for prefixo in _PREFIXOS_DE_DADO_NA_DIVERGENCIA:
+            if texto.startswith(prefixo):
+                return prefixo + _MARCA_REMOVIDO
+    return texto
+
+
+def _retrato_sem_ficha(retrato: dict) -> dict:
+    """A foto pré-fusão com os valores da ``ficha`` trocados por "[removido]"."""
+    ficha = retrato.get(_CAMPO_FICHA_DO_RETRATO)
+    if not isinstance(ficha, dict):
+        return retrato
+    return {**retrato, _CAMPO_FICHA_DO_RETRATO: {
+        chave: _MARCA_REMOVIDO if valor not in (None, "") else valor
+        for chave, valor in ficha.items()}}
 
 
 def _anonimizar_logs_do_aluno(db: Session, escola_id: int,
@@ -907,11 +936,12 @@ def _anonimizar_logs_do_aluno(db: Session, escola_id: int,
     referem ao aluno excluído (LGPD/direito ao esquecimento).
 
     Anonimiza, NÃO apaga: o "quê/quando/por quem/sobre qual registro" — e o
-    porquê técnico (decisão, motivo, turma, RA) — continuam intactos; só o nome
-    de pessoa (e o dado pessoal de ``_CHAVES_DE_DADO_PESSOAL`` e as datas do item
-    de nascimento de ``divergencias``) vira ``"[removido]"``. O ``entidade_id``
-    fica como referência anônima. ``logs_auditoria`` é permanente por design
-    (``models/nota.py``).
+    porquê técnico (decisão, motivo, turma, o RA que motivou um vínculo) —
+    continuam intactos; só o nome de pessoa (e o dado pessoal de
+    ``_CHAVES_DE_DADO_PESSOAL``, os valores dos itens de nascimento e de RA de
+    ``divergencias`` e a ``ficha`` da ``foto_pre_fusao``, com o RA dela) vira
+    ``"[removido]"``. O ``entidade_id`` fica como referência anônima.
+    ``logs_auditoria`` é permanente por design (``models/nota.py``).
 
     ``absorvidas`` ({id: {nomes}}, de ``exclusao_aluno.fichas_absorvidas``): as
     fichas que a criança absorveu por fusão. São ELA: as entradas com o id delas
@@ -1013,10 +1043,9 @@ def _anonimizar_logs_do_aluno(db: Session, escola_id: int,
             return _MARCA_REMOVIDO
         redigido = _redigir(item, por_chave=por_chave)
         if por_chave and chave in _CHAVES_DE_DIVERGENCIA and isinstance(redigido, list):
-            return [_PREFIXO_NASCIMENTO + _MARCA_REMOVIDO
-                    if isinstance(texto, str) and texto.startswith(_PREFIXO_NASCIMENTO)
-                    else texto
-                    for texto in redigido]
+            return [_divergencia_sem_dado(texto) for texto in redigido]
+        if por_chave and chave in _CHAVES_DE_RETRATO and isinstance(redigido, dict):
+            return _retrato_sem_ficha(redigido)
         return redigido
 
     def _redigir(valor, *, por_chave: bool):
@@ -1239,7 +1268,7 @@ def _divergencias_de_identidade(a: Aluno, b: Aluno) -> dict[str, str]:
     if ia.nascimento and ib.nascimento and ia.nascimento != ib.nascimento:
         motivos["nascimento"] = f"{_PREFIXO_NASCIMENTO}{ia.nascimento} × {ib.nascimento}"
     if ia.ra and ib.ra and ia.ra != ib.ra:
-        motivos["ra"] = f"RA {ia.ra} × {ib.ra}"
+        motivos["ra"] = f"{_PREFIXO_RA}{ia.ra} × {ib.ra}"
     if (ia.chamada is not None and ib.chamada is not None
             and ia.chamada != ib.chamada):
         motivos["chamada"] = f"nº de chamada {ia.chamada} × {ib.chamada}"
