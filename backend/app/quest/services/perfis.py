@@ -233,6 +233,21 @@ def nome_para_falas(perfil: QuestPerfil, aluno_nome: str) -> str:
     return (perfil.nome_exibicao or "").strip() or primeiro_nome_cadastro(aluno_nome)
 
 
+def travar_perfil(db: Session, perfil: QuestPerfil) -> QuestPerfil:
+    """Relê o perfil com ``SELECT ... FOR UPDATE`` (e ``populate_existing``, que
+    troca no próprio objeto o que a dependência leu sem trava) antes de mesclar
+    avatar ou preferências. Os dois são um dicionário JSON regravado INTEIRO: sem a
+    trava, dois toques rápidos que leram a mesma versão gravavam um por cima do
+    outro e uma troca sumia (os dois com 200). Com ela, o segundo espera o primeiro
+    gravar e mescla sobre a versão nova. No SQLite o FOR UPDATE não existe (escrita
+    já é serial)."""
+    return db.execute(
+        select(QuestPerfil).where(QuestPerfil.id == perfil.id)
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    ).scalar_one()
+
+
 def atualizar_avatar(perfil: QuestPerfil, mudancas: dict) -> None:
     """Aplica apenas os slots presentes no catálogo APARENCIA, com valores da
     whitelist de cada slot: um slot fora de APARENCIA é ignorado; um valor fora
