@@ -28,7 +28,7 @@ Até esta rodada a configuração era `registerType: "autoUpdate"`:
 
 | Situação | O que acontece |
 |---|---|
-| App logado, pessoa usando (já tocou/digitou) | Aviso no canto: **"Nova versão do Constela disponível — Salve o que estiver editando: atualizar recarrega a página."** Botões **Atualizar agora** e **Depois**. Nada recarrega sem o clique: enquanto o aviso espera, as telas desta aba seguem abrindo pela versão antiga, do cache. |
+| App logado, pessoa usando (já tocou/digitou) | Aviso no canto: **"Nova versão do Constela disponível — Salve o que estiver editando: atualizar recarrega a página."** Botões **Atualizar agora** e **Depois**. Enquanto o aviso espera numa aba servida pelo service worker, nada recarrega sem o clique: as telas dela seguem abrindo pela versão antiga, do cache. A página que veio da **rede** (1ª visita, Ctrl+Shift+R, plano B) mostra o mesmo aviso, mas é a exceção da última linha: ao abrir depois do deploy uma tela que ainda não tinha aberto, recarrega uma vez, sozinha. |
 | "Atualizar agora" | O service worker novo assume (`SKIP_WAITING`) e a página recarrega **uma vez**, já na versão nova. |
 | "Depois" | O aviso some. A versão nova entra na **próxima abertura** do app (ver linha abaixo). |
 | Abertura do app (F5, nova aba, ícone instalado) com versão nova esperando, nos primeiros 10 s e antes de qualquer toque | Troca direta, **sem cartão**: o pedido de troca sai 1 s depois de a página carregar e ela recarrega uma vez, já na nova. Se a pessoa tocar ou digitar antes da recarga, a troca é **cancelada** e vira o aviso acima (nada do que ela digitou se perde). **Um F5 comum basta — não precisa de hard refresh.** |

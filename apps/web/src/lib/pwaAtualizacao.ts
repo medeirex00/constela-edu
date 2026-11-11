@@ -10,8 +10,11 @@
  * Agora (registerType "prompt"): a versão nova é baixada e ESPERA. Quem decide a
  * troca é esta máquina de estados:
  *   - app autenticado: aviso "Nova versão disponível — Atualizar agora". Nada
- *     recarrega sem o clique (quem está editando salva antes): enquanto o aviso
- *     espera, as telas desta aba seguem abrindo pela versão antiga, do cache;
+ *     recarrega sem o clique (quem está editando salva antes) enquanto o aviso
+ *     espera numa aba servida pelo service worker: as telas dela seguem abrindo
+ *     pela versão antiga, do cache. A página que veio da rede (1ª visita,
+ *     Ctrl+Shift+R, plano B) mostra o mesmo aviso, mas é a exceção descrita em
+ *     "outra aba atualizou", abaixo;
  *   - abertura do app servida pelo service worker (F5 comum, aba nova, ícone): se
  *     já havia versão nova esperando e a pessoa ainda não tocou na tela, ela entra
  *     direto, sem cartão. Se a pessoa tocar ou digitar antes da recarga, a troca é
