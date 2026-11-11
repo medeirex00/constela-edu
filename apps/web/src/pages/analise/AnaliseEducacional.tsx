@@ -46,7 +46,7 @@ import { useCallback, useEffect, useId, useRef } from "react";
 import { Link, Navigate, useNavigate, useSearchParams } from "react-router-dom";
 
 import { AbasLigadas } from "../../components/AbasLigadas";
-import { DatasDoPeriodo, PRESETS_PERIODO } from "../../components/SeletorPeriodo";
+import { DatasDoPeriodo } from "../../components/SeletorPeriodo";
 import { Botao, Card, Carregando, Erro, Mensagem, PageHeader, Vazio, estiloInput } from "../../components/ui";
 import { useApp } from "../../context/AppContext";
 import { useApi } from "../../hooks/useApi";
@@ -54,7 +54,9 @@ import { usePerfil } from "../../hooks/usePerfil";
 import Diagnostico from "./Diagnostico";
 import PorEscola from "./PorEscola";
 import RelacaoPlataformas from "./RelacaoPlataformas";
-import { FiltrosAplicados, Seletor, useApiExata } from "./comum";
+import {
+  FiltrosAplicados, OpcoesDePeriodo, Seletor, TEXTO_PERIODO_DA_REDE, useApiExata, usePeriodoDaAnalise,
+} from "./comum";
 import { porNome, rotuloSerie } from "./formato";
 import type { RespostaIndicadoresRede } from "./tipos";
 
@@ -167,6 +169,7 @@ function FiltrosCompartilhados({ base, escolaId, serie, atualizar, aoMudarEscola
   atualizar: (m: Record<string, string | null>) => void;
   aoMudarEscola: (v: string) => void;
 }) {
+  const { secretaria } = usePerfil();
   return (
     <Card className="space-y-3 p-5" >
       <div className="flex flex-wrap items-end gap-4" data-testid="filtros-compartilhados">
@@ -189,6 +192,7 @@ function FiltrosCompartilhados({ base, escolaId, serie, atualizar, aoMudarEscola
         O período vale para o lado das plataformas (Elefante e Matific); as avaliações oficiais têm edição própria.
         A série vale para a análise detalhada por escola. A escola abre a análise detalhada dela e a linha dela no
         diagnóstico — e é a mesma do seletor de escola do menu lateral.
+        {secretaria && <> {TEXTO_PERIODO_DA_REDE}</>}
       </FiltrosAplicados>
     </Card>
   );
@@ -202,14 +206,17 @@ function FiltrosCompartilhados({ base, escolaId, serie, atualizar, aoMudarEscola
  * ficava sem seta (não parecia uma lista), com um recuo vazio e 4 px abaixo dos vizinhos.
  */
 function CampoPeriodo() {
-  const { periodo, definirPeriodo } = useApp();
+  const { definirPeriodo } = useApp();
+  // A Secretaria: só o ano letivo ou um bimestre inteiro (o período global de outra tela que não
+  // vale aqui aparece — e é pedido — como o ano letivo).
+  const periodo = usePeriodoDaAnalise();
   // `basis-*` manda na largura do item flex (o `w-full` do estiloInput venceria um `w-*`).
   const estiloData = `${estiloInput} min-w-0 shrink-0 basis-44 dark:[color-scheme:dark]`;
   return (
     <>
       <Seletor rotulo="Período" valor={periodo.preset}
                aoMudar={(v) => definirPeriodo({ ...periodo, preset: v })}>
-        {PRESETS_PERIODO.map((p) => <option key={p.valor} value={p.valor}>{p.rotulo}</option>)}
+        <OpcoesDePeriodo />
       </Seletor>
       <DatasDoPeriodo valor={periodo} onChange={definirPeriodo} estilo={estiloData}
                       classeAte="pb-3 text-sm text-zinc-500 dark:text-zinc-400" />

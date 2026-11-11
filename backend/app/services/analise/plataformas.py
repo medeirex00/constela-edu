@@ -64,7 +64,7 @@ dessas séries somarem de 1 a ``k − 1`` e nenhuma outra criança esconder as e
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, field, fields
+from dataclasses import dataclass, field, fields, replace
 from datetime import date, datetime, timedelta, timezone
 
 from sqlalchemy import (DateTime, Integer, String, and_, case, cast, extract, func,
@@ -75,7 +75,7 @@ from app.core.tempo import FUSO_BR, para_br
 from app.models import (Aluno, Escola, EventoAluno, Importacao, Leitura, Livro, Matricula,
                         ModuloRede, Rede, SnapshotElefante, SnapshotMatific, Turma)
 from app.models.plataformas import IMPORTACAO_SEM_QUESTOES
-from app.services import matific_destaque
+from app.services import bimestres, matific_destaque
 from app.services import modulos as svc_modulos
 from app.services import relatorios_periodo as rp
 from app.services.analise import K_MINIMO, AnaliseInvalida, validar_anos
@@ -157,6 +157,15 @@ _ZERO_NAO_SABIDO = {"elefante": (), "matific": ("com_atividade",)}
 TEXTO_METRICAS_PROTEGIDAS = ("algumas médias deste total não aparecem: ele soma um grupo de "
                              "menos de {k} alunos cujos números estão escondidos numa parte "
                              "dele, e a diferença os revelaria")
+# A média escondida porque um BLOCO do calendário dentro do período (um bimestre, ou a folga
+# antes do 1º) a esconde — ou o resto da conta que nenhum bloco mede (ver "Blocos fixos").
+TEXTO_METRICAS_PROTEGIDAS_BLOCOS = ("algumas médias deste período não aparecem: num dos "
+                                    "bimestres dele, menos de {k} alunos têm esse número, e a "
+                                    "diferença entre o período e os bimestres o revelaria")
+TEXTO_METRICAS_PROTEGIDAS_AMBOS = ("algumas médias não aparecem: este total soma um grupo de "
+                                   "menos de {k} alunos escondido numa parte dele, ou num dos "
+                                   "bimestres do período menos de {k} alunos têm esse número — "
+                                   "a diferença os revelaria")
 
 SUPRIMIDO = "suprimido"
 TEXTO_SUPRESSAO = ("poucos alunos neste recorte (ou escondido junto com um recorte pequeno, "
@@ -234,6 +243,9 @@ class _Elefante:
     contador_regrediu: int = 0
     bases: list = field(default_factory=list)
     atuais: list = field(default_factory=list)
+    # (tentativas, acertos) de cada aluno que entrou nas questões — só para a proteção por
+    # blocos do calendário (``_residuo``), nunca para a resposta.
+    questoes_por_aluno: dict = field(default_factory=dict)
 
 
 @dataclass
@@ -246,6 +258,9 @@ class _Matific:
     estrelas: float = 0.0
     bases: list = field(default_factory=list)
     atuais: list = field(default_factory=list)
+    # (atividades, estrelas) do ganho de cada aluno medido — só para a proteção por blocos
+    # do calendário (``_residuo``), nunca para a resposta.
+    por_aluno: dict = field(default_factory=dict)
 
 
 def _somar(destino, origem) -> None:
@@ -253,6 +268,8 @@ def _somar(destino, origem) -> None:
         atual = getattr(destino, f.name)
         if isinstance(atual, list):
             atual.extend(getattr(origem, f.name))
+        elif isinstance(atual, dict):
+            atual.update(getattr(origem, f.name))      # alunos distintos (escolas, séries)
         else:
             setattr(destino, f.name, atual + getattr(origem, f.name))
 
@@ -698,6 +715,83 @@ def _janela(preset: str, ano: int, inicio: date | None, fim: date | None,
         raise AnaliseInvalida(str(exc)) from exc
 
 
+# --- Blocos fixos do calendário ---------------------------------------------------------
+#
+# A proteção por métrica (``_PROTEGIDAS``) é decidida período a período. Com dois períodos
+# que se sobrepõem, a diferença entre eles é o que aconteceu só no trecho que um tem e o
+# outro não — e esse trecho pode ter UMA criança, que nenhum dos dois esconde (a auditoria
+# refez assim as estrelas, o desempenho e o nível de leitura de uma criança com o período
+# personalizado: [01/03, 15/08] × [01/03, 04/10]). Por isso:
+#
+# * a SECRETARIA só pede períodos que são uniões de BLOCOS fixos do calendário — o ano letivo
+#   e cada bimestre (``PRESETS_DA_REDE``; a rota recusa os outros com
+#   ``TEXTO_PERIODO_DA_SECRETARIA``). Os blocos são os quatro bimestres (do calendário
+#   oficial ou os aproximados do serviço de períodos) e as folgas entre eles (antes do 1º,
+#   entre dois e depois do 4º): uma partição do ano, sem buraco nem sobreposição;
+# * a métrica de um período que junta vários blocos (o ano letivo) só aparece se NENHUM
+#   bloco dele a esconde com crianças dentro (de 1 a k − 1 no subconjunto, ou em
+#   complemento — as mesmas regras de um período só), nem o RESTO da conta que nenhum bloco
+#   mede (``_residuo``). Assim a diferença entre dois períodos aceitos é sempre uma soma de
+#   blocos que mostram a métrica, e "ano letivo − bimestres" não isola criança nenhuma.
+#
+# Os grupos dos alunos MEDIDOS (a participação) ficam fora da regra dos blocos: são
+# contagens, não números de criança, e as médias deles estão também nos grupos de quem soma.
+# O admin global e a coordenação da escola (que já veem cada criança) pedem qualquer período;
+# a regra dos blocos vale para os períodos de ``PRESETS_DA_REDE`` com a proteção da rede.
+PRESETS_DA_REDE = ("ano_letivo", "bimestre", "bimestre_anterior", "bimestre_1", "bimestre_2",
+                   "bimestre_3", "bimestre_4")
+TEXTO_PERIODO_DA_SECRETARIA = (
+    "Nas análises da rede, o período é o ano letivo ou um bimestre inteiro. Dias, semanas, "
+    "meses e datas escolhidas ficam de fora: a diferença entre dois períodos que se "
+    "sobrepõem mostraria os números de uma criança.")
+
+
+def exigir_periodo_da_secretaria(preset: str | None) -> None:
+    """A Secretaria só pede o ano letivo ou um bimestre inteiro (422 nos demais)."""
+    if preset not in PRESETS_DA_REDE:
+        raise AnaliseInvalida(TEXTO_PERIODO_DA_SECRETARIA, 422)
+
+
+def _particao_do_ano(ano: int, hoje: date) -> list[tuple[date, date]]:
+    """O ano civil em blocos fixos (datas inclusivas, em ordem): os quatro bimestres, pelas
+    MESMAS janelas dos presets ``bimestre_1..4`` (o calendário oficial, ou a aproximação do
+    serviço de períodos sem ele), e as folgas entre eles."""
+    blocos, cursor, fim_do_ano = [], date(ano, 1, 1), date(ano, 12, 31)
+    for numero in bimestres.BIMESTRES:
+        janela = _janela(f"bimestre_{numero}", ano, None, None, hoje)
+        ini, fim = janela.inicio.date(), janela.fim.date()
+        if ini > cursor:
+            blocos.append((cursor, ini - timedelta(days=1)))
+        blocos.append((ini, fim))
+        cursor = fim + timedelta(days=1)
+    if cursor <= fim_do_ano:
+        blocos.append((cursor, fim_do_ano))
+    return blocos
+
+
+def _blocos_do_periodo(p: Periodo, janela: rp.Janela, hoje: date) -> list[tuple[date, date]]:
+    """Os blocos fixos INTEIROS dentro da janela de ``p`` que já começaram (o que ainda não
+    começou não tem dado) — só nos períodos de ``PRESETS_DA_REDE``."""
+    if p.preset not in PRESETS_DA_REDE or janela.inicio is None or janela.fim is None:
+        return []
+    ini, fim = janela.inicio.date(), janela.fim.date()
+    return [(a, b) for ano in range(ini.year, fim.year + 1)
+            for a, b in _particao_do_ano(ano, hoje) if ini <= a and b <= fim and a <= hoje]
+
+
+def _janela_do_periodo(p: Periodo, ano: int, hoje: date) -> rp.Janela | None:
+    """A janela do período no ano letivo ``ano`` — ou, com ``p.bloco``, a do bloco nessa
+    posição (``None`` se o ano não tem esse bloco)."""
+    janela = _janela(p.preset, ano, p.inicio, p.fim, hoje)
+    if p.bloco is None:
+        return janela
+    blocos = _blocos_do_periodo(p, janela, hoje)
+    if p.bloco >= len(blocos):
+        return None
+    ini, fim = blocos[p.bloco]
+    return _janela("personalizado", ano, ini, fim, hoje)
+
+
 # --- Medição das escolas visíveis ----------------------------------------------------------
 #
 # Em três passos, para as leituras do banco serem UMA por fonte: (1) sem banco, o que medir
@@ -860,6 +954,8 @@ def _somar_elefante(janela: rp.Janela, por_serie: dict[int, dict], series: dict[
                 continue
             soma.tentativas += ganho["questoes_tentativas"]
             soma.acertos += ganho["questoes_acertos"]
+            soma.questoes_por_aluno[aid] = (ganho["questoes_tentativas"],
+                                            ganho["questoes_acertos"])
             if ganho["questoes_tentativas"] or ganho["questoes_acertos"]:
                 soma.alunos_com_questao += 1
             if ganho["_data_base"] is not None:
@@ -884,6 +980,7 @@ def _somar_matific(janela: rp.Janela, ano: int, por_serie: dict[int, dict],
             atividades, estrelas = int(ganho.atividades or 0), int(ganho.estrelas or 0)
             soma.atividades += atividades
             soma.estrelas += estrelas
+            soma.por_aluno[aid] = (atividades, estrelas)
             if atividades or estrelas:
                 soma.com_atividade += 1
             if ganho.data_base is not None:
@@ -1172,11 +1269,15 @@ def _escola_esconde(m: _Medida, plataforma: str, k: int
             sem_numero)
 
 
-def _proteger(bloco: dict | None, plataforma: str, esconder: list[bool], k: int) -> None:
+def _proteger(bloco: dict | None, plataforma: str, esconder: list[bool], k: int, *,
+              por_bloco: bool = False) -> None:
     """Esconde do TOTAL os grupos marcados (complemento) e diz quais, com o texto. A métrica
-    que está em dois grupos (derivada das duas somas) some se qualquer um deles some."""
+    que está em dois grupos (derivada das duas somas) some se qualquer um deles some.
+    ``por_bloco``: as marcas vêm dos blocos do calendário dentro do período (``_marcas``),
+    e o texto diz isso (somado ao do complemento, quando os dois escondem)."""
     if not bloco or bloco.get("motivo_sem_dado"):
         return
+    novas = False
     for (chaves, _campo), sim in zip(_PROTEGIDAS[plataforma], esconder):
         if not sim:
             continue
@@ -1184,7 +1285,13 @@ def _proteger(bloco: dict | None, plataforma: str, esconder: list[bool], k: int)
             if bloco.get(chave) is not None:
                 bloco[chave] = None
                 bloco["metricas_protegidas"].append(chave)
-    if bloco["metricas_protegidas"]:
+                novas = True
+    if por_bloco:
+        if novas:
+            texto = (TEXTO_METRICAS_PROTEGIDAS_AMBOS if bloco.get("texto_metricas_protegidas")
+                     else TEXTO_METRICAS_PROTEGIDAS_BLOCOS)
+            bloco["texto_metricas_protegidas"] = texto.format(k=k)
+    elif bloco["metricas_protegidas"]:
         bloco["texto_metricas_protegidas"] = TEXTO_METRICAS_PROTEGIDAS.format(k=k)
 
 
@@ -1344,10 +1451,13 @@ def _validar_serie(serie: int | None) -> None:
 
 @dataclass(frozen=True)
 class Periodo:
-    """Um período pedido (o preset do serviço de períodos e, no personalizado, as datas)."""
+    """Um período pedido (o preset do serviço de períodos e, no personalizado, as datas).
+    ``bloco``: a posição de um BLOCO fixo do calendário dentro dele (``_blocos_do_periodo``),
+    medido só para a proteção por blocos — nunca vira resposta."""
     preset: str = "ano_letivo"
     inicio: date | None = None
     fim: date | None = None
+    bloco: int | None = None
 
 
 @dataclass
@@ -1383,19 +1493,22 @@ def _tabelas(db: Session, escolas_da_decisao: list[Escola], medir: list[Escola],
     col = {p: {i: v for i, v in por_escola.items() if i in visiveis}
            for p, por_escola in col_todas.items()}
     primeiros = {i: v for i, v in primeiros_todos.items() if i in visiveis}
-    janelas: dict[tuple[int, int], rp.Janela] = {}
+    janelas: dict[tuple[int, int], rp.Janela | None] = {}
     preparos = []
     for g, p in enumerate(periodos):
         for e in alvo:
             if (g, e.ano_letivo_ativo) not in janelas:
-                janelas[(g, e.ano_letivo_ativo)] = _janela(p.preset, e.ano_letivo_ativo,
-                                                           p.inicio, p.fim, hoje)
+                janelas[(g, e.ano_letivo_ativo)] = _janela_do_periodo(p, e.ano_letivo_ativo,
+                                                                      hoje)
+            if janelas[(g, e.ano_letivo_ativo)] is None:
+                continue                # o bloco pedido não existe no ano letivo desta escola
             preparos.append(_preparar(g, contagens[e.id], _visiveis(decisoes[e.id]),
                                       janelas[(g, e.ano_letivo_ativo)], mods,
                                       {pl: col[pl].get(e.id) for pl in PLATAFORMA_MODULO}))
     ano = ano_letivo_de_referencia(escolas_da_decisao)
-    janelas_ref = [_janela(p.preset, ano if ano is not None else hoje.year, p.inicio, p.fim,
-                           hoje) for p in periodos]
+    ano_ref = ano if ano is not None else hoje.year
+    janelas_ref = [_janela_do_periodo(p, ano_ref, hoje)
+                   or _janela(p.preset, ano_ref, p.inicio, p.fim, hoje) for p in periodos]
     lidos = _ler_em_lote(db, preparos, coortes)
     medidas: list[dict[int, _Medida]] = [{} for _ in periodos]
     for prep in preparos:
@@ -1444,11 +1557,20 @@ def _limitacoes(anos: list[int]) -> list[str]:
     return saida
 
 
-def _bloco_da_rede(t: _Tabela, k: int, serie: int | None) -> tuple[dict, dict]:
-    """Os blocos da rede: SÓ as escolas visíveis, com a coleta em dia (ou parcial cobrindo
-    ao menos ``FRACAO_MINIMA_SOMA_REDE`` do período, com a data junto), e nelas só as
-    células visíveis — o bloco é sempre igual à soma do que a resposta mostra. Devolve
-    (blocos, escolas que entraram por plataforma)."""
+def _somas_da_escola(m: _Medida, serie: int | None) -> tuple[_Elefante | None,
+                                                          _Matific | None]:
+    """O que a escola põe na soma da rede: as células visíveis dela, ou só a da série."""
+    if serie is None:
+        return m.blocos()
+    cel = m.series.get(serie)
+    return (cel.elefante, cel.matific) if cel else (None, None)
+
+
+def _acumular_rede(t: _Tabela, k: int, serie: int | None, entra
+                   ) -> tuple[dict, dict, dict, dict, dict]:
+    """As somas da rede com as escolas em que ``entra(medida, plataforma)``, e o que o
+    complemento precisa: (somas, escolas que entraram, coletas parciais, crianças escondidas
+    por grupo, alunos medidos das partes sem número)."""
     somas: dict[str, object] = {"elefante": None, "matific": None}
     entraram = {p: 0 for p in PLATAFORMA_MODULO}
     parciais: dict[str, list[datetime]] = {p: [] for p in PLATAFORMA_MODULO}
@@ -1457,13 +1579,9 @@ def _bloco_da_rede(t: _Tabela, k: int, serie: int | None) -> tuple[dict, dict]:
     escondidas = {p: [0] * len(_PROTEGIDAS[p]) for p in PLATAFORMA_MODULO}
     sem_numero = {p: [0] * len(_PROTEGIDAS[p]) for p in PLATAFORMA_MODULO}
     for m in t.medidas.values():
-        if serie is None:
-            ele, mat = m.blocos()
-        else:
-            cel = m.series.get(serie)
-            ele, mat = (cel.elefante, cel.matific) if cel else (None, None)
+        ele, mat = _somas_da_escola(m, serie)
         for p, soma, vazio in (("elefante", ele, _Elefante), ("matific", mat, _Matific)):
-            if soma is None or not _entra_na_soma_da_rede(m, p):
+            if soma is None or not entra(m, p):
                 continue
             somas[p] = somas[p] or vazio()
             _somar(somas[p], soma)
@@ -1484,6 +1602,16 @@ def _bloco_da_rede(t: _Tabela, k: int, serie: int | None) -> tuple[dict, dict]:
                 for i, g in enumerate(_escondidas(soma, p, k)):
                     escondidas[p][i] += g
                     sem_numero[p][i] += sem_numero_celula
+    return somas, entraram, parciais, escondidas, sem_numero
+
+
+def _bloco_da_rede(t: _Tabela, k: int, serie: int | None) -> tuple[dict, dict]:
+    """Os blocos da rede: SÓ as escolas visíveis, com a coleta em dia (ou parcial cobrindo
+    ao menos ``FRACAO_MINIMA_SOMA_REDE`` do período, com a data junto), e nelas só as
+    células visíveis — o bloco é sempre igual à soma do que a resposta mostra. Devolve
+    (blocos, escolas que entraram por plataforma)."""
+    somas, entraram, parciais, escondidas, sem_numero = _acumular_rede(
+        t, k, serie, _entra_na_soma_da_rede)
     blocos = {}
     for p, funcao in (("elefante", metricas_elefante), ("matific", metricas_matific)):
         if PLATAFORMA_MODULO[p] not in t.mods:
@@ -1507,6 +1635,156 @@ def _bloco_da_rede(t: _Tabela, k: int, serie: int | None) -> tuple[dict, dict]:
                     f"{para_br(mais_antiga).strftime('%d/%m/%Y')} (cobrem ao menos 90% do "
                     "período; o restante não foi medido — sem dado não é zero).")
     return blocos, entraram
+
+
+# --- Proteção por blocos (ver "Blocos fixos do calendário") -------------------------------
+
+def _sem_os_medidos(plataforma: str, marcas: list[bool]) -> list[bool]:
+    """As marcas sem os grupos dos alunos MEDIDOS (contagens: ficam fora da regra dos
+    blocos)."""
+    return [sim and campo != "medidos"
+            for sim, (_chaves, campo) in zip(marcas, _PROTEGIDAS[plataforma])]
+
+
+def _marcas(t: _Tabela, k: int, serie: int | None, entram: dict[str, set[int]]) -> dict:
+    """Num bloco (ou no resto da conta, ``_residuo``): por parte que a resposta do período
+    mostra — célula, escola e rede — e plataforma, os grupos de ``_PROTEGIDAS`` com
+    crianças cujo número fica ESCONDIDO ali (de 1 a k − 1 no subconjunto, ou em complemento:
+    as regras de um período só). A rede soma as escolas que entram na soma do PERÍODO
+    (``entram``)."""
+    marcas: dict = {}
+    for eid, m in t.medidas.items():
+        for p in PLATAFORMA_MODULO:
+            for s, cel in m.series.items():
+                soma = getattr(cel, p)
+                if soma is not None:
+                    marcas[("celula", eid, s, p)] = [g > 0 for g in _escondidas(soma, p, k)]
+            partes = _partes(m, p)
+            if partes:
+                total = _Elefante() if p == "elefante" else _Matific()
+                for parte in partes:
+                    _somar(total, parte)
+                marcas[("escola", eid, p)] = _com_criancas(total, p,
+                                                           _escola_esconde(m, p, k)[0])
+    somas, _entraram, _parciais, escondidas, sem_numero = _acumular_rede(
+        t, k, serie, lambda m, p: m.escola.id in entram[p])
+    for p in PLATAFORMA_MODULO:
+        if somas[p] is not None:
+            proprias = [g > 0 for g in _escondidas(somas[p], p, k)]
+            complemento = _esconde_no_total(escondidas[p], sem_numero[p], p, k,
+                                            qualquer=serie is not None)
+            marcas[("rede", p)] = _com_criancas(somas[p], p, [a or b for a, b in
+                                                              zip(proprias, complemento)])
+    return {chave: _sem_os_medidos(chave[-1], v) for chave, v in marcas.items()}
+
+
+def _com_criancas(soma, plataforma: str, marcas: list[bool]) -> list[bool]:
+    """Num TOTAL sem nenhuma criança no subconjunto deste bloco, a soma dele é zero e a das
+    partes também: "período − blocos" só devolve o zero de todas — nada a esconder (nem o
+    zero não sabido de uma parte sem número, que é o mesmo zero do total)."""
+    return [sim and getattr(soma, campo) > 0
+            for sim, (_chaves, campo) in zip(marcas, _PROTEGIDAS[plataforma])]
+
+
+def _diferentes(no_periodo: dict, partes: list[dict]) -> int:
+    """Quantas crianças têm, no período, um número diferente da soma dos blocos."""
+    somado: dict[int, tuple] = {}
+    for parte in partes:
+        for aid, valores in parte.items():
+            atual = somado.get(aid, (0,) * len(valores))
+            somado[aid] = tuple(a + b for a, b in zip(atual, valores))
+    return sum(1 for aid in set(no_periodo) | set(somado)
+               if tuple(no_periodo.get(aid, (0, 0))) != tuple(somado.get(aid, (0, 0))))
+
+
+def _residuo(t: _Tabela, blocos: list[_Tabela]) -> _Tabela:
+    """O que o período mede e nenhum bloco dele mede, criança a criança — um bloco a mais,
+    porque "período − blocos" o devolveria. Livros, tempo e nível somam exatamente pelas
+    datas das leituras (resto zero). Já os contadores não: no Matific, quem chega no meio do
+    ano tem o bimestre medido a partir da PRIMEIRA coleta dele (ganho zero nela) e o ano
+    letivo a partir do zero; o teto das estrelas e a queda do contador também não somam
+    igual. Nas questões do Elefante, as bordas das coletas fazem o mesmo. O subconjunto do
+    resto é o das crianças com número diferente da soma dos blocos."""
+    medidas = {}
+    for eid, m in t.medidas.items():
+        series = {}
+        for s, cel in m.series.items():
+            partes = [b.medidas[eid].series.get(s) for b in blocos if eid in b.medidas]
+            ele = mat = None
+            if cel.elefante is not None:
+                ele = _Elefante(coorte=cel.elefante.coorte, medidos=cel.elefante.medidos,
+                                alunos_com_questao=_diferentes(
+                                    cel.elefante.questoes_por_aluno,
+                                    [c.elefante.questoes_por_aluno for c in partes
+                                     if c is not None and c.elefante is not None]))
+            if cel.matific is not None:
+                mat = _Matific(coorte=cel.matific.coorte, medidos=cel.matific.medidos,
+                               com_atividade=_diferentes(
+                                   cel.matific.por_aluno,
+                                   [c.matific.por_aluno for c in partes
+                                    if c is not None and c.matific is not None]))
+            series[s] = _Celula(alunos=cel.alunos, elefante=ele, matific=mat)
+        medidas[eid] = replace(m, series=series)
+    return replace(t, medidas=medidas)
+
+
+def _marcas_dos_blocos(t: _Tabela, blocos: list[_Tabela], k: int, serie: int | None) -> dict:
+    """As marcas de todos os blocos do período e do resto, juntas (esconde se algum
+    esconde). Período de um bloco só: nenhuma."""
+    if not blocos:
+        return {}
+    entram = {p: {eid for eid, m in t.medidas.items()
+                  if _somas_da_escola(m, serie)[0 if p == "elefante" else 1] is not None
+                  and _entra_na_soma_da_rede(m, p)} for p in PLATAFORMA_MODULO}
+    juntas: dict = {}
+    for tb in (*blocos, _residuo(t, blocos)):
+        for chave, v in _marcas(tb, k, serie, entram).items():
+            atual = juntas.get(chave)
+            juntas[chave] = v if atual is None else [a or b for a, b in zip(atual, v)]
+    return juntas
+
+
+def _tabelas_da_rede(db: Session, escolas_da_decisao: list[Escola], medir: list[Escola],
+                     mods: set[str], *, periodos: list[Periodo], hoje: date, k: int,
+                     serie: int | None = None, com_primeiro_evento: bool = False
+                     ) -> list[tuple[_Tabela, dict]]:
+    """``_tabelas`` com a proteção por blocos: cada período pedido que junta mais de um bloco
+    fixo do calendário é medido junto com os blocos dele (as leituras do banco continuam UMA
+    por fonte), e sai com as marcas deles (``_marcas_dos_blocos``)."""
+    for p in periodos:
+        validar_anos(inicio=p.inicio, fim=p.fim)
+    anos = sorted({e.ano_letivo_ativo for e in medir})
+    estendidos, filhos = list(periodos), []
+    for p in periodos:
+        n = max((len(_blocos_do_periodo(p, _janela(p.preset, ano, p.inicio, p.fim, hoje),
+                                        hoje)) for ano in anos), default=0)
+        indices = []
+        if n > 1:
+            for i in range(n):
+                indices.append(len(estendidos))
+                estendidos.append(replace(p, bloco=i))
+        filhos.append(indices)
+    tabelas = _tabelas(db, escolas_da_decisao, medir, mods, periodos=estendidos, hoje=hoje,
+                       k=k, com_primeiro_evento=com_primeiro_evento)
+    return [(tabelas[g], _marcas_dos_blocos(tabelas[g], [tabelas[i] for i in filhos[g]], k,
+                                            serie))
+            for g in range(len(periodos))]
+
+
+def _proteger_escola_por_blocos(item: dict, marcas: dict, k: int,
+                                serie: int | None = None) -> None:
+    """Aplica as marcas dos blocos a uma escola da resposta (o total e cada série)."""
+    if not marcas or item.get("suprimido"):
+        return
+    eid = item["escola_id"]
+    for p in PLATAFORMA_MODULO:
+        chave = ("escola", eid, p) if serie is None else ("celula", eid, serie, p)
+        if chave in marcas:
+            _proteger(item.get(p), p, marcas[chave], k, por_bloco=True)
+        for cel in item.get("series") or []:
+            marca = marcas.get(("celula", eid, cel["serie"], p))
+            if marca is not None and not cel["suprimido"]:
+                _proteger(cel.get(p), p, marca, k, por_bloco=True)
 
 
 # --- Entradas ---------------------------------------------------------------------------
@@ -1543,17 +1821,20 @@ def plataformas_da_rede_por_periodo(db: Session, rede: Rede, periodos: list[Peri
     if mods is None:
         mods = svc_modulos.modulos_da_rede(db, rede.id)
     medir = [e for e in escolas if e.id == escola_id] if so_escola else escolas
-    tabelas = _tabelas(db, escolas, medir, mods, periodos=periodos, hoje=hoje, k=k,
-                       com_primeiro_evento=not so_escola)
-    return [_resposta_da_rede(t, p, mods, k, hoje, serie, escola_id, so_escola)
-            for t, p in zip(tabelas, periodos)]
+    tabelas = _tabelas_da_rede(db, escolas, medir, mods, periodos=periodos, hoje=hoje, k=k,
+                               serie=serie, com_primeiro_evento=not so_escola)
+    return [_resposta_da_rede(t, p, mods, k, hoje, serie, escola_id, so_escola, marcas)
+            for (t, marcas), p in zip(tabelas, periodos)]
 
 
 def _resposta_da_rede(t: _Tabela, periodo: Periodo, mods: set[str], k: int, hoje: date,
-                      serie: int | None, escola_id: int | None, so_escola: bool) -> dict:
+                      serie: int | None, escola_id: int | None, so_escola: bool,
+                      marcas: dict | None = None) -> dict:
     lista = [_escola_json(t.medidas.get(c.escola.id), c, t.decisoes[c.escola.id], mods, k, hoje,
                           serie) for c in t.contagens
              if escola_id is None or c.escola.id == escola_id]
+    for item in lista:
+        _proteger_escola_por_blocos(item, marcas or {}, k, serie)
     if so_escola:
         rede = None
     else:
@@ -1567,6 +1848,9 @@ def _resposta_da_rede(t: _Tabela, periodo: Periodo, mods: set[str], k: int, hoje
             suprimida = 0 < alunos < k or any(
                 d["series"].get(serie, {}).get("suprimido") for d in t.decisoes.values())
         blocos, entraram = _bloco_da_rede(t, k, serie)
+        for p in PLATAFORMA_MODULO:
+            if marcas and ("rede", p) in marcas:
+                _proteger(blocos.get(p), p, marcas[("rede", p)], k, por_bloco=True)
         motivo = SUPRIMIDO if suprimida else None
         rede = {"alunos": None if suprimida else alunos,
                 "alunos_fora_do_recorte": (None if suprimida else
@@ -1598,10 +1882,12 @@ def celulas_da_rede(db: Session, rede: Rede, *, preset: str, inicio: date | None
     cada série — com as MESMAS decisões de supressão da rota de plataformas."""
     escolas = escolas_da_rede(db, rede)
     mods = svc_modulos.modulos_da_rede(db, rede.id)
-    (t,) = _tabelas(db, escolas, escolas, mods, periodos=[Periodo(preset, inicio, fim)],
-                    hoje=hoje, k=k)
+    ((t, marcas),) = _tabelas_da_rede(db, escolas, escolas, mods,
+                                      periodos=[Periodo(preset, inicio, fim)], hoje=hoje, k=k)
     lista = [_escola_json(t.medidas.get(c.escola.id), c, t.decisoes[c.escola.id], mods, k, hoje)
              for c in t.contagens]
+    for item in lista:
+        _proteger_escola_por_blocos(item, marcas, k)
     return {
         "janela": t.janela, "ano_letivo": t.ano, "anos_letivos": t.anos,
         "modulos": {p: PLATAFORMA_MODULO[p] in mods for p in PLATAFORMA_MODULO},
@@ -1629,11 +1915,18 @@ def plataformas_da_escola(db: Session, escola: Escola, *, preset: str = "ano_let
     else:
         escolas = [escola]
         mods = svc_modulos.modulos_da_escola(db, escola)
-    (t,) = _tabelas(db, escolas, [escola], mods, periodos=[Periodo(preset, inicio, fim)],
-                    hoje=hoje, k=k)
+    periodos = [Periodo(preset, inicio, fim)]
+    if rede is not None and escopo_rede:
+        # Quem lê a rede recebe também a proteção por blocos (a mesma da rota da rede).
+        ((t, marcas),) = _tabelas_da_rede(db, escolas, [escola], mods, periodos=periodos,
+                                          hoje=hoje, k=k)
+    else:
+        (t,), marcas = _tabelas(db, escolas, [escola], mods, periodos=periodos, hoje=hoje,
+                                k=k), {}
     contagem = next(c for c in t.contagens if c.escola.id == escola.id)
     minha = _escola_json(t.medidas.get(escola.id), contagem, t.decisoes[escola.id], mods, k,
                          hoje)
+    _proteger_escola_por_blocos(minha, marcas, k)
     janela = (t.medidas[escola.id].janela if escola.id in t.medidas
               else _janela(preset, escola.ano_letivo_ativo, inicio, fim, hoje))
     return {"janela": _janela_json(janela, escola.ano_letivo_ativo, [escola.ano_letivo_ativo]),

@@ -104,18 +104,20 @@ describe("Elefante e Matific — a tela", () => {
 
   it("o período desta tela fica na URL e a conclusão diz de quando é; os totais acumulados não mudam", async () => {
     semearSecretaria();
-    responder("GET", "/redes/1/analise/plataformas", (c: string) => (consulta(c).get("periodo") === "mes"
-      ? plataformasRede({ janela: { inicio: "2026-10-01", fim: "2026-10-31", rotulo: "Este mês", preset: "mes" } })
+    // (A Secretaria escolhe o ano letivo ou um bimestre inteiro — G_GRUPO-2.)
+    responder("GET", "/redes/1/analise/plataformas", (c: string) => (consulta(c).get("periodo") === "bimestre_3"
+      ? plataformasRede({ janela: { inicio: "2026-07-24", fim: "2026-10-04", rotulo: "3º bimestre (24/07 a 04/10)",
+                                    preset: "bimestre_3" } })
       : plataformasRede()));
     await abrir();
-    await userEvent.selectOptions(screen.getByLabelText("Período"), "mes");
+    await userEvent.selectOptions(screen.getByLabelText("Período"), "bimestre_3");
     await waitFor(() => expect(screen.getByTestId("conclusao-plataformas"))
-      .toHaveTextContent("No período (este mês, de 01/10/2026 a 31/10/2026), 70% dos alunos"));
-    expect(screen.getByTestId("onde")).toHaveTextContent(`${ROTA}?periodo=mes`);
+      .toHaveTextContent("No período (3º bimestre (24/07 a 04/10), de 24/07/2026 a 04/10/2026), 70% dos alunos"));
+    expect(screen.getByTestId("onde")).toHaveTextContent(`${ROTA}?periodo=bimestre_3`);
     expect(chamadas("/redes/1/dashboard")).toHaveLength(1);
     // A tela Escolas (o nome novo; sem o parâmetro `aba`, que não existe mais), no mesmo período.
     expect(screen.getByRole("link", { name: /^Escolas › Elefante e Matific/ }))
-      .toHaveAttribute("href", "/rede/escolas?periodo=mes");
+      .toHaveAttribute("href", "/rede/escolas?periodo=bimestre_3");
     expect(screen.queryByText(/Comparar escolas/)).toBeNull();
   });
 

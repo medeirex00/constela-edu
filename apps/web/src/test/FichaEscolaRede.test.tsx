@@ -78,10 +78,11 @@ describe("Ficha da escola — o que ela mostra", () => {
     expect(screen.getByTestId("ficha-ultima-coleta")).toHaveTextContent("Última coleta: Elefante 18/10/2026 · Matific 19/10/2026.");
     expect(bloco.querySelector("[data-natureza=plataforma]")).toHaveTextContent("Plataforma");
     expect(screen.getByLabelText("Período")).toHaveValue("ano_letivo");
-    await userEvent.selectOptions(screen.getByLabelText("Período"), "mes");
-    await waitFor(() => expect(chamadas("/redes/1/analise/plataformas").some((c) => consulta(c).get("periodo") === "mes"))
-      .toBe(true));
-    expect(screen.getByTestId("onde")).toHaveTextContent("/rede/escolas/2?periodo=mes");
+    // (A Secretaria escolhe o ano letivo ou um bimestre inteiro — G_GRUPO-2.)
+    await userEvent.selectOptions(screen.getByLabelText("Período"), "bimestre_3");
+    await waitFor(() => expect(chamadas("/redes/1/analise/plataformas")
+      .some((c) => consulta(c).get("periodo") === "bimestre_3")).toBe(true));
+    expect(screen.getByTestId("onde")).toHaveTextContent("/rede/escolas/2?periodo=bimestre_3");
     // A situação de uso continua sendo a do ano letivo.
     expect(screen.getByTestId("ficha-situacao-uso")).toHaveTextContent("Com uso no ano letivo");
     const oQueMede = screen.getByTestId("ficha-o-que-mede");

@@ -77,21 +77,22 @@ describe("Escolas — a lista", () => {
 
   it("o nome da escola leva à ficha, com o período da lista; a ficha volta à lista com a mesma consulta", async () => {
     semearEscolas();
-    abrir("/rede/escolas?periodo=mes&serie=3");
+    // (A Secretaria escolhe o ano letivo ou um bimestre inteiro — G_GRUPO-2.)
+    abrir("/rede/escolas?periodo=bimestre_3&serie=3");
     await screen.findByTestId("tabela-escolas-periodo");
     const link = within(screen.getByTestId("escola-periodo-2")).getByRole("link", { name: "EMEF Sintética Alfa" });
-    expect(link).toHaveAttribute("href", "/rede/escolas/2?periodo=mes");
+    expect(link).toHaveAttribute("href", "/rede/escolas/2?periodo=bimestre_3");
     await userEvent.click(link);
     expect(await screen.findByRole("heading", { level: 1, name: "EMEF Sintética Alfa" })).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "Voltar para Escolas" }))
-      .toHaveAttribute("href", "/rede/escolas?periodo=mes&serie=3");
+      .toHaveAttribute("href", "/rede/escolas?periodo=bimestre_3&serie=3");
   });
 
   it("o período e a série ficam na URL e refazem só a leitura das plataformas", async () => {
     semearEscolas();
-    abrir("/rede/escolas?periodo=mes");
+    abrir("/rede/escolas?periodo=bimestre_3");
     await screen.findByTestId("tabela-escolas-periodo");
-    expect(screen.getByLabelText("Período")).toHaveValue("mes");
+    expect(screen.getByLabelText("Período")).toHaveValue("bimestre_3");
     await userEvent.selectOptions(screen.getByLabelText("Período"), "bimestre_2");
     await waitFor(() => expect(chamadas("/redes/1/analise/plataformas").map((c) => consulta(c).get("periodo")))
       .toContain("bimestre_2"));
@@ -316,13 +317,13 @@ describe("Escolas — comparar lado a lado", () => {
     semearEscolas();
     abrir("/rede/escolas?comparar=2,5");
     await screen.findByTestId("comparacao-lado-a-lado");
-    // A leitura do mês (a próxima) responde com a janela do mês.
+    // A leitura do 3º bimestre (a próxima) responde com a janela dele.
     responder("GET", "/redes/1/analise/plataformas", plataformasComEpsilon({
-      janela: { inicio: "2026-10-01", fim: "2026-10-31", rotulo: "Este mês" },
+      janela: { inicio: "2026-07-24", fim: "2026-10-04", rotulo: "3º bimestre (24/07 a 04/10)" },
     }));
-    await userEvent.selectOptions(screen.getByLabelText("Período"), "mes");
+    await userEvent.selectOptions(screen.getByLabelText("Período"), "bimestre_3");
     expect(screen.getByTestId("onde")).toHaveTextContent("comparar=2%2C5");
-    await waitFor(() => expect(screen.getByTestId("recorte-lado-a-lado")).toHaveTextContent("Este mês"));
+    await waitFor(() => expect(screen.getByTestId("recorte-lado-a-lado")).toHaveTextContent("3º bimestre"));
     // As avaliações não dependem do período: a mesma leitura (ano letivo) de cada escola.
     expect(new Set(chamadas("/escolas/2/analise"))).toEqual(new Set(["/escolas/2/analise?periodo=ano_letivo&so_avaliacoes=true"]));
   });

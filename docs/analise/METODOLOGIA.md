@@ -164,6 +164,17 @@ Datas do período e edição da avaliação só entre os anos **2000 e 2100**
 qualquer escola (o ano 0 ou o 10000 não existe para `datetime` e virava erro 500 depois de
 a rota já ter medido a rede inteira).
 
+**Período da Secretaria — só blocos inteiros do calendário** (`PRESETS_DA_REDE`): nas rotas
+que medem as plataformas (`/redes/{id}/analise/plataformas`, `/diagnostico`, `/relacao` e
+`/escolas/{id}/analise`), a Secretaria pede o **ano letivo** ou **um bimestre** (`bimestre_1`
+a `bimestre_4`, `bimestre` e `bimestre_anterior`). O personalizado, o dia, a semana, o mês, o
+semestre e "todo o histórico" voltam **422** (`TEXTO_PERIODO_DA_SECRETARIA`): com dois
+períodos que se sobrepõem, a diferença entre eles é o que aconteceu só no trecho que um tem
+e o outro não — e esse trecho pode ter **uma** criança, que nenhum dos dois esconde (3.5,
+"Blocos fixos"). O admin global e a coordenação da escola, que já veem cada criança,
+continuam com todos os períodos. É uma mudança de comportamento por segurança (G_GRUPO-2,
+11/2026): a Secretaria perdeu o personalizado, o dia, a semana e o mês nessas telas.
+
 ### 3.2 Coorte e série
 
 * **Coorte**: alunos **ativos** com **matrícula no ano letivo ativo** da escola
@@ -341,6 +352,36 @@ sobre o histórico inteiro, também no PostgreSQL), e o custo não cresce com o 
   o total da rede). Para o coordenador e o admin da própria escola (que não leem a rede),
   a decisão é tomada só dentro da escola: ela não perde o agregado dela por causa de outra
   escola, e a resposta não depende das outras.
+* **Blocos fixos do calendário (entre respostas de períodos diferentes)**: a proteção por
+  métrica acima é a de **cada** período, e a diferença entre dois períodos que se
+  sobrepõem a refaria (a auditoria refez as estrelas, o desempenho e o nível de leitura de
+  uma criança com [01/03, 15/08] × [01/03, 04/10]). Por isso a Secretaria só pede uniões de
+  **blocos** (3.1) e a métrica de um período que junta vários blocos — o ano letivo — só
+  aparece se **nenhum** deles a esconde:
+  * os blocos são uma partição do ano civil: os quatro bimestres, pelas mesmas janelas de
+    `bimestre_1..4` (o calendário oficial, ou a aproximação sem ele), e as **folgas** entre
+    eles (em 2026, 01/01 a 01/02, antes do 1º bimestre). Só contam os blocos que já
+    começaram;
+  * cada bloco é medido como um período (na mesma consulta ao banco) e marca, em cada
+    célula, escola e rede da resposta, os grupos que ele esconde **com crianças dentro**: de
+    1 a k − 1 no subconjunto, ou em complemento (as regras acima). Total sem nenhuma criança
+    no subconjunto do bloco não marca (a soma dele é zero, e a das partes também);
+  * o **resto** da conta que nenhum bloco mede é um bloco a mais (`_residuo`): no Matific, o
+    ano letivo parte do zero e o bimestre parte da **primeira coleta** de quem chega no meio
+    do ano (ganho zero nela); o teto das estrelas e a queda do contador também não somam
+    igual; nas questões do Elefante, as bordas das coletas fazem o mesmo. O subconjunto do
+    resto é o das crianças com número diferente da soma dos blocos. Livros, tempo e nível
+    somam exatamente pelas datas das leituras;
+  * os grupos dos alunos **medidos** (a participação) ficam fora dessa regra: são contagens,
+    não números de criança;
+  * a métrica escondida assim entra em `metricas_protegidas`, com o texto
+    `TEXTO_METRICAS_PROTEGIDAS_BLOCOS` (ou `..._AMBOS`, quando o complemento da mesma resposta
+    também esconde).
+  Assim a diferença entre dois períodos aceitos é sempre uma soma de blocos que mostram a
+  métrica, e "ano letivo − bimestres" não isola criança nenhuma. Vale para a Secretaria e o
+  admin global (a proteção da rede), não para a coordenação da escola. Não cobre a
+  diferença entre o **mesmo** período lido em dias diferentes (o bimestre em andamento muda
+  a cada coleta) — ver 5.
 
 ## 4. Relação com as avaliações
 
@@ -438,6 +479,14 @@ visíveis.
   só k alunos **medidos**; com 1 aluno ativo entre eles, "média × medidos" é o total dessa
   criança (sem nome). É lacuna de desenho conhecida (o critério declarado é k medidos), não
   recomposição de métrica escondida.
+* **O mesmo período em dias diferentes**: o bimestre em andamento (e o ano letivo, que o
+  contém) muda a cada coleta; a diferença entre a leitura de hoje e a de ontem é o que
+  aconteceu entre as duas coletas, que pode ser de uma criança só. A proteção por blocos
+  (3.5) fecha a diferença entre períodos, não a diferença no tempo. Fechar esta exigiria
+  medir só até o último bimestre fechado (os números do bimestre corrente sumiriam das
+  telas da Secretaria) ou esconder as médias protegidas enquanto o bimestre corre —
+  decisão do dono, registrada na auditoria (G_GRUPO-2). O mesmo vale para os cartões do
+  Painel da Rede.
 * **Nada disto é causalidade**: escolas diferem em muitas coisas além do uso das
   plataformas.
 
@@ -458,6 +507,7 @@ visíveis.
   `sem_conta_na_plataforma`, `series_suprimidas`, `sem_dado_nas_escolas_visiveis` (rede),
   `sem_alunos_na_serie` (escola, com o filtro de série: nenhum aluno ativo na série; 3.2).
 * Supressão: `suprimido`.
+* Período recusado à Secretaria (422): o texto `TEXTO_PERIODO_DA_SECRETARIA` (3.1).
 * Alertas: `cadastro`, `ausente`, `insuficiente`, `sem_registro`, `desatualizado`,
   `metodologia`.
 * Recusa da relação: ver 4.1.

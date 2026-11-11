@@ -129,7 +129,11 @@ def test_a_conta_com_os_retratos_essenciais_e_a_das_funcoes_oficiais(db):
         retrato_elefante(db, e, alunos[6], quando, tentativas=100 - 10 * j, acertos=5 * j)
         retrato_matific(db, e, alunos[6], quando, atividades=3 * j, estrelas=7 * j)
     db.commit()
-    for preset, ini, fim in (("ano_letivo", None, None), ("tudo", None, None),
+    # A janela do ano letivo vai como período personalizado (01/01 a 31/12): a conta é a
+    # mesma, sem a proteção por blocos do calendário — aqui, a folga antes do 1º bimestre
+    # tem só 2 crianças com questões, e o "ano letivo" da rede esconde o acerto (G_GRUPO-2).
+    for preset, ini, fim in (("personalizado", date(2026, 1, 1), date(2026, 12, 31)),
+                             ("tudo", None, None),
                              ("personalizado", date(2026, 3, 1), date(2026, 6, 30)),
                              ("personalizado", date(2025, 12, 1), date(2026, 5, 15))):
         janela = rp.resolver_janela(preset, 2026, inicio=ini, fim=fim, hoje=HOJE)

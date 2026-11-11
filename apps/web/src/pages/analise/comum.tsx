@@ -12,6 +12,7 @@ import { PRESETS_PERIODO, periodoParaQuery, type Periodo } from "../../component
 import { Badge, estiloInput } from "../../components/ui";
 import { useApp } from "../../context/AppContext";
 import { useApi, type OpcoesUseApi } from "../../hooks/useApi";
+import { usePerfil } from "../../hooks/usePerfil";
 import {
   MARCA_SEM_REGISTRO, ROTULO_POSICAO, ROTULO_SITUACAO, SEM_PONTO_NA_EDICAO, SIMBOLO_POSICAO, TEXTO_SEM_REGISTRO,
   casasDaDiferenca, diaBR, diferencaComUnidade, ehSemRegistro, numeroBR, textoAusencia, textoIndisponivel,
@@ -64,6 +65,42 @@ export function useApiExata<T>(url: string | null, opcoes: Omit<OpcoesUseApi<T>,
 export const OPCOES_LEITURA_PESADA = { timeoutMs: 60_000, tentativas: 0, cacheMs: 60_000 } as const;
 
 /**
+ * Os períodos que a SECRETARIA pede nas análises da rede: o ano letivo ou um bimestre inteiro
+ * (`services/analise/plataformas.PRESETS_DA_REDE`; o servidor recusa os outros com 422). Com
+ * dois períodos que se sobrepõem, a diferença entre eles mostraria os números de uma criança
+ * que um deles esconde. O admin global e a coordenação da escola continuam com todos.
+ */
+export const PRESETS_DA_REDE: ReadonlySet<string> = new Set([
+  "ano_letivo", "bimestre", "bimestre_anterior", "bimestre_1", "bimestre_2", "bimestre_3", "bimestre_4",
+]);
+export const TEXTO_PERIODO_DA_REDE = "Para a Secretaria, o período é o ano letivo ou um bimestre inteiro: "
+  + "a diferença entre dois períodos que se sobrepõem mostraria os números de uma criança.";
+
+/** As opções do seletor de período para quem lê (a Secretaria: só as de `PRESETS_DA_REDE`). */
+export function presetsDoPeriodo(secretaria: boolean) {
+  return secretaria ? PRESETS_PERIODO.filter((p) => PRESETS_DA_REDE.has(p.valor)) : PRESETS_PERIODO;
+}
+
+/** O período como a análise da rede o pede: para a Secretaria, um que não vale vira o ano letivo
+ *  (o período global, guardado de outra tela, ou um link antigo com `?periodo=mes`). */
+export function periodoDaRede(p: Periodo, secretaria: boolean): Periodo {
+  return !secretaria || PRESETS_DA_REDE.has(p.preset) ? p : { preset: "ano_letivo" };
+}
+
+/** O período GLOBAL como as análises da rede o pedem para quem está logado (`periodoDaRede`). */
+export function usePeriodoDaAnalise(): Periodo {
+  const { periodo } = useApp();
+  const { secretaria } = usePerfil();
+  return periodoDaRede(periodo, secretaria);
+}
+
+/** As opções de período de quem está logado, para dentro de um `<select>` / `Seletor`. */
+export function OpcoesDePeriodo() {
+  const { secretaria } = usePerfil();
+  return <>{presetsDoPeriodo(secretaria).map((p) => <option key={p.valor} value={p.valor}>{p.rotulo}</option>)}</>;
+}
+
+/**
  * O diagnóstico da rede numa janela (só a parte das plataformas depende dela; os números
  * oficiais são a última edição de cada escola). Sem `periodoFixo`, a do período global (a área
  * avançada); as telas principais da Secretaria (Panorama, Escolas em acompanhamento, Comparar
@@ -72,7 +109,7 @@ export const OPCOES_LEITURA_PESADA = { timeoutMs: 60_000, tentativas: 0, cacheMs
  * curto de `OPCOES_LEITURA_PESADA`).
  */
 export function useDiagnostico(redeId: number, periodoFixo?: Periodo) {
-  const { periodo } = useApp();
+  const periodo = usePeriodoDaAnalise();
   return useApiExata<RespostaDiagnostico>(
     `/redes/${redeId}/analise/diagnostico?${periodoParaQuery(periodoFixo ?? periodo)}`, OPCOES_LEITURA_PESADA);
 }
@@ -88,7 +125,7 @@ export function useDiagnostico(redeId: number, periodoFixo?: Periodo) {
  * refaz. A resposta de outro recorte nunca aparece sob o atual (`useApiExata`).
  */
 export function usePlataformasDaRede(redeId: number, serie: number | null, periodoFixo?: Periodo) {
-  const { periodo } = useApp();
+  const periodo = usePeriodoDaAnalise();
   const q = new URLSearchParams(periodoParaQuery(periodoFixo ?? periodo));
   if (serie != null) q.set("serie", String(serie));
   return useApiExata<RespostaPlataformas>(`/redes/${redeId}/analise/plataformas?${q.toString()}`,

@@ -17,10 +17,10 @@ import { ArrowRight, Info, Landmark, Settings2 } from "lucide-react";
 import type { ReactNode } from "react";
 import { Link, useNavigate } from "react-router-dom";
 
-import { DatasDoPeriodo, PRESETS_PERIODO, type Periodo } from "../../../components/SeletorPeriodo";
+import { DatasDoPeriodo, type Periodo } from "../../../components/SeletorPeriodo";
 import { Botao, Card, Carregando, Erro, Mensagem, PageHeader, Vazio, estiloInput } from "../../../components/ui";
 import type { ApiError } from "../../../lib/api";
-import { Seletor } from "../../analise/comum";
+import { OpcoesDePeriodo, Seletor } from "../../analise/comum";
 import { porNome, rotuloSerie } from "../../analise/formato";
 import { fraseSeparacao } from "./oQueMede";
 import { SERIES_DA_REDE, useRedeDaPagina, type RedeDaPagina } from "./useRedeDaPagina";
@@ -200,15 +200,16 @@ export function LinkVer({ para, children }: { para: string; children: ReactNode 
 }
 
 /**
- * O PERÍODO da tela (os mesmos presets do sistema, e as datas do personalizado e do dia) — sem
- * mexer no período global: a tela abre no ano letivo e a escolha fica na URL.
+ * O PERÍODO da tela (os presets do sistema, e as datas do personalizado e do dia) — sem mexer
+ * no período global: a tela abre no ano letivo e a escolha fica na URL. A Secretaria escolhe
+ * o ano letivo ou um bimestre inteiro (`OpcoesDePeriodo`; ver `PRESETS_DA_REDE`).
  */
 export function CampoPeriodo({ periodo, aoMudar }: { periodo: Periodo; aoMudar: (p: Periodo) => void }) {
   const estiloData = `${estiloInput} min-w-0 shrink-0 basis-44 dark:[color-scheme:dark]`;
   return (
     <div className="flex flex-wrap items-end gap-3" data-testid="campo-periodo">
       <Seletor rotulo="Período" valor={periodo.preset} aoMudar={(v) => aoMudar({ ...periodo, preset: v })}>
-        {PRESETS_PERIODO.map((p) => <option key={p.valor} value={p.valor}>{p.rotulo}</option>)}
+        <OpcoesDePeriodo />
       </Seletor>
       <DatasDoPeriodo valor={periodo} onChange={aoMudar} estilo={estiloData}
                       classeAte="pb-3 text-sm text-zinc-500 dark:text-zinc-400" />

@@ -27,6 +27,13 @@ A supressão de células pequenas na rota da escola segue QUEM lê: a Secretaria
 global (que também leem a rede) recebem a decisão da rede inteira; o coordenador e o admin
 da própria escola (que não leem a rede), a decisão tomada só dentro da escola.
 
+PERÍODO DA SECRETARIA: nas rotas que medem as plataformas (``plataformas``,
+``diagnostico``, ``relacao`` e a da escola), a Secretaria só pede o ano letivo ou um
+bimestre inteiro (``plataformas.PRESETS_DA_REDE``; 422 nos demais): a diferença entre dois
+períodos que se sobrepõem refaria o número de uma criança que um deles esconde (ver
+"Blocos fixos do calendário" em ``services/analise/plataformas.py``). O admin global e a
+coordenação da escola, que já veem cada criança, continuam com todos os períodos.
+
 Os critérios e as fórmulas estão em ``docs/analise/METODOLOGIA.md``.
 """
 from dataclasses import dataclass
@@ -40,6 +47,7 @@ from app.core.deps import exigir_rede, get_usuario_atual
 from app.core.tempo import hoje_br
 from app.models import Escola, Rede, Usuario
 from app.routers.indicadores import escola_com_indicadores_legiveis
+from app.services import permissoes
 from app.services.analise import AnaliseInvalida
 from app.services.analise import diagnostico as svc_diagnostico
 from app.services.analise import escola as svc_escola
@@ -58,6 +66,12 @@ def _executar(funcao, *args, **kwargs):
         return funcao(*args, **kwargs)
     except AnaliseInvalida as exc:
         raise HTTPException(exc.status, str(exc)) from exc
+
+
+def _periodo_de_quem_le(usuario: Usuario, periodo: str) -> None:
+    """A Secretaria só pede o ano letivo ou um bimestre inteiro (422 nos demais)."""
+    if permissoes.e_secretaria(usuario):
+        _executar(svc_plataformas.exigir_periodo_da_secretaria, periodo)
 
 
 @dataclass(frozen=True)
@@ -109,9 +123,11 @@ def plataformas(
     serie: int | None = None,
     escola_id: int | None = None,
     rede_id: int = Depends(exigir_rede),
+    usuario: Usuario = Depends(get_usuario_atual),
     db: Session = Depends(get_db),
 ):
     """Elefante e Matific por escola × série no período (padrão: o ano letivo)."""
+    _periodo_de_quem_le(usuario, periodo)
     return _executar(svc_plataformas.plataformas_da_rede, db, _RedeConferida(rede_id),
                      preset=periodo, inicio=inicio, fim=fim, serie=serie,
                      escola_id=escola_id, hoje=hoje_br())
@@ -141,11 +157,13 @@ def diagnostico_pedagogico(
     inicio: date | None = None,
     fim: date | None = None,
     rede_id: int = Depends(exigir_rede),
+    usuario: Usuario = Depends(get_usuario_atual),
     db: Session = Depends(get_db),
 ):
     """O diagnóstico pedagógico EXPLORATÓRIO de cada escola da rede (em ordem de nome):
     avaliações oficiais × plataformas no período (padrão: o ano letivo). Hipótese para
     orientar o acompanhamento — nunca causa e efeito."""
+    _periodo_de_quem_le(usuario, periodo)
     return _executar(svc_diagnostico.diagnostico, db, db.get(Rede, rede_id), preset=periodo,
                      inicio=inicio, fim=fim, hoje=hoje_br())
 
@@ -163,10 +181,12 @@ def relacao(
     fim: date | None = None,
     serie: int | None = None,
     rede_id: int = Depends(exigir_rede),
+    usuario: Usuario = Depends(get_usuario_atual),
     db: Session = Depends(get_db),
 ):
     """A relação indicador oficial × plataforma por escola: o coeficiente só quando os
     critérios valem; os pares lado a lado sempre."""
+    _periodo_de_quem_le(usuario, periodo)
     return _executar(svc_relacao.relacao, db, db.get(Rede, rede_id), indicador=indicador,
                      etapa=etapa, componente=componente, edicao=edicao, metrica=metrica,
                      periodo=periodo, inicio=inicio, fim=fim, serie=serie, hoje=hoje_br())
@@ -189,6 +209,7 @@ def analise_da_escola(
     # Quem lê a REDE (global, Secretaria) recebe a supressão da rede; quem só lê a escola,
     # a decidida dentro dela (nada da resposta depende das outras escolas).
     escopo_rede = bool(usuario.is_global or usuario.rede_id is not None)
+    _periodo_de_quem_le(usuario, periodo)
     return _executar(svc_escola.analise_da_escola, db, escola, preset=periodo, inicio=inicio,
                      fim=fim, hoje=hoje_br(), escopo_rede=escopo_rede,
                      com_plataformas=not so_avaliacoes)

@@ -1167,10 +1167,35 @@ describe("Análises avançadas — revisão visual v2", () => {
     await waitFor(() => expect(chamadas("/redes/1/analise/diagnostico")
       .some((c) => query(c).get("periodo") === "bimestre_3")).toBe(true));
 
-    // O personalizado continua com as duas datas, como no seletor de período do resto do app.
+    // A Secretaria escolhe o ano letivo ou um bimestre inteiro (G_GRUPO-2): sem o personalizado,
+    // o dia, a semana e o mês — a diferença entre dois períodos sobrepostos mostraria uma criança.
+    const opcoes = within(periodo).getAllByRole("option").map((o) => (o as HTMLOptionElement).value);
+    expect(opcoes).toEqual(["bimestre", "bimestre_anterior", "bimestre_1", "bimestre_2", "bimestre_3",
+                            "bimestre_4", "ano_letivo"]);
+    expect(screen.getByTestId("onde-valem-os-filtros"))
+      .toHaveTextContent("Para a Secretaria, o período é o ano letivo ou um bimestre inteiro");
+  });
+
+  it("o admin global continua com o personalizado (as duas datas) nas análises avançadas", async () => {
+    responder("GET", "/redes", [{ id: 1, nome: "Rede Sintética Norte" }]);
+    semear();
+    renderComApp(<AnaliseEducacional />, { rota: "/rede/analise", usuario: admin });
+    await screen.findByTestId("tabela-diagnostico");
     await userEvent.selectOptions(screen.getByLabelText("Período"), "personalizado");
     expect(screen.getByLabelText("Data inicial")).toBeInTheDocument();
     expect(screen.getByLabelText("Data final")).toBeInTheDocument();
+    expect(screen.getByTestId("onde-valem-os-filtros")).not.toHaveTextContent("Para a Secretaria");
+  });
+
+  it("a Secretaria com um período guardado de outra tela (este mês) lê o ano letivo", async () => {
+    semear();
+    renderComApp(<AnaliseEducacional />, { rota: "/rede/analise", usuario: secretaria,
+                                           periodo: { preset: "mes" } });
+    await screen.findByTestId("tabela-diagnostico");
+    expect(screen.getByLabelText("Período")).toHaveValue("ano_letivo");
+    const pedidos = chamadas("/redes/1/analise/diagnostico");
+    expect(pedidos.length).toBeGreaterThan(0);
+    expect(pedidos.every((c) => query(c).get("periodo") === "ano_letivo")).toBe(true);
   });
 
   it("sem rede: a mensagem e o 'Gerenciar redes' ficam no MESMO cartão (como em /rede)", async () => {

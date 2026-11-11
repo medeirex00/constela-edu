@@ -210,7 +210,9 @@ def _pedidos(base) -> list[tuple[str, dict]]:
         (f"{r}/analise/indicadores/saresp", {"visao": "escolas", "edicao": 2025}),
         (f"{r}/analise/indicadores/ideb", {"escola_id": beta}),
         (f"{r}/analise/plataformas", {}), (f"{r}/analise/plataformas", {"serie": 5}),
-        (f"{r}/analise/plataformas", {"periodo": "mes"}),
+        # Um período que não é o padrão (um bimestre: a Secretaria só pede blocos inteiros
+        # do calendário — G_GRUPO-2).
+        (f"{r}/analise/plataformas", {"periodo": "bimestre_3"}),
         (f"{r}/analise/plataformas/evolucao", {}),
         (f"{r}/analise/plataformas/evolucao", {"escola_id": alfa, "so_escola": True}),
         (f"{r}/analise/diagnostico", {}), (f"{r}/analise/relacao", {"indicador": "saresp"}),
