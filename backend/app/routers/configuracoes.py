@@ -1147,10 +1147,17 @@ def obter_pontuacao_turma(
     db: Session = Depends(get_db),
     usuario: Usuario = Depends(exigir_papeis("admin", "coordenador")),
 ):
-    """Catálogo de níveis (com padrões) + a config LIVRE já salva por turma."""
+    """Catálogo de níveis (com padrões) + a config LIVRE já salva por turma.
+
+    Só as turmas do ano letivo ATIVO da escola: a configuração é por ``turma_id`` e as
+    turmas de um ano novo são linhas novas — a de uma turma de outro ano não pesa nas Notas
+    do ano ativo (e o seletor mostraria '3º Ano A · 3º Ano' duas vezes)."""
     catalogo = _catalogo_niveis(db, escola_id)
+    ano = db.execute(select(Escola.ano_letivo_ativo)
+                     .where(Escola.id == escola_id)).scalar_one()
     turmas = db.execute(
-        select(Turma).where(Turma.escola_id == escola_id, Turma.status == "ativa")
+        select(Turma).where(Turma.escola_id == escola_id, Turma.status == "ativa",
+                            Turma.ano_letivo == ano)
         .order_by(Turma.ano_escolar, Turma.nome)
     ).scalars().all()
     overrides = {
@@ -1161,8 +1168,10 @@ def obter_pontuacao_turma(
     }
     return {
         "catalogo": catalogo,
+        "ano_letivo": ano,
         "turmas": [{"turma_id": t.id, "nome": t.nome, "ano_escolar": t.ano_escolar,
-                    "pontos": overrides.get(t.id, {})} for t in turmas],
+                    "ano_letivo": t.ano_letivo, "pontos": overrides.get(t.id, {})}
+                   for t in turmas],
     }
 
 
