@@ -1,3 +1,4 @@
+import os from "node:os";
 import path from "node:path";
 
 import { defineConfig, devices } from "@playwright/test";
@@ -27,6 +28,11 @@ const BACKEND_ENV = {
   PROF_PASSWORD: "ProfE2E@2026",
   DOCS_HABILITADOS: "false",
   AUTOMACAO_VERIFICAR_NO_BOOT: "false",
+  // Uploads e exportações numa pasta TEMPORÁRIA, nunca nas do checkout: o expurgo de
+  // fundo da API (core/expurgo_arquivos.py) roda no boot e aplica a retenção em
+  // UPLOADS_DIR/temporarios e EXPORTS_DIR — sem DADOS_DIR, em dev, <repo>/exports, onde
+  // ficam entregas guardadas à mão (REV2-OPS-1). A suíte do backend já faz o mesmo.
+  DADOS_DIR: path.join(os.tmpdir(), "constela-e2e-visual-dados"),
 };
 
 export default defineConfig({
