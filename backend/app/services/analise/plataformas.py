@@ -353,6 +353,10 @@ class _Medida:
 # rota não cresce com o número de escolas nem de bimestres. A regra de cada escola é a de
 # uma escola sozinha: as funções de janela particionam por (escola, aluno) e o recorte da
 # coorte é conferido escola a escola (a leitura de um aluno numa escola só conta para ela).
+# E o trabalho do BANCO também não se multiplica pelos períodos: os retratos de cada fonte
+# são ordenados uma vez (cada linha com a data da anterior e a da seguinte, ``_vizinhos``) e
+# cada período só filtra — antes, cada período numerava de novo o histórico inteiro da rede
+# (a evolução por bimestre levava ~6 s no PG local com 28 escolas fictícias).
 
 # As colunas da união de ``_coortes_e_coletas``: (fonte, escola, aluno, turma, ano escolar,
 # primeira data, última data); cada parte preenche as suas e manda NULL tipado nas outras.
@@ -557,7 +561,8 @@ def _retratos_em_lote(db: Session, modelo, campos: tuple[str, ...],
     ``matific_destaque.ganho_no_periodo`` compara o instante gravado (UTC) com a janela sem
     conversão (a regra das premiações) e não usa nenhum outro retrato da série, então o
     resultado é o mesmo da série inteira, sem carregar o histórico diário. UMA consulta para
-    todos os grupos (``row_number`` por escola, aluno e faixa). As questões do Elefante têm
+    todos os grupos, com os retratos ordenados UMA vez (``_partes_retratos``). As questões do
+    Elefante têm
     outra regra (Brasília, tolerância de borda, uma linha por execução):
     ``_questoes_em_lote``.
 
@@ -574,40 +579,65 @@ def _partes_retratos(modelo, campos: tuple[str, ...],
                      grupos: dict[int, tuple[datetime | None, datetime | None,
                                              datetime | None, list[int]]]) -> list:
     """Os SELECTs de ``_retratos_em_lote`` (um por grupo), com as colunas (g, escola_id, id,
-    aluno_id, data_referencia, *campos)."""
-    d = modelo.data_referencia
+    aluno_id, data_referencia, *campos).
+
+    Os retratos são ordenados UMA vez para todos os grupos (``_vizinhos``: cada linha com a
+    data da anterior e a da seguinte da mesma criança); cada grupo só filtra. A faixa de um
+    grupo — antes do piso (fora), antes do início, dentro, depois do fim (fora) — cresce com
+    a data, então "a última antes do início" e "a primeira e a última dentro" são as linhas
+    cuja vizinha está noutra faixa (ou não existe): as mesmas do ``row_number`` por escola,
+    aluno e faixa de cada grupo, sem uma ordenação do histórico inteiro por grupo."""
+    pisos = [piso for _, _, piso, _ in grupos.values()]
+    fins = [fim for _, fim, _, _ in grupos.values()]
+    base = _vizinhos(
+        select(modelo.id.label("id"), modelo.escola_id.label("escola_id"),
+               modelo.aluno_id.label("aluno_id"), modelo.data_referencia.label("data_referencia"),
+               *[getattr(modelo, c).label(c) for c in campos]).where(
+            modelo.escola_id.in_(sorted({i for *_, ids in grupos.values() for i in ids})),
+            # Fora de TODOS os grupos (antes do menor piso, depois do maior fim): a linha não
+            # é lida por nenhum, e a vizinha que falta vale como "outra faixa".
+            *([modelo.data_referencia >= min(pisos)] if None not in pisos else []),
+            *([modelo.data_referencia <= max(fins)] if None not in fins else [])),
+        f"retratos_{modelo.__tablename__}")
+    b = base.c
     partes = []
     for g, (inicio, fim, piso, ids) in grupos.items():
-        whens = []
-        if inicio is not None:
-            whens.append((d < inicio, 0))
-        if fim is not None:
-            whens.append((d > fim, 2))
-        faixa = case(*whens, else_=1) if whens else literal_column("1")
-        particao = ((modelo.escola_id, modelo.aluno_id, faixa) if whens
-                    else (modelo.escola_id, modelo.aluno_id))
-        filtro = [modelo.escola_id.in_(ids)]
-        if piso is not None:
-            filtro.append(d >= piso)
-        if fim is not None:
-            filtro.append(d <= fim)
-        sub = select(
-            modelo.id.label("id"), modelo.escola_id.label("escola_id"),
-            modelo.aluno_id.label("aluno_id"), d.label("data_referencia"),
-            *[getattr(modelo, c).label(c) for c in campos], faixa.label("faixa"),
-            func.row_number().over(partition_by=particao, order_by=(d.asc(), modelo.id.asc())
-                                   ).label("rn_asc"),
-            func.row_number().over(partition_by=particao, order_by=(d.desc(), modelo.id.desc())
-                                   ).label("rn_desc"),
-        ).where(*filtro).subquery()
-        c = sub.c
+        def faixa(x, inicio=inicio, fim=fim, piso=piso):
+            whens = ([(x < piso, -1)] if piso is not None else []) + (
+                [(x < inicio, 0)] if inicio is not None else []) + (
+                [(x > fim, 2)] if fim is not None else [])
+            return case(*whens, else_=1) if whens else literal_column("1")
+        f, primeira, ultima = _faixa_e_bordas(b, faixa)
         partes.append(
-            select(literal_column(str(g)).label("g"), c.escola_id, c.id, c.aluno_id,
-                   c.data_referencia, *[c[x] for x in campos])
-            .where(or_(and_(c.faixa == 0, c.rn_desc == 1),
-                       and_(c.faixa == 1, or_(c.rn_asc == 1, c.rn_desc == 1)),
-                       and_(c.faixa == 2, c.rn_asc == 1))))
+            select(literal_column(str(g)).label("g"), b.escola_id, b.id, b.aluno_id,
+                   b.data_referencia, *[b[x] for x in campos])
+            .where(b.escola_id.in_(ids),
+                   or_(and_(f == 0, ultima(0)), and_(f == 1, or_(primeira(1), ultima(1))))))
     return partes
+
+
+def _vizinhos(consulta, nome: str):
+    """``consulta`` (com ``escola_id``, ``aluno_id``, ``data_referencia`` e ``id``) numa CTE
+    com a data da linha ANTERIOR e a da SEGUINTE da mesma criança, em ordem de (data, id) —
+    uma ordenação só, que todos os grupos da consulta reaproveitam."""
+    sub = consulta.subquery()
+    c = sub.c
+    ordem = {"partition_by": (c.escola_id, c.aluno_id),
+             "order_by": (c.data_referencia.asc(), c.id.asc())}
+    return select(*c, func.lag(c.data_referencia).over(**ordem).label("anterior"),
+                  func.lead(c.data_referencia).over(**ordem).label("seguinte")).cte(nome)
+
+
+def _faixa_e_bordas(b, faixa):
+    """A faixa da linha (``faixa(data)``) e, para uma faixa ``n``, se a linha é a PRIMEIRA
+    (a anterior está noutra faixa ou não existe) ou a ÚLTIMA dela (idem, a seguinte). Vale
+    porque a faixa nunca diminui com a data (as linhas de uma faixa são contíguas)."""
+    def primeira(n):
+        return or_(b.anterior.is_(None), faixa(b.anterior) != n)
+
+    def ultima(n):
+        return or_(b.seguinte.is_(None), faixa(b.seguinte) != n)
+    return faixa(b.data_referencia), primeira, ultima
 
 
 def _retratos_essenciais(db: Session, modelo, escola_id: int, campos: tuple[str, ...],
@@ -651,8 +681,9 @@ def _questoes_em_lote(db: Session, grupos: dict[int, tuple[rp.Janela, list[int]]
     período; todas a até a tolerância do fim (a 0h do dia seguinte); e a primeira depois
     disso (só para saber que a conta existe). Nenhuma outra coleta muda o resultado da
     regra, então ele é o da série inteira — sem carregar o histórico diário. UMA consulta
-    para todos os grupos: a execução de cada linha (``lag`` por escola e aluno) sai de uma
-    CTE só, e cada grupo escolhe as dele (``row_number`` por escola, aluno e faixa).
+    para todos os grupos: a execução de cada linha (``lag`` por escola e aluno) e as vizinhas
+    de cada primeira linha saem de uma CTE só, e cada grupo escolhe as dele pela faixa da
+    linha e a das vizinhas (``_partes_questoes``) — sem uma ordenação por grupo.
     Limitação: uma sequência de linhas a menos de 15 min uma da outra que dure mais de 15
     min (só em dado antigo; hoje a sync reescreve o retrato do dia no lugar) conta aqui como
     uma execução só.
@@ -670,7 +701,8 @@ def _questoes_em_lote(db: Session, grupos: dict[int, tuple[rp.Janela, list[int]]
 def _partes_questoes(db: Session, grupos: dict[int, tuple[rp.Janela, list[int]]]) -> list:
     """Os SELECTs de ``_questoes_em_lote`` (um por grupo, sobre a mesma CTE das primeiras
     linhas de cada execução), com as colunas (g, escola_id, id, aluno_id, data_referencia,
-    *_COLUNAS_QUESTOES)."""
+    *_COLUNAS_QUESTOES). Como em ``_partes_retratos``, as primeiras linhas são ordenadas UMA
+    vez (``_vizinhos``) e cada grupo só filtra pela faixa da linha e a das vizinhas."""
     m = SnapshotElefante
     d = m.data_referencia
     todas = select(
@@ -683,46 +715,40 @@ def _partes_questoes(db: Session, grupos: dict[int, tuple[rp.Janela, list[int]]]
         or_(Importacao.status.is_(None), Importacao.status != IMPORTACAO_SEM_QUESTOES),
     ).subquery()
     t = todas.c
-    primeiras = select(t.id, t.escola_id, t.aluno_id, t.data_referencia,
-                       *[t[c] for c in _COLUNAS_QUESTOES]).where(or_(
-                           t.anterior.is_(None),
-                           _segundos(db, t.data_referencia) - _segundos(db, t.anterior)
-                           > rp._MESMA_COLETA.total_seconds())).cte("primeiras")
+    primeiras = _vizinhos(
+        select(t.id, t.escola_id, t.aluno_id, t.data_referencia,
+               *[t[c] for c in _COLUNAS_QUESTOES]).where(or_(
+                   t.anterior.is_(None),
+                   _segundos(db, t.data_referencia) - _segundos(db, t.anterior)
+                   > rp._MESMA_COLETA.total_seconds())),
+        "primeiras")
     p = primeiras.c
     # A janela de cada borda é a de ``rp._mede_a_borda`` (mais larga DEPOIS da meia-noite:
     # a coleta da madrugada mede o dia anterior).
     antes, depois = rp.TOLERANCIA_BORDA, rp.tolerancia_depois_da_borda()
     partes = []
     for g, (janela, ids) in grupos.items():
-        whens = []
+        limites = []
         if janela.inicio is not None:
             ini = _utc(janela.inicio)
-            whens += [(p.data_referencia < ini - antes, 0),
-                      (p.data_referencia <= ini + depois, 1)]
+            limites += [(ini - antes, "<", 0), (ini + depois, "<=", 1)]
         if janela.fim is not None:
             fim_excl = _utc(janela.fim + timedelta(microseconds=1))
-            whens += [(p.data_referencia < fim_excl - antes, 2),
-                      (p.data_referencia <= fim_excl + depois, 3)]
-        faixa = (case(*whens, else_=4 if janela.fim is not None else 2) if whens
-                 else literal_column("2"))
-        particao = (p.escola_id, p.aluno_id, faixa) if whens else (p.escola_id, p.aluno_id)
-        sub = select(
-            p.id, p.escola_id, p.aluno_id, p.data_referencia, *[p[c] for c in _COLUNAS_QUESTOES],
-            faixa.label("faixa"),
-            func.row_number().over(partition_by=particao,
-                                   order_by=(p.data_referencia.asc(), p.id.asc())).label("rn_asc"),
-            func.row_number().over(partition_by=particao,
-                                   order_by=(p.data_referencia.desc(), p.id.desc())
-                                   ).label("rn_desc"),
-        ).where(p.escola_id.in_(ids)).subquery()
-        c = sub.c
+            limites += [(fim_excl - antes, "<", 2), (fim_excl + depois, "<=", 3)]
+        resto = 4 if janela.fim is not None else 2
+
+        def faixa(x, limites=limites, resto=resto):
+            whens = [((x < lim) if op == "<" else (x <= lim), n) for lim, op, n in limites]
+            return case(*whens, else_=resto) if whens else literal_column("2")
+        f, primeira, ultima = _faixa_e_bordas(p, faixa)
         partes.append(
-            select(literal_column(str(g)).label("g"), c.escola_id, c.id, c.aluno_id,
-                   c.data_referencia, *[c[x] for x in _COLUNAS_QUESTOES])
-            .where(or_(and_(c.faixa == 0, c.rn_desc == 1),
-                       c.faixa.in_((1, 3)),
-                       and_(c.faixa == 2, or_(c.rn_asc == 1, c.rn_desc == 1)),
-                       and_(c.faixa == 4, c.rn_asc == 1))))
+            select(literal_column(str(g)).label("g"), p.escola_id, p.id, p.aluno_id,
+                   p.data_referencia, *[p[x] for x in _COLUNAS_QUESTOES])
+            .where(p.escola_id.in_(ids),
+                   or_(and_(f == 0, ultima(0)),
+                       f.in_((1, 3)),
+                       and_(f == 2, or_(primeira(2), ultima(2))),
+                       and_(f == 4, primeira(4)))))
     return partes
 
 
@@ -1029,8 +1055,14 @@ def _medir_escola(prep: _Preparo, coorte: dict[int, dict], lidos: _Lidos, hoje: 
     coberto_ate: dict[str, datetime | None] = {p: None for p in PLATAFORMA_MODULO}
     if prep.medir and series:
         por_serie: dict[int, dict] = {}
+        # A série de cada rótulo de turma, calculada uma vez (são poucos rótulos por escola,
+        # e a escola é medida em cada período pedido).
+        serie_do_rotulo: dict[str | None, int | None] = {}
         for aid, info in coorte.items():
-            s = ano_premiavel(info["ano_escolar"])
+            rotulo = info["ano_escolar"]
+            if rotulo not in serie_do_rotulo:
+                serie_do_rotulo[rotulo] = ano_premiavel(rotulo)
+            s = serie_do_rotulo[rotulo]
             if s in series:
                 por_serie.setdefault(s, {})[aid] = info
         if "elefante" in prep.medir:

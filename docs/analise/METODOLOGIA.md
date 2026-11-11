@@ -265,9 +265,12 @@ Notação: `n` = alunos medidos da célula. Com `n < k` (k = 5), nenhuma métric
 Arredondamento: "meio para cima" (`ica.arredondar`), como na divulgação oficial.
 
 **Só os retratos que a regra lê.** A análise não carrega o histórico diário inteiro: lê,
-de cada aluno, só as coletas que a regra pode usar (uma consulta por escola, com `lag` e
-`row_number`) — o resultado é o mesmo (há teste que confere contra as funções oficiais
-sobre o histórico inteiro, também no PostgreSQL), e o custo não cresce com o histórico.
+de cada aluno, só as coletas que a regra pode usar (uma consulta para todas as escolas e
+períodos: os retratos ordenados uma vez, cada um com a data do anterior e a do seguinte —
+`lag` e `lead` —, e cada período escolhe as linhas na borda das faixas dele) — o resultado
+é o mesmo (há teste que confere contra as funções oficiais sobre o histórico inteiro e
+contra a escolha linha a linha, também no PostgreSQL), e o custo não cresce com o
+histórico nem se multiplica pelos períodos.
 
 * **Matific** (`_retratos_essenciais`): o último retrato antes do início e o primeiro e o
   último dentro do período, no instante gravado (UTC), como na regra das premiações (que
