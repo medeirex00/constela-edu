@@ -166,7 +166,9 @@ def reter_quedas_matific(db: Session, escola: Escola, linhas: list,
     vinculada (UUID → ficha) e cujo total novo de atividades OU estrelas é menor
     que o do retrato atual DENTRO do ano (ver a virada abaixo) NÃO é aplicada — o
     valor gravado fica, a ocorrência vai para a auditoria (sem nome: só ids e
-    números) e o serviço abre o alerta 'queda_matific' para revisão humana.
+    números) e o serviço abre o alerta 'queda_matific' para revisão humana. Se o
+    retrato atual é um AJUSTE MANUAL, a base de cada campo é o menor entre o ajuste
+    e o último retrato coletado no ano (ver o comentário no corpo).
 
     VIRADA LEGÍTIMA (documentada): o acumulado recomeça no ano novo. A base de
     comparação são só os retratos que estão AO MESMO TEMPO no ano letivo ativo
@@ -233,17 +235,24 @@ def reter_quedas_matific(db: Session, escola: Escola, linhas: list,
             SnapshotMatific.id.in_(scoring.ids_snapshots_atuais(
                 SnapshotMatific, escola.id, janela=janela)),
             SnapshotMatific.aluno_id.in_(list(aluno_por_uuid.values())))).scalars()}
-    # A BASE é o último retrato COLETADO no ano, não o AJUSTE MANUAL (G_AJUSTE-1):
-    # depois de um ajuste para cima, toda coleta abaixo do número digitado era
-    # retida como "queda" e nunca chegava a desmenti-lo. Sem retrato coletado no
-    # ano, não há base (a coleta entra).
+    campos = ("atividades", "estrelas")
+    # A BASE, campo a campo, é o retrato atual do ano. Quando ele é um AJUSTE MANUAL,
+    # é o MENOR entre o ajuste e o último retrato COLETADO no ano (G_AJUSTE-1,
+    # REV2-COSTURA-1):
+    # * ajuste para CIMA (coletado 60, digitado 100): vale a coleta. Com o ajuste
+    #   como base, toda coleta abaixo do número digitado era retida como "queda" e
+    #   nunca chegava a desmenti-lo; a queda abaixo do último coletado segue retida;
+    # * ajuste para BAIXO (coletado 60, digitado 40): vale o número digitado. Com a
+    #   coleta antiga como base, a de 55 era retida como "queda" do 60, e o 40 ficava
+    #   como estado atual até a plataforma passar de 60.
+    # Sem retrato coletado no ano, o ajuste sozinho não é base (a coleta entra).
+    base = {aid: dict.fromkeys(campos, s) for aid, s in atuais.items()}
     from app.services import evolucao
     manuais = evolucao.ajustes_manuais_matific(db, escola.id)
     de_ajuste = [aid for aid, s in atuais.items() if s.importacao_id in manuais]
     if de_ajuste:
         inicio, fim = janela
-        for aid in de_ajuste:
-            atuais.pop(aid)
+        coletado: dict[int, SnapshotMatific] = {}
         for s in db.execute(
                 select(SnapshotMatific).where(
                     SnapshotMatific.escola_id == escola.id,
@@ -252,27 +261,35 @@ def reter_quedas_matific(db: Session, escola: Escola, linhas: list,
                     SnapshotMatific.data_referencia >= inicio,
                     SnapshotMatific.data_referencia <= fim)
                 .order_by(SnapshotMatific.data_referencia, SnapshotMatific.id)).scalars():
-            atuais[s.aluno_id] = s          # o último, pela ordem
+            coletado[s.aluno_id] = s        # o último, pela ordem
+        for aid in de_ajuste:
+            ajuste, col = atuais[aid], coletado.get(aid)
+            if col is None:
+                base.pop(aid)
+                continue
+            base[aid] = {campo: (ajuste if int(getattr(ajuste, campo) or 0)
+                                 <= int(getattr(col, campo) or 0) else col)
+                         for campo in campos}
 
     retidas: set[int] = set()
     for uuid, aluno_id in aluno_por_uuid.items():
-        atual = atuais.get(aluno_id)
-        if atual is None:
+        por_campo = base.get(aluno_id)
+        if por_campo is None:
             continue
         for linha in por_uuid[uuid]:
             dados = linha.dados or {}
-            caiu = [campo for campo in ("atividades", "estrelas")
+            caiu = [campo for campo in campos
                     if campo in dados and dados[campo] is not None
-                    and int(dados[campo]) < int(getattr(atual, campo) or 0)]
+                    and int(dados[campo]) < int(getattr(por_campo[campo], campo) or 0)]
             if not caiu:
                 continue
             retidas.add(id(linha))
             registrar(db, "sync.matific_queda_retida", escola_id=escola.id,
                       entidade="aluno", entidade_id=aluno_id,
-                      detalhes={campo: {"gravado": int(getattr(atual, campo) or 0),
+                      detalhes={campo: {"gravado": int(getattr(por_campo[campo], campo) or 0),
                                         "recebido": int(dados[campo])}
                                 for campo in caiu}
-                      | {"snapshot_id": atual.id, "ano_letivo": ano})
+                      | {"snapshot_id": por_campo[caiu[0]].id, "ano_letivo": ano})
     if retidas:
         contexto.log("validacao", "warn",
                      f"{len(retidas)} aluno(s) com total do Matific MENOR que o já "

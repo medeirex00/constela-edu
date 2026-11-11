@@ -141,6 +141,12 @@ legítima" abaixo), a linha **não é aplicada** (`orchestrator.reter_quedas_mat
 * abre o alerta `queda_matific` (revisão humana), que fecha quando a plataforma
   voltar a mandar o acumulado certo.
 
+**Ajuste manual**: se o retrato atual é um ajuste manual do Admin Global, a base
+de cada número é o **menor** entre o ajuste e o último retrato coletado no ano.
+Ajuste para cima (coletado 60, digitado 100): a coleta de 70 entra, e a de 55
+fica retida. Ajuste para baixo (coletado 60, digitado 40): a coleta de 55 entra,
+e a de 35 fica retida. Sem retrato coletado no ano, o ajuste sozinho não é base.
+
 **Virada legítima**: só conta como base de comparação o retrato que está, ao
 mesmo tempo, no ano letivo ativo da escola **e** no ano civil da coleta (relógio
 de Brasília — o ano do "this-year" do Matific). O primeiro do ano novo entra

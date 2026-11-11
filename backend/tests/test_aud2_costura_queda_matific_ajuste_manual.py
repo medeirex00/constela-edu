@@ -69,3 +69,53 @@ def test_so_ajuste_manual_no_ano_nao_e_base(db, escola_completa, monkeypatch):
                    monkeypatch)
     assert res["retidos_queda"] == 0
     assert _atual(db, escola, ana).atividades == 30
+
+
+# REV2-COSTURA-1: o AJUSTE PARA BAIXO. A base é o MENOR entre o ajuste e o último
+# coletado, campo a campo: no ajuste para cima vale a coleta (acima); no ajuste para
+# baixo vale o número digitado. Antes, a base era sempre o último coletado, e a coleta
+# acima do número que a gestão corrigiu para baixo era retida como "queda" do 60 antigo.
+
+def test_coleta_acima_do_ajuste_para_baixo_entra(db, escola_completa, monkeypatch):
+    escola, ana = escola_completa["escola"], escola_completa["alunos"][0]
+    _base(db, escola, ana, estrelas=180, atividades=60)             # coletado em 01/10
+    _ajuste_manual(db, escola, ana, estrelas=120, atividades=40)    # corrigido p/ 40
+
+    res = _aplicar(db, escola, _placar(ana, "uuid-ana", estrelas=165, atividades=55),
+                   monkeypatch)
+
+    assert res["retidos_queda"] == 0, "a coleta 55 (acima do 40 digitado) foi retida"
+    atual = _atual(db, escola, ana)
+    assert (atual.atividades, atual.estrelas) == (55, 165)
+
+
+def test_coleta_abaixo_do_ajuste_para_baixo_continua_retida(db, escola_completa, monkeypatch):
+    from sqlalchemy import select
+
+    from app.models import LogAuditoria
+    escola, ana = escola_completa["escola"], escola_completa["alunos"][0]
+    _base(db, escola, ana, estrelas=180, atividades=60)
+    _ajuste_manual(db, escola, ana, estrelas=120, atividades=40)
+
+    res = _aplicar(db, escola, _placar(ana, "uuid-ana", estrelas=130, atividades=35),
+                   monkeypatch)
+
+    assert res["retidos_queda"] == 1
+    assert _atual(db, escola, ana).atividades == 40      # o digitado ficou
+    audit = db.execute(select(LogAuditoria).where(
+        LogAuditoria.acao == "sync.matific_queda_retida")).scalars().one()
+    # a base é o número digitado (o menor), não o 60 da coleta antiga
+    assert audit.detalhes["atividades"] == {"gravado": 40, "recebido": 35}
+    assert "estrelas" not in audit.detalhes              # 130 ≥ 120: não caiu
+
+
+def test_base_e_o_menor_campo_a_campo(db, escola_completa, monkeypatch):
+    """Ajuste que sobe um campo e desce o outro: cada campo tem a sua base."""
+    escola, ana = escola_completa["escola"], escola_completa["alunos"][0]
+    _base(db, escola, ana, estrelas=180, atividades=60)
+    _ajuste_manual(db, escola, ana, estrelas=300, atividades=40)    # estrelas ↑, atividades ↓
+
+    entra = _aplicar(db, escola, _placar(ana, "uuid-ana", estrelas=190, atividades=50),
+                     monkeypatch)
+    assert entra["retidos_queda"] == 0          # 50 ≥ 40 (digitado) e 190 ≥ 180 (coleta)
+    assert (_atual(db, escola, ana).atividades, _atual(db, escola, ana).estrelas) == (50, 190)
