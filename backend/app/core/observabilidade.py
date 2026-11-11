@@ -309,6 +309,25 @@ def render_metricas() -> tuple[bytes, str]:
 # --- Sentry (opcional) --------------------------------------------------------
 _sentry_ativo = False
 
+# Um evento por FALHA de verdade. O log de acesso de um 5xx sai em ERROR (o JSON do
+# Railway marca a severidade), e a LoggingIntegration faria dele mais um evento — sem
+# exceção, de toda rota, agrupado numa issue só "http_acesso": o ``before_send`` o
+# descarta (no log ele continua). O erro não tratado já tem o evento do
+# ``erro_nao_tratado`` (o ``capturar_excecao`` da mesma exceção o SDK deduplica); a
+# HTTPException 500 levantada pelo código, o da integração do Starlette/FastAPI — que,
+# por padrão, captura de 500 a 599 e por isso fica só no 500: os 502/503/504 são
+# respostas ESPERADAS (plataforma ou navegador fora, ver sync/router.py), e o que é
+# defeito nosso nelas já sai num log ERROR próprio.
+_LOGGER_DE_ACESSO = "constela.http"
+_STATUS_QUE_VIRAM_EVENTO = frozenset({500})
+
+
+def _e_log_de_acesso(evento) -> bool:
+    if not isinstance(evento, dict) or evento.get("logger") != _LOGGER_DE_ACESSO:
+        return False
+    entrada = evento.get("logentry")
+    return isinstance(entrada, dict) and entrada.get("message") == "http_acesso"
+
 
 def higienizar_evento_sentry(event, _hint=None):
     """Redige segredos da URL/query ANTES do evento sair para o Sentry
@@ -322,7 +341,11 @@ def higienizar_evento_sentry(event, _hint=None):
     Depois, o texto livre do evento passa pela MESMA redação de dado pessoal do log,
     com um orçamento por evento (veja ``_sem_dado_pessoal_no_sentry``). Se ela falhar
     (não deveria), o evento NÃO sai: devolve None, que o SDK trata como descartado —
-    sem a redação, iria cru."""
+    sem a redação, iria cru.
+
+    O registro do log de acesso (``http_acesso``) não sai: veja ``_e_log_de_acesso``."""
+    if _e_log_de_acesso(event):
+        return None
     req = event.get("request") if isinstance(event, dict) else None
     if isinstance(req, dict):
         if isinstance(req.get("url"), str):
@@ -423,7 +446,9 @@ def _nome_sem_segredo(nome: str) -> str:
 #
 # O CUSTO TEM TETO POR EVENTO. Este hook roda síncrono, com o event loop parado: o
 # ``before_send_transaction`` sai do fim da transação da requisição, e um erro não tratado
-# gera dois eventos (o ``logger.exception`` e o ``capturar_excecao``). A redação custa
+# chega aqui uma vez (o do ``logger.exception``: o ``capturar_excecao`` da mesma exceção o
+# SDK descarta como duplicado antes deste hook), mais o log de acesso do 500, descartado
+# logo no começo, sem redigir nada. A redação custa
 # ~0,4 s por MB, uma transação leva até 1000 spans e o SDK NÃO corta a ``description`` de
 # um span (um INSERT de 1400 linhas tem 52 KB): sem teto, uma requisição com muitas
 # consultas e o tracing ligado parava o worker por centenas de ms. Por evento:
@@ -652,13 +677,22 @@ def configurar_sentry(settings) -> None:
     global _sentry_ativo
     if _sentry is None or not settings.SENTRY_DSN:
         return
+    from sentry_sdk.integrations.fastapi import FastApiIntegration
+    from sentry_sdk.integrations.starlette import StarletteIntegration
+
     _sem_mutar_o_erro_no_sentry()
     _sentry.init(
         dsn=settings.SENTRY_DSN,
         environment=(settings.SENTRY_ENVIRONMENT or settings.ENV),
         release=settings.APP_VERSION,
         traces_sample_rate=settings.SENTRY_TRACES_SAMPLE_RATE,
-        # As integrações de FastAPI/Starlette/SQLAlchemy ligam sozinhas.
+        # As integrações de FastAPI/Starlette/SQLAlchemy ligam sozinhas; as duas de HTTP
+        # vão explícitas só para a HTTPException de 502/503/504 (respostas esperadas)
+        # não virar evento (ver _STATUS_QUE_VIRAM_EVENTO).
+        integrations=[
+            StarletteIntegration(failed_request_status_codes=set(_STATUS_QUE_VIRAM_EVENTO)),
+            FastApiIntegration(failed_request_status_codes=set(_STATUS_QUE_VIRAM_EVENTO)),
+        ],
         send_default_pii=False,   # LGPD: sem dados pessoais por padrão
         # NÃO anexar variáveis locais dos frames às exceções: elas podem conter
         # PII de menor (bytes do arquivo, filename, linhas já parseadas com
