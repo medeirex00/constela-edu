@@ -246,9 +246,8 @@ def resolver_janela(preset: str, ano_letivo: int, *,
             raise RelatorioInvalido(
                 "Período personalizado exige data inicial E data final.")
         if inicio > fim:
-            raise RelatorioInvalido(
-                f"A data inicial ({inicio.strftime('%d/%m/%Y')}) é posterior à "
-                f"final ({fim.strftime('%d/%m/%Y')}) — inverta as duas.")
+            # A frase da fonte única (``periodos``): a mesma do 422 das outras rotas.
+            raise RelatorioInvalido(periodos.mensagem_datas_invertidas(inicio, fim))
     # Dia de BRASÍLIA (não o relógio do servidor, em UTC): depois das 21h do último
     # dia do mês, `date.today()` já virava o mês e "mês anterior" pulava um mês.
     ini, fi, rotulo = periodos.resolver(
