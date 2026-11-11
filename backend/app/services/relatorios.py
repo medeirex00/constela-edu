@@ -11,7 +11,10 @@ import csv
 import io
 import logging
 import mimetypes
+import os
 import re
+import threading
+from contextlib import contextmanager
 from decimal import ROUND_HALF_UP, Decimal
 from pathlib import Path
 
@@ -631,13 +634,67 @@ def _tam_fonte_aluno_certificado(nome: str) -> int:
     return _PISO_ALUNO_CERT
 
 
+# ---------------------------------------------------------------------------
+# TETO DE NAVEGADORES. Cada PDF bonito sobe um driver do Playwright (processo Node) e
+# um Chromium inteiro (~150-300 MB). Sem fila, N pedidos juntos (fim de bimestre:
+# coordenações imprimindo cartaz, certificado, relatório) eram N navegadores, e o
+# processo podia estourar a memória do contêiner e derrubar a API inteira. Aqui, no
+# máximo ``NAVEGADORES_SIMULTANEOS`` por processo; o excesso espera a vez até
+# ``ESPERA_POR_NAVEGADOR_S`` e, esgotado o prazo, ``NavegadorOcupado`` — que quem chama
+# já trata como "sem Chromium": cai no PDF simples de reserva (fpdf), com os mesmos
+# números. Ajustáveis no ambiente: PDF_NAVEGADORES_SIMULTANEOS e
+# PDF_ESPERA_POR_NAVEGADOR_S.
+# ---------------------------------------------------------------------------
+
+def _numero_do_ambiente(nome: str, padrao: float, minimo: float) -> float:
+    bruto = os.environ.get(nome, "").strip()
+    if not bruto:
+        return padrao
+    try:
+        return max(minimo, float(bruto))
+    except ValueError:
+        _log.warning("%s=%r não é um número; usando %s", nome, bruto, padrao)
+        return padrao
+
+
+NAVEGADORES_SIMULTANEOS = int(_numero_do_ambiente("PDF_NAVEGADORES_SIMULTANEOS", 2, 1))
+ESPERA_POR_NAVEGADOR_S = _numero_do_ambiente("PDF_ESPERA_POR_NAVEGADOR_S", 30.0, 0.0)
+_VAGAS_DE_NAVEGADOR = threading.BoundedSemaphore(NAVEGADORES_SIMULTANEOS)
+
+
+class NavegadorOcupado(RuntimeError):
+    """Todas as vagas de navegador seguiram ocupadas durante a espera."""
+
+
+@contextmanager
+def _navegador():
+    """Um Chromium aberto, DENTRO do teto: a vaga é pega antes de subir o driver e
+    devolvida depois de fechar o navegador — também quando a renderização falha."""
+    if not _VAGAS_DE_NAVEGADOR.acquire(timeout=ESPERA_POR_NAVEGADOR_S):
+        raise NavegadorOcupado(
+            f"{NAVEGADORES_SIMULTANEOS} PDF(s) já em geração; sem vaga em "
+            f"{ESPERA_POR_NAVEGADOR_S:g} s")
+    try:
+        from playwright.sync_api import sync_playwright
+
+        with sync_playwright() as p:
+            try:
+                navegador = p.chromium.launch()
+            except Exception:  # noqa: BLE001 — sem chromium baixado: tenta o Chrome do sistema
+                navegador = p.chromium.launch(channel="chrome")
+            try:
+                yield navegador
+            finally:
+                navegador.close()
+    finally:
+        _VAGAS_DE_NAVEGADOR.release()
+
+
 def _certificado_html_pdf(escola_nome: str, cor: str, aluno_nome: str,
                           turma: str, posicao: int | None, nota_geral: float,
                           ano_letivo: int, logos: tuple[str, str] | None = None,
                           dados_em: str | None = None) -> bytes:
     """Renderiza o certificado bonito em PDF via Chromium (Playwright)."""
-    from playwright.sync_api import sync_playwright
-
     cantos = "".join(
         _CANTO_SVG.replace('class="canto"', f'class="canto {c}"')
         for c in ("c-tl", "c-tr", "c-bl", "c-br"))
@@ -658,18 +715,11 @@ def _certificado_html_pdf(escola_nome: str, cor: str, aluno_nome: str,
             .replace("⟦DADOS⟧", dados_html))
     doc = f"<!doctype html><html lang='pt-BR'><head><meta charset='utf-8'></head><body>{html}</body></html>"
 
-    with sync_playwright() as p:
-        try:
-            navegador = p.chromium.launch()
-        except Exception:  # noqa: BLE001 — sem chromium baixado: tenta o Chrome do sistema
-            navegador = p.chromium.launch(channel="chrome")
-        try:
-            pagina = navegador.new_page()
-            pagina.set_content(doc, wait_until="networkidle")
-            pdf = pagina.pdf(prefer_css_page_size=True, print_background=True,
-                             landscape=True)
-        finally:
-            navegador.close()
+    with _navegador() as navegador:
+        pagina = navegador.new_page()
+        pagina.set_content(doc, wait_until="networkidle")
+        pdf = pagina.pdf(prefer_css_page_size=True, print_background=True,
+                         landscape=True)
     return pdf
 
 
@@ -805,21 +855,12 @@ _CERT_PLATAFORMA_TEMPLATE = """<style>
 def _html_para_pdf_paisagem(corpo: str) -> bytes:
     """Renderiza HTML em PDF A4 paisagem via Chromium (Playwright), com fundo
     impresso (para a arte de fundo aparecer)."""
-    from playwright.sync_api import sync_playwright
-
     doc = (f"<!doctype html><html lang='pt-BR'><head><meta charset='utf-8'>"
            f"</head><body>{corpo}</body></html>")
-    with sync_playwright() as p:
-        try:
-            navegador = p.chromium.launch()
-        except Exception:  # noqa: BLE001 — sem chromium baixado: tenta o Chrome do sistema
-            navegador = p.chromium.launch(channel="chrome")
-        try:
-            pagina = navegador.new_page()
-            pagina.set_content(doc, wait_until="networkidle")
-            pdf = pagina.pdf(prefer_css_page_size=True, print_background=True, landscape=True)
-        finally:
-            navegador.close()
+    with _navegador() as navegador:
+        pagina = navegador.new_page()
+        pagina.set_content(doc, wait_until="networkidle")
+        pdf = pagina.pdf(prefer_css_page_size=True, print_background=True, landscape=True)
     return pdf
 
 
@@ -1329,23 +1370,14 @@ def _cartaz_html_pdf(escola_nome: str, ano_letivo: int, linhas: list[list],
                      materia: str | None = None,
                      dados_em: str | None = None,
                      modulos: set[str] | None = None) -> bytes:
-    from playwright.sync_api import sync_playwright
-
     doc = _cartaz_documento_html(escola_nome, ano_letivo, linhas, estatisticas,
                                  logos, materia=materia, cabecalho=cabecalho,
                                  dados_em=dados_em, modulos=modulos)
 
-    with sync_playwright() as p:
-        try:
-            navegador = p.chromium.launch()
-        except Exception:  # noqa: BLE001 — sem chromium baixado: tenta o Chrome do sistema
-            navegador = p.chromium.launch(channel="chrome")
-        try:
-            pagina = navegador.new_page()
-            pagina.set_content(doc, wait_until="networkidle")
-            pdf = pagina.pdf(prefer_css_page_size=True, print_background=True)
-        finally:
-            navegador.close()
+    with _navegador() as navegador:
+        pagina = navegador.new_page()
+        pagina.set_content(doc, wait_until="networkidle")
+        pdf = pagina.pdf(prefer_css_page_size=True, print_background=True)
     return pdf
 
 
@@ -1428,24 +1460,15 @@ def _relatorio_shell(titulo: str, escola_nome: str, subtitulo: str,
 
 def _relatorio_html_pdf(html_body: str) -> bytes:
     """Renderiza um relatório 'de vitrine' (A4 retrato) com rodapé/numeração."""
-    from playwright.sync_api import sync_playwright
-
     doc = (f"<!doctype html><html lang='pt-BR'><head><meta charset='utf-8'>"
            f"</head><body>{html_body}</body></html>")
-    with sync_playwright() as p:
-        try:
-            navegador = p.chromium.launch()
-        except Exception:  # noqa: BLE001 — sem chromium baixado: tenta o Chrome do sistema
-            navegador = p.chromium.launch(channel="chrome")
-        try:
-            pagina = navegador.new_page()
-            pagina.set_content(doc, wait_until="networkidle")
-            pdf = pagina.pdf(
-                format="A4", print_background=True, display_header_footer=True,
-                header_template="<div></div>", footer_template=_REPORT_FOOTER,
-                margin={"top": "12mm", "bottom": "16mm", "left": "11mm", "right": "11mm"})
-        finally:
-            navegador.close()
+    with _navegador() as navegador:
+        pagina = navegador.new_page()
+        pagina.set_content(doc, wait_until="networkidle")
+        pdf = pagina.pdf(
+            format="A4", print_background=True, display_header_footer=True,
+            header_template="<div></div>", footer_template=_REPORT_FOOTER,
+            margin={"top": "12mm", "bottom": "16mm", "left": "11mm", "right": "11mm"})
     return pdf
 
 
