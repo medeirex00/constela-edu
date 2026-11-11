@@ -422,6 +422,11 @@ describe("Importacoes", () => {
     await u.selectOptions(destino("Crianca Ficticia Sem Ficha"), "ignorar");
     expect(destino("Zefa Q").value).toBe("revisao");
 
+    // "Aplicar a todos" (turma escolhida) só vale depois de escolher a turma: o seletor
+    // começa vazio (antes começava na 1ª turma da escola).
+    if (novoDestino === "criar") {
+      await u.selectOptions(screen.getByRole("combobox", { name: "Turma para os novos alunos" }), "1");
+    }
     await u.click(screen.getByRole("button", { name: botao }));
     expect(destino("Crianca Ficticia Sem Ficha").value).toBe(novoDestino);
     expect(destino("Zefa Q").value).toBe("revisao");
@@ -712,10 +717,13 @@ describe("Importacoes", () => {
     expect(screen.queryByText(/será criada automaticamente/)).toBeNull();
     expect(screen.queryByRole("button", { name: /turma do relatório \(nova\)/ })).toBeNull();
 
-    // Com uma turma ATIVA escolhida, a ficha nasce nela.
+    // Com uma turma ATIVA escolhida, a ficha nasce nela. "Criar aluno novo…" começa sem
+    // turma (antes, na 1ª da escola): até a escolha, não dá para importar.
     await u.selectOptions(destino, "criar");
-    expect((screen.getByRole("combobox", { name: "Turma para Crianca Nova Ficticia" }) as HTMLSelectElement)
-      .value).toBe("1");
+    const turma = screen.getByRole("combobox", { name: "Turma para Crianca Nova Ficticia" }) as HTMLSelectElement;
+    expect(turma.value).toBe("");
+    expect(screen.getByRole("button", { name: "Sim, importar" })).toBeDisabled();
+    await u.selectOptions(turma, "1");
     expect(screen.getByText(/serão importados/).textContent).toBe("1 de 1 aluno(s) serão importados.");
 
     // De volta à Revisão: o corpo é o que o backend confirma (sem aluno, com o nome da

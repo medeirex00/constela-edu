@@ -513,6 +513,9 @@ export default function Importacoes() {
 
   const [analise, setAnalise] = useState<Analise | null>(null);
   const [acoes, setAcoes] = useState<Acao[]>([]); // uma ação por GRUPO
+  // A turma do "Aplicar a todos" — começa VAZIA ("Escolha a turma") a cada prévia:
+  // antes começava na 1ª turma da escola, e um clique punha todos os alunos novos
+  // numa turma que ninguém escolheu, por cima da turma certa de cada linha.
   const [turmaEmMassa, setTurmaEmMassa] = useState<number | null>(null);
   const [editarGrupo, setEditarGrupo] = useState<number | null>(null);
   const [ocupado, setOcupado] = useState(false);
@@ -594,8 +597,7 @@ export default function Importacoes() {
       setDataRelatorio(""); // arquivo novo: a data é dele, informada de novo
 
       // Ação inicial POR GRUPO, com a turma que a prévia do backend decidiu.
-      const turmaId = acharTurmaPorNome(turmas, resposta.turma_detectada);
-      setTurmaEmMassa(turmaId ?? turmas[0]?.id ?? null);
+      setTurmaEmMassa(null);
       const gruposIniciais = agrupar(resposta);
       setAcoes(
         gruposIniciais.map((g): Acao => {
@@ -723,7 +725,11 @@ export default function Importacoes() {
         if (valor === "revisao") {
           return grupos[gi] && analise ? acaoRevisao(grupos[gi], analise) : acao;
         }
-        if (valor === "criar") return { tipo: "criar", turmaId: turmaAlvo ?? turmas[0]?.id ?? null };
+        // "Criar aluno novo…": a turma que a prévia decidiu para a ficha nova; sem ela,
+        // nenhuma — o gestor escolhe (não a 1ª turma da escola).
+        if (valor === "criar") {
+          return { tipo: "criar", turmaId: grupos[gi]?.correspondencia?.turma_id ?? null };
+        }
         if (valor === "criar_nova") return { tipo: "criar_nova" };
         return { tipo: "importar", alunoId: Number(valor) };
       }),
@@ -888,7 +894,10 @@ export default function Importacoes() {
     (g, i) => !g.todasComErro
       && vaiParaARevisao(acoes[i], criacaoBloqueada, g.correspondencia, global, emOutraEtapa(g, i)),
   ).length;
-  const turmaAlvo = turmaEmMassa ?? turmas[0]?.id ?? null;
+  // "Criar aluno novo…" ainda sem turma escolhida: "Sim, importar" espera a escolha —
+  // sem turma, a confirmação não saberia onde a ficha nasce.
+  const criarSemTurma = grupos.some(
+    (g, i) => !g.todasComErro && acoes[i]?.tipo === "criar" && !(acoes[i] as { turmaId: number | null }).turmaId);
   // Data do relatório: obrigatória no total acumulado (sem "Intervalo de datas").
   const exigeData = analise ? exigeDataDoRelatorio(analise) : false;
   const hoje = hojeEmBrasilia();
@@ -1189,15 +1198,16 @@ export default function Importacoes() {
                     <select
                       aria-label="Turma para os novos alunos"
                       className="rounded-lg border border-ouro-200 bg-white px-2.5 py-1.5 text-sm dark:border-ouro-400/30 dark:bg-zinc-900"
-                      value={turmaAlvo ?? ""}
-                      onChange={(e) => setTurmaEmMassa(Number(e.target.value))}
+                      value={turmaEmMassa ?? ""}
+                      onChange={(e) => setTurmaEmMassa(e.target.value ? Number(e.target.value) : null)}
                     >
+                      <option value="">Escolha a turma</option>
                       {turmas.map((turma) => (
                         <option key={turma.id} value={turma.id}>{turma.nome}</option>
                       ))}
                     </select>
-                    <Botao variante="secundario" tamanho="sm"
-                           onClick={() => turmaAlvo && aplicarATodosOsNovos({ tipo: "criar", turmaId: turmaAlvo })}>
+                    <Botao variante="secundario" tamanho="sm" disabled={turmaEmMassa === null}
+                           onClick={() => turmaEmMassa && aplicarATodosOsNovos({ tipo: "criar", turmaId: turmaEmMassa })}>
                       <UserPlus size={14} aria-hidden /> Aplicar a todos
                     </Botao>
                   </>
@@ -1340,12 +1350,16 @@ export default function Importacoes() {
                                   onChange={(e) =>
                                     setAcoes((atuais) =>
                                       atuais.map((a, i) =>
-                                        i === gi ? { tipo: "criar", turmaId: Number(e.target.value) } : a,
+                                        i === gi
+                                          ? { tipo: "criar", turmaId: e.target.value ? Number(e.target.value) : null }
+                                          : a,
                                       ),
                                     )
                                   }
                                 >
-                                  {turmas.length === 0 && <option value="">Crie uma turma primeiro</option>}
+                                  <option value="">
+                                    {turmas.length === 0 ? "Crie uma turma primeiro" : "Escolha a turma"}
+                                  </option>
                                   {turmas.map((turma) => (
                                     <option key={turma.id} value={turma.id}>{turma.nome}</option>
                                   ))}
@@ -1408,15 +1422,18 @@ export default function Importacoes() {
             <span className="mr-auto text-sm font-semibold text-zinc-800 dark:text-zinc-100">
               {exigeData && !dataOk
                 ? "Informe a data do relatório para importar."
-                : totalSelecionados > 0
-                  ? `${totalSelecionados - totalParaRevisao} de ${gruposValidos.length} aluno(s) serão importados${
-                    totalParaRevisao > 0 ? `; ${vaoParaRevisoes(totalParaRevisao)}` : ""}.`
-                  : "Deseja importar estes dados?"}
+                : criarSemTurma
+                  ? "Escolha a turma de cada aluno novo em “Criar aluno novo…” para importar."
+                  : totalSelecionados > 0
+                    ? `${totalSelecionados - totalParaRevisao} de ${gruposValidos.length} aluno(s) serão importados${
+                      totalParaRevisao > 0 ? `; ${vaoParaRevisoes(totalParaRevisao)}` : ""}.`
+                    : "Deseja importar estes dados?"}
             </span>
             <Botao variante="secundario" onClick={() => setAnalise(null)} disabled={ocupado}>
               Não, voltar
             </Botao>
-            <Botao onClick={() => setConfirmando(true)} disabled={ocupado || totalSelecionados === 0 || !dataOk}>
+            <Botao onClick={() => setConfirmando(true)}
+                   disabled={ocupado || totalSelecionados === 0 || !dataOk || criarSemTurma}>
               <CheckCircle2 size={15} aria-hidden />
               {ocupado ? "Importando..." : "Sim, importar"}
             </Botao>
