@@ -207,7 +207,10 @@ def test_escola_avulsa_mantem_as_duas_plataformas(db, avulsa):
 
 def _com_queda_de_acertos(db, escola_completa, modulo_ativo: str | None):
     """Ana tem dois retratos do Elefante com acertos de 9/10 para 8/20 (a queda
-    dispara o alerta); os três têm Matific normal (nenhum outro alerta)."""
+    dispara o alerta); João e Sofia leem sem queda (8/10 para 16/20) e os três têm
+    Matific normal: nenhum outro alerta, em qualquer plano. Sem a leitura de João e
+    Sofia, numa rede só Leitura eles teriam o alerta "nenhum dado", porque o Matific
+    fora do plano não conta como dado (G_MODULOS-5)."""
     escola = escola_completa["escola"]
     ana, joao, sofia = escola_completa["alunos"]
     if modulo_ativo:
@@ -221,6 +224,13 @@ def _com_queda_de_acertos(db, escola_completa, modulo_ativo: str | None):
                                 livros_unicos=livros, tempo_leitura_min=30,
                                 questoes_tentativas=tentativas, questoes_acertos=acertos,
                                 data_referencia=agora - timedelta(days=dias)))
+    for aluno in (joao, sofia):
+        for dias, livros, tentativas, acertos in ((10, 3, 10, 8), (1, 5, 20, 16)):
+            db.add(SnapshotElefante(escola_id=escola.id, aluno_id=aluno.id,
+                                    importacao_id=imp.id, livros_unicos=livros,
+                                    tempo_leitura_min=30, questoes_tentativas=tentativas,
+                                    questoes_acertos=acertos,
+                                    data_referencia=agora - timedelta(days=dias)))
     for aluno in (ana, joao, sofia):
         for dias, atividades in ((50, 1), (1, 20)):
             db.add(SnapshotMatific(escola_id=escola.id, aluno_id=aluno.id, importacao_id=imp.id,
