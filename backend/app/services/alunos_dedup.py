@@ -18,6 +18,7 @@ confirma cada par (checkbox) e a fusão em si é ``alunos_fusao.fundir_par``.
 """
 from __future__ import annotations
 
+import logging
 from collections import defaultdict
 from functools import reduce
 from itertools import combinations
@@ -44,6 +45,13 @@ from app.services.importacao import casa_abreviado, nome_abreviado, tokens_nome
 from app.services.lista_piloto import ra_util
 from app.services.matching import plausivel
 from app.services.matriculas import chave_turma_norm
+
+logger = logging.getLogger("constela.fusao")
+
+# A falha de UM par no lote: não culpa os dados (a causa costuma ser defeito,
+# trava ou deadlock), diz o que fazer, e o detalhe vai para o log.
+MOTIVO_FALHA_INESPERADA = ("não deu para fundir agora — tente de novo; se repetir, "
+                           "fale com o suporte")
 
 
 def _expande(curto: str, completo: str) -> bool:
@@ -508,9 +516,12 @@ def aplicar_deduplicacao(db: Session, escola_id: int, loser_ids: list[int],
                 fundidos += 1
                 detalhes.append({"manter_id": canonico.id, "manter": res["manter_nome"],
                                  "removido": res["remover_nome"]})
-            except Exception:   # noqa: BLE001
-                falhas.append({"loser_id": m.id,
-                               "motivo": "erro ao fundir (dados inconsistentes)"})
+            except Exception:   # noqa: BLE001 — isola o par; o lote segue
+                # Sem isto a falha sumia: a rota responde 200 e o middleware não
+                # vê. Só ids no log (o formatador já redige o texto da exceção).
+                logger.exception("fusao_em_lote_falhou", extra={
+                    "escola_id": escola_id, "manter_id": canonico.id, "remover_id": m.id})
+                falhas.append({"loser_id": m.id, "motivo": MOTIVO_FALHA_INESPERADA})
 
     return {"fundidos": fundidos, "falhas": falhas, "detalhes": detalhes}
 
