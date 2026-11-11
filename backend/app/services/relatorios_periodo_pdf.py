@@ -385,6 +385,18 @@ def _duracao(horas) -> str:
     return f"{horas} h" if horas < 48 else f"{horas // 24} dias"
 
 
+# Por que o trecho entre o início do período e a primeira coleta não sai das coletas —
+# POR PLATAFORMA (pela ``regra`` da cobertura). O contador das questões do Elefante é
+# vitalício; o do Matific é do ANO e conta atividades e estrelas (o "Como ler" diz o
+# mesmo). A tela usa as mesmas frases (``POR_QUE_SEM_INICIO`` em RelatorioPeriodo.tsx).
+_POR_QUE_SEM_INICIO = {
+    "diferenca_de_coletas": "o contador que o Constela coleta é acumulado desde o início "
+                            "da conta e não diz quando cada questão foi respondida",
+    "oficial_matific": "o contador do Matific é o total do ano (atividades e estrelas) e "
+                       "não diz quando cada atividade foi feita",
+}
+
+
 def _avisos_cobertura(dados: dict) -> list[dict]:
     """PERÍODO PEDIDO × COBERTURA DAS COLETAS de cada número de retrato — a
     mesma regra da tela (``AvisoCobertura`` em RelatorioPeriodo.tsx). O período
@@ -438,9 +450,9 @@ def _avisos_cobertura(dados: dict) -> list[dict]:
                     f"sem coleta no início do período{para(c.get('alunos_sem_inicio'))}: "
                     f"o que foi feito de {_data(ini)} até a primeira coleta"
                     + (f" (até {_data_hora(tardio)})" if tardio else "")
-                    + " não está na conta: o contador que o Constela coleta é acumulado "
-                      "desde o início da conta e não diz quando cada questão foi "
-                      "respondida, então esse trecho não sai das coletas"
+                    + " não está na conta: "
+                    + _POR_QUE_SEM_INICIO["oficial_matific" if oficial else "diferenca_de_coletas"]
+                    + ", então esse trecho não sai das coletas"
                     + (f" (a primeira coleta já trazia {_num(c['acumulado_na_primeira_coleta'])} "
                        "questões acumuladas, de datas que o contador não informa)"
                        if c.get("acumulado_na_primeira_coleta") else "")

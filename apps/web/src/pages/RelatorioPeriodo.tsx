@@ -371,6 +371,16 @@ function motivoSemNumeroQuestoes(ele: BlocoElefante): string {
   return "sem número para o período (não é zero)";
 }
 
+/** Por que o trecho entre o início do período e a primeira coleta não sai das coletas,
+ *  por plataforma: o contador das questões do Elefante é vitalício; o do Matific é do ANO
+ *  e conta atividades e estrelas. As mesmas frases do PDF (`_POR_QUE_SEM_INICIO`). */
+const POR_QUE_SEM_INICIO: Record<Cobertura["regra"], string> = {
+  diferenca_de_coletas: "o contador que o Constela coleta é acumulado desde o início da conta e não diz quando "
+    + "cada questão foi respondida",
+  oficial_matific: "o contador do Matific é o total do ano (atividades e estrelas) e não diz quando cada "
+    + "atividade foi feita",
+};
+
 /** O período PEDIDO é a referência; o que as coletas cobrem vem ao lado. Se
  *  não cobrem exatamente, a tela diz o que falta (ou sobra) e por quê — nunca
  *  troca uma coisa pela outra. Mesma regra do PDF (`_avisos_cobertura`). */
@@ -486,8 +496,8 @@ function AvisoCobertura({ cobertura: c, titulo }: { cobertura: Cobertura; titulo
               Sem coleta no início do período{para(c.alunos_sem_inicio)}: o que foi feito de{" "}
               {diaDoPeriodo(c.periodo_inicio)} até a primeira coleta
               {c.coleta_inicio_mais_tardio ? ` (até ${dataHora(c.coleta_inicio_mais_tardio)})` : ""} não está na
-              conta: o contador que o Constela coleta é acumulado desde o início da conta e não diz quando cada
-              questão foi respondida, então esse trecho não sai das coletas
+              conta: {POR_QUE_SEM_INICIO[oficial ? "oficial_matific" : "diferenca_de_coletas"]}, então esse trecho
+              não sai das coletas
               {c.acumulado_na_primeira_coleta
                 ? ` (a primeira coleta já trazia ${numero(c.acumulado_na_primeira_coleta)} questões acumuladas, de datas que o contador não informa)`
                 : ""}.
