@@ -12,6 +12,7 @@ import io
 import logging
 import mimetypes
 import re
+from decimal import ROUND_HALF_UP, Decimal
 from pathlib import Path
 
 from sqlalchemy import select
@@ -493,11 +494,20 @@ _IC_ELEFANTE = ('<svg class="ic" width="15" height="14" viewBox="0 0 34 32" fill
 
 
 def _fmt_nota(valor) -> str:
-    """Nota 0–100 com uma casa e vírgula decimal ('85,3'); '—' se vazia."""
+    """Nota 0–100 com uma casa e vírgula decimal ('85,3'); '—' se vazia.
+
+    O 5 arredonda PARA CIMA (87,25 → '87,3'), a partir do número como foi gravado
+    (as notas têm 2 casas, ``scoring._nota_0_100``): o ``:.1f`` arredondava o float
+    binário, e 87,25 saía '87,2' enquanto 87,15 saía '87,2' e 87,45 '87,5'. É a
+    função ÚNICA de nota com uma casa dos documentos (certificado Geral e a reserva
+    dele, cartaz, boletim)."""
     try:
-        return f"{float(valor):.1f}".replace(".", ",")
+        numero = Decimal(repr(float(valor)))
     except (TypeError, ValueError):
         return "—"
+    if not numero.is_finite():
+        return "—"
+    return str(numero.quantize(Decimal("0.1"), rounding=ROUND_HALF_UP)).replace(".", ",")
 
 
 _CERT_TEMPLATE = """<style>
@@ -583,7 +593,7 @@ def _certificado_html_pdf(escola_nome: str, cor: str, aluno_nome: str,
             .replace("⟦ESCOLA⟧", _esc_html(escola_nome))
             .replace("⟦ALUNO⟧", _esc_html(aluno_nome))
             .replace("⟦TURMA⟧", _esc_html(turma or "—"))
-            .replace("⟦NOTA⟧", f"{nota_geral:.1f}".replace(".", ","))
+            .replace("⟦NOTA⟧", _fmt_nota(nota_geral))
             .replace("⟦POSICAO⟧", pos_txt)
             .replace("⟦ANO⟧", str(ano_letivo))
             .replace("⟦DATA⟧", agora_br().strftime("%d/%m/%Y"))
@@ -862,7 +872,7 @@ def _certificado_fpdf(escola_nome: str, cor: str, aluno_nome: str,
     pdf.set_font("helvetica", "", 13)
     pdf.set_y(98)
     detalhe = _latin1(
-        f"da turma {turma}, alcançou a nota geral {nota_geral:.1f}".replace(".", ","))
+        f"da turma {turma}, alcançou a nota geral {_fmt_nota(nota_geral)}")
     if posicao:
         detalhe += f" e a {posicao}ª posição no Ranking Geral"
     pdf.cell(0, 8, detalhe, align="C")
