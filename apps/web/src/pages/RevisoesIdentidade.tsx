@@ -782,9 +782,10 @@ function ContasDaPlataforma({
   return (
     <Bloco titulo={`Contas do aluno no ${rotulo}`}>
       <div className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-xs text-amber-900 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-100">
-        <strong>{alunoNome}</strong> tem {lista.length} contas no {rotulo}. Só uma pode
-        alimentar o retrato e a pontuação — a outra fica <strong>aposentada</strong>:
-        preservada com todo o histórico, mas fora da importação.
+        <strong>{alunoNome}</strong> tem {lista.length} contas no {rotulo}. Só uma vale no
+        Constela — a outra fica <strong>aposentada</strong>: preservada com todo o
+        histórico, mas fora da importação. Os números que já vieram dela continuam na
+        ficha até a próxima coleta da conta que vale.
         <p className="mt-1">
           Aposentar é uma decisão <strong>interna do Constela</strong>. Ela não desativa
           nem remove a conta no {rotulo}.

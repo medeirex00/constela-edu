@@ -924,6 +924,10 @@ describe("Revisões de identidade — contas do aluno na plataforma", () => {
     expect(within(bloco).getByText(/por Admin — conta de teste/)).toBeInTheDocument();
     // a distinção que não pode se perder
     expect(within(bloco).getByText(/não desativa nem remove a conta no Matific/i)).toBeInTheDocument();
+    // ALUNOS-4: o retrato não guarda a conta de origem — o que já veio da aposentada
+    // fica na ficha até a próxima coleta da conta que vale; o texto não promete o contrário.
+    expect(bloco).toHaveTextContent(/Os números que já vieram dela continuam na ficha até a próxima coleta da conta que vale/);
+    expect(bloco).not.toHaveTextContent(/alimentar o retrato e a pontuação/);
   });
 
   it("escolher a conta principal exige motivo e envia aposentando a outra", async () => {
