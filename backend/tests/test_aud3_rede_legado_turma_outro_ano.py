@@ -37,6 +37,12 @@ SENHA = "s3nh4"
 EMAIL_SEC = "secretaria@legado-inventado.local"
 # Os números da criança "canário": nenhum outro aluno os tem.
 CANARIO = {"livros": 37, "tempo": 1913, "atividades": 11, "estrelas": 47}
+# A frase final do diagnóstico (REV3-REDE-2): onde a criança some e onde ainda aparece.
+FRASE_FINAL = (
+    "Essas crianças ficam fora do cartão da escola no painel da rede, da Visão da Escola e do "
+    "ranking da escola (que só contam as turmas do ano ativo), mas o Painel da escola ainda as "
+    "conta nos totais (alunos, livros, tempo, atividades), até a matrícula ir para uma turma "
+    "do ano ativo.")
 
 
 def _login(email: str) -> TestClient:
@@ -227,6 +233,11 @@ def test_diagnostico_acha_a_matricula_do_ano_numa_turma_de_outro_ano(
     assert "matrículas do ano ativo: 1 (1 de aluno ativo)" in saida
     assert f"ano letivo mudado para {antiga.ano_letivo} em" in saida
     assert "TOTAL: 1 matrícula(s) do ano ativo em turma de outro ano, em 1 escola(s)" in saida
+    # REV3-REDE-2: a frase final diz onde a criança some e onde ainda aparece. Antes ela dizia
+    # que a criança ficava "fora dos painéis da escola e da rede" — falso: o Painel da escola
+    # ainda a conta (``test_a_frase_final_do_diagnostico_e_verdadeira``).
+    assert FRASE_FINAL in " ".join(saida.split())
+    assert "fora dos painéis da escola e da rede" not in " ".join(saida.split())
     # Sem --listar, só contagens; com ele, os ids das fichas (nunca o nome da criança).
     assert "alunos (id)" not in saida
     assert canario.nome not in saida
@@ -236,6 +247,30 @@ def test_diagnostico_acha_a_matricula_do_ano_numa_turma_de_outro_ano(
     # Só leitura: nada gravado, nada mudado.
     assert sessao.commits == 0
     assert sorted(db.execute(select(Matricula.id, Matricula.turma_id)).all()) == antes
+
+
+def test_a_frase_final_do_diagnostico_e_verdadeira(db, escola_completa):
+    """O que a frase final do diagnóstico afirma, conferido nas telas, no mesmo cenário: o
+    cartão da escola no painel da rede, a Visão da Escola e o ranking da escola
+    (``GET /escolas/{id}/ranking``) deixam a criança de fora; o Painel da escola
+    (``GET /escolas/{id}/dashboard``) ainda a conta nos totais. Se um dia o Painel da escola
+    passar a contar só as turmas do ano ativo (ou o ranking a contar todas), este teste cai —
+    e a frase do script tem de mudar junto."""
+    escola, rede_, canario, _antiga = _cenario(db, escola_completa, legado=True)
+    cartao, turmas = _cartao_e_turmas(_login(EMAIL_SEC), escola.id, rede_.id)
+    assert cartao["total_alunos"] == 8                                  # painel da rede: fora
+    assert sum(t.get("total_alunos") or 0 for t in turmas) == 8         # Visão da Escola: fora
+    adm = _login(escola_completa["admin"].email)
+    ranking = adm.get(f"{API}/escolas/{escola.id}/ranking")
+    assert ranking.status_code == 200, ranking.text
+    no_ranking = {item["aluno_id"] for item in ranking.json()}
+    assert len(no_ranking) == 8 and canario.id not in no_ranking        # ranking: fora
+    painel = adm.get(f"{API}/escolas/{escola.id}/dashboard")
+    assert painel.status_code == 200, painel.text
+    p = painel.json()
+    # O Painel da escola: as 8 crianças da turma do ano (80 livros, 800 min) + a canário.
+    assert (p["total_alunos"], p["total_livros"], p["tempo_leitura_min"]) == (
+        9, 80 + CANARIO["livros"], 800 + CANARIO["tempo"]), p
 
 
 def test_diagnostico_sem_legado_diz_que_nao_ha_nada(db, escola_completa, monkeypatch,

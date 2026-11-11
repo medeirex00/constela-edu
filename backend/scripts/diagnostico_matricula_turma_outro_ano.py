@@ -4,10 +4,13 @@ de OUTRO ano letivo.
 Esse estado vem de antes das travas de escrita: um "Transferir de turma" para uma turma
 do ano passado, ou a correção do ano de uma turma que já tinha alunos. Nenhuma porta o
 grava mais (cadastro, transferência, /resolver, consolidar e a edição do ano da turma
-recusam com 409), mas o que foi gravado antes continua no banco. Os painéis (o cartão da
-rede e a Visão da Escola) deixam essas crianças de fora; a escola não as vê em turma
-nenhuma do ano. Este script mostra QUANTAS são e EM QUE TURMA, para o dono decidir o
-saneamento (mudar a matrícula para a turma certa do ano é ação da escola, não daqui).
+recusam com 409), mas o que foi gravado antes continua no banco. O cartão da escola no
+painel da rede, a Visão da Escola e o ranking da escola deixam essas crianças de fora (só
+contam as turmas do ano ativo); a escola não as vê em turma nenhuma do ano. Mas o Painel
+da escola (``rankings.montar_dashboard``) ainda as conta nos totais — alunos, livros,
+tempo, atividades —, então ele e o cartão da rede divergem nessa escola. Este script
+mostra QUANTAS são e EM QUE TURMA, para o dono decidir o saneamento (mudar a matrícula
+para a turma certa do ano é ação da escola, não daqui).
 
 NÃO grava nada. NÃO chama plataforma. Só lê o banco. Não escreve o nome de nenhuma
 criança: com ``--listar`` sai o id da ficha (para a escola achar a criança na tela).
@@ -129,8 +132,10 @@ def main() -> int:
         else:
             print(f"  TOTAL: {len(linhas)} matrícula(s) do ano ativo em turma de outro ano, "
                   f"em {len(por_escola)} escola(s).")
-            print("  Essas crianças ficam fora dos painéis da escola e da rede até a matrícula "
-                  "ir para uma turma do ano ativo.")
+            print("  Essas crianças ficam fora do cartão da escola no painel da rede, da Visão "
+                  "da Escola e do ranking da escola\n  (que só contam as turmas do ano ativo), "
+                  "mas o Painel da escola ainda as conta nos totais\n  (alunos, livros, tempo, "
+                  "atividades), até a matrícula ir para uma turma do ano ativo.")
         return 0
     finally:
         db.rollback()
