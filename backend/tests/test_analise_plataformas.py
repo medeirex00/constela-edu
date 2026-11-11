@@ -581,7 +581,9 @@ def test_subconjunto_menor_que_k_nao_tem_total_que_refaca_a_taxa(db):
 
 def test_matific_com_poucos_ativos_esconde_estrelas_e_desempenho(db):
     """Com ≥ k alunos com retrato mas < k com atividade, "estrelas ÷ atividades" das duas
-    médias refaria o desempenho escondido: as estrelas por aluno somem junto."""
+    médias refaria o desempenho escondido: as estrelas por aluno somem junto. E as atividades
+    por aluno também (G_GRUPO-4): com 2 crianças somando, "média × medidos" eram as 12
+    atividades delas — a média some e diz que é proteção."""
     rede = nova_rede(db, nome="Rede Fictícia Poucos Ativos", codigo="3599936")
     e = nova_escola(db, rede, "EMEF Fictícia Poucos Ativos", "35993601")
     alunos = turma_com_alunos(db, e, "3º Ano", 8)
@@ -591,7 +593,9 @@ def test_matific_com_poucos_ativos_esconde_estrelas_e_desempenho(db):
     db.commit()
     (cel,) = _escola(svc.plataformas_da_rede(db, rede, hoje=HOJE), e)["series"]
     mt = cel["matific"]
-    assert mt["alunos_medidos"] == 8 and mt["atividades_por_aluno"] == 1.5
+    assert mt["alunos_medidos"] == 8 and mt["atividades_por_aluno"] is None
+    assert mt["participacao_pct"] == 25.0
+    assert mt["metricas_protegidas"] == ["atividades_por_aluno"]
     assert mt["estrelas_por_aluno"] is None and mt["desempenho_medio"] is None
 
 
@@ -719,9 +723,12 @@ def test_metrica_escondida_numa_serie_nao_se_refaz_pelo_total_da_escola(db, clie
     assert cel[4]["estrelas_por_aluno"] == 30.0
     for bloco in (esc["matific"], completa["rede"]["matific"]):
         assert bloco["estrelas_por_aluno"] is None and bloco["desempenho_medio"] is None
-        assert bloco["metricas_protegidas"] == ["estrelas_por_aluno", "desempenho_medio"]
+        # As atividades da criança também (G_GRUPO-4): "total − 4º ano" dava as 10 dela.
+        assert bloco["metricas_protegidas"] == ["estrelas_por_aluno", "desempenho_medio",
+                                                "atividades_por_aluno"]
         assert bloco["texto_metricas_protegidas"] == svc.TEXTO_METRICAS_PROTEGIDAS.format(k=5)
-        assert bloco["atividades_por_aluno"] == 5.38          # o resto do total continua
+        assert bloco["atividades_por_aluno"] is None
+        assert bloco["participacao_pct"] is not None          # o resto do total continua
     assert cel[4]["metricas_protegidas"] == [] and cel[4]["texto_metricas_protegidas"] is None
     # Por série: o 4º ano (sem célula escondida) mostra o total; o 3º, não.
     assert por_serie[4]["rede"]["matific"]["estrelas_por_aluno"] == 30.0
@@ -895,7 +902,8 @@ def test_desempenho_do_total_nao_refaz_as_atividades_escondidas_em_complemento(d
     esc = _escola(completa, e)
     cel = {c["serie"]: c["matific"] for c in esc["series"]}
     assert cel[3]["alunos_medidos"] == 3 and cel[3]["atividades_por_aluno"] is None
-    assert cel[4]["atividades_por_aluno"] is not None and cel[4]["estrelas_por_aluno"] is None
+    # 4º: 2 crianças somando nas atividades — a média some (G_GRUPO-4), como as estrelas.
+    assert cel[4]["atividades_por_aluno"] is None and cel[4]["estrelas_por_aluno"] is None
     assert cel[5]["atividades_por_aluno"] is not None
     for rotulo, total in (("escola", esc["matific"]), ("rede", completa["rede"]["matific"])):
         assert total["atividades_por_aluno"] is None, rotulo

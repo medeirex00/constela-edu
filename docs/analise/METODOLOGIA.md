@@ -238,8 +238,8 @@ Notação: `n` = alunos medidos da célula. Com `n < k` (k = 5), nenhuma métric
 |---|---|---|
 | `alunos_com_leitura` | medidos com livro novo **ou** evento de leitura no período | contagem |
 | `participacao_pct` | `alunos_com_leitura ÷ n × 100` | 1 casa |
-| `livros_por_aluno` | `Σ livros novos ÷ n` | 2 casas; livro novo = `Leitura.data` no período (o par da premiação "Mais Livros") |
-| `minutos_por_aluno` | `Σ Leitura.tempo_leitura_min ÷ n` | 1 casa; é um **piso** (a fonte nem sempre informa o tempo) |
+| `livros_por_aluno` | `Σ livros novos ÷ n` | 2 casas; livro novo = `Leitura.data` no período (o par da premiação "Mais Livros"); só com **nenhum ou ≥ k alunos com livro novo** (os contribuintes — §3.5) |
+| `minutos_por_aluno` | `Σ Leitura.tempo_leitura_min ÷ n` | 1 casa; é um **piso** (a fonte nem sempre informa o tempo); só com **nenhum ou ≥ k alunos com tempo** |
 | `nivel_medio` / `nivel_medio_posicao` | média da posição do nível (AA = 0 … Z = 29, `scoring.POS_DO_NIVEL`) dos livros novos, com o nível congelado da leitura (`coalesce(Leitura.nivel_codigo, Livro.nivel_codigo)`); a letra é a posição arredondada | só com **≥ k alunos com livro novo de nível conhecido**; nível fora do vocabulário não entra |
 | `taxa_acerto_pct` | `Σ acertos ÷ Σ tentativas × 100`, pela **diferença entre coletas** | 1 casa; só com **≥ k alunos com questão**; `janela_questoes` = o intervalo real das coletas. As exclusões são as da regra oficial (`_elefante_questoes`): o aluno **sem intervalo medido** (uma coleta só, sem base) não soma 0/0, e o aluno cujo **contador diminuiu** entre as coletas (série que mistura contas — fusão, colisão de identidade — ou recontada) **sai das questões** (continua em `n`); o bloco avisa com `contador_regrediu = true` e `texto_contador_regrediu`, sem a contagem |
 
@@ -248,7 +248,7 @@ Notação: `n` = alunos medidos da célula. Com `n < k` (k = 5), nenhuma métric
 | Métrica | Fórmula | Observação |
 |---|---|---|
 | `participacao_pct` | `alunos com atividade (ganho > 0) ÷ n × 100` | 1 casa |
-| `atividades_por_aluno` | `Σ atividades ganhas ÷ n` | 2 casas |
+| `atividades_por_aluno` | `Σ atividades ganhas ÷ n` | 2 casas; só com **nenhum ou ≥ k alunos com atividade** (os contribuintes — §3.5) |
 | `estrelas_por_aluno` | `Σ estrelas ganhas ÷ n` | 2 casas; só com **≥ k alunos com atividade** (senão "estrelas ÷ atividades" das duas médias refaria o desempenho escondido) |
 | `desempenho_medio` | `Σ estrelas ÷ Σ atividades` (escala 0 a 5) | 2 casas; só com **≥ k alunos com atividade**; num total, some também quando as atividades somem em complemento (§3.5) — ao lado das estrelas por aluno, ele as refaria |
 
@@ -304,7 +304,8 @@ sobre o histórico inteiro, também no PostgreSQL), e o custo não cresce com o 
   atividade — ex.: o desempenho de **uma** criança ativa no 3º ano). Para cada grupo de
   métricas que depende de um subconjunto (`_PROTEGIDAS`: participação/livros/minutos e
   participação/atividades pelos **medidos**; nível pelos alunos **com nível**; acerto pelos
-  alunos **com questão**; estrelas/desempenho pelos alunos **com atividade**), a métrica some
+  alunos **com questão**; estrelas/desempenho/atividades pelos alunos **com atividade**;
+  livros pelos alunos **com livro novo** e minutos pelos alunos **com tempo**), a métrica some
   também do total que a revelaria:
   * **escola**: quando as crianças escondidas nas séries dela somam de 1 a k − 1 (com k ou
     mais, a diferença dá só a soma de k ou mais crianças — a proteção da própria célula);
@@ -335,6 +336,14 @@ sobre o histórico inteiro, também no PostgreSQL), e o custo não cresce com o 
   escondidas, vale a soma delas (o zero fica misturado). No Elefante, o nível e o acerto
   dividem por somas que não saem em resposta nenhuma, e a regra não muda. Antes (até
   a937245), a escola e a rede mostravam as estrelas por aluno nesse caso.
+  **Contribuintes** (G_GRUPO-4): as médias por aluno **medido** — livros, minutos e
+  atividades — dão a soma exata (média × `alunos_medidos`); com 6 medidos e 1 só lendo, 0,5
+  livro por aluno eram os 3 livros dela. Por isso cada uma depende também de quem **soma** no
+  campo (o campo > 0): com nenhum, é o zero sabido; de 1 a k − 1, some (na célula e, em
+  complemento, nos totais), entra em `metricas_protegidas` e o texto diz que é proteção
+  (`TEXTO_METRICAS_POUCOS_CONTRIBUINTES`). É a regra dos contribuintes do cartão da
+  Secretaria (`grupo_pequeno`) e da vitrine. Releitura conta na participação, não nos livros:
+  quem só releu não soma livro novo.
   O total diz quais métricas escondeu em complemento (`metricas_protegidas`) e por quê
   (`texto_metricas_protegidas`). Há teste que confere, por álgebra linear exata sobre as
   respostas (rede, rede por série e escola), que nenhuma soma de menos de k crianças
@@ -475,10 +484,9 @@ visíveis.
   Ideb e o IEE) passa a somar só as séries visíveis. A supressão complementar por métrica
   (3.5) também esconde médias de totais grandes — sobretudo no total da rede filtrado por
   série e em períodos curtos, em que mais séries têm menos de k crianças ativas.
-* **Média por aluno com poucos ativos**: `atividades_por_aluno` e `livros_por_aluno` exigem
-  só k alunos **medidos**; com 1 aluno ativo entre eles, "média × medidos" é o total dessa
-  criança (sem nome). É lacuna de desenho conhecida (o critério declarado é k medidos), não
-  recomposição de métrica escondida.
+* **Médias por aluno escondidas com poucos contribuintes** (desde G_GRUPO-4): livros,
+  minutos e atividades por aluno somem quando de 1 a k − 1 crianças somam nelas (§3.5) —
+  sobretudo em bimestres de pouco uso. A participação continua: é contagem.
 * **O mesmo período em dias diferentes**: o bimestre em andamento (e o ano letivo, que o
   contém) muda a cada coleta; a diferença entre a leitura de hoje e a de ontem é o que
   aconteceu entre as duas coletas, que pode ser de uma criança só. A proteção por blocos

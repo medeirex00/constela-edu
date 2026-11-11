@@ -140,14 +140,30 @@ TEXTO_CONTADOR_REGREDIU = ("o contador de questões de algum aluno diminuiu entr
 # o desempenho do Matific é estrelas ÷ atividades — num total que esconde as atividades e
 # mostra as estrelas por aluno (estrelas = média × alunos medidos), ele refaria as
 # atividades escondidas (atividades = estrelas ÷ desempenho).
+# CONTRIBUINTES (G_GRUPO-4): as médias por aluno MEDIDO (livros, minutos, atividades) dão a
+# soma exata (média × medidos); com 1 a k − 1 crianças somando nelas, a soma é a delas. Por
+# isso cada uma depende também de quem SOMA no campo — livros por quem leu livro novo,
+# minutos por quem tem tempo, atividades por quem fez atividade —, a regra dos contribuintes
+# do cartão da Secretaria (``grupo_pequeno``) e da vitrine. Sem nenhum, é o zero sabido.
 _PROTEGIDAS = {
     "elefante": ((("alunos_com_leitura", "participacao_pct", "livros_por_aluno",
                    "minutos_por_aluno"), "medidos"),
                  (("nivel_medio", "nivel_medio_posicao"), "alunos_com_nivel"),
-                 (("taxa_acerto_pct",), "alunos_com_questao")),
+                 (("taxa_acerto_pct",), "alunos_com_questao"),
+                 (("livros_por_aluno",), "com_livros"),
+                 (("minutos_por_aluno",), "com_tempo")),
     "matific": ((("participacao_pct", "atividades_por_aluno", "desempenho_medio"), "medidos"),
-                (("estrelas_por_aluno", "desempenho_medio"), "com_atividade")),
+                (("estrelas_por_aluno", "desempenho_medio", "atividades_por_aluno"),
+                 "com_atividade")),
 }
+# As médias por aluno medido que dependem dos contribuintes: aparecem com nenhum (o zero
+# sabido) ou com pelo menos k; de 1 a k − 1, somem e entram em ``metricas_protegidas``.
+_POR_CONTRIBUINTES = {"elefante": (("livros_por_aluno", "com_livros"),
+                                   ("minutos_por_aluno", "com_tempo")),
+                      "matific": (("atividades_por_aluno", "com_atividade"),)}
+TEXTO_METRICAS_POUCOS_CONTRIBUINTES = ("algumas médias não aparecem: menos de {k} alunos "
+                                       "deste recorte têm esse número, e a média por aluno o "
+                                       "revelaria")
 # Subconjuntos cuja média divide a soma pelos alunos MEDIDOS (as estrelas por aluno do
 # Matific: estrelas = média × alunos medidos, exata) — numa parte sem número nenhum (poucos
 # medidos), o grupo VAZIO ali (nenhuma criança com atividade) soma zero sem que o zero seja
@@ -166,6 +182,10 @@ TEXTO_METRICAS_PROTEGIDAS_AMBOS = ("algumas médias não aparecem: este total so
                                    "menos de {k} alunos escondido numa parte dele, ou num dos "
                                    "bimestres do período menos de {k} alunos têm esse número — "
                                    "a diferença os revelaria")
+# Mais de um motivo, com os contribuintes no meio.
+TEXTO_METRICAS_PROTEGIDAS_VARIOS = ("algumas médias não aparecem: menos de {k} alunos têm esse "
+                                    "número neste recorte, numa parte deste total ou num dos "
+                                    "bimestres do período — a média ou a diferença o revelaria")
 
 SUPRIMIDO = "suprimido"
 TEXTO_SUPRESSAO = ("poucos alunos neste recorte (ou escondido junto com um recorte pequeno, "
@@ -229,6 +249,10 @@ class _Elefante:
     coorte: int = 0                 # alunos do recorte (escola com coleta que cobre o período)
     medidos: int = 0                # com conta no Elefante (alguma coleta) ou leitura no período
     com_leitura: int = 0
+    # Quem SOMA em cada campo (o campo > 0): as médias por aluno medido só aparecem com 0 ou
+    # pelo menos k deles — a regra dos contribuintes do cartão (``grupo_pequeno``).
+    com_livros: int = 0
+    com_tempo: int = 0
     livros_novos: int = 0
     tempo_min: int = 0
     soma_nivel: float = 0.0
@@ -936,6 +960,8 @@ def _somar_elefante(janela: rp.Janela, por_serie: dict[int, dict], series: dict[
                 soma.tempo_min += e["tempo_min"]
                 if e["livros_novos"] or e["eventos_leitura"]:
                     soma.com_leitura += 1
+                soma.com_livros += 1 if e["livros_novos"] else 0
+                soma.com_tempo += 1 if e["tempo_min"] else 0
             nv = niveis.get(aid)
             if nv:
                 soma.soma_nivel += nv[0]
@@ -1107,6 +1133,19 @@ def _intervalo(bases: list[datetime], atuais: list[datetime], plataforma: str) -
             "observacao": None if primeira else _INICIO_DO_ZERO[plataforma]}
 
 
+def _proteger_contribuintes(bloco: dict, s, plataforma: str, k: int) -> dict:
+    """Esconde as médias por aluno medido com 1 a k − 1 crianças somando nelas
+    (``_POR_CONTRIBUINTES``) e diz que é proteção (``metricas_protegidas``), não falta de
+    dado."""
+    for chave, campo in _POR_CONTRIBUINTES[plataforma]:
+        if 0 < getattr(s, campo) < k and bloco.get(chave) is not None:
+            bloco[chave] = None
+            bloco["metricas_protegidas"].append(chave)
+    if bloco["metricas_protegidas"]:
+        bloco["texto_metricas_protegidas"] = TEXTO_METRICAS_POUCOS_CONTRIBUINTES.format(k=k)
+    return bloco
+
+
 def metricas_elefante(s: _Elefante | None, k: int, motivo: str | None = None, *,
                       parcial: bool = False, coberto_ate: datetime | None = None) -> dict:
     if motivo is not None:
@@ -1122,7 +1161,7 @@ def metricas_elefante(s: _Elefante | None, k: int, motivo: str | None = None, *,
     nivel = None
     if pos is not None:
         nivel = NIVEIS_ORDENADOS[min(max(int(arredondar(pos, 0)), 0), len(NIVEIS_ORDENADOS) - 1)]
-    return {
+    return _proteger_contribuintes({
         **contas,
         "alunos_com_leitura": s.com_leitura,
         "participacao_pct": _arred(100 * s.com_leitura / n, 1),
@@ -1139,7 +1178,7 @@ def metricas_elefante(s: _Elefante | None, k: int, motivo: str | None = None, *,
         "texto_contador_regrediu": TEXTO_CONTADOR_REGREDIU if s.contador_regrediu else None,
         **_cobertura_bloco(parcial, coberto_ate, k), **_sem_protecao(),
         "motivo_sem_dado": None, "texto_sem_dado": None,
-    }
+    }, s, "elefante", k)
 
 
 def metricas_matific(s: _Matific | None, k: int, motivo: str | None = None, *,
@@ -1155,7 +1194,7 @@ def metricas_matific(s: _Matific | None, k: int, motivo: str | None = None, *,
     if n < k:
         return _sem_dado(_CHAVES_MATIFIC, POUCOS_MEDIDOS, k, **contas)
     ativos = s.com_atividade >= k
-    return {
+    return _proteger_contribuintes({
         **contas,
         "participacao_pct": _arred(100 * s.com_atividade / n, 1),
         "atividades_por_aluno": _arred(s.atividades / n, 2),
@@ -1167,7 +1206,7 @@ def metricas_matific(s: _Matific | None, k: int, motivo: str | None = None, *,
         "janela_efetiva": _intervalo(s.bases, s.atuais, "matific"),
         **_cobertura_bloco(parcial, coberto_ate, k), **_sem_protecao(),
         "motivo_sem_dado": None, "texto_sem_dado": None,
-    }
+    }, s, "matific", k)
 
 
 def _blocos_da_medida(m: _Medida, ele: _Elefante | None, mat: _Matific | None,
@@ -1286,13 +1325,25 @@ def _proteger(bloco: dict | None, plataforma: str, esconder: list[bool], k: int,
                 bloco[chave] = None
                 bloco["metricas_protegidas"].append(chave)
                 novas = True
-    if por_bloco:
-        if novas:
-            texto = (TEXTO_METRICAS_PROTEGIDAS_AMBOS if bloco.get("texto_metricas_protegidas")
-                     else TEXTO_METRICAS_PROTEGIDAS_BLOCOS)
-            bloco["texto_metricas_protegidas"] = texto.format(k=k)
-    elif bloco["metricas_protegidas"]:
-        bloco["texto_metricas_protegidas"] = TEXTO_METRICAS_PROTEGIDAS.format(k=k)
+    if novas:
+        bloco["texto_metricas_protegidas"] = _texto_dos_motivos(
+            bloco.get("texto_metricas_protegidas"), "blocos" if por_bloco else "complemento", k)
+
+
+def _texto_dos_motivos(atual: str | None, motivo: str, k: int) -> str:
+    """O texto das médias escondidas com mais um motivo ("contribuintes", "complemento" ou
+    "blocos") somado aos do texto que o bloco já tem."""
+    modelos = {frozenset({"contribuintes"}): TEXTO_METRICAS_POUCOS_CONTRIBUINTES,
+               frozenset({"complemento"}): TEXTO_METRICAS_PROTEGIDAS,
+               frozenset({"blocos"}): TEXTO_METRICAS_PROTEGIDAS_BLOCOS,
+               frozenset({"complemento", "blocos"}): TEXTO_METRICAS_PROTEGIDAS_AMBOS}
+    motivos = {motivo}
+    if atual is not None:
+        anteriores = next((m for m, t in modelos.items() if t.format(k=k) == atual),
+                          frozenset({"contribuintes", "complemento", "blocos"}))
+        motivos |= anteriores
+    modelo = modelos.get(frozenset(motivos), TEXTO_METRICAS_PROTEGIDAS_VARIOS)
+    return modelo.format(k=k)
 
 
 # --- Supressão ------------------------------------------------------------------------
