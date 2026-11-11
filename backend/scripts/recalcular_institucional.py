@@ -24,6 +24,7 @@ Como executar (no ambiente de produção, após o deploy e a migração)
     python -m scripts.recalcular_institucional            # todas as escolas
     python -m scripts.recalcular_institucional --rede 3   # só a rede 3
     python -m scripts.recalcular_institucional --escola 42  # só a escola 42
+    python -m scripts.recalcular_institucional --rede 3 --escola 42  # a 42, se for da rede 3
     python -m scripts.recalcular_institucional --dry-run   # só conta, não grava
     python -m scripts.recalcular_institucional --pendentes  # só quem falta (ver abaixo)
 
@@ -80,8 +81,10 @@ def escolas_pendentes(db: Session) -> list[int]:
 def main() -> int:
     forcar_saida_utf8()
     parser = argparse.ArgumentParser(description="Recálculo institucional pós-deploy.")
-    parser.add_argument("--rede", type=int, default=None, help="recalcular só as escolas desta rede")
-    parser.add_argument("--escola", type=int, default=None, help="recalcular só esta escola")
+    parser.add_argument("--rede", type=int, default=None,
+                        help="recalcular só as escolas desta rede (com --escola: as duas condições)")
+    parser.add_argument("--escola", type=int, default=None,
+                        help="recalcular só esta escola (com --rede: só se ela for da rede)")
     parser.add_argument("--dry-run", action="store_true", help="apenas listar, sem recalcular")
     parser.add_argument("--pendentes", action="store_true",
                         help="só escolas com alguma Nota do ano ativo SEM o carimbo institucional "
@@ -92,9 +95,12 @@ def main() -> int:
     db = SessionLocal()
     try:
         consulta = select(Escola.id, Escola.nome).order_by(Escola.id)
+        # Os recortes valem JUNTOS: com --rede e --escola, só a escola pedida, se ela
+        # for da rede pedida (antes o --rede caía fora em silêncio e uma escola de
+        # outra rede era recalculada).
         if args.escola is not None:
             consulta = consulta.where(Escola.id == args.escola)
-        elif args.rede is not None:
+        if args.rede is not None:
             consulta = consulta.where(Escola.rede_id == args.rede)
         if args.pendentes:
             # IDEMPOTENTE: depois de recalculada, a escola some desta seleção.
@@ -121,6 +127,10 @@ def main() -> int:
                 print(f"  [{i}/{len(escolas)}] escola {escola_id} — {nome}: FALHOU ({erro})")
 
         print("\nResumo:")
+        if args.dry_run:
+            # Nada foi processado: "escolas processadas: N" se lia como trabalho feito.
+            print(f"  escolas que seriam recalculadas: {len(escolas)} (nada foi gravado)")
+            return 0
         print(f"  escolas processadas: {len(escolas)}")
         print(f"  alunos recalculados: {total_alunos}")
         print(f"  falhas: {len(falhas)}")
