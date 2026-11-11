@@ -829,22 +829,35 @@ def _ip_publico(ip: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
                                  or ip.is_reserved or ip.is_multicast or ip.is_unspecified)
 
 
+# Recusa ÚNICA da guarda para o nome que não resolve e para o nome que resolve para
+# fora da internet pública. Ela chega a ``fonte.ultimo_erro`` (o painel mostra): se
+# dissesse o IP resolvido, ou separasse "não existe" de "existe e é interno", o
+# "coletar agora" serviria para mapear os nomes e os IPs da rede interna. O IP e o
+# motivo exato vão só para o log do servidor.
+_RECUSA_DESTINO = "o endereço não foi encontrado ou aponta para uma rede não-pública: {host}"
+
+
 def _resolver_publico(host: str, porta: int) -> list[str]:
     """Resolve o host UMA vez e devolve os IPs dele, todos públicos (um só que não seja
-    público já recusa o host inteiro)."""
+    público já recusa o host inteiro). A recusa é a mesma para os dois motivos
+    (``_RECUSA_DESTINO``); o detalhe vai para o log."""
     try:
         infos = socket.getaddrinfo(host, porta, proto=socket.IPPROTO_TCP)
     except socket.gaierror as exc:
-        raise ValueError(f"host não resolvido: {host}") from exc
+        logger.warning("Guarda anti-SSRF: host %s não resolvido (%s)", host, exc)
+        raise ValueError(_RECUSA_DESTINO.format(host=host)) from exc
     ips: list[str] = []
     for info in infos:
         ip = ipaddress.ip_address(info[4][0])
         if not _ip_publico(ip):
-            raise ValueError(f"host aponta para rede não-pública ({ip}): {host}")
+            logger.warning("Guarda anti-SSRF: host %s aponta para rede não-pública (%s)",
+                           host, ip)
+            raise ValueError(_RECUSA_DESTINO.format(host=host))
         if str(ip) not in ips:
             ips.append(str(ip))
     if not ips:
-        raise ValueError(f"host não resolvido: {host}")
+        logger.warning("Guarda anti-SSRF: host %s não resolvido (sem endereço)", host)
+        raise ValueError(_RECUSA_DESTINO.format(host=host))
     return ips
 
 

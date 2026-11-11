@@ -9,6 +9,10 @@
 3. O erro gravado em ``fonte.ultimo_erro`` (mostrado no painel) não diferencia porta
    aberta de porta fechada: falha de conexão vira uma mensagem única; o detalhe vai
    só para o log do servidor.
+4. (REV2-INDIC-1) A recusa da GUARDA também vai para ``fonte.ultimo_erro``: ela não
+   diz o IP para o qual o nome resolveu nem separa "nome inexistente" de "nome que
+   aponta para a rede interna" — senão "coletar agora" mapeia os nomes e IPs da rede
+   interna. O detalhe vai só para o log.
 
 Rede FALSIFICADA: ``socket.getaddrinfo`` é trocado por um resolvedor falso que só
 conhece hosts ``*.sonda.invalid``; a conexão "de verdade" do httpcore é interceptada
@@ -162,3 +166,48 @@ def test_recusa_da_guarda_continua_dizendo_o_motivo(db, monkeypatch):
     db.commit()
     svc.coletar_fonte(db, f)
     assert f.ultimo_status == "erro" and "não-pública" in f.ultimo_erro
+
+
+# --- REV2-INDIC-1: a recusa da guarda não é oráculo da rede interna ----------------
+
+INTERNOS = {"postgres.interno.sonda.invalid": "fd12:3456:789a::7",
+            "redis.interno.sonda.invalid": "10.244.3.17"}
+INEXISTENTE = "naoexiste.interno.sonda.invalid"
+
+
+def test_recusa_da_guarda_nao_diz_o_ip_interno_nem_se_o_nome_existe(db, monkeypatch, caplog):
+    monkeypatch.setattr(socket, "getaddrinfo",
+                        ResolvedorFalso({h: [ip] for h, ip in INTERNOS.items()}))
+    f = _fonte(db)
+    gravado = {}
+    with caplog.at_level(logging.WARNING, logger="app.services.avaliacoes"):
+        for host in (*INTERNOS, INEXISTENTE):
+            f.url = f"https://{host}/x.csv"
+            db.commit()
+            svc.coletar_fonte(db, f)
+            assert f.ultimo_status == "erro"
+            gravado[host] = f.ultimo_erro
+    for host, ip in INTERNOS.items():
+        assert ip not in gravado[host], (
+            f"o erro gravado (o painel mostra) diz o IP interno do nome: {gravado[host]!r}")
+    # Nome interno e nome inexistente: o MESMO texto (fora o nome que o próprio admin digitou).
+    sem_o_nome = {h: t.replace(h, "<host>") for h, t in gravado.items()}
+    assert len(set(sem_o_nome.values())) == 1, sem_o_nome
+    assert "não-pública" in gravado[INEXISTENTE]          # continua dizendo o motivo
+    # O detalhe fica no log do servidor.
+    assert all(ip in caplog.text for ip in INTERNOS.values())
+
+
+def test_rebinding_recusado_na_conexao_nao_grava_o_ip_interno(db, monkeypatch, caplog):
+    # A guarda vê o IP público; a 2ª resolução (a do transporte, na conexão) vê o interno.
+    falso = ResolvedorFalso({"rebind2.sonda.invalid": [IP_PUBLICO, INTERNOS["redis.interno.sonda.invalid"]]})
+    monkeypatch.setattr(socket, "getaddrinfo", falso)
+    f = _fonte(db)
+    f.url = "https://rebind2.sonda.invalid/ideb.csv"
+    db.commit()
+    with caplog.at_level(logging.WARNING, logger="app.services.avaliacoes"):
+        svc.coletar_fonte(db, f)
+    assert [ip for _, ip in falso.chamadas] == [IP_PUBLICO, "10.244.3.17"]
+    assert f.ultimo_status == "erro" and "não-pública" in f.ultimo_erro
+    assert "10.244.3.17" not in f.ultimo_erro, f.ultimo_erro
+    assert "10.244.3.17" in caplog.text
