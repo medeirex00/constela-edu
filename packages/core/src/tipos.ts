@@ -599,6 +599,9 @@ export interface EventoMural {
  *  uma unica viagem de rede para o mobile hidratar todas as telas. */
 export interface PacoteSincronizacao {
   gerado_em: string;
+  /** Módulos que a rede da escola contratou. O módulo fora do plano não aparece
+   *  no app nem zerado. Ausente (servidor antigo) = os dois, como antes. */
+  modulos?: Dimensao[];
   dashboard: Dashboard;
   /** LEGADO: ordem única por nota geral. */
   ranking: RankingItem[];

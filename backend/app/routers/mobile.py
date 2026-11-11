@@ -2,7 +2,8 @@
 
 Decisões:
   * `/sincronizacao` devolve TUDO que o app precisa em UMA viagem de rede
-    (dashboard, ranking, evolução, alertas e mural) + carimbo `gerado_em`.
+    (dashboard, ranking, evolução, alertas e mural) + carimbo `gerado_em` e os
+    módulos que a rede da escola contratou (o app esconde o resto, também offline).
     No celular, menos round-trips = menos bateria e melhor uso de redes
     ruins; o app guarda o pacote em cache e o reexibe offline.
   * Dispositivos são upsert pelo token: o mesmo aparelho que troca de
@@ -22,7 +23,7 @@ from app.core.rate_limit import LimitadorTentativas, ip_do_cliente
 from app.models import DispositivoMovel, Escola, Usuario
 from app.models.base import agora
 from app.routers.rankings import _ranking, montar_dashboard
-from app.services import elegibilidade, evolucao, gamificacao, insights, permissoes
+from app.services import elegibilidade, evolucao, gamificacao, insights, permissoes, scoring
 from app.services import push as svc_push
 from app.services.audit import registrar
 
@@ -258,6 +259,11 @@ def sincronizar(
 
     return {
         "gerado_em": datetime.now(timezone.utc).isoformat(),
+        # CONTRATO: os módulos que valem para ESTA escola (a mesma régua do motor,
+        # `scoring.dimensoes_contratadas`). O Painel do app esconde o cartão do
+        # módulo fora do plano — ele não aparece nem zerado — e o pacote fica em
+        # cache, então a informação viaja com ele.
+        "modulos": scoring.dimensoes_contratadas(db, escola),
         "dashboard": montar_dashboard(db, escola_id, turma_ids=permitidas),
         "ranking": ranking,
         "evolucao": [

@@ -51,6 +51,9 @@ export default function Painel() {
 
   const data = estado.dados;
   const painel = data.dashboard;
+  // CONTRATO: o cartão do módulo que a rede não contratou não aparece (nem
+  // zerado). Pacote de servidor antigo, sem a lista: os dois, como antes.
+  const modulos = data.modulos ?? ["leitura", "matematica"];
 
   return (
     <ScrollView
@@ -67,9 +70,15 @@ export default function Painel() {
       <View style={estilos.grade}>
         <Estatistica rotulo="Alunos" valor={numero(painel.total_alunos)} />
         <Estatistica rotulo="Média geral" valor={nota(painel.media_geral)} />
-        <Estatistica rotulo="Atividades" valor={numero(painel.total_atividades)} />
-        <Estatistica rotulo="Livros" valor={numero(painel.total_livros)} />
-        <Estatistica rotulo="Leitura" valor={tempoLeitura(painel.tempo_leitura_min)} />
+        {modulos.includes("matematica") && (
+          <Estatistica rotulo="Atividades" valor={numero(painel.total_atividades)} />
+        )}
+        {modulos.includes("leitura") && (
+          <Estatistica rotulo="Livros" valor={numero(painel.total_livros)} />
+        )}
+        {modulos.includes("leitura") && (
+          <Estatistica rotulo="Leitura" valor={tempoLeitura(painel.tempo_leitura_min)} />
+        )}
         <Estatistica rotulo="Turmas" valor={numero(painel.total_turmas)} />
       </View>
 

@@ -1122,19 +1122,37 @@ def _bloco_dimensoes(contratadas: list[str], aferido: dict[str, bool],
     quando não há dado, `contratada` explícita, e o denominador ao lado. Sem
     isto, comparar um aluno com uma turma poria lado a lado um zero de ausência
     e uma média já cortada por aferido — dois números com a mesma cara e
-    significados diferentes.
+    significados diferentes. Matéria fora do plano da rede nunca é aferida
+    (o motor também não a afere: ``scoring._ordenar_por_dimensao``).
     """
+    aferido = {d: bool(aferido.get(d)) and d in contratadas for d in DIMENSOES}
     return {
         dimensao: {
             "plataforma": DIMENSOES[dimensao],
             "contratada": dimensao in contratadas,
-            "aferido": bool(aferido.get(dimensao)),
-            "nota": notas.get(dimensao) if aferido.get(dimensao) else None,
+            "aferido": aferido[dimensao],
+            "nota": notas.get(dimensao) if aferido[dimensao] else None,
             "posicao": (posicoes or {}).get(dimensao),
             "n_aferidos": (n_aferidos or {}).get(dimensao),
         }
         for dimensao in DIMENSOES
     }
+
+
+def _lado_no_plano(lado: dict, contratadas) -> dict:
+    """CONTRATO: num lado do comparador, a nota legada (``notas.matific`` /
+    ``notas.elefante``) e os indicadores da matéria que a rede NÃO contratou saem
+    NULOS — o módulo fora do plano não existe para ela, nem como zero. Sem isto,
+    um retrato antigo do Matific numa rede só com Leitura aparecia como "Nota
+    Matific 100,0" e "30 atividades" no Comparador. Mesmo formato do lado de
+    grupo pequeno (``grupo_pequeno``), que também anula com ``None``."""
+    for dimensao, plataforma in DIMENSOES.items():
+        if dimensao in contratadas:
+            continue
+        lado["notas"][plataforma] = None
+        for campo in CAMPOS_DOS_INDICADORES[dimensao]:
+            lado["indicadores"][campo] = None
+    return lado
 
 
 def _lado_aluno(db: Session, escola_id: int, aluno_id: int) -> dict | None:
@@ -1161,7 +1179,8 @@ def _lado_aluno(db: Session, escola_id: int, aluno_id: int) -> dict | None:
     detalhes_dim = ((nota.detalhes or {}).get("dimensoes") or {}) if nota else {}
     n_aferidos = {d: (detalhes_dim.get(d) or {}).get("n_aferidos")
                   for d in DIMENSOES}
-    return {
+    contratadas = scoring.dimensoes_contratadas(db, escola)
+    return _lado_no_plano({
         "tipo": "aluno",
         "id": aluno.id,
         "nome": aluno.nome,
@@ -1169,7 +1188,7 @@ def _lado_aluno(db: Session, escola_id: int, aluno_id: int) -> dict | None:
         # Estado por dimensão: sem dado é `null`, não 0,0 — é o que impede a
         # tela de mostrar "0,0 em Matemática" para quem nunca abriu o Matific.
         "dimensoes": _bloco_dimensoes(
-            scoring.dimensoes_contratadas(db, escola), aferido,
+            contratadas, aferido,
             {"leitura": nota.nota_elefante if nota else None,
              "matematica": nota.nota_matific if nota else None},
             {"leitura": nota.posicao_leitura if nota else None,
@@ -1183,7 +1202,7 @@ def _lado_aluno(db: Session, escola_id: int, aluno_id: int) -> dict | None:
             "geral": nota.nota_geral if nota else 0.0,
             "posicao": nota.posicao if nota else None,
         },
-    }
+    }, contratadas)
 
 
 def _lado_turma(db: Session, escola_id: int, turma_id: int, *,
@@ -1197,7 +1216,7 @@ def _lado_turma(db: Session, escola_id: int, turma_id: int, *,
         return None
     internas = {chave: resumo[chave] for chave in ("_aferidos", "_contribuintes")
                 if chave in resumo}
-    return {
+    return _lado_no_plano({
         **internas,
         "tipo": "turma",
         "id": resumo["turma"]["id"],
@@ -1219,7 +1238,7 @@ def _lado_turma(db: Session, escola_id: int, turma_id: int, *,
             "geral": resumo["media_geral"],
             "posicao": None,
         },
-    }
+    }, resumo["contratadas"])
 
 
 def _lado_escola(db: Session, escola_id: int, *,
@@ -1322,6 +1341,7 @@ def _lado_escola(db: Session, escola_id: int, *,
             "posicao": None,
         },
     }
+    _lado_no_plano(lado, contratadas)
     if com_contagem_aferidos:
         # Crianças DISTINTAS (o aluno com duas matrículas aparece duas vezes em
         # `aluno_ids`), nos mesmos conjuntos que somam os indicadores.

@@ -1096,37 +1096,49 @@ def montar_dashboard(db: Session, escola_id: int,
             .exists()
         )
 
+    # CONTRATO: o total da plataforma de um módulo que a rede NÃO contratou nem é
+    # somado — um retrato antigo dela (contrato mudado, escola vinda de outra
+    # rede) virava "Atividades 35" no Painel do app de uma rede só com Leitura.
+    # O esquema da resposta pede número, então sai 0; o pacote do app leva os
+    # módulos (`routers/mobile.sincronizar`) e o Painel esconde o cartão.
+    contratadas = scoring.dimensoes_contratadas(db, escola)
+
     # MATIFIC É CONTADOR DO ANO: o "atual" é o último retrato DENTRO do ano
     # letivo (a definição de aferido do motor, ``scoring.snapshots_matific_do_ano``).
     # Sem a janela, o acumulado de dez/2025 (ou de jan/2027, antes da virada da
     # escola) entrava no "atividades" do painel de 2026.
-    ids_atuais_m = scoring.ids_snapshots_atuais(
-        SnapshotMatific, escola_id, janela=matific_destaque.janela_ano_letivo(ano))
-    consulta_atividades = (
-        select(func.coalesce(func.sum(SnapshotMatific.atividades), 0))
-        .where(SnapshotMatific.id.in_(ids_atuais_m), _na_coorte(SnapshotMatific))
-    )
-    if alunos_sub is not None:
-        consulta_atividades = consulta_atividades.where(SnapshotMatific.aluno_id.in_(alunos_sub))
-    total_atividades = db.execute(consulta_atividades).scalar_one()
+    total_atividades = 0
+    if "matematica" in contratadas:
+        ids_atuais_m = scoring.ids_snapshots_atuais(
+            SnapshotMatific, escola_id, janela=matific_destaque.janela_ano_letivo(ano))
+        consulta_atividades = (
+            select(func.coalesce(func.sum(SnapshotMatific.atividades), 0))
+            .where(SnapshotMatific.id.in_(ids_atuais_m), _na_coorte(SnapshotMatific))
+        )
+        if alunos_sub is not None:
+            consulta_atividades = consulta_atividades.where(
+                SnapshotMatific.aluno_id.in_(alunos_sub))
+        total_atividades = db.execute(consulta_atividades).scalar_one()
 
-    ids_atuais_e = scoring.ids_snapshots_atuais(SnapshotElefante, escola_id)
-    consulta_elefante = (
-        select(
-            func.coalesce(func.sum(SnapshotElefante.livros_unicos), 0),
-            func.coalesce(func.sum(SnapshotElefante.tempo_leitura_min), 0),
-        ).where(SnapshotElefante.id.in_(ids_atuais_e), _na_coorte(SnapshotElefante))
-    )
-    if alunos_sub is not None:
-        consulta_elefante = consulta_elefante.where(SnapshotElefante.aluno_id.in_(alunos_sub))
-    total_livros, tempo_total = db.execute(consulta_elefante).one()
+    total_livros, tempo_total = 0, 0
+    if "leitura" in contratadas:
+        ids_atuais_e = scoring.ids_snapshots_atuais(SnapshotElefante, escola_id)
+        consulta_elefante = (
+            select(
+                func.coalesce(func.sum(SnapshotElefante.livros_unicos), 0),
+                func.coalesce(func.sum(SnapshotElefante.tempo_leitura_min), 0),
+            ).where(SnapshotElefante.id.in_(ids_atuais_e), _na_coorte(SnapshotElefante))
+        )
+        if alunos_sub is not None:
+            consulta_elefante = consulta_elefante.where(
+                SnapshotElefante.aluno_id.in_(alunos_sub))
+        total_livros, tempo_total = db.execute(consulta_elefante).one()
 
     # DESEMPENHO POR DIMENSÃO — cada média só sobre quem TEM dado da plataforma
     # (ver `_media_da_dimensao`). Era uma média única de `nota_geral` sobre TODOS
     # os alunos ativos, zeros de quem não tem dado incluídos: media_geral media
     # desempenho × cobertura, e a MESMA escola exibia um número aqui e outro no
     # cartão do painel da rede. Agora as duas telas usam a mesma régua.
-    contratadas = scoring.dimensoes_contratadas(db, escola)
     desempenho = _desempenho_da_escola(db, escola_id, ano, contratadas, alunos_sub)
     n_leitura, media_leitura = desempenho["n_leitura"], desempenho["media_leitura"]
     n_matematica = desempenho["n_matematica"]

@@ -12,6 +12,7 @@ import { Avatar, Botao, Campo, Card, Carregando, Chip, IconePastel, Mensagem, Pa
 import type { TomPastel } from "../components/ui";
 import { useApp } from "../context/AppContext";
 import { useApi } from "../hooks/useApi";
+import { useModulos } from "../hooks/useModulos";
 import { api } from "../lib/api";
 import { nota, numero, tempoLeitura } from "../lib/formato";
 import type { Escola, PaginaAlunos, Turma } from "../lib/types";
@@ -21,8 +22,9 @@ interface Lado {
   id: number;
   nome: string;
   total_alunos?: number;
-  indicadores: Record<string, number>;
-  notas: { matific: number; elefante: number; geral: number; posicao: number | null };
+  /** `null` = matéria fora do plano da rede (ou escondida por grupo pequeno). */
+  indicadores: Record<string, number | null>;
+  notas: { matific: number | null; elefante: number | null; geral: number | null; posicao: number | null };
 }
 
 interface Comparacao {
@@ -167,6 +169,12 @@ const GRUPOS: { chave: "matific" | "elefante"; titulo: string; icone: LucideIcon
   { chave: "matific", titulo: "Matemática · Matific", icone: Calculator, tom: "teal" },
 ];
 
+/** Módulo do contrato de cada plataforma (as notas e os grupos de indicadores). */
+const MODULO_DA_PLATAFORMA: Record<"matific" | "elefante", string> = {
+  matific: "matematica",
+  elefante: "leitura",
+};
+
 const NOTAS: { chave: "matific" | "elefante" | "geral"; rotulo: string; icone: LucideIcon; tom: TomPastel }[] = [
   { chave: "elefante", rotulo: "Nota Elefante Letrado", icone: BookOpen, tom: "violeta" },
   { chave: "matific", rotulo: "Nota Matific", icone: Calculator, tom: "teal" },
@@ -227,6 +235,12 @@ function CartaoLado({ lado, dados }: { lado: keyof typeof LADOS; dados: Lado }) 
 
 export default function Comparador() {
   const { escolaId, usuario } = useApp();
+  // CONTRATO: a nota e o grupo de indicadores do módulo que a rede não contratou
+  // não aparecem (nem zerados). O Admin Global vê os dois (ele compara escolas de
+  // redes diferentes); o lado de uma rede sem o módulo chega nulo e mostra "—".
+  const { tem } = useModulos();
+  const notasNoPlano = NOTAS.filter((n) => n.chave === "geral" || tem(MODULO_DA_PLATAFORMA[n.chave]));
+  const gruposNoPlano = GRUPOS.filter((g) => tem(MODULO_DA_PLATAFORMA[g.chave]));
   // "Escola" como lado é exclusivo do ADM supremo (rede/Secretaria).
   const podeEscola = !!usuario?.is_global;
   // Opções dos seletores: buscas de leitura (ociosas sem escola) via useApi.
@@ -324,8 +338,8 @@ export default function Comparador() {
             <CartaoLado lado="B" dados={comparacao.b} />
           </div>
 
-          <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
-            {NOTAS.map((n) => (
+          <div className={`grid grid-cols-1 gap-4 ${notasNoPlano.length === 3 ? "sm:grid-cols-3" : "sm:grid-cols-2"}`}>
+            {notasNoPlano.map((n) => (
               <Card key={n.chave} className="p-5">
                 <div className="flex items-center gap-3">
                   <IconePastel icone={n.icone} tom={n.tom} />
@@ -352,8 +366,8 @@ export default function Comparador() {
             ))}
           </div>
 
-          <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-            {GRUPOS.map((grupo) => (
+          <div className={`grid grid-cols-1 gap-4 ${gruposNoPlano.length > 1 ? "lg:grid-cols-2" : ""}`}>
+            {gruposNoPlano.map((grupo) => (
               <Card key={grupo.chave} className="p-5">
                 <div className="mb-2 flex items-center gap-3">
                   <IconePastel icone={grupo.icone} tom={grupo.tom} />
