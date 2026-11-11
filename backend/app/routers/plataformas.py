@@ -5,8 +5,9 @@ importação do tipo "manual" e um novo snapshot, preservando a linha do
 tempo (§68) e deixando o antes/depois no log de auditoria.
 
 GOVERNANÇA DO CATÁLOGO: o catálogo de livros é OFICIAL (Elefante Letrado) e
-SOMENTE LEITURA para a escola (admin, coordenador, professor, Secretaria). Só o
-Admin Global cria, corrige (nível/título) ou exclui livros.
+SOMENTE LEITURA para a escola (admin, coordenador, professor). Só o Admin Global
+cria, corrige (nível/título) ou exclui livros. A Secretaria não lê o catálogo da
+escola (``listar_livros``): o acervo é o histórico de leitura das crianças.
 
 SEMÂNTICA DA CORREÇÃO: cada ``Leitura`` guarda o NÍVEL CONGELADO do livro no
 momento em que foi registrada (``Leitura.nivel_codigo``). Corrigir o catálogo,
@@ -27,7 +28,8 @@ from sqlalchemy.orm import Session
 
 from app.core.database import bloquear_escola_para_importacao, get_db
 from app.core.deps import exigir_admin_global, exigir_modulo_da_escola
-from app.core.deps import escola_autorizada, exigir_papeis, get_usuario_atual
+from app.core.deps import (escola_autorizada, exigir_papeis, get_usuario_atual,
+                           negar_secretaria)
 from app.models import (
     Aluno,
     Escola,
@@ -828,7 +830,8 @@ def _conflito_de_titulo(db: Session, escola_id: int, titulo: str, nivel: str,
 
 
 @router.get("/livros", response_model=dict,
-            dependencies=[Depends(exigir_modulo_da_escola("leitura"))])
+            dependencies=[Depends(exigir_modulo_da_escola("leitura")),
+                          Depends(negar_secretaria)])
 def listar_livros(
     escola_id: int = Depends(escola_autorizada),
     busca: str | None = Query(default=None),
@@ -841,6 +844,13 @@ def listar_livros(
     db: Session = Depends(get_db),
     usuario: Usuario = Depends(get_usuario_atual),
 ):
+    """O acervo da escola, com quantas leituras cada livro tem.
+
+    Fica com QUEM É DA ESCOLA e com o Admin Global: a Secretaria recebe 403
+    (``negar_secretaria``). O acervo nasce da coleta, a partir das leituras das
+    crianças — numa escola em que só uma ou duas leram, os títulos, o ``total`` e
+    as ``leituras`` por livro são o histórico de leitura delas, justamente o que
+    o cartão da rede esconde pelo grupo pequeno."""
     consulta = select(Livro).where(Livro.escola_id == escola_id)
     if busca:
         consulta = consulta.where(

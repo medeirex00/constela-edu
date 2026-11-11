@@ -61,7 +61,7 @@ export const ROTAS_GUARDADAS: RotaGuardada[] = [
   { caminho: "/configuracoes/conquistas", guardas: ["RotaEscolaOp"] },
   { caminho: "/matific", guardas: ["RotaEscolaOp"], modulo: "matematica" },
   { caminho: "/elefante", guardas: ["RotaEscolaOp"], modulo: "leitura" },
-  { caminho: "/livros", guardas: ["RotaGestao"], modulo: "leitura" },
+  { caminho: "/livros", guardas: ["RotaEscolaOp"], modulo: "leitura" },
   { caminho: "/comecar", guardas: ["RotaEscolaOp"] },
   { caminho: "/importacoes", guardas: ["RotaEscolaOp"] },
   { caminho: "/sincronizacao", guardas: ["RotaEscolaOp"] },

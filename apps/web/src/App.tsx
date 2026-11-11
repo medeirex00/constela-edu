@@ -140,8 +140,8 @@ function RotaRede({ children }: { children: React.ReactNode }) {
 
 /** Operações de ESCOLA (importar, sincronizar, diagnóstico, onboarding) e telas de
  *  gestão com dado NOMINAL de criança ou da equipe da escola (Matific, Elefante,
- *  Comparador, Turmas, Professores, Conquistas e Mural, Assistente, Simulador,
- *  Editar conquistas): a Secretaria (rede vinculada, não-global) acompanha os
+ *  Catálogo de Livros, Comparador, Turmas, Professores, Conquistas e Mural,
+ *  Assistente, Simulador, Editar conquistas): a Secretaria (rede vinculada, não-global) acompanha os
  *  resultados da rede mas NÃO opera as escolas — é mandada ao Dashboard. Sem esta
  *  trava ela abria essas telas pelo endereço (tem cargo coordenador ou admin) e via
  *  dado falso ou quebrado: "Esta escola ainda não cadastrou turmas" numa escola com
@@ -257,9 +257,11 @@ export default function App() {
 
           {/* --- Só GESTÃO (admin/coordenador) — professor é redirecionado. As de
               operação ou dado da escola (RotaEscolaOp) desviam também a Secretaria;
-              a Visão da Escola, os Critérios, os Livros e o Painel Público seguem
-              abertos a ela (cada uma já trata a Secretaria: só leitura ou um aviso
-              que a leva ao Panorama da Rede). --- */}
+              a Visão da Escola, os Critérios e o Painel Público seguem abertos a ela
+              (cada uma já trata a Secretaria: só leitura ou um aviso que a leva ao
+              Panorama da Rede). O Catálogo de Livros não: o acervo nasce das
+              leituras das crianças e, com uma ou duas leitoras, é o histórico delas
+              (o backend devolve 403 à Secretaria). --- */}
           <Route path="/comparador" element={<RotaEscolaOp><Comparador /></RotaEscolaOp>} />
           <Route path="/escola" element={<RotaGestao><VisaoEscola /></RotaGestao>} />
           {/* Evolução por aluno: coordenador/admin veem qualquer aluno; o
@@ -279,7 +281,7 @@ export default function App() {
           {/* Telas de PRODUTO: só existem para a rede que contratou o módulo. */}
           <Route path="/matific" element={<RotaEscolaOp><RotaModulo modulo="matematica"><Matific /></RotaModulo></RotaEscolaOp>} />
           <Route path="/elefante" element={<RotaEscolaOp><RotaModulo modulo="leitura"><Elefante /></RotaModulo></RotaEscolaOp>} />
-          <Route path="/livros" element={<RotaGestao><RotaModulo modulo="leitura"><Livros /></RotaModulo></RotaGestao>} />
+          <Route path="/livros" element={<RotaEscolaOp><RotaModulo modulo="leitura"><Livros /></RotaModulo></RotaEscolaOp>} />
           <Route path="/comecar" element={<RotaEscolaOp><Comecar /></RotaEscolaOp>} />
           <Route path="/importacoes" element={<RotaEscolaOp><Importacoes /></RotaEscolaOp>} />
           <Route path="/sincronizacao" element={<RotaEscolaOp><Sincronizacao /></RotaEscolaOp>} />

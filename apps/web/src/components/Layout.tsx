@@ -1786,9 +1786,9 @@ function SimboloEscola({ url, rede }: { url: string | null | undefined; rede: bo
 
 /** Telas que dependem da escola escolhida (com as sub-rotas): a Secretaria que volta a
  *  "Toda a Rede Municipal" numa delas é levada ao Panorama da Rede. Só as que ela ABRE
- *  (RotaGestao): Turmas, Professores e Simulador são RotaEscolaOp, e o App a manda ao
- *  Dashboard antes de o Layout montar. */
-const TELAS_DA_ESCOLA = ["/escola", "/metricas", "/livros"];
+ *  (RotaGestao): Turmas, Professores, Simulador e o Catálogo de Livros são RotaEscolaOp, e
+ *  o App a manda ao Dashboard antes de o Layout montar. */
+const TELAS_DA_ESCOLA = ["/escola", "/metricas"];
 const ehTelaDaEscola = (pathname: string): boolean =>
   TELAS_DA_ESCOLA.some((r) => pathname === r || pathname.startsWith(`${r}/`));
 

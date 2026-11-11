@@ -26,7 +26,8 @@ describe("Layout — telas de escola da Secretaria", () => {
     expect(telas.filter((rota) => !podeAbrirRota(rota, secretaria, todos))).toEqual([]);
   });
 
+  // O Catálogo de Livros saiu (S_G_GRUPO-2): passou a RotaEscolaOp, como Turmas e Simulador.
   it("as telas de escola que ela abre continuam na lista", () => {
-    expect(telasDaEscola()).toEqual(expect.arrayContaining(["/escola", "/metricas", "/livros"]));
+    expect(telasDaEscola()).toEqual(expect.arrayContaining(["/escola", "/metricas"]));
   });
 });
