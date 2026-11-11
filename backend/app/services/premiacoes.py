@@ -363,10 +363,15 @@ def _categorias(alunos: dict[int, dict], livros: dict, pontos: dict, tempo: dict
         desempate=desempate_m, extras=auditoria_m)
     if ocultar_indice:
         _sem_indice(melhor_matematica)
+    # Desempate do Melhor Leitor: livros do período → tempo do período → nome.
+    # É a cascata do /ranking/leitura (``routers.rankings.ranking_leitura``):
+    # pontos iguais (mesmos livros do mesmo nível) não podem coroar uma criança
+    # aqui e outra no Ranking de Leitura do MESMO período.
+    desempate_l = {aid: (livros.get(aid, 0), tempo.get(aid, 0)) for aid in pontos}
     return [
         _categoria("melhor_leitor", "Melhor Leitor", "🏆",
                    "Mais pontos de dificuldade no período", "pontos",
-                   pontos, alunos, limite),
+                   pontos, alunos, limite, desempate=desempate_l),
         melhor_matematica,
         _categoria("mais_livros", "Mais Livros Lidos", "📚",
                    "Maior quantidade de livros no período", "livros",
