@@ -32,13 +32,21 @@ arquivo. Antes de tocar em qualquer linha, ``restaurar`` calcula as PERDAS
 silêncio e responder "Backup restaurado com sucesso". A varredura é
 ESTRUTURAL (segue o cascade no metadata), então uma tabela criada no futuro
 entra no radar sozinha, sem depender de alguém lembrar de atualizar uma lista.
+
+O que fica FORA do arquivo e aponta com ``ON DELETE SET NULL`` para uma linha que a
+restauração recria (``_referencias_de_fora``: a fila de revisões de identidade e as
+execuções da sincronização) não se perde: a restauração REAPONTA para a linha
+recriada (``_reapontar``), e só o que o arquivo não traz fica NULL. Antes o vínculo
+sumia calado — a memória das decisões humanas da fila de revisão
+(``aluno_escolhido_id``) virava NULL e a coleta seguinte voltava a mandar para a
+revisão a conta que o Admin Global já tinha confirmado (G_LGPD-4).
 """
 from __future__ import annotations
 
 from datetime import date, datetime, timezone
 from typing import Any
 
-from sqlalchemy import delete, func, select
+from sqlalchemy import bindparam, delete, func, select, update
 from sqlalchemy.orm import Session
 
 from app.models import (
@@ -151,6 +159,21 @@ IGNORADAS = {"id", "escola_id", "usuario_id"}
 # (``_excluidos_depois_do_backup``).
 CHAVE_MAPA_ALUNOS = "alunos_id_anterior"
 
+# A mesma linhagem para cada tabela do arquivo a que alguém FORA dele aponta
+# (``_referencias_de_fora``): {tabela: chave do mapa {id novo: ``_id`` do arquivo} em
+# ``backup.restaurado``}. É o que deixa reapontar a fila de revisões quando o arquivo
+# é anterior a OUTRA restauração (os ids atuais já não são os do arquivo). Só números.
+CHAVES_DE_LINHAGEM: dict[str, str] = {
+    "alunos": CHAVE_MAPA_ALUNOS,
+    "turmas": "turmas_id_anterior",
+    "importacoes": "importacoes_id_anterior",
+}
+
+# Os candidatos de cada revisão de identidade ficam num JSON
+# (``revisoes_identidade.candidatos[].aluno_id``), sem FK: o radar estrutural não os
+# vê, então a restauração os trata à parte (``_reapontar``).
+CANDIDATOS_DA_REVISAO = "revisoes_identidade.candidatos"
+
 
 def _referencias_a_usuario(modelo) -> tuple[str, ...]:
     """Colunas do modelo que apontam para ``usuarios`` e SAEM no arquivo (fora de
@@ -255,6 +278,24 @@ def _tabelas_destruidas(metadata) -> set[str]:
     """Toda tabela que uma restauração apaga: as deletadas diretamente (as do
     ``MODELOS``) mais o que o banco derruba por cascade."""
     return _fecho_cascade(metadata, {m.__tablename__ for _, m in MODELOS})
+
+
+def _referencias_de_fora(metadata) -> list[tuple[str, str, str]]:
+    """(tabela, coluna, tabela do arquivo) de toda FK ``ON DELETE SET NULL`` de uma
+    tabela FORA do arquivo para uma DO arquivo: o vínculo que o DELETE da restauração
+    zera e que ``_reapontar`` liga à linha recriada.
+
+    Varredura ESTRUTURAL, como a das perdas (que segue o CASCADE): uma tabela nova
+    nessa situação é reapontada sozinha, e
+    ``test_toda_referencia_de_fora_do_arquivo_esta_no_radar`` exige que a tabela do
+    arquivo tenha linhagem (``CHAVES_DE_LINHAGEM``) e que não haja FK de fora sem
+    ``ondelete`` (o DELETE cairia com "dados inconsistentes")."""
+    no_arquivo = {m.__tablename__ for _, m in MODELOS}
+    return sorted(
+        (tabela.name, fk.parent.name, fk.column.table.name)
+        for tabela in metadata.tables.values() if tabela.name not in no_arquivo
+        for fk in tabela.foreign_keys
+        if fk.column.table.name in no_arquivo and (fk.ondelete or "").upper() == "SET NULL")
 
 
 def _registrar_tabelas_protegidas() -> None:
@@ -392,12 +433,14 @@ def _ultimo_log(db: Session) -> int:
     return int(db.execute(select(func.max(LogAuditoria.id))).scalar() or 0)
 
 
-def _ligacoes_entre_restauracoes(db: Session) -> dict[int, set[int]]:
+def _ligacoes_entre_restauracoes(db: Session, chave: str = CHAVE_MAPA_ALUNOS,
+                                 ) -> dict[int, set[int]]:
     """Linhagem das fichas, pelas restaurações de QUALQUER escola: cada restauração
     recria a ficha com id NOVO e grava em ``backup.restaurado`` o mapa {id novo:
     ``_id`` do arquivo} (``CHAVE_MAPA_ALUNOS``; preservado do expurgo). Devolve as
     ligações nos dois sentidos. Registro sem o mapa (restauração anterior a ele) ou
-    com o mapa ilegível não liga nada.
+    com o mapa ilegível não liga nada. ``chave`` escolhe a tabela
+    (``CHAVES_DE_LINHAGEM``): turmas e importações têm a mesma linhagem.
 
     Não filtra pela escola de destino, como as exclusões
     (``_excluidos_depois_do_backup``): o arquivo da escola A gerado ANTES de uma
@@ -409,7 +452,7 @@ def _ligacoes_entre_restauracoes(db: Session) -> dict[int, set[int]]:
     ligacoes: dict[int, set[int]] = {}
     for detalhes in db.execute(select(LogAuditoria.detalhes).where(
             LogAuditoria.acao == "backup.restaurado")).scalars():
-        mapa = detalhes.get(CHAVE_MAPA_ALUNOS) if isinstance(detalhes, dict) else None
+        mapa = detalhes.get(chave) if isinstance(detalhes, dict) else None
         if not isinstance(mapa, dict):
             continue
         for novo, antigo in mapa.items():
@@ -463,9 +506,112 @@ def _excluidos_depois_do_backup(db: Session, escola_id: int, log_ate: Any) -> se
     return excluidos
 
 
+def _id_no_arquivo(atual: int, ids_no_arquivo: set[int],
+                   ligacoes: dict[int, set[int]]) -> int | None:
+    """O ``_id`` do arquivo que é a mesma linha que ``atual`` (o id de hoje): o próprio
+    id, quando o arquivo é desta escola e não houve outra restauração depois dele; senão
+    o único id do arquivo na linhagem dele (``_ligacoes_entre_restauracoes``, em cadeia).
+    Nenhum, ou mais de um (ambíguo): ``None`` — a linha não tem equivalente no arquivo.
+    No PostgreSQL um id nunca volta a ser usado, então o mesmo id é a mesma linha. (No
+    SQLite de desenvolvimento, que reaproveita id, a linha apagada e recriada depois do
+    arquivo com o mesmo id passaria por ela.)"""
+    if atual in ids_no_arquivo:
+        return atual
+    vistos, pendentes, achados = {atual}, [atual], set()
+    while pendentes:
+        for outro in ligacoes.get(pendentes.pop(), ()):
+            if outro not in vistos:
+                vistos.add(outro)
+                pendentes.append(outro)
+                if outro in ids_no_arquivo:
+                    achados.add(outro)
+    return achados.pop() if len(achados) == 1 else None
+
+
+def _referencias_atuais(db: Session, escola_id: int) -> dict:
+    """ANTES do DELETE: quem, fora do arquivo, aponta hoje para uma linha da escola que
+    a restauração vai recriar — por FK ``SET NULL`` (``_referencias_de_fora``), com o
+    id ATUAL, que o DELETE zera; e os candidatos das revisões da escola (JSON)."""
+    from app.core.database import Base  # noqa: E402  (evita ciclo no import)
+    por_fk = []
+    for tabela, coluna, alvo in _referencias_de_fora(Base.metadata):
+        t, a = Base.metadata.tables[tabela], Base.metadata.tables[alvo]
+        [chave] = t.primary_key.columns
+        linhas = db.execute(select(chave, t.c[coluna]).where(t.c[coluna].in_(
+            select(a.c.id).where(a.c.escola_id == escola_id)))).all()
+        por_fk.append((tabela, coluna, alvo, [(int(i), int(v)) for i, v in linhas]))
+    revisoes = Base.metadata.tables["revisoes_identidade"]
+    candidatos = [(int(i), lista) for i, lista in db.execute(
+        select(revisoes.c.id, revisoes.c.candidatos)
+        .where(revisoes.c.escola_id == escola_id)).all()
+        if isinstance(lista, list) and lista]
+    return {"por_fk": por_fk, "candidatos": candidatos}
+
+
+def _reapontar(db: Session, referencias: dict,
+               mapas: dict[str, dict[int, int]]) -> dict[str, dict[str, int]]:
+    """DEPOIS dos INSERTs: liga cada referência capturada por ``_referencias_atuais`` à
+    linha recriada (id atual → ``_id`` do arquivo → id novo: ``_id_no_arquivo``).
+
+    O que o arquivo não traz (a ficha, turma ou importação criada depois dele, a
+    criança excluída de vez) fica NULL — a decisão humana que apontava para a ficha
+    que não volta deixa de valer —, e a candidata sem equivalente sai da lista, como
+    na exclusão (o clique nela daria 400). ``resolucao`` não muda: é o registro do que
+    foi escolhido na época, como na fusão. Devolve, por referência, quantas foram
+    reapontadas e quantas ficaram sem equivalente (só contagens)."""
+    from app.core.database import Base  # noqa: E402  (evita ciclo no import)
+    ligacoes: dict[str, dict[int, set[int]]] = {}
+    ids_no_arquivo: dict[str, set[int]] = {}
+
+    def _novo(alvo: str, atual: int) -> int | None:
+        if alvo not in ligacoes:
+            chave = CHAVES_DE_LINHAGEM.get(alvo)
+            ligacoes[alvo] = _ligacoes_entre_restauracoes(db, chave) if chave else {}
+            ids_no_arquivo[alvo] = set(mapas.get(alvo, {}))
+        antigo = _id_no_arquivo(atual, ids_no_arquivo[alvo], ligacoes[alvo])
+        return None if antigo is None else mapas[alvo].get(antigo)
+
+    contagem: dict[str, dict[str, int]] = {}
+    for tabela, coluna, alvo, linhas in referencias["por_fk"]:
+        t = Base.metadata.tables[tabela]
+        [chave] = t.primary_key.columns
+        valores = [{"b_chave": i, "b_novo": _novo(alvo, atual)} for i, atual in linhas]
+        if valores:
+            db.execute(update(t).where(chave == bindparam("b_chave"))
+                       .values({coluna: bindparam("b_novo")}), valores)
+        reapontadas = sum(1 for v in valores if v["b_novo"] is not None)
+        contagem[f"{tabela}.{coluna}"] = {"reapontadas": reapontadas,
+                                          "sem_equivalente": len(valores) - reapontadas}
+
+    revisoes = Base.metadata.tables["revisoes_identidade"]
+    reapontados = sem_equivalente = 0
+    for revisao_id, lista in referencias["candidatos"]:
+        nova, vistos = [], set()
+        for candidato in lista:
+            atual = candidato.get("aluno_id") if isinstance(candidato, dict) else None
+            if not isinstance(atual, int) or isinstance(atual, bool):
+                nova.append(candidato)          # entrada sem ficha: fica como está
+                continue
+            novo = _novo("alunos", atual)
+            if novo is None:
+                sem_equivalente += 1
+            elif novo not in vistos:
+                vistos.add(novo)
+                reapontados += 1
+                nova.append({**candidato, "aluno_id": novo})
+        if nova != lista:
+            db.execute(update(revisoes).where(revisoes.c.id == revisao_id)
+                       .values(candidatos=nova))
+    contagem[CANDIDATOS_DA_REVISAO] = {"reapontadas": reapontados,
+                                       "sem_equivalente": sem_equivalente}
+    return contagem
+
+
 def restaurar(db: Session, escola_id: int, dados: dict,
               avisos: list[str] | None = None,
-              mapa_alunos: dict[int, int] | None = None) -> dict[str, int]:
+              mapa_alunos: dict[int, int] | None = None,
+              linhagem: dict[str, dict[int, int]] | None = None,
+              reapontadas: dict[str, dict[str, int]] | None = None) -> dict[str, int]:
     """Substitui os dados pedagógicos da escola pelos do backup.
 
     Tudo acontece em uma única transação: ou restaura completo, ou nada.
@@ -495,6 +641,12 @@ def restaurar(db: Session, escola_id: int, dados: dict,
     Ressalva: restauração registrada sem esse mapa (anterior a ele) ou registro
     apagado quebra a linhagem — a criança excluída depois dela pode voltar sem aviso;
     confira a exclusão à mão.
+
+    ``linhagem`` (opcional) recebe o mesmo mapa {id novo: ``_id`` do arquivo} das
+    fichas, turmas e importações recriadas, por chave do log (``CHAVES_DE_LINHAGEM``),
+    e ``reapontadas`` (opcional), quantas referências de fora do arquivo foram ligadas
+    às linhas recriadas e quantas ficaram sem equivalente (``_reapontar``): quem chama
+    grava os dois em ``backup.restaurado``.
     """
     if dados.get("versao") not in VERSOES_ACEITAS:
         raise ValueError("Versão de backup não suportada.")
@@ -508,6 +660,9 @@ def restaurar(db: Session, escola_id: int, dados: dict,
         raise RestauracaoBloqueada(perdas)
     excluidos = _excluidos_depois_do_backup(db, escola_id, dados.get("log_ate"))
     nao_restaurados: set[int] = set()
+    # Quem fica FORA do arquivo e aponta para o que vai ser recriado: lido antes do
+    # DELETE, que zera essas referências (``ON DELETE SET NULL``).
+    referencias = _referencias_atuais(db, escola_id)
 
     # Apaga os dados atuais da escola (filhos antes dos pais) — menos as
     # configurações de segredo/acesso e as travas da sincronização
@@ -587,8 +742,14 @@ def restaurar(db: Session, escola_id: int, dados: dict,
             if id_antigo is not None:
                 mapas[nome][int(id_antigo)] = objeto.id
         contagem[nome] = restauradas
+    religadas = _reapontar(db, referencias, mapas)
+    if reapontadas is not None:
+        reapontadas.update(religadas)
     if mapa_alunos is not None:
         mapa_alunos.update({novo: antigo for antigo, novo in mapas.get("alunos", {}).items()})
+    if linhagem is not None:
+        linhagem.update({chave: {novo: antigo for antigo, novo in mapas.get(tabela, {}).items()}
+                         for tabela, chave in CHAVES_DE_LINHAGEM.items()})
     if nao_restaurados and avisos is not None:
         # "nesta ou em outra escola": a exclusão pode ter sido de outra ficha da mesma
         # criança, em outra escola (a cópia que um arquivo restaurado levou para lá).

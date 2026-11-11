@@ -912,6 +912,9 @@ def restaurar_backup(
     inteiro, ``log_ate``).
     Ressalva: restauração registrada sem o mapa (anterior a ele) quebra a linhagem — a
     criança excluída depois dela pode voltar sem aviso; confira a exclusão à mão.
+    A fila de revisões de identidade e as execuções da sincronização, que não entram
+    no arquivo, passam a apontar para as fichas, turmas e importações recriadas
+    (``backup._reapontar``): a decisão humana da fila continua valendo.
     """
     # No máximo o teto + 1 byte na memória: o resto fica no temporário.
     conteudo = arquivo.file.read(TAMANHO_MAXIMO_BACKUP + 1)
@@ -936,10 +939,11 @@ def restaurar_backup(
     # LGPD (art. 18): a criança excluída de vez depois do backup não volta; o aviso
     # (sem nome) vai em ``avisos``, ao lado do D10.
     avisos_lgpd: list[str] = []
-    mapa_alunos: dict[int, int] = {}
+    linhagem: dict[str, dict[int, int]] = {}
+    reapontadas: dict[str, dict[str, int]] = {}
     try:
         contagem = svc_backup.restaurar(db, escola_id, dados, avisos=avisos_lgpd,
-                                        mapa_alunos=mapa_alunos)
+                                        linhagem=linhagem, reapontadas=reapontadas)
     except svc_backup.RestauracaoBloqueada as bloqueio:
         # C-06: a operação destruiria dado que o arquivo não repõe (perfis do
         # Quest, responsáveis, ou tabelas ausentes num backup antigo). Recusar é
@@ -967,10 +971,15 @@ def restaurar_backup(
     avisos = avisos_lgpd + list(identidade_efetiva.conferir_restauracao(
         db, escola_id, usuario_id=usuario.id))
     # A linhagem das fichas (só ids): sem ela, um arquivo anterior a ESTA restauração
-    # traria de volta a criança excluída de vez depois dela (LGPD art. 18).
+    # traria de volta a criança excluída de vez depois dela (LGPD art. 18). A das
+    # turmas e importações reaponta a fila de revisões numa restauração seguinte; e
+    # ``referencias_reapontadas`` conta o que, fora do arquivo, foi ligado às linhas
+    # recriadas ou ficou sem equivalente (só contagens).
     registrar(db, "backup.restaurado", escola_id=escola_id, usuario_id=usuario.id,
-              detalhes={"tabelas": contagem, svc_backup.CHAVE_MAPA_ALUNOS: {
-                  str(novo): antigo for novo, antigo in mapa_alunos.items()}})
+              detalhes={"tabelas": contagem,
+                        **{chave: {str(novo): antigo for novo, antigo in mapa.items()}
+                           for chave, mapa in linhagem.items()},
+                        "referencias_reapontadas": reapontadas})
     db.commit()
     scoring.recalcular_escola(db, escola_id)
     total = sum(contagem.values())
