@@ -38,6 +38,7 @@ import {
 } from "../components/ui";
 import { useApp } from "../context/AppContext";
 import { useApi } from "../hooks/useApi";
+import { useModulos } from "../hooks/useModulos";
 import { apiDownload } from "../lib/api";
 import { dataHora, numero, tempoLeitura } from "../lib/formato";
 import type { Turma } from "../lib/types";
@@ -201,6 +202,9 @@ const PLATAFORMAS = [
   { valor: "elefante", rotulo: "Somente Elefante Letrado" },
   { valor: "matific", rotulo: "Somente Matific" },
 ] as const;
+
+/** Plataforma do relatório → módulo do plano da rede (o `PLATAFORMA_MODULO` do backend). */
+const MODULO_DA_PLATAFORMA: Record<string, string> = { elefante: "leitura", matific: "matematica" };
 
 const TOM_CLASSIFICACAO: Record<Classificacao, "ok" | "alerta" | "neutro"> = {
   SUPORTADO: "ok",
@@ -591,7 +595,16 @@ export default function RelatorioPeriodo() {
   // continua valendo nos rankings e nas premiações, e vice-versa — é a mesma
   // pergunta ("qual janela?") e seria ruído pedi-la de novo em cada tela.
   const { escolaId, periodo, definirPeriodo } = useApp();
-  const [plataformas, setPlataformas] = useState<string>("elefante,matific");
+  // Só as plataformas que a rede CONTRATOU: o backend recusa (403) o relatório
+  // inteiro quando uma das plataformas pedidas é de um módulo fora do plano — numa
+  // rede só com a Leitura, abrir em "Elefante + Matific" era abrir num erro.
+  const { tem } = useModulos();
+  const contratadas = PLATAFORMAS.filter((p) => p.valor.split(",").every((x) => tem(MODULO_DA_PLATAFORMA[x])));
+  const opcoesPlataforma: readonly (typeof PLATAFORMAS)[number][] = contratadas.length ? contratadas : PLATAFORMAS;
+  const [escolhaPlataformas, setPlataformas] = useState<string>(opcoesPlataforma[0].valor);
+  const plataformas = opcoesPlataforma.some((p) => p.valor === escolhaPlataformas)
+    ? escolhaPlataformas
+    : opcoesPlataforma[0].valor;
   const [turmaId, setTurmaId] = useState<number | null>(null);
   const [alunoId, setAlunoId] = useState<number | null>(null);
 
@@ -710,7 +723,7 @@ export default function RelatorioPeriodo() {
                 value={plataformas}
                 onChange={(e) => setPlataformas(e.target.value)}
               >
-                {PLATAFORMAS.map((p) => (
+                {opcoesPlataforma.map((p) => (
                   <option key={p.valor} value={p.valor}>{p.rotulo}</option>
                 ))}
               </select>
