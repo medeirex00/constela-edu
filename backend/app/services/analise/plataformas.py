@@ -79,8 +79,8 @@ from app.services import bimestres, matific_destaque
 from app.services import modulos as svc_modulos
 from app.services import relatorios_periodo as rp
 from app.services.analise import K_MINIMO, AnaliseInvalida, validar_anos
-from app.services.analise.indicadores import (ano_letivo_de_referencia, escolas_da_rede,
-                                              ordem_nome)
+from app.services.analise.indicadores import (ano_letivo_de_referencia, anos_letivos_medidos,
+                                              escolas_da_rede, ordem_nome)
 from app.services.elegibilidade import ANOS_PREMIAVEIS, ano_premiavel
 from app.services.indicadores.ica import arredondar
 from app.services.scoring import NIVEIS_ORDENADOS, POS_DO_NIVEL
@@ -1556,7 +1556,10 @@ def _tabelas(db: Session, escolas_da_decisao: list[Escola], medir: list[Escola],
             preparos.append(_preparar(g, contagens[e.id], _visiveis(decisoes[e.id]),
                                       janelas[(g, e.ano_letivo_ativo)], mods,
                                       {pl: col[pl].get(e.id) for pl in PLATAFORMA_MODULO}))
-    ano = ano_letivo_de_referencia(escolas_da_decisao)
+    # O ano de referência e os anos letivos: pelas escolas com aluno na coorte (a mesma
+    # leitura que decide a supressão) — escola fechada ou só cadastrada não decide o ano.
+    com_aluno = {eid for eid, c in contagens.items() if c.total or c.fora}
+    ano = ano_letivo_de_referencia(escolas_da_decisao, com_aluno)
     ano_ref = ano if ano is not None else hoje.year
     janelas_ref = [_janela_do_periodo(p, ano_ref, hoje)
                    or _janela(p.preset, ano_ref, p.inicio, p.fim, hoje) for p in periodos]
@@ -1565,7 +1568,7 @@ def _tabelas(db: Session, escolas_da_decisao: list[Escola], medir: list[Escola],
     for prep in preparos:
         eid = prep.contagem.escola.id
         medidas[prep.g][eid] = _medir_escola(prep, coortes[eid], lidos, hoje)
-    anos = sorted({e.ano_letivo_ativo for e in escolas_da_decisao})
+    anos = anos_letivos_medidos(escolas_da_decisao, com_aluno)
     return [_Tabela(contagens=ordenadas, decisoes=decisoes, medidas=medidas[g], mods=mods,
                     janela=janelas_ref[g], ano=ano, anos=anos, primeiros=primeiros)
             for g in range(len(periodos))]

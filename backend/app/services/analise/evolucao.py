@@ -17,10 +17,13 @@ bimestres e recorta os campos da série.
 
 * Só os bimestres que JÁ COMEÇARAM (o início ≤ hoje); o que contém hoje vem marcado
   ``em_andamento`` (os números dele são parciais, até hoje).
-* O ano é o ano letivo de referência da rede (o mais comum entre as escolas). Quando ele
-  não é o do calendário de hoje (a virada de ano antes de a escola trocar o ano letivo), as
-  datas de cada bimestre continuam as do ano letivo: o preset numerado do serviço de
-  períodos é do ano letivo de cada escola, como na aba de plataformas.
+* O ano é o ano letivo de referência da rede: o mais comum entre as escolas EM USO (ativas
+  e com aluno na coorte — ``indicadores.ano_letivo_da_rede``; escola fechada ou só
+  cadastrada, parada no ano antigo, não decide). Na ficha (``so_escola``), o ano letivo da
+  própria escola. Quando ele não é o do calendário de hoje (a virada de ano antes de a
+  escola trocar o ano letivo), as datas de cada bimestre continuam as do ano letivo: o
+  preset numerado do serviço de períodos é do ano letivo de cada escola, como na aba de
+  plataformas.
 * Escolas em ordem alfabética (nunca ranking); ausência ≠ zero: sem número, o campo é nulo
   e vem o motivo do serviço; escola suprimida não mostra nada.
 
@@ -37,7 +40,7 @@ from app.services import bimestres
 from app.services import relatorios_periodo as rp
 from app.services.analise import K_MINIMO, AnaliseInvalida
 from app.services.analise import plataformas as plat_svc
-from app.services.analise.indicadores import ano_letivo_de_referencia
+from app.services.analise.indicadores import ano_letivo_da_rede
 
 CAMPOS_REDE = {"elefante": ("participacao_pct", "livros_por_aluno", "minutos_por_aluno"),
                "matific": ("participacao_pct", "atividades_por_aluno")}
@@ -119,7 +122,10 @@ def evolucao(db: Session, rede: Rede, *, serie: int | None = None,
         raise AnaliseInvalida("Escola não encontrada nesta rede.", 404)
     if so_escola and escola_id is None:
         raise AnaliseInvalida("Para medir só a escola, informe a escola (escola_id).", 422)
-    ano = ano_letivo_de_referencia(escolas) or hoje.year
+    if so_escola:                                        # a ficha: o ano da escola
+        ano = next(e.ano_letivo_ativo for e in escolas if e.id == escola_id)
+    else:
+        ano = ano_letivo_da_rede(db, escolas) or hoje.year
     modulos = {p: m in contratados for p, m in plat_svc.PLATAFORMA_MODULO.items()}
     pedidos = []
     for numero in bimestres.BIMESTRES:

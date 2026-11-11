@@ -153,6 +153,16 @@ limites em datas de Brasília, comparados com os instantes gravados em UTC, **se
 conversão** (a regra herdada das premiações — ver 5). Cada escola usa o próprio ano letivo
 ativo.
 
+**Ano letivo de referência da rede** (o `janela.ano_letivo` da rota da rede, o rótulo da
+janela e o ano da evolução por bimestre): o mais comum entre as escolas **em uso** —
+ativas e com aluno na coorte (no empate, o mais novo). A troca do ano letivo é manual e
+escola a escola: escola fechada ou só cadastrada, sem aluno, fica parada no ano antigo e
+**não decide** o ano da rede. Sem nenhuma escola em uso, valem as que têm aluno; sem
+nenhuma com aluno, todas. `janela.anos_letivos` lista os anos das escolas **com aluno** (as
+que são medidas, cada uma no ano dela — também a inativa que ainda tem aluno): escola sem
+aluno não põe "anos letivos diferentes" na tela nem tira a relação e o diagnóstico do
+"mesmo ano".
+
 **Exceção — questões do Elefante**: seguem a regra do Relatório por Período
 (`relatorios_periodo._diferenca_de_retratos`): cada coleta é convertida para Brasília, a
 borda do período é medida pela coleta a até **1 h** dela (`TOLERANCIA_BORDA`: a agenda das
@@ -731,8 +741,8 @@ Serviço: `evolucao.py`. Só leitura.
   `escola_id`: 422; escola de outra rede: 404, como sempre.
 * **Só os bimestres que já começaram** (início ≤ hoje); o que contém hoje vem com
   `em_andamento = true` (números parciais, até hoje).
-* **Ano**: o ano letivo de referência da rede (o mais comum entre as escolas). Se ele não é
-  o ano de hoje (a virada de ano antes de a escola trocar o ano letivo), as datas são as do
+* **Ano**: o ano letivo de referência da rede (3.1: o mais comum entre as escolas em uso);
+  na ficha (`so_escola`), o ano letivo da própria escola. Se ele não é o ano de hoje (a virada de ano antes de a escola trocar o ano letivo), as datas são as do
   calendário daquele ano, pedidas como período personalizado — o mesmo resultado. Ano sem
   calendário oficial: as datas aproximadas do serviço de períodos, com o aviso em
   `limitacoes` (`calendario_oficial = false`).
