@@ -20,7 +20,7 @@ from app.models import (
     SnapshotMatific,
     Turma,
 )
-from app.services import dificuldade_livro, elegibilidade, evolucao, scoring
+from app.services import dificuldade_livro, elegibilidade, evolucao, matific_destaque, scoring
 
 # Padrões usados até a escola personalizar (namespace gamificacao.*)
 XP_PADRAO = {
@@ -199,6 +199,24 @@ def _primeira_conquista(serie_m: list, serie_e: list, indicador: str, limite: fl
     return None
 
 
+def _matific_do_ano(serie_m: list, ano_letivo: int | None):
+    """Último retrato do Matific DENTRO do ano letivo — o contador que vale para o
+    XP dos indicadores (atividades e estrelas).
+
+    MATIFIC É CONTADOR DO ANO (``scoring.snapshots_matific_do_ano``, a regra do
+    motor, do dashboard e do telão): o acumulado de dezembro do ano anterior não
+    é XP do ano novo. ``serie_m`` vem em ordem cronológica. ``ano_letivo=None`` =
+    sem recorte (o último retrato da série)."""
+    if ano_letivo is None:
+        return serie_m[-1] if serie_m else None
+    inicio, fim = matific_destaque.janela_ano_letivo(ano_letivo)
+    do_ano = None
+    for snap in serie_m:
+        if inicio <= evolucao._sem_fuso(snap.data_referencia) <= fim:
+            do_ano = snap
+    return do_ano
+
+
 def xp_do_aluno(snap_m, snap_e, pesos_xp: dict) -> int:
     total = 0.0
     if snap_m:
@@ -251,9 +269,15 @@ def sequencia_semanas(serie_m: list, serie_e: list) -> int:
 
 
 def _computar_gamificacao(aluno_id: int, serie_m: list, serie_e: list,
-                          pesos_xp: dict, base: float, conquistas_cfg: list) -> dict:
+                          pesos_xp: dict, base: float, conquistas_cfg: list,
+                          ano_letivo: int | None = None) -> dict:
     """Núcleo do cálculo a partir de séries JÁ carregadas — sem tocar o banco.
-    Permite processar a escola inteira (mural, ranking) sem N+1."""
+    Permite processar a escola inteira (mural, ranking) sem N+1.
+
+    ``ano_letivo``: o XP dos indicadores do Matific usa o contador DESSE ano
+    (:func:`_matific_do_ano`). As conquistas seguem avaliadas sobre o último
+    retrato — se as de matemática valem por ano ou pela vida toda é decisão de
+    produto ainda aberta, e este recorte não a toma."""
     snap_m = serie_m[-1] if serie_m else None
     snap_e = serie_e[-1] if serie_e else None
 
@@ -276,8 +300,10 @@ def _computar_gamificacao(aluno_id: int, serie_m: list, serie_e: list,
             if atingida else None,
         })
 
-    # XP = indicadores (contínuo) + bônus das conquistas desbloqueadas
-    xp = xp_do_aluno(snap_m, snap_e, pesos_xp) + xp_conquistas
+    # XP = indicadores (contínuo) + bônus das conquistas desbloqueadas. O
+    # indicador do Matific é o contador DO ANO letivo: sem retrato no ano, ele
+    # não soma XP (antes o acumulado do ano anterior virava XP do ano novo).
+    xp = xp_do_aluno(_matific_do_ano(serie_m, ano_letivo), snap_e, pesos_xp) + xp_conquistas
     nivel, faltam = nivel_do_xp(xp, base)
 
     return {
@@ -304,8 +330,10 @@ def gamificacao_do_aluno(db: Session, escola_id: int, aluno_id: int) -> dict:
         select(SnapshotElefante).where(SnapshotElefante.aluno_id == aluno_id)
         .order_by(SnapshotElefante.data_referencia, SnapshotElefante.id)
     ).scalars().all()
+    escola = db.get(Escola, escola_id)
     return _computar_gamificacao(aluno_id, serie_m, serie_e,
-                                 pesos_xp, base, conquistas_cfg)
+                                 pesos_xp, base, conquistas_cfg,
+                                 ano_letivo=escola.ano_letivo_ativo if escola else None)
 
 
 def ranking_xp(db: Session, escola_id: int) -> list[dict]:
@@ -323,7 +351,11 @@ def ranking_xp(db: Session, escola_id: int) -> list[dict]:
     if not premiaveis:
         return []
     pesos_xp, base, conquistas_cfg = _regras(db, escola_id)
+    # Conquistas: o último retrato (regra de hoje, à espera da decisão do dono).
     matific = scoring._snapshots_atuais(db, escola_id, SnapshotMatific)
+    # XP dos indicadores do Matific: o contador DO ANO letivo (a regra do motor).
+    matific_do_ano = scoring.snapshots_matific_do_ano(db, escola_id,
+                                                      escola.ano_letivo_ativo)
     elefante = scoring._snapshots_atuais(db, escola_id, SnapshotElefante)
 
     matriculas = db.execute(
@@ -345,7 +377,7 @@ def ranking_xp(db: Session, escola_id: int) -> list[dict]:
             regra for regra in conquistas_cfg
             if _valor_indicador(snap_m, snap_e, regra["indicador"]) >= float(regra["limite"])
         ]
-        xp = xp_do_aluno(snap_m, snap_e, pesos_xp) \
+        xp = xp_do_aluno(matific_do_ano.get(matricula.aluno_id), snap_e, pesos_xp) \
             + sum(regra["xp"] for regra in desbloqueadas)
         nivel, _ = nivel_do_xp(xp, base)
         conquistas = len(desbloqueadas)
@@ -549,7 +581,8 @@ def mural(db: Session, escola_id: int,
     for aluno_id in (set(series_m) | set(series_e)) & set(nomes):
         detalhe = _computar_gamificacao(
             aluno_id, series_m.get(aluno_id, []), series_e.get(aluno_id, []),
-            pesos_xp, base, conquistas_cfg)
+            pesos_xp, base, conquistas_cfg,
+            ano_letivo=escola.ano_letivo_ativo if escola is not None else None)
         for conquista in detalhe["conquistas"]:
             data = conquista["data"]
             if data is None:
