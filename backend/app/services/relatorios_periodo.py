@@ -125,6 +125,7 @@ from app.models import (Aluno, Escola, EventoAluno, Importacao, Leitura, Matricu
                         SnapshotElefante, SnapshotMatific, Turma)
 from app.models.plataformas import IMPORTACAO_SEM_QUESTOES
 from app.services import matific_destaque, periodos
+from app.services.evolucao import sem_ajustes_superados_matific
 # A faixa de anos aceita é UMA só para o relatório e para a análise (que mede com as
 # funções deste módulo): o pacote ``analise`` só a declara — o ``__init__`` dele não
 # importa nada daqui, então não há ciclo.
@@ -810,7 +811,10 @@ def _cobertura(janela: Janela, hoje: date | None, intervalos: list[dict],
 
 def _retratos(db: Session, escola_id: int, coorte: dict[int, dict], modelo
               ) -> dict[int, list]:
-    """Série de retratos por aluno. UMA query; sem N+1."""
+    """Série de retratos por aluno. UMA query; sem N+1.
+
+    MATIFIC: sem o ajuste manual que uma coleta posterior do mesmo ano desmentiu
+    (``matific_destaque.sem_ajustes_superados``) — a mesma série das premiações."""
     if not coorte:
         return {}
     series: dict[int, list] = {}
@@ -819,6 +823,8 @@ def _retratos(db: Session, escola_id: int, coorte: dict[int, dict], modelo
                                  modelo.aluno_id.in_(coorte.keys()))
             .order_by(modelo.aluno_id, modelo.data_referencia, modelo.id)).scalars():
         series.setdefault(snap.aluno_id, []).append(snap)
+    if modelo is SnapshotMatific:
+        return sem_ajustes_superados_matific(db, escola_id, series)
     return series
 
 

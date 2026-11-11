@@ -40,7 +40,7 @@ import math
 import statistics
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Iterable
+from typing import Container, Iterable
 
 # Fração da mediana de atividades da coorte somada como atividades com 0 estrela.
 FRACAO_ZEROS_EXTRAS = 0.2
@@ -94,6 +94,42 @@ def limitar_estrelas(atividades: float, estrelas: float) -> float:
     premiação real). Valores negativos contam como 0."""
     return min(max(0.0, float(estrelas)),
                ESTRELAS_MAX_POR_ATIVIDADE * max(0.0, float(atividades)))
+
+
+def sem_ajustes_superados(serie: Iterable, manuais: Container[int]) -> list:
+    """A série SEM os ajustes manuais que uma coleta posterior do mesmo ano já desmentiu.
+
+    O botão Editar do Matific grava um retrato novo no instante do ajuste, ligado a
+    uma ``Importacao`` do tipo ``"manual"``. O contador da plataforma é cumulativo e
+    a coleta seguinte traz de novo o número DELA: se o ajuste continuasse na série,
+    ele seria um degrau artificial entre duas coletas — corrigir para baixo fazia a
+    coleta seguinte parecer ganho do período; corrigir para cima fazia o ganho real
+    parecer queda (e virar 0).
+
+    REGRA: um retrato manual vale — como base E como estado atual — só enquanto
+    nenhuma COLETA (retrato que não é ajuste manual) do MESMO ano letivo vier depois
+    dele. Sem coleta depois, o ajuste é o estado vigente e continua valendo. Uma
+    coleta de outro ano não o desmente: o contador é do ano
+    (``janela_ano_letivo``, ano civil).
+
+    ``manuais``: ids das importações do tipo ``"manual"`` (o ``importacao_id`` de
+    cada retrato diz de onde ele veio). Devolve a série em ordem cronológica
+    (``data_referencia``; empate preserva a ordem recebida, isto é, o id)."""
+    ordenada = sorted(serie, key=_data)
+    if not manuais:
+        return ordenada
+    anos_com_coleta_depois: set[int] = set()
+    mantidos = []
+    for snap in reversed(ordenada):
+        ano = _data(snap).year
+        if getattr(snap, "importacao_id", None) in manuais:
+            if ano in anos_com_coleta_depois:
+                continue       # desmentido pela coleta que veio depois
+        else:
+            anos_com_coleta_depois.add(ano)
+        mantidos.append(snap)
+    mantidos.reverse()
+    return mantidos
 
 
 @dataclass(frozen=True)
@@ -163,6 +199,10 @@ def ganho_no_periodo(serie: Iterable, inicio: datetime | None,
     recortar, e fingir um seria inventar número. Vale a SITUAÇÃO DO ÚLTIMO
     SNAPSHOT do ano letivo, tomada a partir do zero (``data_base = None``): os
     contadores do ano como a plataforma os informou. Sem snapshot no ano → ``None``.
+
+    AJUSTE MANUAL: ``serie`` chega SEM os ajustes que uma coleta posterior do ano
+    desmentiu (``sem_ajustes_superados``, aplicada por quem carrega a série do
+    banco). Eles não são base nem estado atual — eram eles que inventavam ganho.
     """
     ini_ano, fim_ano = janela_ano_letivo(ano_letivo)
     # sorted é estável: empate de data preserva a ordem recebida (id).

@@ -59,6 +59,7 @@ from sqlalchemy.orm import Session
 from app.models import Escola, EventoAluno, Leitura, SnapshotElefante, SnapshotMatific
 from app.services import bimestres, matific_destaque, periodos
 from app.services import relatorios_periodo as rp
+from app.services.evolucao import sem_ajustes_superados_matific
 
 # Os presets de ``periodos`` que têm as DUAS pontas: "tudo" não tem período, e
 # "personalizado" exige datas que esta rota não recebe.
@@ -200,14 +201,19 @@ class _SeriesMatific:
 def _series_matific(db: Session, escola_id: int, coorte: dict[int, dict],
                     ano: int) -> _SeriesMatific:
     """UMA consulta, só as colunas que a regra oficial lê, só em volta do ano letivo
-    (o contador do Matific é do ano: ``ganho_no_periodo`` descarta o resto)."""
+    (o contador do Matific é do ano: ``ganho_no_periodo`` descarta o resto).
+
+    Sem o ajuste manual que uma coleta posterior do mesmo ano desmentiu
+    (``matific_destaque.sem_ajustes_superados``): a mesma série das premiações e do
+    Relatório por Período. A folga em volta do ano não muda isso — o ajuste só é
+    desmentido por coleta do MESMO ano, que está inteiro na consulta."""
     if not coorte:
         return _SeriesMatific({}, {}, None)
     ini_ano, fim_ano = matific_destaque.janela_ano_letivo(ano)
     linhas = db.execute(
         select(SnapshotMatific.aluno_id, SnapshotMatific.id,
                SnapshotMatific.data_referencia, SnapshotMatific.atividades,
-               SnapshotMatific.estrelas)
+               SnapshotMatific.estrelas, SnapshotMatific.importacao_id)
         .where(SnapshotMatific.escola_id == escola_id,
                SnapshotMatific.aluno_id.in_(list(coorte)),
                SnapshotMatific.data_referencia >= ini_ano - _FOLGA_ANO,
@@ -217,7 +223,8 @@ def _series_matific(db: Session, escola_id: int, coorte: dict[int, dict],
     series: dict[int, list] = {}
     for linha in linhas:
         series.setdefault(linha.aluno_id, []).append(linha)
-    chaves = {aid: [matific_destaque._data(s) for s in serie]
+    series = sem_ajustes_superados_matific(db, escola_id, series)
+    chaves ={aid: [matific_destaque._data(s) for s in serie]
               for aid, serie in series.items()}
     ultima = db.execute(
         select(func.max(SnapshotMatific.data_referencia))

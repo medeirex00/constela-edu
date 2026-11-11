@@ -28,6 +28,7 @@ from sqlalchemy.orm import Session, selectinload
 from app.models import (
     Aluno,
     Escola,
+    Importacao,
     Leitura,
     Livro,
     Matricula,
@@ -39,6 +40,9 @@ from app.models import (
 from app.services import (bimestres, dificuldade_livro, elegibilidade, matific_destaque,
                           scoring)
 
+# ``Importacao.tipo`` do retrato gravado à mão pela escola (botão Editar das telas
+# Matific/Elefante — ``routers.plataformas._importacao_manual``).
+IMPORTACAO_AJUSTE_MANUAL = "manual"
 CAMPOS_MATIFIC = ("atividades", "estrelas", "pontuacao_media")
 CAMPOS_ELEFANTE = ("livros_unicos", "tempo_leitura_min", "questoes_tentativas", "questoes_acertos")
 # Snapshot → plataforma (o vocabulário de ``modulos.PLATAFORMA_MODULO``): é por
@@ -51,18 +55,48 @@ def _sem_fuso(momento: datetime) -> datetime:
     return momento.replace(tzinfo=None) if momento.tzinfo else momento
 
 
+def ajustes_manuais_matific(db: Session, escola_id: int) -> frozenset[int]:
+    """Ids das importações do Matific que são AJUSTE MANUAL da escola (o botão
+    Editar, ``routers.plataformas._importacao_manual``). É o que diz, retrato a
+    retrato (``importacao_id``), o que é número digitado e o que é coleta — a
+    entrada de ``matific_destaque.sem_ajustes_superados``."""
+    return frozenset(db.execute(
+        select(Importacao.id).where(Importacao.escola_id == escola_id,
+                                    Importacao.plataforma == "matific",
+                                    Importacao.tipo == IMPORTACAO_AJUSTE_MANUAL)
+    ).scalars())
+
+
+def sem_ajustes_superados_matific(db: Session, escola_id: int,
+                                  series: dict[int, list]) -> dict[int, list]:
+    """``series`` do Matific (por aluno) sem os ajustes manuais que uma coleta
+    posterior do mesmo ano já desmentiu (``matific_destaque.sem_ajustes_superados``).
+    Escola sem ajuste manual: devolve as séries como vieram (uma consulta só)."""
+    manuais = ajustes_manuais_matific(db, escola_id)
+    if not manuais:
+        return series
+    return {aluno_id: matific_destaque.sem_ajustes_superados(serie, manuais)
+            for aluno_id, serie in series.items()}
+
+
 def _series_por_aluno(db: Session, escola_id: int, modelo) -> dict[int, list]:
     """Todos os snapshots da escola agrupados por aluno, em ordem cronológica.
 
     Ordem por data_referencia (id desempata): o import por período do Matific
     pode gravar um mês ANTIGO depois (backfill) — por id, a série ficaria fora
-    de ordem e _janela/_baseline elegeriam o passado como "atual"."""
+    de ordem e _janela/_baseline elegeriam o passado como "atual".
+
+    MATIFIC: sai da série o ajuste manual que uma coleta posterior do mesmo ano
+    já desmentiu (``sem_ajustes_superados_matific``) — senão ele virava base ou
+    estado atual de um período e inventava ganho (ou o apagava)."""
     series: dict[int, list] = {}
     for snap in db.execute(
         select(modelo).where(modelo.escola_id == escola_id)
         .order_by(modelo.data_referencia, modelo.id)
     ).scalars():
         series.setdefault(snap.aluno_id, []).append(snap)
+    if modelo is SnapshotMatific:
+        return sem_ajustes_superados_matific(db, escola_id, series)
     return series
 
 
@@ -299,6 +333,10 @@ def resumo_evolucao(db: Session, escola_id: int, aluno_id: int, dias: int, *,
                 .order_by(modelo.data_referencia, modelo.id)
             ).scalars()
         ]
+        if modelo is SnapshotMatific:
+            # O ajuste manual já desmentido pela coleta não é ponto de partida.
+            serie = sem_ajustes_superados_matific(
+                db, escola_id, {aluno_id: serie})[aluno_id]
         atual = serie[-1] if serie else None
         anterior = _baseline(serie, inicio)
         for campo in campos:
