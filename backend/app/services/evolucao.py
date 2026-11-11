@@ -19,7 +19,7 @@ dimensão — sem virar zero e sem sumir da tela. Ver `ranking_evolucao`.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from types import SimpleNamespace
 
 from sqlalchemy import func, select
@@ -265,10 +265,27 @@ def _bucket_leitura(dt: datetime, granularidade: str) -> tuple[tuple, str]:
         # Bimestre LETIVO (calendário oficial da rede), não o do calendário civil:
         # ``(mês-1)//2+1`` chegava a rotular "5º bim" e "6º bim", que não existem
         # num ano letivo, e punha jul e ago no mesmo balde quando o 2º bimestre
-        # fecha em 23/07. ``bimestre_sugerido`` sempre devolve 1–4 (e em ano sem
-        # calendário cadastrado cai no mapa por mês), então o eixo nunca quebra.
-        bimestre = bimestres.bimestre_sugerido(dt.date())
-        return (dt.year, bimestre), f"{bimestre}º bim {dt.year}"
+        # fecha em 23/07.
+        dia = dt.date()
+        cal = bimestres.calendario(dia.year)
+        if cal is None:
+            # Ano sem calendário cadastrado: o mapa por mês (aproximado, que avisa
+            # no log) — ``bimestre_sugerido`` sempre devolve 1–4.
+            bimestre = bimestres.bimestre_sugerido(dia)
+            return (dt.year, bimestre), f"{bimestre}º bim {dt.year}"
+        # A leitura JÁ FEITA é classificada pela DATA, na janela oficial do
+        # bimestre — a mesma do Ranking de Leitura, das Premiações, do Relatório
+        # por Período e do certificado. A SUGESTÃO (``bimestre_sugerido``) põe o
+        # recesso no próximo bimestre, e o Perfil contava no "1º bim" a leitura de
+        # janeiro que o 1º bimestre não conta.
+        bimestre = bimestres.bimestre_da_data(dia)
+        if bimestre is not None:
+            return (dt.year, bimestre), f"{bimestre}º bim {dt.year}"
+        # Recesso (antes do 1º, entre dois bimestres ou depois do 4º): um balde
+        # próprio, entre os bimestres vizinhos, com o mês em que ele começa.
+        anterior = max((n for n in bimestres.BIMESTRES if cal[n][1] < dia), default=0)
+        comeca = cal[anterior][1] + timedelta(days=1) if anterior else date(dia.year, 1, 1)
+        return (dt.year, anterior + 0.5), f"Recesso {_MES_ABREV[comeca.month]}/{dt.year}"
     return (dt.year, dt.month), f"{_MES_ABREV[dt.month]}/{dt.year}"  # mês (padrão)
 
 

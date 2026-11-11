@@ -67,6 +67,9 @@ def test_certificado_sem_numero_no_recesso_nao_imprime_4(monkeypatch):
     assert '<div class="campo bimestre">4</div>' not in html
 
 
-def test_evolucao_por_bimestre_poe_a_leitura_do_recesso_no_proximo():
+def test_evolucao_por_bimestre_poe_a_leitura_do_recesso_no_balde_do_recesso():
+    """A SUGESTÃO (o próximo bimestre) é para a tela abrir marcada; a leitura JÁ FEITA no
+    recesso não é do 3º bimestre (a janela oficial dele começa em 26/07) — REG_NUMEROS-5,
+    tests/test_aud3_serie_evolucao_bimestre_recesso.py."""
     _, rotulo = svc_evolucao._bucket_leitura(datetime(2027, 7, 15, 10), "bimestre")
-    assert rotulo == "3º bim 2027"
+    assert rotulo == "Recesso jul/2027"
