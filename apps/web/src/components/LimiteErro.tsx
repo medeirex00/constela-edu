@@ -1,6 +1,7 @@
 import { Component, type ErrorInfo, type ReactNode } from "react";
 
-import { ehErroDeChunk, recarregarLimpandoCache, recuperarDeChunkObsoleto } from "../lib/atualizacao";
+import { ehErroDeChunk, recuperarDeChunkObsoleto } from "../lib/atualizacao";
+import { recarregarSemServiceWorker } from "../lib/pwaAtualizacao";
 
 interface Props {
   children: ReactNode;
@@ -25,8 +26,9 @@ export class LimiteErro extends Component<Props, State> {
   componentDidCatch(erro: Error, info: ErrorInfo): void {
     // Log local no console (o backend não recebe stack do cliente).
     console.error("Erro de renderização capturado:", erro, info.componentStack);
-    // Falha ao carregar um chunk lazy (deploy novo × shell antigo em cache) =
-    // limpa o cache do PWA e recarrega, em vez de estampar "Algo deu errado".
+    // Falha ao carregar um chunk lazy (deploy novo: o arquivo da versão antiga
+    // sumiu) = recarrega da rede uma vez, já na versão nova, em vez de estampar
+    // "Algo deu errado". Sem apagar o cache do PWA, que as outras abas usam.
     if (ehErroDeChunk(erro)) recuperarDeChunkObsoleto();
   }
 
@@ -80,7 +82,7 @@ export class LimiteErro extends Component<Props, State> {
         </p>
         <button
           type="button"
-          onClick={() => void recarregarLimpandoCache()}
+          onClick={() => void recarregarSemServiceWorker()}
           style={{
             marginTop: "0.75rem",
             padding: "0.7rem 1.4rem",

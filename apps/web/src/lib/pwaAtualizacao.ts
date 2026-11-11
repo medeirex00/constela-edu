@@ -10,7 +10,8 @@
  * Agora (registerType "prompt"): a versão nova é baixada e ESPERA. Quem decide a
  * troca é esta máquina de estados:
  *   - app autenticado: aviso "Nova versão disponível — Atualizar agora". Nada
- *     recarrega sem o clique (quem está editando salva antes);
+ *     recarrega sem o clique (quem está editando salva antes): enquanto o aviso
+ *     espera, as telas desta aba seguem abrindo pela versão antiga, do cache;
  *   - abertura do app servida pelo service worker (F5 comum, aba nova, ícone): se
  *     já havia versão nova esperando e a pessoa ainda não tocou na tela, ela entra
  *     direto, sem cartão. Se a pessoa tocar ou digitar antes da recarga, a troca é
@@ -22,8 +23,13 @@
  *     outra aba segurando o service worker antigo, em laço a cada 4 s;
  *   - telas públicas (telão /p/…, vitrine /rede/p/…): sem formulário e sem
  *     ninguém para clicar, a troca é automática;
- *   - outra aba atualizou: esta NÃO recarrega sozinha; avisa para recarregar
- *     quando der;
+ *   - outra aba atualizou: esta não recarrega na hora; avisa para recarregar
+ *     quando der. Mas o service worker novo, que agora a controla, não tem os
+ *     arquivos da versão antiga, e o servidor também não: se a pessoa abrir uma
+ *     tela que esta aba ainda não tinha aberto, ela recarrega UMA vez, sozinha, já
+ *     na versão nova, sem perder o login (o socorro de lib/atualizacao.ts). O mesmo
+ *     vale para a página que veio da rede (1ª visita, Ctrl+Shift+R, plano B) depois
+ *     de um deploy;
  *   - procura versão nova a cada hora, ao voltar para a aba (5+ min depois da
  *     última procura) e ao voltar a conexão. A versão que chega é vista aqui também
  *     (updatefound/statechange do próprio registro), não só pelos avisos do
@@ -150,11 +156,13 @@ function sessaoDoNavegador(): Pick<Storage, "getItem" | "setItem"> | null {
   }
 }
 
-/** Plano B: desregistra o service worker e recarrega — a página vem da REDE, já na
- *  versão nova. Não apaga o cache do PWA: outra aba aberta ainda roda a versão antiga
- *  com ele, e sem o cache as telas dela (chunks com o nome de antes do deploy) não
- *  abririam mais. Para a recarga vir da rede basta desregistrar. */
-async function recarregarSemServiceWorker(): Promise<void> {
+/** Desregistra o service worker e recarrega — a página vem da REDE, já na versão
+ *  nova. É o plano B daqui, o socorro do chunk obsoleto (lib/atualizacao.ts) e o botão
+ *  "Recarregar" da tela de erro (LimiteErro). Não apaga o cache do PWA: ele é de todas
+ *  as abas do navegador, outra aba aberta ainda roda a versão antiga com ele, e sem o
+ *  cache as telas dela (chunks com o nome de antes do deploy) não abririam mais. Para
+ *  a recarga vir da rede basta desregistrar. */
+export async function recarregarSemServiceWorker(): Promise<void> {
   try {
     const registros = (await navigator.serviceWorker?.getRegistrations?.()) ?? [];
     await Promise.all(registros.map((r) => r.unregister()));

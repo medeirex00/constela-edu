@@ -28,13 +28,16 @@ import "./index.css";
 // app shell disponível offline. A versão nova é baixada em segundo plano e ESPERA:
 // o aviso "Atualizar agora" (PwaAviso) decide a troca — nada recarrega sozinho com
 // alguém editando. Telão/vitrine e a abertura do app (antes de qualquer toque)
-// trocam direto. Regras: lib/pwaAtualizacao.ts e docs/operacao/PWA-ATUALIZACAO.md.
+// trocam direto. A exceção é o socorro abaixo, quando a tela pedida já não existe.
+// Regras: lib/pwaAtualizacao.ts e docs/operacao/PWA-ATUALIZACAO.md.
 iniciarAtualizacaoPwa(registerSW);
 
-// Deploy novo + shell antigo em cache = chunk lazy (ex.: o Dashboard) some e o
-// import dinâmico falha. O Vite emite `vite:preloadError`; aqui limpamos o
-// cache do PWA e recarregamos para o build novo, em vez de deixar a tela em
-// branco/no LimiteErro para todos os perfis.
+// Deploy novo + página na versão antiga sem os arquivos dela no cache (outra aba
+// aplicou a versão nova, ou a página veio da rede) = o chunk lazy de uma tela ainda
+// não aberta (ex.: o Dashboard) sumiu do servidor e o import dinâmico falha. O Vite
+// emite `vite:preloadError`; aqui recarregamos da rede, uma vez por sessão, para o
+// build novo, em vez de deixar a tela em branco/no LimiteErro para todos os perfis.
+// Sem apagar o cache do PWA: as outras abas abertas ainda dependem dele.
 window.addEventListener("vite:preloadError", (evento: Event) => {
   evento.preventDefault();
   recuperarDeChunkObsoleto();
