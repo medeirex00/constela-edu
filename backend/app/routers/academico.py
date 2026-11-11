@@ -2226,7 +2226,11 @@ def corrigir_turmas_duplicadas(
 
     Duplicada de ano letivo diferente do da canônica: também 409 para o pedido
     inteiro, antes de mover qualquer matrícula
-    (``_exigir_duplicadas_do_ano_da_canonica``)."""
+    (``_exigir_duplicadas_do_ano_da_canonica``).
+
+    Duplicada com pontuação por nível própria (parâmetro do Admin Global),
+    diferente da canônica: 409 para o pedido inteiro, antes de mover — o CASCADE
+    apagava a configuração em silêncio (``turmas_dedup.motivo_da_recusa``)."""
     bloquear_escola_para_importacao(db, escola_id)
     for g in grupos:
         canonica = db.get(Turma, g.canonica_id)
@@ -2234,11 +2238,19 @@ def corrigir_turmas_duplicadas(
             turma_arquivada.exigir_turma_ativa(canonica)
             _exigir_duplicadas_do_ano_da_canonica(db, escola_id, canonica,
                                                   g.duplicada_ids)
+            duplicadas = [d for d in (db.get(Turma, i) for i in g.duplicada_ids
+                                      if i != canonica.id)
+                          if d is not None and d.escola_id == escola_id]
+            motivo = turmas_dedup.motivo_da_recusa(db, escola_id, canonica, duplicadas)
+            if motivo is not None:
+                raise HTTPException(status.HTTP_409_CONFLICT, motivo)
         # Canônica inexistente ou de outra escola: o 400 de sempre, de consolidar.
     resumos: list[dict] = []
     try:
         for g in grupos:
             resumos.append(turmas_dedup.consolidar(db, escola_id, g.canonica_id, g.duplicada_ids))
+    except turmas_dedup.ConsolidacaoRecusada as exc:
+        raise HTTPException(status.HTTP_409_CONFLICT, exc.motivo) from None
     except ValueError as exc:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc))
 

@@ -15,14 +15,72 @@ então cada aluno tem UMA matrícula no ano — repontar `turma_id` nunca colide
 NÃO fundimos alunos automaticamente (unir pessoas por nome é arriscado): apenas
 REPORTAMOS quantos nomes aparecem repetidos na turma final, para o gestor revisar
 com "Fundir alunos".
+
+PONTUAÇÃO POR TURMA (``PontuacaoNivelTurma``, parâmetro do Admin Global): a linha
+da duplicada some com ela (``ondelete=CASCADE``). Herdá-la na turma que fica
+mudaria os pontos de quem já estava lá — decisão do dono, não desta rotina. Então
+o grupo em que a duplicada tem pontuação por nível DIFERENTE da que fica é
+recusado (``motivo_da_recusa``; a prévia mostra o mesmo texto em ``recusa``). A
+mesma pontuação nas duas consolida: nada muda para ninguém.
 """
 from collections import Counter
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from app.models import Aluno, Matricula, Turma
+from app.models import Aluno, Matricula, PontuacaoNivelTurma, Turma
 from app.services import matriculas as mat
+
+
+class ConsolidacaoRecusada(Exception):
+    """Consolidar este grupo apagaria um parâmetro que a escola não pode refazer
+    (a pontuação por turma, do Admin Global). Levantada antes de mover qualquer
+    matrícula; ``motivo`` é texto para quem usa (a rota responde 409)."""
+
+    def __init__(self, motivo: str):
+        super().__init__(motivo)
+        self.motivo = motivo
+
+
+def _pontuacoes(db: Session, escola_id: int, turma_ids) -> dict[int, dict]:
+    """turma_id → ``pontos_por_codigo`` das turmas com pontuação por nível própria."""
+    ids = list(dict.fromkeys(turma_ids))
+    if not ids:
+        return {}
+    return {turma_id: dict(pontos or {}) for turma_id, pontos in db.execute(
+        select(PontuacaoNivelTurma.turma_id, PontuacaoNivelTurma.pontos_por_codigo)
+        .where(PontuacaoNivelTurma.escola_id == escola_id,
+               PontuacaoNivelTurma.turma_id.in_(ids))).all()}
+
+
+def _mesmos_pontos(a: dict, b: dict) -> bool:
+    try:
+        return {k: float(v) for k, v in a.items()} == {k: float(v) for k, v in b.items()}
+    except (TypeError, ValueError):
+        return a == b
+
+
+def motivo_da_recusa(db: Session, escola_id: int, canonica: Turma,
+                     duplicadas: list[Turma]) -> str | None:
+    """Por que este grupo não pode ser consolidado (None: pode): alguma duplicada
+    tem pontuação por nível própria, diferente da turma que fica (ou a que fica não
+    tem). Consolidar apagaria essa configuração do Admin Global e mudaria os pontos
+    de dificuldade dos alunos dela; copiá-la para a turma que fica mudaria os de
+    quem já está lá. Quem resolve é o Admin Global, deixando as turmas com a mesma
+    pontuação (ou tirando a da duplicada)."""
+    pontos = _pontuacoes(db, escola_id, [canonica.id, *(d.id for d in duplicadas)])
+    da_canonica = pontos.get(canonica.id)
+    nomes = [d.nome for d in duplicadas if d.id in pontos and (
+        da_canonica is None or not _mesmos_pontos(pontos[d.id], da_canonica))]
+    if not nomes:
+        return None
+    quais = ", ".join(f"“{n}”" for n in nomes)
+    return (f"A turma {quais} tem pontuação por nível própria, definida pelo Admin "
+            f"Global, diferente da turma “{canonica.nome}”: consolidar apagaria essa "
+            "configuração e mudaria os pontos de dificuldade dos alunos. Por isso este "
+            "grupo não é consolidado — peça ao Admin Global para deixar as turmas com "
+            "a mesma pontuação por nível (Configurações › Pontuação por turma) e "
+            "consolide depois.")
 
 # Palavras administrativas que, no NOME da turma, indicam a forma "longa" (menos
 # canônica). Usadas só para pontuar qual nome do grupo é o preferido.
@@ -86,6 +144,8 @@ def _grupo_consolidavel(db: Session, ts: list[Turma], ano: int, chave: str,
                      "turno": canonica.turno, "alunos": alunos[canonica.id]},
         "duplicadas": [{"id": d.id, "nome": d.nome, "turno": d.turno,
                         "alunos": alunos[d.id]} for d in duplicadas],
+        # O MESMO texto do 409 de ``consolidar`` (None: o grupo pode ser consolidado).
+        "recusa": motivo_da_recusa(db, canonica.escola_id, canonica, duplicadas),
     }
 
 
@@ -157,7 +217,11 @@ def consolidar(db: Session, escola_id: int, canonica_id: int,
                duplicada_ids: list[int]) -> dict:
     """Move as matrículas das turmas `duplicada_ids` para a `canonica_id`,
     herda o titular quando a canônica não tem, remove as turmas duplicadas (já
-    vazias) e devolve um resumo. Sem commit — o chamador decide."""
+    vazias) e devolve um resumo. Sem commit — o chamador decide.
+
+    ``ConsolidacaoRecusada`` (antes de mover qualquer matrícula) quando uma
+    duplicada tem pontuação por nível própria diferente da canônica
+    (``motivo_da_recusa``)."""
     canonica = db.get(Turma, canonica_id)
     if canonica is None or canonica.escola_id != escola_id:
         raise ValueError("Turma canônica inválida para esta escola.")
@@ -169,6 +233,9 @@ def consolidar(db: Session, escola_id: int, canonica_id: int,
         if dup is None or dup.escola_id != escola_id:
             raise ValueError("Uma das turmas duplicadas não pertence a esta escola.")
         alvos.append(dup)
+    motivo = motivo_da_recusa(db, escola_id, canonica, alvos)
+    if motivo is not None:
+        raise ConsolidacaoRecusada(motivo)
 
     movidos = 0
     for dup in alvos:

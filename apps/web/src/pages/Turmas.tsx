@@ -479,7 +479,12 @@ function CriarVariasTurmas({ escolaId, anoLetivo, existentes, aberto, aoFechar, 
 // --- Consolidação de turmas duplicadas --------------------------------------
 
 type TurmaDup = { id: number; nome: string; turno: string | null; alunos: number };
-type GrupoDup = { chave: string; ano_letivo: number; canonica: TurmaDup; duplicadas: TurmaDup[] };
+type GrupoDup = {
+  chave: string; ano_letivo: number; canonica: TurmaDup; duplicadas: TurmaDup[];
+  /** Por que o servidor recusa este grupo (hoje: a duplicada tem pontuação por nível
+   *  própria, do Admin Global, diferente da turma que fica); null = pode consolidar. */
+  recusa?: string | null;
+};
 
 /** Detecta salas cadastradas com nomes diferentes (ex.: "1 ANO A TARDE ANUAL
  *  (300302821)" e "1ºA") e, ao aplicar, migra os alunos para o nome curto e
@@ -496,9 +501,10 @@ function ModalTurmasDuplicadas({ escolaId, aberto, aoFechar, aoConcluir }: {
   const [aplicando, setAplicando] = useState(false);
   const [erroApi, setErroApi] = useState("");
 
-  // Por padrão, todos os grupos vêm marcados (o gestor pode desmarcar).
+  // Por padrão, todos os grupos vêm marcados (o gestor pode desmarcar) — menos o
+  // que o servidor vai recusar (`recusa`), que voltaria como erro do pedido inteiro.
   useEffect(() => {
-    if (grupos) setEscolhidos(new Set(grupos.map((g) => g.chave)));
+    if (grupos) setEscolhidos(new Set(grupos.filter((g) => !g.recusa).map((g) => g.chave)));
   }, [grupos]);
 
   function alternar(chave: string) {
@@ -583,6 +589,11 @@ function ModalTurmasDuplicadas({ escolaId, aberto, aoFechar, aoConcluir }: {
                       </li>
                     ))}
                   </ul>
+                  {g.recusa && (
+                    <p className="mt-1.5 text-xs font-medium text-amber-800 dark:text-amber-300">
+                      ⚠ {g.recusa}
+                    </p>
+                  )}
                 </div>
               </label>
             ))}
