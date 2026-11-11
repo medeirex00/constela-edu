@@ -1184,14 +1184,24 @@ def salvar_pontuacao_turma(
 ):
     """Salva a tabela de pontos por nível de UMA turma e, opcionalmente, REPLICA a
     mesma config para outras turmas (aplicar_em) — cada uma continua editável
-    depois. Guarda só o que difere do padrão (config esparsa). UM recálculo no fim."""
+    depois. Guarda só o que difere do padrão (config esparsa). UM recálculo no fim.
+
+    Só as turmas do ano letivo ATIVO (as que o GET lista): a de outro ano não pesa nas
+    Notas do ano ativo, e o "salva. Notas recalculadas." seria falso."""
     # Turmas-alvo = a principal + as marcadas para replicar (sem repetir).
     alvos = list(dict.fromkeys([dados.turma_id, *dados.aplicar_em]))
+    ano = db.execute(select(Escola.ano_letivo_ativo)
+                     .where(Escola.id == escola_id)).scalar_one()
     turmas: dict[int, Turma] = {}
     for tid in alvos:
         t = db.get(Turma, tid)
         if t is None or t.escola_id != escola_id:
             raise HTTPException(status.HTTP_400_BAD_REQUEST, "Turma inválida para esta escola.")
+        if t.ano_letivo != ano:
+            raise HTTPException(
+                status.HTTP_400_BAD_REQUEST,
+                f"A turma {t.nome} é do ano letivo {t.ano_letivo}: a pontuação por turma vale "
+                f"só para as turmas do ano letivo ativo ({ano}).")
         turmas[tid] = t
 
     validos = {c["codigo"] for c in _catalogo_niveis(db, escola_id)}
