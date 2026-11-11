@@ -1072,7 +1072,8 @@ def _apagar_avisos_do_aluno(db: Session, escola_id: int,
 
 
 def _apagar_alunos_e_dados(db: Session, escola_id: int, usuario: Usuario,
-                           aluno_ids: list[int], contagens: dict | None = None) -> int:
+                           aluno_ids: list[int], contagens: dict | None = None, *,
+                           esquecer_contas: bool = False) -> int:
     """Exclusão FÍSICA de alunos + TODOS os dados vinculados (leituras, snapshots
     Matific/Elefante, notas, matrículas, eventos, identidades externas) e — LGPD/
     direito ao esquecimento — as conversas da IA que citem o nome e o que guarda
@@ -1084,7 +1085,15 @@ def _apagar_alunos_e_dados(db: Session, escola_id: int, usuario: Usuario,
 
     ``contagens`` (opcional): dicionário que recebe, SEM nome nenhum, quantas
     linhas de cada tipo saíram — para o chamador auditar e mostrar o que apagou
-    (a exclusão de turma com alunos usa; nada muda para quem não passa)."""
+    (a exclusão de turma com alunos usa; nada muda para quem não passa).
+
+    ``esquecer_contas`` (a exclusão permanente — o pedido de esquecimento): grava
+    no ``aluno.excluido_permanente`` de cada criança a MARCA das contas dela nas
+    plataformas (HMAC, sem nome nem id em claro — ``exclusao_aluno.contas_da_crianca``)
+    para a coleta seguinte ignorá-las, em vez de recriar a ficha ou devolver o nome
+    à fila de revisões. A exclusão de turma com alunos não passa: limpar uma turma
+    não é pedido de esquecimento, e a conta de quem continua estudando voltaria a
+    ser ignorada para sempre."""
     from app.models import EventoAluno, IdentidadeExterna  # noqa: E402
     from app.quest.models import QuestPerfil  # noqa: E402
     from app.services import exclusao_aluno  # noqa: E402
@@ -1101,6 +1110,10 @@ def _apagar_alunos_e_dados(db: Session, escola_id: int, usuario: Usuario,
     identidades = {(p, i) for p, i in db.execute(
         select(IdentidadeExterna.plataforma, IdentidadeExterna.id_externo)
         .where(IdentidadeExterna.aluno_id.in_(ids)))}
+    # As contas de cada criança — as vinculadas e as das revisões dela — também
+    # antes de apagar identidades e revisões: viram a marca de esquecimento.
+    contas_dela = (exclusao_aluno.contas_da_crianca(db, escola_id, nomes)
+                   if esquecer_contas else {})
     if contagens is not None:
         # O perfil do Quest (com a telemetria) sai pelo ON DELETE CASCADE do
         # banco: contado ANTES, para a auditoria não omitir o que a cascata leva.
@@ -1123,11 +1136,17 @@ def _apagar_alunos_e_dados(db: Session, escola_id: int, usuario: Usuario,
         delete(Matricula).where(Matricula.aluno_id.in_(ids))).rowcount
     # LGPD/esquecimento: NÃO gravar o nome da criança no log permanente (o
     # entidade_id basta como referência; o nome, uma vez apagado, não deve
-    # sobreviver em texto claro). Guarda só a contagem por lote.
+    # sobreviver em texto claro). Guarda só a contagem por lote — e, no pedido de
+    # esquecimento, a marca das contas dela (plataforma + HMAC do id externo), que a
+    # porta única de identidade lê para ignorar a conta na coleta seguinte.
     for aid in ids:
-        registrar(db, "aluno.excluido_permanente", escola_id=escola_id,
+        detalhes = {"tipo": "exclusao_permanente"}
+        if contas_dela.get(aid):
+            detalhes[exclusao_aluno.CHAVE_CONTAS_ESQUECIDAS] = (
+                exclusao_aluno.marcas_para_o_log(contas_dela[aid]))
+        registrar(db, exclusao_aluno.ACAO_EXCLUSAO_PERMANENTE, escola_id=escola_id,
                   usuario_id=usuario.id, entidade="aluno", entidade_id=aid,
-                  detalhes={"tipo": "exclusao_permanente"})
+                  detalhes=detalhes)
     # E anonimiza as entradas ANTERIORES do log que citam o nome deste aluno
     # (criação/edição/fusão/importação) — sem isso o nome civil do menor
     # persistiria para sempre no histórico de auditoria. Inclui as fichas que ele
@@ -1191,7 +1210,8 @@ def excluir_alunos_permanente(
     # entre a leitura do estado e a anonimização.
     bloquear_escola_para_importacao(db, escola_id)
     alunos = _alunos_selecionados(db, escola_id, dados.aluno_ids)
-    n = _apagar_alunos_e_dados(db, escola_id, usuario, [a.id for a in alunos])
+    n = _apagar_alunos_e_dados(db, escola_id, usuario, [a.id for a in alunos],
+                               esquecer_contas=True)
     db.commit()
     _recalcular_escola(db, escola_id)
     return {"mensagem": f"{n} aluno(s) excluído(s) permanentemente, com "

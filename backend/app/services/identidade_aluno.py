@@ -61,6 +61,11 @@ pertence a uma ficha existente — nem se ela estiver inativa. Ficha EXCLUÍDA n
 TRANSFERIDA (ou arquivada, fora da Lista Piloto) não é reativada por aqui:
 qualquer caminho que chegue a ela vira revisão (``STATUS_INATIVOS``).
 
+CONTA ESQUECIDA (antes de tudo, até da escolha explícita): a conta da plataforma de
+uma criança EXCLUÍDA DE VEZ desta escola (direito ao esquecimento) é ignorada — não
+associa, não cria ficha, não vai para a revisão (``exclusao_aluno``: a exclusão
+permanente guarda só a marca da conta, um HMAC, sem nome nem id em claro).
+
 Este módulo só LÊ o banco (``Contexto`` é carregado uma vez por importação e
 atualizado em memória pelo chamador a cada aluno criado/identidade vinculada).
 Quem grava é o router — inclusive a fila de revisão (``RevisaoIdentidade``).
@@ -77,14 +82,14 @@ from sqlalchemy.orm import Session
 
 from app.models import Aluno, Escola, IdentidadeExterna, Matricula, Turma
 from app.models.academico import RevisaoIdentidade
-from app.services import matching
+from app.services import exclusao_aluno, matching
 from app.services.importacao import chave_nome, nome_abreviado, tokens_nome
 from app.services.lista_piloto import ra_util
 
 ASSOCIAR = "associar"   # dados vão para uma ficha existente
 REVISAR = "revisar"     # há candidato(s), nenhum seguro: não associa, não cria
 CRIAR = "criar"         # nenhum candidato plausível: ficha nova
-IGNORAR = "ignorar"     # entrada inválida (aluno de outra escola/excluído)
+IGNORAR = "ignorar"     # entrada inválida (aluno de outra escola/excluído/esquecido)
 
 STATUS_INATIVOS = ("arquivado", "fora_lista_piloto", "transferido")
 
@@ -188,8 +193,10 @@ MOTIVOS_DE_TURMA = frozenset({"sem_turma", "turma_nao_cadastrada", "turma_ambigu
 # desfaz o cursor de ninguém por ela), nem em 'sem_vinculo' (não vira
 # "correspondência pendente" a cada coleta), nem conta como linha com defeito.
 # Hoje: a conta da plataforma que a escola APOSENTOU (conta duplicada — achado 5
-# da revisão e95, decisão D4).
-MOTIVOS_DESCARTE_DECIDIDO = frozenset({"identidade_aposentada"})
+# da revisão e95, decisão D4) e a conta de uma criança EXCLUÍDA DE VEZ (direito ao
+# esquecimento: a gestão já decidiu, e o nome dela não pode voltar nem num aviso).
+MOTIVO_CONTA_ESQUECIDA = "conta_esquecida"
+MOTIVOS_DESCARTE_DECIDIDO = frozenset({"identidade_aposentada", MOTIVO_CONTA_ESQUECIDA})
 
 # Vias de ASSOCIAR/REVISAR que NÃO dependem do nome recebido: a conta da
 # plataforma já vinculada, o RA da escola e a decisão humana anterior. São as
@@ -417,7 +424,22 @@ class Contexto:
     # provando de quem era o id externo, mas estão FORA de ``identidade`` e de
     # ``ids_do_aluno`` — não casam, não contam e não voltam sozinhas.
     aposentadas: dict[tuple[str, str], int] = field(default_factory=dict)
+    # Contas de crianças EXCLUÍDAS DE VEZ desta escola: {(plataforma, marca)}, a
+    # marca é o HMAC do id externo (``exclusao_aluno.marcas_esquecidas``). Lidas uma
+    # vez; ``conta_esquecida`` responde por conta, com memória (o relatório de
+    # leituras repete a conta numa linha por livro).
+    contas_esquecidas: set[tuple[str, str]] = field(default_factory=set)
+    _memo_esquecidas: dict = field(default_factory=dict, repr=False)
     _memo_escola: dict = field(default_factory=dict, repr=False)
+
+    def conta_esquecida(self, plataforma: str, id_externo: str) -> bool:
+        if not (self.contas_esquecidas and plataforma and id_externo):
+            return False
+        chave = (plataforma, id_externo)
+        if chave not in self._memo_esquecidas:
+            self._memo_esquecidas[chave] = exclusao_aluno.conta_esquecida(
+                self.contas_esquecidas, plataforma, id_externo)
+        return self._memo_esquecidas[chave]
 
     # --- manutenção em memória -------------------------------------------
     def registrar_aluno(self, aluno: Aluno) -> None:
@@ -687,6 +709,7 @@ def carregar_contexto(db: Session, escola_id: int, ano: int | None = None) -> Co
             ctx.criacoes_em_disputa.setdefault(
                 (plataforma, chave_nome(_nome_para_casar(nome or "", sala, sala_rel)), sala),
                 set()).add(str(id_externo))
+    ctx.contas_esquecidas = exclusao_aluno.marcas_esquecidas(db, escola_id)
     return ctx
 
 
@@ -1322,6 +1345,14 @@ def decidir(ctx: Contexto, linha: LinhaIdentidade) -> Decisao:
         linha.turma_id is not None and linha.turma_id in ctx.turmas
     ) else ctx.sala_efetiva(chave_relatorio, linha.turma_nome)
     chave_alt = chave_relatorio if chave_relatorio != chave else ""
+
+    # 00) CONTA ESQUECIDA: a conta é de uma criança que a escola excluiu de vez
+    # (direito ao esquecimento). Antes de tudo — inclusive da escolha explícita de
+    # um humano: se ela associasse, a conta ganharia vínculo numa ficha e a coleta
+    # seguinte reabriria o que o esquecimento fechou. Nada associa, cria ou vai para
+    # a revisão (que guardaria o nome); levantar a marca é decisão à parte.
+    if linha.id_externo and ctx.conta_esquecida(linha.plataforma, linha.id_externo):
+        return Decisao(IGNORAR, motivo=MOTIVO_CONTA_ESQUECIDA, chave_sala=chave)
 
     # 0) Escolha EXPLÍCITA de um humano (prévia aceita, alternativa escolhida,
     # revisão resolvida). Vale — salvo se a identidade externa da linha já for de

@@ -168,6 +168,34 @@ vivo "Joao Pedro Silva".
   {id novo: id do arquivo} das fichas recriadas, só números);
 - o registro de cada importação (quem, quando, quantos) e o histórico das sincronizações.
 
+**Marca de esquecimento das contas da plataforma** (só a exclusão permanente de aluno;
+a exclusão de turma com alunos não grava a marca)
+
+- A conta da criança no Matific ou no Elefante Letrado continua existindo lá, e a coleta
+  seguinte a manda de novo. Sem memória, ela era uma conta desconhecida: com a política
+  padrão ("permitir") a ficha voltava inteira (nome, conta, retrato, ranking) e o log
+  gravava o nome de novo; com "bloquear", o nome voltava para a fila de revisões e para
+  o log.
+- Agora o `aluno.excluido_permanente` de cada criança leva `contas_esquecidas`:
+  `[{"plataforma", "marca"}]`, em que a marca é o HMAC-SHA256 do id externo com a chave
+  do servidor (`exclusao_aluno.marca_da_conta`; a mesma família de chaves da cifra em
+  repouso). Nem o nome nem o id da conta ficam em claro. Entram as contas vinculadas à
+  ficha (inclusive a aposentada e as que ela absorveu por fusão) e as das revisões dela
+  (a segunda conta que a coleta mandou para a fila); conta vinculada a uma criança que
+  continua na escola nunca entra.
+- A porta única de identidade (`identidade_aluno.decidir`) ignora a linha de conta
+  marcada antes de qualquer outro passo, com o motivo `conta_esquecida`: não associa,
+  não cria ficha, não abre revisão. A marca vale na escola que excluiu.
+- Limites: a linha **sem** a conta (relatório ou planilha só com o nome, como a Lista
+  Piloto) não tem como ser reconhecida e pode cadastrar a criança de novo — o modal da
+  exclusão avisa e pede o encerramento da conta na plataforma; exclusões feitas antes
+  desta versão não têm a marca (as contas não foram guardadas); levantar a marca (a
+  criança voltou à escola) ainda não tem ação própria — decisão do dono.
+- Troca de chave: a marca gravada com uma chave só é reconhecida enquanto essa chave
+  estiver no anel (`DATA_ENCRYPTION_KEY`, `DATA_ENCRYPTION_KEYS_ANTERIORES`, `SECRET_KEY`,
+  `CHAVE_CIFRA_LEGADA_ANTERIOR`). O id em claro não existe mais para regravá-la: ver a
+  seção 3.
+
 **Fora do alcance do código** (precisa de procedimento ou decisão)
 
 - backups já feitos (o dado excluído persiste até a rotação — 14 dias no privado). A
@@ -198,14 +226,18 @@ vivo "Joao Pedro Silva".
   escola fica `[removido]`. O arquivo fica no disco com o nome. Pergunta 9 da seção 5;
 - prévias não confirmadas em `uploads/temporarios/` (expiram em 24 h);
 - logs da aplicação (Railway) e eventos do Sentry;
-- cópias fora do sistema (downloads, e-mail) e a **plataforma de origem**, que continua
-  mandando o nome na próxima sincronização se a conta lá não for encerrada.
+- cópias fora do sistema (downloads, e-mail) e a **plataforma de origem**: a conta
+  continua ativa lá até ser encerrada. O Constela passa a ignorá-la nas coletas (marca
+  de esquecimento, acima), mas não a encerra.
 
 Teste: `tests/test_exclusao_alcance_total.py` varre **todas** as tabelas e colunas de
 texto/JSON depois da exclusão (dados fictícios) e falha se sobrar o nome ou o id;
 `tests/test_exclusao_escopo_e_homonimos.py` prova que o esquecimento não passa do que
 é da criança (log global, homônimo e nome maior de quem fica, conversas da IA,
-original de outra escola, original com dado de quem fica).
+original de outra escola, original com dado de quem fica);
+`tests/test_aud2_lgpd_esquecimento_conta.py` (e o `_pg`, com a exclusão chegando no meio
+de uma coleta) prova que a coleta seguinte não traz a criança de volta, com "permitir" e
+com "bloquear", nem pela segunda conta que estava na fila.
 
 ### 2.4 Quest — código de login, limite de tentativas e portão
 
@@ -338,6 +370,11 @@ leva só o primeiro nome (`push.corpo_dados_atualizados`; sem nome: "Um aluno ..
   backfill usa a chave do próprio serviço. Conferir depois:
   `SELECT count(*) FROM quest_credenciais_aluno WHERE codigo_login_hash IS NULL OR
   qr_token_hash IS NULL` = 0.
+- **Troca de chave × contas esquecidas**: ao girar `DATA_ENCRYPTION_KEY` (ou a
+  `SECRET_KEY`), mantenha a anterior no anel (`DATA_ENCRYPTION_KEYS_ANTERIORES` /
+  `CHAVE_CIFRA_LEGADA_ANTERIOR`) enquanto houver `aluno.excluido_permanente` com
+  `contas_esquecidas` gravado com ela. Tirar a chave do anel apaga, em silêncio, a
+  memória dessas contas: a coleta seguinte volta a tratá-las como contas novas.
 
 ## 4. O que NÃO foi feito (e por quê)
 

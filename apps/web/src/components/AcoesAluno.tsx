@@ -639,6 +639,15 @@ function ModalPermanenteUm({ nome, ocupado, erro, aoFechar, aoConfirmar }: {
             <strong>{nome}</strong> será removido por completo: cadastro, histórico,
             leituras, dados do Matific e do Elefante Letrado, rankings, XP e conquistas.
           </p>
+          {/* A conta na plataforma continua existindo: o Constela passa a ignorá-la
+              nas coletas (marca de esquecimento), mas só a plataforma a encerra — e
+              uma linha sem a conta (só o nome) não tem como ser reconhecida. */}
+          <p className="mt-2">
+            Se a criança ainda tiver conta no Matific ou no Elefante Letrado, peça o
+            encerramento dela na plataforma. Até lá, o Constela ignora nas próximas coletas
+            as contas ligadas a este cadastro. Um relatório ou planilha que traga só o nome,
+            sem a conta da plataforma, pode cadastrar a criança de novo.
+          </p>
         </div>
       </div>
       <div className="mt-4">
