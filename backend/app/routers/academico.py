@@ -174,6 +174,79 @@ def _parecidos_inativos(db: Session, escola_id: int, ano: int, turma: Turma,
             if i in por_id and por_id[i].status != "ativo"]
 
 
+def _mesma_crianca_na_escola(db: Session, escola_id: int, dados: AlunoCreate,
+                             ra_informado: str | None) -> tuple[Aluno, str] | None:
+    """A ficha que esta criança JÁ tem na escola, em qualquer turma e ano (não
+    excluída), e o critério: ``"ra"`` (o mesmo RA, normalizado por ``ra_util``) ou
+    ``"nome_nascimento"`` (o mesmo nome normalizado E o mesmo nascimento, sem RA
+    divergente — RA diferente prova outra criança).
+
+    A busca da turma de destino (``_aluno_existente_na_turma``/``_casar_no_roster``)
+    não basta: na virada a turma do ano novo está vazia e a ficha do ano anterior
+    nunca era candidata — nascia uma segunda ficha (no ranking com 0) e a coleta
+    seguinte gravava o dado na antiga, fora de qualquer ranking. Só o nome igual não
+    prova nada (homônimo é legítimo); o nº de chamada muda de um ano para o outro e
+    não entra. Duas fichas achadas: a que está no ano/turma mais recente, a ativa."""
+    from app.services._nomes import chave_nome
+    from app.services.lista_piloto import ra_util
+    ra = ra_util(ra_informado)
+    alvo = chave_nome(dados.nome)
+    nascimento = dados.data_nascimento
+    achados: list[tuple[int, str]] = []
+    for aluno_id, nome, nasc, ficha in db.execute(
+        select(Aluno.id, Aluno.nome, Aluno.data_nascimento, Aluno.ficha)
+        .where(Aluno.escola_id == escola_id, Aluno.status != "excluido")
+    ).all():
+        ra_dele = ra_util((ficha or {}).get("ra"))
+        if ra and ra_dele == ra:
+            achados.append((aluno_id, "ra"))
+        elif (nascimento is not None and nasc == nascimento and chave_nome(nome) == alvo
+              and not (ra and ra_dele)):
+            achados.append((aluno_id, "nome_nascimento"))
+    if not achados:
+        return None
+    ultimo_ano = dict(db.execute(
+        select(Matricula.aluno_id, func.max(Matricula.ano_letivo))
+        .where(Matricula.aluno_id.in_([i for i, _ in achados]))
+        .group_by(Matricula.aluno_id)).all())
+    fichas = {i: db.get(Aluno, i) for i, _ in achados}
+    aluno_id, criterio = max(achados, key=lambda a: (
+        a[1] == "ra", ultimo_ano.get(a[0]) or 0, fichas[a[0]].status == "ativo", -a[0]))
+    return fichas[aluno_id], criterio
+
+
+def _texto_ja_tem_ficha(db: Session, ja: Aluno, criterio: str, ano: int) -> str:
+    """A recusa do cadastro quando a criança já tem ficha em OUTRA turma ou ano: onde
+    a ficha está, a situação dela e o caminho para matriculá-la sem duplicar. A
+    lista de Alunos só mostra quem tem matrícula ativa do ano: depois da virada, a
+    ficha de 2026 se acha pela turma de 2026 (Turmas, com as de outros anos)."""
+    ultima = db.execute(
+        select(Turma.nome, Matricula.ano_letivo)
+        .join(Turma, Turma.id == Matricula.turma_id)
+        .where(Matricula.aluno_id == ja.id)
+        .order_by(Matricula.ano_letivo.desc(), Matricula.id.desc())).first()
+    inativa = ja.status != "ativo"
+    deste_ano = ultima is not None and ultima[1] == ano
+    onde = f"{ultima[0]}, {ultima[1]}" if ultima else "sem turma"
+    por = "com o mesmo RA" if criterio == "ra" else "com o mesmo nome e nascimento"
+    texto = f"Esta criança já tem ficha nesta escola: “{ja.nome}” ({onde}), {por}."
+    if inativa:
+        texto += f" O cadastro dela está {_SITUACAO_INATIVA.get(ja.status, ja.status)}."
+    if ultima is None or (deste_ano and not inativa):
+        caminho = "abra a ficha dela"
+    else:
+        caminho = "em Minha Escola › Turmas, "
+        if not deste_ano:
+            caminho += "ligue “Mostrar arquivadas e de outros anos”, "
+        caminho += f"abra a turma {ultima[0]}" + ("" if deste_ano else f" de {ultima[1]}")
+        caminho += (", ligue “Mostrar arquivados”" if inativa else "") + ", abra a ficha dela"
+    if inativa:
+        caminho += ", use “Reativar”"
+    meta = "mudar de turma" if deste_ano else f"matriculá-la em {ano}"
+    return (f"{texto} Não cadastre de novo: {caminho} e use ⋮ › Editar dados › Turma "
+            f"para {meta}. Se for outra criança, confira o RA e a data de nascimento.")
+
+
 @router.post("/alunos", response_model=AlunoOut, status_code=status.HTTP_201_CREATED)
 def criar_aluno(
     dados: AlunoCreate,
@@ -263,6 +336,21 @@ def criar_aluno(
             f"“{dados.nome}” é muito parecido com um aluno já cadastrado nesta turma. "
             "Confira a lista da turma antes de cadastrar. Se for outra criança, informe "
             "o nº de chamada ou a data de nascimento para diferenciar.")
+
+    # A MESMA criança em outra turma ou outro ano (G_VIRADA-3): a rematrícula do ano
+    # novo pelo cadastro abria uma 2ª ficha, e a coleta seguinte gravava o dado na
+    # antiga, fora do ranking. A ficha certa ganha a turma por Editar dados › Turma.
+    outra = _mesma_crianca_na_escola(db, escola_id, dados, ra_informado)
+    if outra is not None:
+        ja, criterio = outra
+        registrar(db, "aluno.criacao_recusada", escola_id=escola_id, usuario_id=usuario.id,
+                  entidade="aluno", entidade_id=ja.id,
+                  detalhes={"nome": dados.nome, "decisao": "EXACT_MATCH",
+                            "motivo": "aluno_ja_cadastrado_na_escola",
+                            "criterio": criterio})
+        db.commit()
+        raise HTTPException(status.HTTP_409_CONFLICT,
+                            _texto_ja_tem_ficha(db, ja, criterio, ano))
 
     aluno = Aluno(
         escola_id=escola_id,

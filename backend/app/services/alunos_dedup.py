@@ -7,6 +7,9 @@ pior fundir duas crianças diferentes do que deixar duas fichas duplicadas.
 Por isso o detector é conservador (prefere o falso-negativo):
   * só compara alunos ATIVOS que têm turma no ano letivo ativo;
   * só sugere pares da MESMA turma (nunca entre turmas ou escolas);
+  * a exceção é a MESMA criança em dois anos (``_pares_de_outro_ano``): a ficha
+    sem turma no ano ativo × a da turma com o mesmo RA, ou nome e nascimento —
+    sempre 🔴 "revisar";
   * nome idêntico + mesma turma → 🟢 "alta";
   * nome curto que é começo/abreviação de UM único nome mais completo, mesma
     turma → 🟡 "revisar" (o caso Matific-curto × Lista-Piloto-completo, ex.:
@@ -121,7 +124,9 @@ def _candidatos(db: Session, escola_id: int
     """Pares (loser, survivor, confianca, motivo, turma_nome) da MESMA turma.
     ``confianca`` ∈ {"alta","provavel","revisar"} (🟢 aprova em lote / 🟡 lote com
     conferência / 🔴 uma a uma); ``motivo`` ∈ {"nome_identico","subconjunto",
-    "abreviacao","variante"}. survivor = perfil principal (piloto > nome completo)."""
+    "abreviacao","variante","outro_ano"}. survivor = perfil principal (piloto >
+    nome completo). ``outro_ano`` é o único par fora da mesma turma
+    (``_pares_de_outro_ano``)."""
     escola = db.get(Escola, escola_id)
     if escola is None:
         return []
@@ -243,6 +248,52 @@ def _candidatos(db: Session, escola_id: int
                 continue                              # `a` é o melhor → não é loser
             pares.append((a, survivor, "revisar", "variante", turma_de[a.id][1]))
             ja_losers.add(a.id)
+    pares.extend(_pares_de_outro_ano(alunos, membros, turma_de))
+    return pares
+
+
+def _pares_de_outro_ano(alunos: list[Aluno], membros: list[Aluno],
+                        turma_de: dict[int, tuple[int, str]]
+                        ) -> list[tuple[Aluno, Aluno, str, str, str]]:
+    """A MESMA criança em dois anos (G_VIRADA-3): ficha ativa SEM turma no ano ativo
+    (a do ano anterior, com as contas e o histórico) × ficha da turma do ano com o
+    MESMO RA (``ra_util``), ou o mesmo nome normalizado e o mesmo nascimento sem RA
+    divergente. É o par que a rematrícula pelo "Cadastrar aluno" criava na virada: a
+    turma deixa de ser o discriminador porque uma das fichas não tem turma no ano.
+
+    Sempre 🔴 "revisar" (nunca pré-marca): o nº de chamada muda de um ano para o
+    outro e não entra; só RA e nascimento decidem, e um humano confere. Só o par
+    INEQUÍVOCO: a ficha de cada lado casa com uma só do outro."""
+    from app.services._nomes import chave_nome
+
+    sem_turma = [a for a in alunos if a.id not in turma_de]
+    if not sem_turma or not membros:
+        return []
+
+    def ra(a: Aluno) -> str:
+        return ra_util((a.ficha or {}).get("ra"))
+
+    def mesma(x: Aluno, y: Aluno) -> bool:
+        rx, ry = ra(x), ra(y)
+        if rx and ry:
+            return rx == ry and not (x.data_nascimento and y.data_nascimento
+                                     and x.data_nascimento != y.data_nascimento)
+        return bool(x.data_nascimento and x.data_nascimento == y.data_nascimento
+                    and chave_nome(x.nome) == chave_nome(y.nome))
+
+    casamentos = [(velha, [m for m in membros if mesma(velha, m)]) for velha in sem_turma]
+    quantas_por_membro: dict[int, int] = defaultdict(int)
+    for _velha, achados in casamentos:
+        for m in achados:
+            quantas_por_membro[m.id] += 1
+    pares: list[tuple[Aluno, Aluno, str, str, str]] = []
+    for velha, achados in casamentos:
+        if len(achados) != 1 or quantas_por_membro[achados[0].id] != 1:
+            continue                                   # ambíguo: não sugere
+        nova = achados[0]
+        survivor = _melhor_perfil(velha, nova)
+        loser = nova if survivor.id == velha.id else velha
+        pares.append((loser, survivor, "revisar", "outro_ano", turma_de[nova.id][1]))
     return pares
 
 

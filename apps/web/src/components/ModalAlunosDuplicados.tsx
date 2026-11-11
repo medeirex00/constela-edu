@@ -59,7 +59,9 @@ interface CandidatoAluno {
   manter: string;
   turma: string;
   confianca: Confianca;
-  motivo: "nome_identico" | "subconjunto" | "abreviacao" | "variante";
+  /** `outro_ano`: uma das fichas não tem turma no ano ativo (a do ano anterior) e a
+   *  outra tem o mesmo RA, ou o mesmo nome e nascimento — sempre "revisar". */
+  motivo: "nome_identico" | "subconjunto" | "abreviacao" | "variante" | "outro_ano";
   impacto: Impacto;
   /** Livros que estão nas duas fichas: fica a data do principal (A7). */
   leituras?: ResumoLeiturasRepetidas;
@@ -131,6 +133,9 @@ function motivoTexto(c: CandidatoAluno): string {
   if (c.motivo === "nome_identico") return "nome idêntico, mesma turma";
   if (c.motivo === "abreviacao") return "nome abreviado do mais completo";
   if (c.motivo === "variante") return "variação de grafia do mesmo nome";
+  if (c.motivo === "outro_ano") {
+    return "mesmo RA ou mesmo nome e nascimento, e uma das fichas não tem turma neste ano";
+  }
   return "nome contido no nome mais completo";
 }
 
