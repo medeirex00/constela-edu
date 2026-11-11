@@ -725,15 +725,21 @@ export default function Importacoes() {
    *  linha que vai para a Revisão fica onde está: nela "Criar" não vale. Nem a da
    *  turma arquivada, ambígua ou de outra etapa recebe "a turma do relatório" — nela
    *  o backend não cria. Nem a que o gestor marcou "Ignorar": antes ela voltava para
-   *  "Criar" e virava ficha de criança. */
+   *  "Criar" e virava ficha de criança. E "a turma do relatório" só alcança a linha
+   *  que TEM turma do relatório — a que oferece "Criar na turma do relatório (…)": na
+   *  criança sem turma (Placar da escola), ia sem nome de turma, a tela a contava como
+   *  importada e o backend a mandava para Revisões ("sem_turma"). */
   function aplicarATodosOsNovos(acao: Acao) {
     setAcoes((atuais) =>
       atuais.map((atual, i) => {
         const g = grupos[i];
         const ignoradaPeloGestor = atual.tipo === "ignorar" && atual.manual === true;
+        const semTurmaDoRelatorio = acao.tipo === "criar_nova"
+          && !(analise && g && turmaDoRelatorio(analise, analise.linhas[g.indices[0]]));
         if (g && !g.todasComErro && atual.tipo !== "importar" && !ignoradaPeloGestor
             && !vaiParaRevisao(g.correspondencia)
-            && !(acao.tipo === "criar_nova" && turmaSemDestino(g.correspondencia))) {
+            && !(acao.tipo === "criar_nova" && turmaSemDestino(g.correspondencia))
+            && !semTurmaDoRelatorio) {
           return acao;
         }
         return atual;
