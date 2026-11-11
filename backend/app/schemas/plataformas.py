@@ -10,6 +10,18 @@ from app.services.matific_destaque import ESTRELAS_MAX_POR_ATIVIDADE
 # Contagem de livros num ajuste MANUAL: inteiro entre 0 e 10.000 (negativo → 422).
 ContagemLivros = Annotated[int, Field(ge=0, le=10000)]
 
+# Teto da coluna INTEGER do PostgreSQL. Acima disto o banco recusa no commit
+# (DataError) e a tela recebia "Erro interno" (500) sem dizer o campo; o SQLite
+# aceita qualquer inteiro, por isso só o PG mostrava. Barrado aqui, vira 422.
+INTEIRO_MAX = 2_147_483_647
+ContadorPlataforma = Annotated[int, Field(ge=0, le=INTEIRO_MAX)]
+
+# Catálogo de livros: os mesmos tamanhos das colunas (Livro.autor String(200),
+# Livro.categoria String(100)); páginas com um teto que nenhum livro alcança.
+AUTOR_MAXIMO = 200
+CATEGORIA_MAXIMA = 100
+PAGINAS_MAXIMAS = 100_000
+
 MOTIVO_MINIMO = 5
 
 
@@ -36,8 +48,8 @@ class MatificAlunoOut(BaseModel):
 
 
 class MatificEdicao(BaseModel):
-    atividades: int = Field(ge=0)
-    estrelas: int = Field(ge=0)
+    atividades: ContadorPlataforma
+    estrelas: ContadorPlataforma
     # A média do Matific é de 0 a 5 (a mesma escala do Placar da Escola).
     #
     # OPCIONAL de propósito: corrigir "atividades" ou "estrelas" não pode obrigar
@@ -87,9 +99,9 @@ class ElefanteEdicao(BaseModel):
     """Snapshot MANUAL do Elefante. As chaves de ``livros_por_nivel`` são validadas
     no servidor (vocabulário oficial AA…Z, Z+, A+ ou faixas da escola)."""
     livros_unicos: int | None = Field(default=None, ge=0, le=10000)
-    tempo_leitura_min: int = Field(ge=0)
-    questoes_tentativas: int = Field(ge=0)
-    questoes_acertos: int = Field(ge=0)
+    tempo_leitura_min: ContadorPlataforma
+    questoes_tentativas: ContadorPlataforma
+    questoes_acertos: ContadorPlataforma
     livros_por_nivel: dict[str, ContagemLivros] = {}
     motivo: str
 
@@ -150,19 +162,19 @@ class LivroOut(ORMModel):
 
 class LivroCreate(BaseModel):
     titulo: str = Field(min_length=1, max_length=300)
-    autor: str | None = None
+    autor: str | None = Field(default=None, max_length=AUTOR_MAXIMO)
     nivel_codigo: str = Field(min_length=1, max_length=5)
-    categoria: str | None = None
-    paginas: int | None = Field(default=None, ge=1)
+    categoria: str | None = Field(default=None, max_length=CATEGORIA_MAXIMA)
+    paginas: int | None = Field(default=None, ge=1, le=PAGINAS_MAXIMAS)
     motivo: str | None = Field(default=None, max_length=500)
 
 
 class LivroUpdate(BaseModel):
     titulo: str | None = Field(default=None, min_length=1, max_length=300)
-    autor: str | None = None
+    autor: str | None = Field(default=None, max_length=AUTOR_MAXIMO)
     nivel_codigo: str | None = Field(default=None, min_length=1, max_length=5)
-    categoria: str | None = None
-    paginas: int | None = Field(default=None, ge=1)
+    categoria: str | None = Field(default=None, max_length=CATEGORIA_MAXIMA)
+    paginas: int | None = Field(default=None, ge=1, le=PAGINAS_MAXIMAS)
     # Obrigatório (≥ 5 caracteres) quando o nível muda ou quando a correção é
     # aplicada ao histórico — validado na rota, que sabe o nível atual do livro.
     motivo: str | None = Field(default=None, max_length=500)

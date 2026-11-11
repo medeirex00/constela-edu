@@ -55,6 +55,10 @@ const NIVEIS_OFICIAIS = [
 ];
 
 const MOTIVO_MINIMO = 5;
+/** Os mesmos limites do servidor (colunas do livro): acima deles, 422. */
+const AUTOR_MAXIMO = 200;
+const CATEGORIA_MAXIMA = 100;
+const PAGINAS_MAXIMAS = 100_000;
 
 /** Usado quando a resposta do PATCH não traz `aviso_correcao` (servidor antigo):
  *  o MESMO conteúdo honesto, para a tela nunca prometer efeito retroativo. */
@@ -153,6 +157,21 @@ export default function Livros() {
   /** Valida e, se for reescrever o histórico, pede a confirmação antes de enviar. */
   function salvar() {
     if (!escolaId || !formulario) return;
+    if (formulario.paginas) {
+      const paginas = Number(formulario.paginas);
+      if (!Number.isInteger(paginas) || paginas < 1 || paginas > PAGINAS_MAXIMAS) {
+        setErro(`As páginas vão de 1 a ${numero(PAGINAS_MAXIMAS)}. Confira o valor digitado.`);
+        return;
+      }
+    }
+    if (formulario.autor.trim().length > AUTOR_MAXIMO) {
+      setErro(`O autor pode ter até ${AUTOR_MAXIMO} caracteres.`);
+      return;
+    }
+    if (formulario.categoria.trim().length > CATEGORIA_MAXIMA) {
+      setErro(`A categoria pode ter até ${CATEGORIA_MAXIMA} caracteres.`);
+      return;
+    }
     const exigeMotivo = nivelMudou || formulario.aplicar_ao_historico;
     if (exigeMotivo && formulario.motivo.trim().length < MOTIVO_MINIMO) {
       setErro(`Informe o motivo da correção de nível (pelo menos ${MOTIVO_MINIMO} caracteres).`);
@@ -484,7 +503,7 @@ export default function Livros() {
                        onChange={(e) => setFormulario({ ...formulario, titulo: e.target.value })} />
               </Campo>
               <Campo rotulo="Autor">
-                <input className={estiloInput} value={formulario.autor}
+                <input className={estiloInput} maxLength={AUTOR_MAXIMO} value={formulario.autor}
                        onChange={(e) => setFormulario({ ...formulario, autor: e.target.value })} />
               </Campo>
               <div className="grid grid-cols-2 gap-3">
@@ -498,12 +517,12 @@ export default function Livros() {
                   </select>
                 </Campo>
                 <Campo rotulo="Páginas (opcional)">
-                  <input type="number" min={1} className={estiloInput} value={formulario.paginas}
+                  <input type="number" min={1} max={PAGINAS_MAXIMAS} className={estiloInput} value={formulario.paginas}
                          onChange={(e) => setFormulario({ ...formulario, paginas: e.target.value })} />
                 </Campo>
               </div>
               <Campo rotulo="Categoria (opcional)">
-                <input className={estiloInput} value={formulario.categoria}
+                <input className={estiloInput} maxLength={CATEGORIA_MAXIMA} value={formulario.categoria}
                        onChange={(e) => setFormulario({ ...formulario, categoria: e.target.value })} />
               </Campo>
               {formulario.id !== null && (

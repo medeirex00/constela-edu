@@ -54,6 +54,8 @@ const NIVEIS_OFICIAIS = new Set([
   "M", "N", "O", "P", "Q", "R", "S", "T", "U", "V", "W", "X", "Y", "Z", "Z+", "A+",
 ]);
 const CONTAGEM_MAXIMA = 10000;
+/** Maior número que o servidor grava (coluna INTEGER): acima disso, 422. */
+const INTEIRO_MAXIMO = 2_147_483_647;
 const MOTIVO_MINIMO = 5;
 /** Células da tabela de alunos: mais justas abaixo de 1280 px (tablet e notebook com a
  *  gaveta), para os dois botões de ação de cada linha caberem sem rolagem lateral. */
@@ -194,6 +196,16 @@ export default function Elefante() {
     ) {
       setErro("Informe os livros por nível (ex.: AA:2, D:1) — deixar em branco apagaria a distribuição atual.");
       return;
+    }
+    for (const [rotulo, valor] of [
+      ["O tempo de leitura", formulario.tempo_leitura_min],
+      ["O número de questões", formulario.questoes_tentativas],
+      ["O número de acertos", formulario.questoes_acertos],
+    ] as const) {
+      if (valor > INTEIRO_MAXIMO) {
+        setErro(`${rotulo} é grande demais. Confira o valor digitado.`);
+        return;
+      }
     }
     if (formulario.motivo.trim().length < MOTIVO_MINIMO) {
       setErro(MSG_MOTIVO);
@@ -445,20 +457,20 @@ export default function Elefante() {
           </Campo>
           <Campo rotulo="Tempo de leitura (minutos)">
             <input
-              type="number" min={0} className={estiloInput} value={formulario.tempo_leitura_min}
+              type="number" min={0} max={INTEIRO_MAXIMO} className={estiloInput} value={formulario.tempo_leitura_min}
               onChange={(e) => setFormulario({ ...formulario, tempo_leitura_min: Number(e.target.value) })}
             />
           </Campo>
           <div className="grid grid-cols-2 gap-3">
             <Campo rotulo="Questões (tentativas)">
               <input
-                type="number" min={0} className={estiloInput} value={formulario.questoes_tentativas}
+                type="number" min={0} max={INTEIRO_MAXIMO} className={estiloInput} value={formulario.questoes_tentativas}
                 onChange={(e) => setFormulario({ ...formulario, questoes_tentativas: Number(e.target.value) })}
               />
             </Campo>
             <Campo rotulo="Acertos">
               <input
-                type="number" min={0} className={estiloInput} value={formulario.questoes_acertos}
+                type="number" min={0} max={INTEIRO_MAXIMO} className={estiloInput} value={formulario.questoes_acertos}
                 onChange={(e) => setFormulario({ ...formulario, questoes_acertos: Number(e.target.value) })}
               />
             </Campo>

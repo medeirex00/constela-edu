@@ -38,6 +38,8 @@ const MEDIA_MAXIMA = 5;
 /** Teto de estrelas por atividade — a mesma regra das Premiações
  *  (`matific_destaque.limitar_estrelas`); o servidor recusa acima disso (422). */
 const ESTRELAS_POR_ATIVIDADE = 5;
+/** Maior número que o servidor grava (coluna INTEGER): acima disso, 422. */
+const INTEIRO_MAXIMO = 2_147_483_647;
 /** Motivo do ajuste: obrigatório, como no Elefante (o servidor recusa com menos). */
 const MOTIVO_MINIMO = 5;
 const MSG_MOTIVO = `Informe o motivo do ajuste (pelo menos ${MOTIVO_MINIMO} caracteres) — ele fica no histórico de alterações.`;
@@ -104,6 +106,12 @@ function ModalEditarMatific({
       setErro(`A média do Matific vai de 0 a ${MEDIA_MAXIMA} (a mesma escala do Placar da Escola).`);
       return;
     }
+    for (const [campo, valor] of [["atividades", form.atividades], ["estrelas", form.estrelas]] as const) {
+      if (valor > INTEIRO_MAXIMO) {
+        setErro(`O número de ${campo} é grande demais. Confira o valor digitado.`);
+        return;
+      }
+    }
     const tetoEstrelas = ESTRELAS_POR_ATIVIDADE * form.atividades;
     if (form.estrelas > tetoEstrelas) {
       setErro(
@@ -148,13 +156,13 @@ function ModalEditarMatific({
       <div className="space-y-4">
         <Campo rotulo="Atividades finalizadas">
           <input
-            type="number" min={0} className={estiloInput} value={form.atividades}
+            type="number" min={0} max={INTEIRO_MAXIMO} className={estiloInput} value={form.atividades}
             onChange={(e) => setForm({ ...form, atividades: Number(e.target.value) })}
           />
         </Campo>
         <Campo rotulo="Estrelas">
           <input
-            type="number" min={0} className={estiloInput} value={form.estrelas}
+            type="number" min={0} max={INTEIRO_MAXIMO} className={estiloInput} value={form.estrelas}
             onChange={(e) => setForm({ ...form, estrelas: Number(e.target.value) })}
           />
         </Campo>
