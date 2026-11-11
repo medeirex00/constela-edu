@@ -195,7 +195,9 @@ test("conflito de identidade revela a segunda confirmação e a envia", async ()
 
 const PREVIA_LEITURAS = {
   livros_repetidos: 3, com_data_diferente: 2, no_bimestre: 1,
-  bimestre: { numero: 3, rotulo: "3º bimestre", inicio: "2026-07-24", fim: "2026-10-04" },
+  // "(o bimestre atual)" só aparece quando o backend diz que ele está em curso.
+  bimestre: { numero: 3, rotulo: "3º bimestre", inicio: "2026-07-24", fim: "2026-10-04",
+              ano: 2026, atual: true },
   por_bimestre: [{ numero: 3, rotulo: "3º bimestre", livros: 1 }],
   exemplos: [{ livro_id: 5, livro: "Livro Ficticio A", data_manter: "2026-03-25",
                data_remover: "2026-08-06", deixa_de_contar_em: 3 }],

@@ -149,11 +149,23 @@ def leituras_repetidas(db: Session, ano_letivo: int, pares: list[tuple[int, int]
     conversão, janela inclusiva). Ano sem calendário oficial: sem bimestre
     (``None``), em vez de datas inventadas.
 
+    O ``bimestre`` diz também o ``ano`` letivo e se é o ``atual`` (hoje está
+    dentro dele). Na virada do ano o bimestre da premiação é o 4º do ano que
+    terminou (ou o 1º, que ainda não começou): a tela não pode chamá-lo de
+    "o bimestre atual".
+
     Uma consulta só, para qualquer número de pares (a prévia do lote lista todos)."""
     if not pares:
         return {}
     janelas = bimestres.calendario(ano_letivo) or {}
-    premiado = _bimestre_premiado(ano_letivo, janelas, hoje or agora_br().date())
+    hoje = hoje or agora_br().date()
+    premiado = _bimestre_premiado(ano_letivo, janelas, hoje)
+    bimestre = ({"numero": premiado, "rotulo": bimestres.rotulo(premiado),
+                 "inicio": janelas[premiado][0].isoformat(),
+                 "fim": janelas[premiado][1].isoformat(),
+                 "ano": ano_letivo,
+                 "atual": janelas[premiado][0] <= hoje <= janelas[premiado][1]}
+                if premiado is not None else None)
     ids = {i for par in pares for i in par}
     datas: dict[int, dict[int, object]] = defaultdict(dict)
     for aluno_id, livro_id, quando in db.execute(
@@ -188,10 +200,7 @@ def leituras_repetidas(db: Session, ano_letivo: int, pares: list[tuple[int, int]
             "livros_repetidos": len(comuns),
             "com_data_diferente": len(diferentes),
             "no_bimestre": saem_de.get(premiado, 0) if premiado is not None else None,
-            "bimestre": ({"numero": premiado, "rotulo": bimestres.rotulo(premiado),
-                          "inicio": janelas[premiado][0].isoformat(),
-                          "fim": janelas[premiado][1].isoformat()}
-                         if premiado is not None else None),
+            "bimestre": dict(bimestre) if bimestre is not None else None,
             "por_bimestre": [{"numero": n, "rotulo": bimestres.rotulo(n), "livros": saem_de[n]}
                              for n in sorted(saem_de)],
             "exemplos": amostra,

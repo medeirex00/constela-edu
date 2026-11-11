@@ -9,12 +9,25 @@
  */
 import { CalendarClock } from "lucide-react";
 
+/** O bimestre que a premiação abre. Na virada do ano é o 4º do ano letivo que
+ * terminou (ou o 1º, que ainda não começou): só é "o bimestre atual" com `atual`. */
+export interface BimestrePremiacao {
+  numero: number;
+  rotulo: string;
+  inicio: string;
+  fim: string;
+  /** Ano letivo do bimestre. */
+  ano?: number;
+  /** Hoje está dentro dele. */
+  atual?: boolean;
+}
+
 export interface ResumoLeiturasRepetidas {
   livros_repetidos: number;
   com_data_diferente: number;
   /** Livros que deixam de contar no bimestre da premiação (null: sem calendário). */
   no_bimestre: number | null;
-  bimestre: { numero: number; rotulo: string; inicio: string; fim: string } | null;
+  bimestre: BimestrePremiacao | null;
   por_bimestre: { numero: number; rotulo: string; livros: number }[];
   exemplos: {
     livro_id: number;
@@ -35,11 +48,24 @@ function livros(n: number): string {
   return `${n} livro${n === 1 ? "" : "s"}`;
 }
 
-/** "1 no 3º bimestre (o bimestre atual) e 2 no 1º bimestre". */
+/** " de 2026" quando o bimestre da premiação não está em curso (a virada do ano):
+ * aí o bimestre precisa do ano para não parecer o de agora. */
+function doAno(b: BimestrePremiacao | null): string {
+  return b && !b.atual && b.ano ? ` de ${b.ano}` : "";
+}
+
+/** "4º bimestre (o bimestre atual)" com o bimestre em curso; senão "4º bimestre de 2026". */
+export function nomeBimestrePremiacao(b: BimestrePremiacao): string {
+  return b.atual ? `${b.rotulo} (o bimestre atual)` : `${b.rotulo}${doAno(b)}`;
+}
+
+/** "1 no 3º bimestre (o bimestre atual) e 2 no 1º bimestre"; na virada do ano,
+ * "1 no 4º bimestre de 2026 e 2 no 1º bimestre de 2026". */
 export function textoBimestres(r: ResumoLeiturasRepetidas): string {
   const partes = r.por_bimestre.map((b) => {
-    const premiado = r.bimestre?.numero === b.numero ? " (o bimestre atual)" : "";
-    return `${b.livros} no ${b.rotulo}${premiado}`;
+    const premiado = r.bimestre?.atual && r.bimestre.numero === b.numero
+      ? " (o bimestre atual)" : "";
+    return `${b.livros} no ${b.rotulo}${doAno(r.bimestre)}${premiado}`;
   });
   if (partes.length <= 1) return partes.join("");
   return `${partes.slice(0, -1).join(", ")} e ${partes[partes.length - 1]}`;

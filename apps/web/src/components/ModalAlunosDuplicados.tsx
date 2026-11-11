@@ -15,7 +15,9 @@ import { AlertTriangle, UsersRound } from "lucide-react";
 import { useEffect, useState } from "react";
 
 import { ApiError, api } from "../lib/api";
-import { type ResumoLeiturasRepetidas, textoBimestres } from "./LeiturasRepetidas";
+import {
+  type BimestrePremiacao, nomeBimestrePremiacao, type ResumoLeiturasRepetidas, textoBimestres,
+} from "./LeiturasRepetidas";
 import { estiloCheckbox } from "./PessoasUi";
 import { Botao, Carregando, Mensagem, Modal, Vazio } from "./ui";
 
@@ -102,15 +104,15 @@ function avisoLeituras(c: CandidatoAluno): string | null {
 function somaLeituras(cands: CandidatoAluno[]) {
   let diferentes = 0;
   let noBimestre = 0;
-  let rotulo: string | null = null;
+  let bimestre: BimestrePremiacao | null = null;
   for (const c of cands) {
     const l = c.leituras;
     if (!l) continue;
     diferentes += l.com_data_diferente;
     noBimestre += l.no_bimestre ?? 0;
-    rotulo = rotulo ?? l.bimestre?.rotulo ?? null;
+    bimestre = bimestre ?? l.bimestre ?? null;
   }
-  return { diferentes, noBimestre, rotulo };
+  return { diferentes, noBimestre, bimestre };
 }
 
 function motivoTexto(c: CandidatoAluno): string {
@@ -480,8 +482,8 @@ export default function ModalAlunosDuplicados({ escolaId, aoFechar, aoConcluir }
                     <span className="mt-1 block">
                       Nos pares marcados, {datas.diferentes} livro(s) estão nas duas fichas com data
                       diferente: fica sempre a data do cadastro principal
-                      {datas.rotulo && datas.noBimestre > 0
-                        ? `, e ${datas.noBimestre} deixa(m) de contar no ${datas.rotulo} (o bimestre atual)`
+                      {datas.bimestre && datas.noBimestre > 0
+                        ? `, e ${datas.noBimestre} deixa(m) de contar no ${nomeBimestrePremiacao(datas.bimestre)}`
                         : ""}
                       . Para manter a outra data, desmarque o par e faça a fusão pela ficha do aluno
                       (⋮ › Fundir com outro aluno), escolhendo a ficha principal.
