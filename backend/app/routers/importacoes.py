@@ -74,6 +74,7 @@ from app.services import identidade_efetiva, politica_sync, triagem_revisoes
 from app.services import turma_arquivada
 from app.services import modulos as svc_modulos
 from app.services.audit import registrar
+from app.services.codificacao import decodificar_texto
 from app.models.base import agora
 from app.models.plataformas import IMPORTACAO_SEM_QUESTOES
 
@@ -612,7 +613,9 @@ def analisar(
             guardar_como = "pdf"
             tipo = "pdf"
         else:
-            texto = conteudo.decode("utf-8", errors="replace")
+            # .txt/.csv/.tsv: o "CSV" do Excel em português vem em Windows-1252 e o
+            # "Texto Unicode" em UTF-16 — a mesma regra dos leitores de texto enviado.
+            texto = decodificar_texto(conteudo)
             tipo = "texto"
             payload_mat = _payload_matific_placar(texto)
             analise = (svc.analisar_matific_api(payload_mat) if payload_mat is not None
@@ -1013,11 +1016,12 @@ def _resolver_aluno(db: Session, escola_id: int, ano: int, linha, avisos: list[s
     if turma_invalida:
         avisos.append(f"Linha “{linha.nome}”: turma inválida — ignorada.")
         return None
-    longo = svc.texto_longo_demais(linha.nome, ident.id_externo, turma_nome)
-    if longo:
+    problema = svc.texto_que_nao_grava(linha.nome, ident.id_externo, turma_nome)
+    if problema:
         # Nada desta linha cabe no banco (nem na fila de revisão): ignorada, com o
-        # mesmo erro que a prévia mostrou. Antes, 500 no PostgreSQL no commit.
-        avisos.append(f"Linha “{(linha.nome or '')[:60]}”: {longo} — ignorada.")
+        # mesmo erro que a prévia mostrou. Antes, 500 no PostgreSQL no commit (texto
+        # longo) ou a ficha nascia com "�" no nome (arquivo noutra codificação).
+        avisos.append(f"Linha “{(linha.nome or '')[:60]}”: {problema} — ignorada.")
         return None
     if linha.aluno_id is None and not svc.tokens_nome(linha.nome):
         avisos.append(f"Linha “{linha.nome}”: sem nome utilizável — ignorada.")
@@ -3261,7 +3265,7 @@ def _confirmar_sem_commit(
         ident, turma_linha, invalida = _identidade_da_linha(db, escola_id, linha,
                                                             dados.plataforma)
         if (not invalida
-                and not svc.texto_longo_demais(linha.nome, ident.id_externo, turma_linha)
+                and not svc.texto_que_nao_grava(linha.nome, ident.id_externo, turma_linha)
                 and (linha.aluno_id is not None or svc.tokens_nome(linha.nome))):
             idents_da_importacao.append(ident)
     ida.marcar_fichas_disputadas(ctx_identidade, idents_da_importacao)

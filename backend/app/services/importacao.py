@@ -36,6 +36,8 @@ from difflib import SequenceMatcher
 
 from sqlalchemy.orm import Session
 
+from app.services.codificacao import ILEGIVEL
+
 # --------------------------------------------------------------------------
 # Normalização de texto e números
 # --------------------------------------------------------------------------
@@ -1184,6 +1186,29 @@ def texto_longo_demais(nome: str, id_externo: str = "", turma: str = "") -> str 
     return None
 
 
+def texto_ilegivel(nome: str, id_externo: str = "", turma: str = "") -> str | None:
+    """O texto da linha com letra que a leitura do arquivo não conseguiu ler (o "�"
+    que ``codificacao.decodificar_texto`` põe no byte que nem o UTF-8 nem o
+    Windows-1252 leem), já em palavras para quem usa; None se tudo foi lido. Gravado,
+    o "�" iria para a ficha, o certificado e o ranking — e a criança já cadastrada não
+    casaria pelo nome."""
+    for texto, rotulo in ((nome, "nome do aluno"),
+                          (id_externo, "código da conta na plataforma"),
+                          (turma, "nome da turma")):
+        if ILEGIVEL in (texto or ""):
+            return f"{rotulo} com letra ilegível (“{ILEGIVEL}”, acento perdido no arquivo)"
+    return None
+
+
+def texto_que_nao_grava(nome: str, id_externo: str = "", turma: str = "") -> str | None:
+    """O motivo de a linha não poder ser gravada pelo TEXTO dela — longo demais para a
+    coluna (``texto_longo_demais``) ou com letra ilegível (``texto_ilegivel``) —; None
+    se o texto serve. A MESMA regra na prévia (a linha sai com erro) e no /confirmar
+    (a linha é ignorada, com aviso)."""
+    return (texto_longo_demais(nome, id_externo, turma)
+            or texto_ilegivel(nome, id_externo, turma))
+
+
 def casar_nomes(db: Session, escola_id: int, linhas: list[LinhaImportacao], *,
                 plataforma: str | None = None, turma_padrao: str = "") -> None:
     """PRÉVIA = CONFIRMAÇÃO. Preenche ``correspondencia`` de cada linha com a decisão
@@ -1212,15 +1237,17 @@ def casar_nomes(db: Session, escola_id: int, linhas: list[LinhaImportacao], *,
         linha.nome, linha.dados or {}, plataforma=plataforma,
         turma_nome=str((linha.dados or {}).get("turma_relatorio") or turma_padrao or ""))
         for linha in linhas]
-    # Texto maior que a coluna: o /confirmar ignora a linha (``_resolver_aluno``) e
-    # ela não disputa ficha com as outras — a prévia já mostra o erro.
-    longos = [texto_longo_demais(linha.nome, ident.id_externo, ident.turma_nome)
-              for linha, ident in zip(linhas, idents)]
+    # Texto maior que a coluna ou com letra ilegível: o /confirmar ignora a linha
+    # (``_resolver_aluno``) e ela não disputa ficha com as outras — a prévia já mostra
+    # o erro.
+    problemas = [texto_que_nao_grava(linha.nome, ident.id_externo, ident.turma_nome)
+                 for linha, ident in zip(linhas, idents)]
     ida.marcar_fichas_disputadas(
-        ctx, [ident for ident, longo in zip(idents, longos) if not longo])   # idem
-    for linha, ident, longo in zip(linhas, idents, longos):
-        if longo:
-            linha.erros.append(f"{longo[:1].upper()}{longo[1:]} — confira o relatório.")
+        ctx, [ident for ident, problema in zip(idents, problemas) if not problema])  # idem
+    for linha, ident, problema in zip(linhas, idents, problemas):
+        if problema:
+            linha.erros.append(
+                f"{problema[:1].upper()}{problema[1:]} — confira o relatório.")
         linha.correspondencia = _correspondencia(
             ctx, ida.decidir(ctx, ident), linha.nome, parecidos, ident)
 

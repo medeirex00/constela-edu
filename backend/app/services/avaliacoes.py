@@ -25,6 +25,7 @@ from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.models import AvaliacaoExterna, Escola, FonteAvaliacao, ResultadoAvaliacao
+from app.services.codificacao import decodificar_texto
 
 logger = logging.getLogger(__name__)
 
@@ -221,7 +222,9 @@ def _iterar_grade(conteudo: bytes, nome: str) -> Iterator[list]:
             finally:
                 wb.close()
         else:
-            texto = conteudo.decode("utf-8-sig", errors="replace")
+            # O CSV do Excel em português vem em Windows-1252 (e o "Texto Unicode" em
+            # UTF-16): o componente lido da coluna é chave gravada.
+            texto = decodificar_texto(conteudo)
             delim = ";" if texto[:8192].count(";") >= texto[:8192].count(",") else ","
             for r in csv.reader(io.StringIO(texto), delimiter=delim):
                 if _nao_vazia(r):
