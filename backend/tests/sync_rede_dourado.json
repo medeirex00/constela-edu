@@ -393,7 +393,7 @@
   [
    400,
    {
-    "detail": "A senha salva do Matific e do Elefante não pode mais ser lida pelo servidor e precisa ser recadastrada: informe usuário e senha de novo em Sincronização automática e clique em “Salvar e validar”."
+    "detail": "A senha salva do Matific e do Elefante não pode mais ser lida pelo servidor e precisa ser recadastrada: informe usuário e senha de novo em Integrações → “Configurar conexão” e clique em “Salvar e validar”."
    }
   ],
   [
@@ -419,7 +419,7 @@
   [
    400,
    {
-    "detail": "A senha salva do Elefante não pode mais ser lida pelo servidor e precisa ser recadastrada: informe usuário e senha de novo em Sincronização automática e clique em “Salvar e validar”."
+    "detail": "A senha salva do Elefante não pode mais ser lida pelo servidor e precisa ser recadastrada: informe usuário e senha de novo em Integrações → “Configurar conexão” e clique em “Salvar e validar”."
    }
   ],
   [
@@ -445,7 +445,7 @@
   [
    400,
    {
-    "detail": "A senha salva do Matific e do Elefante não pode mais ser lida pelo servidor e precisa ser recadastrada: informe usuário e senha de novo em Sincronização automática e clique em “Salvar e validar”."
+    "detail": "A senha salva do Matific e do Elefante não pode mais ser lida pelo servidor e precisa ser recadastrada: informe usuário e senha de novo em Integrações → “Configurar conexão” e clique em “Salvar e validar”."
    }
   ],
   [

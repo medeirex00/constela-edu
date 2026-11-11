@@ -148,7 +148,7 @@ def executar(db: Session, escola_id: int, *, agora: datetime | None = None) -> d
                                codigo=vault.CODIGO_CREDENCIAL_ILEGIVEL, recuperavel=False)
         raise ErroConector(
             "As credenciais do Elefante não estão configuradas. Configure em "
-            "Sincronização automática → Elefante.", codigo="sem_credencial",
+            "Integrações → Elefante → “Configurar conexão”.", codigo="sem_credencial",
             recuperavel=False)
     conector = connectors.obter("elefante")
     if conector is None or not hasattr(conector, "diagnosticar_endpoints"):

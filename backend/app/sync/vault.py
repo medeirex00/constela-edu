@@ -48,8 +48,8 @@ def mensagem_credencial_ilegivel(plataformas) -> str:
     ``ilegivel``)."""
     nomes = " e do ".join(_NOME_PLATAFORMA.get(p, str(p)) for p in plataformas)
     return (f"A senha salva do {nomes} não pode mais ser lida pelo servidor e precisa "
-            "ser recadastrada: informe usuário e senha de novo em Sincronização "
-            "automática e clique em “Salvar e validar”.")
+            "ser recadastrada: informe usuário e senha de novo em Integrações → "
+            "“Configurar conexão” e clique em “Salvar e validar”.")
 
 
 def _para_credenciais(payload: dict) -> Credenciais:

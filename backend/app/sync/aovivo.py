@@ -590,7 +590,7 @@ def placar_matific(db: Session, escola_id: int, *, periodo: str | None,
     if linha is None:
         raise ErroConector(
             "As credenciais do Matific não estão configuradas. Configure em "
-            "Sincronização automática → Matific.", codigo="sem_credencial",
+            "Integrações → Matific → “Configurar conexão”.", codigo="sem_credencial",
             recuperavel=False)
     cred = vault.credencial_da_linha(linha)
     if cred is None:
