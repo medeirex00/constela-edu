@@ -91,11 +91,17 @@ interface FormularioLivro {
   /** Ação RETROATIVA explícita: reescreve o nível congelado das leituras deste
    *  livro. Nasce desmarcada — o padrão é não mexer no passado. */
   aplicar_ao_historico: boolean;
+  /** Leituras de um livro FORA do catálogo oficial (0 no catálogo ou sem
+   *  leituras). A coleta reconhece esse livro pelo título que vem da plataforma:
+   *  com outro título, ela criaria um segundo livro e contaria de novo as
+   *  leituras — o servidor recusa (409) e o formulário avisa antes. */
+  leituras_reconhecidas_pelo_titulo: number;
 }
 
 const FORM_VAZIO: FormularioLivro = {
   id: null, titulo: "", autor: "", nivel_codigo: "", nivel_original: "", nivel_oficial: null,
   categoria: "", paginas: "", motivo: "", aplicar_ao_historico: false,
+  leituras_reconhecidas_pelo_titulo: 0,
 };
 
 // No celular (< 640 px) os botões da linha ganham 40 px (alvo de toque).
@@ -448,6 +454,7 @@ export default function Livros() {
                                 paginas: livro.paginas ? String(livro.paginas) : "",
                                 motivo: "",
                                 aplicar_ao_historico: false,
+                                leituras_reconhecidas_pelo_titulo: livro.no_catalogo ? 0 : livro.leituras,
                               });
                               setErro("");
                             }}
@@ -502,6 +509,17 @@ export default function Livros() {
                 <input className={estiloInput} value={formulario.titulo}
                        onChange={(e) => setFormulario({ ...formulario, titulo: e.target.value })} />
               </Campo>
+              {/* Fora do <label>: o nome acessível do campo continua "Título". */}
+              {formulario.leituras_reconhecidas_pelo_titulo > 0 && (
+                <p className="text-xs text-ouro-700 dark:text-ouro-300">
+                  Este livro está fora do catálogo oficial e tem{" "}
+                  {numero(formulario.leituras_reconhecidas_pelo_titulo)}{" "}
+                  {formulario.leituras_reconhecidas_pelo_titulo === 1 ? "leitura" : "leituras"}: a coleta
+                  reconhece o livro pelo título que vem da plataforma. Por isso o título só aceita
+                  correção de acentos, maiúsculas e espaços — outro título faria a próxima coleta
+                  contar essas leituras de novo.
+                </p>
+              )}
               <Campo rotulo="Autor">
                 <input className={estiloInput} maxLength={AUTOR_MAXIMO} value={formulario.autor}
                        onChange={(e) => setFormulario({ ...formulario, autor: e.target.value })} />

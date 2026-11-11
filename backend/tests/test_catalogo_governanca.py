@@ -166,8 +166,11 @@ def test_patch_vale_para_as_proximas_leituras_e_preserva_o_historico(
     assert notas() == antes
 
     # Título também vale daqui para a frente; um metadado sem efeito na nota, não.
+    # (Livro fora do catálogo com leituras: só acento/caixa/espaço muda — outro
+    # título faria a coleta criar um segundo livro; ver
+    # test_aud2_plat_livro_renomear_coleta.)
     assert cliente_global.patch(
-        url, json={"titulo": "O Mapa Perdido II"}).json()["vale_para_proximas_leituras"] is True
+        url, json={"titulo": "O mapa perdido"}).json()["vale_para_proximas_leituras"] is True
     sem_efeito = cliente_global.patch(url, json={"autor": "Rita"}).json()
     assert sem_efeito["vale_para_proximas_leituras"] is False
     assert sem_efeito["aviso_correcao"] is None

@@ -751,6 +751,25 @@ def _livro_out(livro: Livro, regra, usuario: Usuario, leituras: int = 0, *,
     return saida
 
 
+def _leituras_que_a_coleta_perderia(db: Session, livro: Livro, titulo_novo: str) -> int:
+    """Leituras que a próxima coleta deixaria de reconhecer se o título mudasse.
+
+    Fora do catálogo oficial (sem ``elefante_id`` válido no arquivo do catálogo),
+    a coleta acha o livro da escola SÓ pelo título normalizado que vem da
+    plataforma (``importacoes._AcervoEscola.resolver``). Com outro título, ela
+    não acha o livro renomeado, cria um segundo e grava de novo cada leitura já
+    registrada (a regra de releitura compara o livro). No catálogo, o livro é
+    achado pelo id e o título da escola não importa; trocar só acento, caixa ou
+    espaços não muda a chave. Nos dois casos devolve 0."""
+    no_catalogo = (livro.elefante_id is not None
+                   and livro.elefante_id in dificuldade_livro.catalogo().por_id)
+    if no_catalogo or (dificuldade_livro.normalizar_titulo(titulo_novo)
+                       == dificuldade_livro.normalizar_titulo(livro.titulo)):
+        return 0
+    return int(db.execute(
+        select(func.count(Leitura.id)).where(Leitura.livro_id == livro.id)).scalar_one())
+
+
 def _conflito_de_titulo(db: Session, escola_id: int, titulo: str, nivel: str,
                         ignorar_id: int | None = None) -> Livro | None:
     """Outro livro da escola com o mesmo título (normalizado: sem acento/caixa).
@@ -913,7 +932,11 @@ def atualizar_livro(
     """Correção de livro pelo Admin Global.
 
     Nível só do vocabulário oficial (400); título/nível nulos (422); título
-    duplicado (409); ``motivo`` obrigatório quando o nível muda (400). Mudar o
+    duplicado (409); ``motivo`` obrigatório quando o nível muda (400). Trocar o
+    título de um livro FORA do catálogo oficial que já tem leituras é 409: a
+    coleta o reconhece pelo título da plataforma e, com outro título, criaria um
+    segundo livro e contaria de novo essas leituras (acento, caixa e espaços
+    continuam livres — ver ``_leituras_que_a_coleta_perderia``). Mudar o
     nível marca ``origem_nivel='admin_global'`` — a sincronização passa a
     PRESERVAR esse nível e só audita a divergência com a fonte.
 
@@ -949,6 +972,17 @@ def atualizar_livro(
             status.HTTP_400_BAD_REQUEST,
             "Informe o motivo da correção de nível (pelo menos 5 caracteres) — ele "
             "fica registrado no log de auditoria.")
+    perdidas = (_leituras_que_a_coleta_perderia(db, livro, mudancas["titulo"])
+                if titulo_muda else 0)
+    if perdidas:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            "Não é possível trocar o título deste livro: ele está fora do catálogo "
+            f"oficial do Elefante e já tem {perdidas} leitura(s) registrada(s). Fora do "
+            "catálogo, a coleta reconhece o livro pelo título que vem da plataforma — "
+            "com outro título, a próxima coleta criaria um segundo livro e contaria de "
+            "novo essas leituras. Acentos, maiúsculas e espaços podem ser corrigidos "
+            "(não mudam o reconhecimento).")
     if (nivel_muda or titulo_muda) and _conflito_de_titulo(
             db, escola_id, mudancas.get("titulo", livro.titulo),
             mudancas.get("nivel_codigo", livro.nivel_codigo), ignorar_id=livro.id):
