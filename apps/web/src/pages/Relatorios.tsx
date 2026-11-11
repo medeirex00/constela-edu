@@ -60,10 +60,6 @@ function SetaSelect() {
   );
 }
 
-/** O item de /escolas com o plano da escola (`modulos`, os da rede dela). Opcional: a API
- *  antiga não o manda. */
-type EscolaComPlano = { modulos?: string[] };
-
 export default function Relatorios() {
   const { escolaId, escolaAtual, usuario } = useApp();
   const idExportacoes = useId();
@@ -78,7 +74,7 @@ export default function Relatorios() {
   // global recebe em /auth/me o catálogo inteiro, e numa escola de rede com um módulo
   // só a tela oferecia o que a rede não contratou. Sem o plano na resposta, o do usuário.
   const doUsuario = useModulos();
-  const planoDaEscola = (escolaAtual as EscolaComPlano | null)?.modulos;
+  const planoDaEscola = escolaAtual?.modulos;
   const leitura = planoDaEscola?.length ? planoDaEscola.includes("leitura") : doUsuario.leitura;
   const matematica = planoDaEscola?.length
     ? planoDaEscola.includes("matematica")

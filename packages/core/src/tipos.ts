@@ -27,6 +27,10 @@ export interface Escola {
   logotipo_url: string | null;
   ano_letivo_ativo: number;
   status: string;
+  /** Módulos do plano da escola (os da rede dela), só no item de GET /escolas. Ausente = API
+   *  antiga. É por aqui que a tela sabe o que a escola SELECIONADA contratou: o admin global
+   *  recebe em /auth/me o catálogo inteiro. */
+  modulos?: string[];
 }
 
 export interface Aluno {

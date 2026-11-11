@@ -604,11 +604,16 @@ export default function RelatorioPeriodo() {
   // O PERÍODO é global (AppContext): o recorte que o gestor escolheu aqui
   // continua valendo nos rankings e nas premiações, e vice-versa — é a mesma
   // pergunta ("qual janela?") e seria ruído pedi-la de novo em cada tela.
-  const { escolaId, periodo, definirPeriodo } = useApp();
+  const { escolaId, escolaAtual, periodo, definirPeriodo } = useApp();
   // Só as plataformas que a rede CONTRATOU: o backend recusa (403) o relatório
   // inteiro quando uma das plataformas pedidas é de um módulo fora do plano — numa
-  // rede só com a Leitura, abrir em "Elefante + Matific" era abrir num erro.
-  const { tem } = useModulos();
+  // rede só com a Leitura, abrir em "Elefante + Matific" era abrir num erro. Vale o
+  // plano da ESCOLA selecionada (item de /escolas): o admin global recebe em /auth/me
+  // o catálogo inteiro, e numa escola de rede com um módulo só a tela pedia as duas
+  // plataformas e recebia o 403 (NAOCORR-11). Sem o plano na resposta, o do usuário.
+  const doUsuario = useModulos();
+  const plano = escolaAtual?.modulos;
+  const tem = plano?.length ? (m: string) => plano.includes(m) : doUsuario.tem;
   const contratadas = PLATAFORMAS.filter((p) => p.valor.split(",").every((x) => tem(MODULO_DA_PLATAFORMA[x])));
   const opcoesPlataforma: readonly (typeof PLATAFORMAS)[number][] = contratadas.length ? contratadas : PLATAFORMAS;
   const [escolhaPlataformas, setPlataformas] = useState<string>(opcoesPlataforma[0].valor);
