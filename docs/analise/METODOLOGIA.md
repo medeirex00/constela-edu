@@ -404,7 +404,12 @@ histórico nem se multiplica pelos períodos.
     não números de criança;
   * a métrica escondida assim entra em `metricas_protegidas`, com o texto
     `TEXTO_METRICAS_PROTEGIDAS_BLOCOS` (ou `..._AMBOS`, quando o complemento da mesma resposta
-    também esconde).
+    também esconde, e `..._VARIOS`, com os contribuintes junto). O texto diz a **parte** do
+    período — "um bimestre, os dias fora dos bimestres ou o que só o período inteiro conta"
+    —, não "um dos bimestres": quando quem esconde é a folga (janeiro) ou o resto (a
+    primeira coleta de quem chegou no meio do ano), todos os bimestres mostram o número ou
+    não têm ninguém ativo, e quem os confere na tela não acharia o bimestre citado
+    (REV2-ANALISE-3).
   Assim a diferença entre dois períodos aceitos é sempre uma soma de blocos que mostram a
   métrica, e "ano letivo − bimestres" não isola criança nenhuma. Vale para a Secretaria e o
   admin global (a proteção da rede), não para a coordenação da escola. Não cobre a

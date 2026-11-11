@@ -182,18 +182,24 @@ TEXTO_METRICAS_PROTEGIDAS = ("algumas médias deste total não aparecem: ele som
                              "menos de {k} alunos cujos números estão escondidos numa parte "
                              "dele, e a diferença os revelaria")
 # A média escondida porque um BLOCO do calendário dentro do período (um bimestre, ou a folga
-# antes do 1º) a esconde — ou o resto da conta que nenhum bloco mede (ver "Blocos fixos").
-TEXTO_METRICAS_PROTEGIDAS_BLOCOS = ("algumas médias deste período não aparecem: num dos "
-                                    "bimestres dele, menos de {k} alunos têm esse número, e a "
-                                    "diferença entre o período e os bimestres o revelaria")
-TEXTO_METRICAS_PROTEGIDAS_AMBOS = ("algumas médias não aparecem: este total soma um grupo de "
-                                   "menos de {k} alunos escondido numa parte dele, ou num dos "
-                                   "bimestres do período menos de {k} alunos têm esse número — "
-                                   "a diferença os revelaria")
+# entre eles, como janeiro antes do 1º) a esconde — ou o resto da conta que nenhum bloco mede
+# (ver "Blocos fixos"). O texto diz as três partes: quem confere os bimestres na tela pode
+# não achar o número escondido em nenhum deles.
+_PARTES_DO_PERIODO = ("um bimestre, os dias fora dos bimestres ou o que só o período inteiro "
+                      "conta")
+TEXTO_METRICAS_PROTEGIDAS_BLOCOS = (
+    "algumas médias deste período não aparecem: numa parte dele (" + _PARTES_DO_PERIODO
+    + ", como a primeira coleta de quem chegou no meio do ano), menos de {k} alunos têm esse "
+    "número, e a diferença entre o período e os bimestres o revelaria")
+TEXTO_METRICAS_PROTEGIDAS_AMBOS = (
+    "algumas médias não aparecem: este total soma um grupo de menos de {k} alunos escondido "
+    "numa parte dele, ou numa parte do período (" + _PARTES_DO_PERIODO + ") menos de {k} "
+    "alunos têm esse número — a diferença os revelaria")
 # Mais de um motivo, com os contribuintes no meio.
-TEXTO_METRICAS_PROTEGIDAS_VARIOS = ("algumas médias não aparecem: menos de {k} alunos têm esse "
-                                    "número neste recorte, numa parte deste total ou num dos "
-                                    "bimestres do período — a média ou a diferença o revelaria")
+TEXTO_METRICAS_PROTEGIDAS_VARIOS = (
+    "algumas médias não aparecem: menos de {k} alunos têm esse número neste recorte, numa "
+    "parte deste total ou numa parte do período (" + _PARTES_DO_PERIODO + ") — a média ou a "
+    "diferença o revelaria")
 
 SUPRIMIDO = "suprimido"
 TEXTO_SUPRESSAO = ("poucos alunos neste recorte (ou escondido junto com um recorte pequeno, "
