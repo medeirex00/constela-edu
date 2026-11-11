@@ -47,6 +47,7 @@ from app.models import (
 )
 from app.services import bimestres
 from app.services.audit import registrar
+from app.services.eventos import conteudo_evento, nasceu_na_ficha
 
 
 def _foto_pre_fusao(db: Session, remover: Aluno) -> dict:
@@ -289,14 +290,30 @@ def fundir_par(db: Session, escola_id: int, manter: Aluno, remover: Aluno,
     ).rowcount
 
     # Eventos (linha do tempo): migra os que o `manter` não tem; descarta os
-    # duplicados (mesma plataforma+chave_natural) para respeitar a UNIQUE de
-    # idempotência. SEM a reatribuição, o delete cascatearia e apagaria em
-    # silêncio o histórico do `remover`.
-    chaves_evt_manter = set(db.execute(
-        select(EventoAluno.plataforma, EventoAluno.chave_natural)
-        .where(EventoAluno.aluno_id == manter.id)
-    ).all())
+    # duplicados para respeitar a UNIQUE de idempotência e não dobrar a linha do
+    # tempo. SEM a reatribuição, o delete cascatearia e apagaria em silêncio o
+    # histórico do `remover`.
+    # Duplicado = mesma chave OU mesmo CONTEÚDO: a mesma linha do relatório nas
+    # duas fichas tem chaves que diferem só pelo id da ficha (``chave_evento``).
+    # Entre as duas cópias fica a que prova a origem de uma ficha absorvida — é a
+    # evidência da restauração histórica (``leituras_restauracao``) —, então a
+    # cópia NATIVA do `manter` é a redundante. A cópia descartada vai para o log.
+    chaves_evt_manter: set[tuple[str, str]] = set()
+    # conteúdo → (cópia no `manter`, nasceu no `manter`?, a chave prova "sem extra"?)
+    copia_no_manter: dict[tuple, tuple[EventoAluno, bool, bool]] = {}
+    for evento in db.execute(
+        select(EventoAluno).where(EventoAluno.aluno_id == manter.id)
+    ).scalars().all():
+        chaves_evt_manter.add((evento.plataforma, evento.chave_natural))
+        conteudo = conteudo_evento(evento.plataforma, evento.tipo_evento,
+                                   evento.conteudo_titulo, evento.ocorrido_em)
+        if conteudo is not None and conteudo not in copia_no_manter:
+            nativa = nasceu_na_ficha(evento.chave_natural, manter.id, evento.plataforma,
+                                     evento.tipo_evento, evento.conteudo_titulo,
+                                     evento.ocorrido_em)
+            copia_no_manter[conteudo] = (evento, nativa, nativa)
     eventos_movidos = eventos_descartados = 0
+    eventos_descartes: list[dict] = []
     for evento in db.execute(
         select(EventoAluno).where(EventoAluno.aluno_id == remover.id)
     ).scalars().all():
@@ -304,10 +321,33 @@ def fundir_par(db: Session, escola_id: int, manter: Aluno, remover: Aluno,
         if chave in chaves_evt_manter:
             db.delete(evento)
             eventos_descartados += 1
-        else:
-            evento.aluno_id = manter.id
-            chaves_evt_manter.add(chave)
-            eventos_movidos += 1
+            continue
+        conteudo = conteudo_evento(evento.plataforma, evento.tipo_evento,
+                                   evento.conteudo_titulo, evento.ocorrido_em)
+        sem_extra = conteudo is not None and nasceu_na_ficha(
+            evento.chave_natural, remover.id, evento.plataforma, evento.tipo_evento,
+            evento.conteudo_titulo, evento.ocorrido_em)
+        copia = copia_no_manter.get(conteudo) if conteudo is not None else None
+        # A MESMA ocorrência só quando uma das cópias prova que nasceu sem ``extra``
+        # (a repetição no mesmo minuto, com ``extra``, continua distinta).
+        if copia is not None and (copia[2] or sem_extra):
+            existente, existente_nativa, _ = copia
+            sai, fica = (existente, evento) if existente_nativa else (evento, existente)
+            eventos_descartes.append({
+                "evento_id": sai.id, "da_ficha": sai.aluno_id,
+                "igual_ao_evento_id": fica.id, "livro_id": sai.livro_id,
+                "ocorrido_em": sai.ocorrido_em.isoformat(),
+                "chave_natural": sai.chave_natural})
+            db.delete(sai)
+            eventos_descartados += 1
+            if sai is evento:
+                continue
+            copia_no_manter[conteudo] = (evento, False, sem_extra)
+        evento.aluno_id = manter.id
+        chaves_evt_manter.add(chave)
+        if conteudo is not None:
+            copia_no_manter.setdefault(conteudo, (evento, False, sem_extra))
+        eventos_movidos += 1
 
     # Identidade externa (vínculo UUID): RETÉM ambos os vínculos — só descarta o
     # que for EXATAMENTE igual (mesma plataforma E mesmo id_externo). Se a mesma
@@ -518,6 +558,7 @@ def fundir_par(db: Session, escola_id: int, manter: Aluno, remover: Aluno,
                         "foto_pre_fusao": foto,
                         "decisoes_de_identidade_movidas": decisoes_movidas,
                         "leituras_descartadas_detalhe": descartes,
+                        "eventos_descartados_detalhe": eventos_descartes,
                         **contagens})
     # Grava as reatribuições ANTES do delete — o cascade não pega o que foi movido.
     db.flush()
