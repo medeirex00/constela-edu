@@ -154,6 +154,12 @@ def escola_autorizada(
     escola = db.get(Escola, escola_id)
     if escola is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Escola não encontrada.")
+    # Referência FORTE à ficha da escola durante a sessão (a requisição): o identity
+    # map do SQLAlchemy só guarda referência fraca, e a Escola lida aqui era descartada
+    # assim que a dependência devolvia o int — o ``db.get(Escola, escola_id)`` da rota
+    # fazia um SELECT de novo (uma ida a mais, ~0,2 s, em toda rota por escola).
+    # Expirada por um commit, a ficha é relida no acesso, como sempre (DESEMPENHO-2).
+    db.info.setdefault("escolas_autorizadas", {})[escola_id] = escola
     if usuario.is_global:
         return escola_id
     if _e_secretaria(usuario):
