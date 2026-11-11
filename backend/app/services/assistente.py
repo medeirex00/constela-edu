@@ -217,7 +217,9 @@ def montar_contexto(db: Session, escola_id: int) -> str:
     escola = db.get(Escola, escola_id)
     ano = escola.ano_letivo_ativo
 
-    ranking = db.execute(
+    # As turmas que concorrem (1º ao 5º ano): as Fases não entram no ranking.
+    premiaveis = elegibilidade.turmas_premiaveis(db, escola_id, ano)
+    alunos_com_nota = db.execute(
         select(Nota, Aluno, Turma)
         .join(Aluno, Nota.aluno_id == Aluno.id)
         .join(Matricula, (Matricula.aluno_id == Aluno.id) & (Matricula.ano_letivo == ano))
@@ -225,10 +227,17 @@ def montar_contexto(db: Session, escola_id: int) -> str:
         # Aluno.status: aluno arquivado/inativo NUNCA entra no contexto da IA —
         # sua Nota órfã (arquivar não a apaga) não pode reintroduzir o nome dele,
         # inclusive na ida ao provedor externo. Mesmo filtro do ranking/painel.
+        # Turma premiável: a Nota de quem foi para turma de Fase continua no banco,
+        # com a posição de um cálculo antigo (ou sem posição) — fora do ranking,
+        # como no Ranking Geral (``rankings._apenas_premiaveis``).
         .where(Nota.escola_id == escola_id, Nota.ano_letivo == ano,
-               Aluno.status == "ativo")
+               Aluno.status == "ativo", Turma.id.in_(premiaveis))
         .order_by(Nota.posicao)
     ).all()
+    # AUSÊNCIA NÃO É ZERO (DEC-19): a criança sem dado em nenhuma plataforma não tem
+    # lugar nem "geral 0,0" no ranking — como no Ranking Geral, no Top 10 e no telão.
+    ranking = [linha for linha in alunos_com_nota
+               if linha[0].aferido_leitura or linha[0].aferido_matematica]
 
     # CONTRATO: o que a rede não assinou não entra no contexto — nem a nota, nem
     # o pódio, nem os ganhos daquela plataforma. Com provedor externo o contexto
@@ -252,17 +261,23 @@ def montar_contexto(db: Session, escola_id: int) -> str:
         f"{por_plataforma(nota)}"
         for nota, aluno, turma in ranking[:15]
     ]
-    # Pódios por PLATAFORMA — para perguntas "melhores do Matific/Elefante".
-    def podio(metrica) -> list[str]:
-        ordenado = sorted(ranking, key=lambda r: metrica(r[0]), reverse=True)
+    # Pódios por PLATAFORMA — para perguntas "melhores do Matific/Elefante". Só quem
+    # tem dado DAQUELA plataforma (sem ele, o 0,0 é ausência, não nota).
+    def podio(metrica, aferido) -> list[str]:
+        ordenado = sorted((r for r in ranking if aferido(r[0])),
+                          key=lambda r: metrica(r[0]), reverse=True)
         return [
             f"- {i}º: {aluno.nome} ({turma.nome}) — nota {metrica(nota):.1f}"
             for i, (nota, aluno, turma) in enumerate(ordenado[:10], start=1)
         ]
+    com_dado = {nota.aluno_id for nota, _aluno, _turma in ranking}
     linhas_alunos = [
         f"- {aluno.nome}: turma {turma.nome}, {nota.posicao}º lugar, "
         f"geral {nota.nota_geral:.1f}{por_plataforma(nota)}"
-        for nota, aluno, turma in ranking
+        if nota.aluno_id in com_dado else
+        f"- {aluno.nome}: turma {turma.nome}, ainda sem dados das plataformas "
+        "(sem lugar no ranking)"
+        for nota, aluno, turma in alunos_com_nota
     ]
 
     def ganhos_do_periodo(ganhos: dict) -> str:
@@ -278,8 +293,7 @@ def montar_contexto(db: Session, escola_id: int) -> str:
     # criança do 1º retrato no mês não lidera), e só as turmas que concorrem —
     # as Fases ficam fora da lista (a régua continua a da escola inteira).
     itens_evolucao = evolucao.ranking_evolucao(
-        db, escola_id, dias=30, base_no_periodo=True,
-        turma_ids=elegibilidade.turmas_premiaveis(db, escola_id, ano))[:10]
+        db, escola_id, dias=30, base_no_periodo=True, turma_ids=premiaveis)[:10]
     linhas_evolucao = [
         f"- {item.posicao}º: {item.nome} ({item.turma}) — evolução {item.nota_evolucao:.1f} "
         f"({ganhos_do_periodo(item.ganhos)})"
@@ -332,9 +346,11 @@ def montar_contexto(db: Session, escola_id: int) -> str:
         ], "- Sem dados."),
         *([secao("FORA_DO_PLANO", fora_do_plano, "")] if fora_do_plano else []),
         secao("RANKING", linhas_ranking, "- Nenhuma nota calculada ainda."),
-        *([secao("RANKING_MATIFIC", podio(lambda n: n.nota_matific),
+        *([secao("RANKING_MATIFIC",
+                 podio(lambda n: n.nota_matific, lambda n: n.aferido_matematica),
                  "- Nenhuma nota calculada ainda.")] if com_matematica else []),
-        *([secao("RANKING_ELEFANTE", podio(lambda n: n.nota_elefante),
+        *([secao("RANKING_ELEFANTE",
+                 podio(lambda n: n.nota_elefante, lambda n: n.aferido_leitura),
                  "- Nenhuma nota calculada ainda.")] if com_leitura else []),
         secao("EVOLUCAO", linhas_evolucao, "- Sem dados de evolução no período."),
         secao("INDICES", linhas_indices, "- Sem índices calculados."),
