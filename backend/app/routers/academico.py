@@ -1340,6 +1340,9 @@ def fundir_alunos(
         telemetria) se o `manter` não tiver; se ambos tiverem, fica o que a
         criança usa (``alunos_fusao.plano_quest``) e o outro é descartado (contado
         no log); as duas fichas com jogo no Quest → 409, nada é fundido;
+      * conta da MESMA plataforma nas duas fichas (contas diferentes) → 409,
+        nada é fundido: o retrato não guarda a conta de origem e as duas séries
+        se misturariam (``alunos_fusao.contas_em_conflito``);
       * campos vazios do `manter` (foto, nº de chamada, nascimento,
         observações) são preenchidos com os do `remover`.
     Irreversível → exige confirmação textual "FUNDIR". Recalcula ao final."""
@@ -1385,7 +1388,8 @@ def fundir_alunos(
     # Núcleo compartilhado com a fusão em lote (Fundir duplicatas): reatribui/
     # deduplica cada relação, funde a ficha, registra a auditoria (com a foto
     # pré-fusão) e apaga o `remover`. Não commita nem recalcula — isso é aqui.
-    # Recusa (as duas fichas com jogo no Constela Quest) vem antes de qualquer escrita.
+    # Recusa (contas diferentes da mesma plataforma, ou as duas fichas com jogo no
+    # Constela Quest) vem antes de qualquer escrita (``alunos_fusao.motivo_da_recusa``).
     try:
         r = alunos_fusao.fundir_par(db, escola_id, manter, remover, usuario.id)
     except alunos_fusao.FusaoRecusada as recusa:

@@ -7,8 +7,17 @@ para apagar a duplicada lá; e apagá-la AQUI seria pior, porque se perderia a
 prova de que aquele id externo era daquela criança.
 
 Então o Constela guarda as duas e diz qual é a EFETIVA. A aposentada continua
-existindo, com todo o histórico: só deixa de casar na importação, de alimentar
-retrato/pontuação e de voltar a se associar sozinha.
+existindo, com todo o histórico: só deixa de casar na importação (não chega
+retrato NOVO dela) e de voltar a se associar sozinha.
+
+O QUE APOSENTAR NÃO FAZ (ainda): tirar da ficha os retratos que JÁ vieram da
+conta aposentada. O retrato (``SnapshotMatific``/``SnapshotElefante``) não guarda
+de qual conta veio, então o retrato atual da ficha só passa a ser o da conta
+efetiva na próxima coleta dela, e o ganho de um período que começa antes disso
+ainda pode comparar uma conta com a outra. Separar exige a coluna da conta no
+retrato (migração: decisão do dono). Por isso a fusão de duas fichas com contas
+diferentes da mesma plataforma é recusada (``alunos_fusao.contas_em_conflito``):
+é ela que juntava as duas séries.
 
 DISTINÇÃO QUE NÃO PODE SE PERDER: aposentar aqui NÃO desativa nada na
 plataforma. A conta continua lá, e a próxima sincronização vai continuar trazendo
@@ -349,7 +358,10 @@ def definir_efetiva(db: Session, escola_id: int, *, aluno_id: int, plataforma: s
     """Fixa a identidade EFETIVA do aluno nesta plataforma e aposenta as outras.
 
     Não apaga nada, não toca em snapshot, leitura, evento ou nota, e não altera
-    nenhuma outra plataforma. Faz parte da transação de quem chama — o commit é
+    nenhuma outra plataforma. Consequência: os retratos que já vieram da conta
+    aposentada continuam na ficha (o retrato não guarda a conta de origem) e o
+    retrato atual só passa a ser o da efetiva na próxima coleta dela — ver o
+    cabeçalho do módulo. Faz parte da transação de quem chama — o commit é
     do chamador, para a decisão e a auditoria caírem juntas.
 
     Escolher uma conta APOSENTADA a faz voltar a valer: se ela já é efetiva em

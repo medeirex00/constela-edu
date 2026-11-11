@@ -310,8 +310,13 @@ def plano_deduplicacao(db: Session, escola_id: int) -> list[dict]:
     # fica, o cartão que deixa de entrar e o par que não será fundido (as duas com jogo).
     quest = alunos_fusao.quest_das_fichas(
         db, {i for loser, survivor, *_ in candidatos for i in (loser.id, survivor.id)})
-    return [
-        {
+    # As duas fichas com conta na mesma plataforma: o par que a fusão recusa.
+    contas = alunos_fusao.contas_em_conflito(
+        db, [(survivor.id, loser.id) for loser, survivor, *_ in candidatos])
+
+    def _linha(loser: Aluno, survivor: Aluno, confianca: str, motivo: str, turma: str) -> dict:
+        plano_quest = alunos_fusao.plano_quest(survivor, loser, quest)
+        return {
             "loser_id": loser.id,
             "manter_id": survivor.id,
             "apagar": loser.nome,
@@ -323,10 +328,15 @@ def plano_deduplicacao(db: Session, escola_id: int) -> list[dict]:
             # O que a fusão faz com os livros que estão nas DUAS fichas. Só descreve
             # (a data de quem fica é a que vale): o gestor vê antes de confirmar.
             "leituras": repetidas[(survivor.id, loser.id)],
-            "quest": alunos_fusao.plano_quest(survivor, loser, quest),
+            "quest": plano_quest,
+            # Por que o servidor vai recusar este par (None: não recusa) — o MESMO
+            # texto da falha do lote: a tela não o marca nem o põe no "Selecionar todos".
+            "recusa": alunos_fusao.motivo_da_recusa(
+                plano_quest, contas[(survivor.id, loser.id)]),
         }
-        for loser, survivor, confianca, motivo, turma in candidatos
-    ]
+
+    return [_linha(loser, survivor, confianca, motivo, turma)
+            for loser, survivor, confianca, motivo, turma in candidatos]
 
 
 def _motivo_do_principal(melhor: Aluno, outro: Aluno) -> str:
@@ -365,6 +375,11 @@ def previa_da_fusao(db: Session, escola_id: int, manter: Aluno, remover: Aluno) 
     escola = db.get(Escola, escola_id)
     melhor = _melhor_perfil(manter, remover)
     outro = remover if melhor.id == manter.id else manter
+    # A mesma regra que a fusão aplica (com o progresso e as habilidades conferidos).
+    quest = alunos_fusao.plano_quest(manter, remover, alunos_fusao.quest_das_fichas(
+        db, (manter.id, remover.id), com_agregados=True))
+    contas = alunos_fusao.contas_em_conflito(db, [(manter.id, remover.id)])[
+        (manter.id, remover.id)]
     return {
         "manter": {"id": manter.id, "nome": manter.nome},
         "remover": {"id": remover.id, "nome": remover.nome},
@@ -375,9 +390,11 @@ def previa_da_fusao(db: Session, escola_id: int, manter: Aluno, remover: Aluno) 
         "leituras": alunos_fusao.leituras_repetidas(
             db, escola.ano_letivo_ativo if escola else 0, [(manter.id, remover.id)],
             exemplos=20)[(manter.id, remover.id)],
-        # A mesma regra que a fusão aplica (com o progresso e as habilidades conferidos).
-        "quest": alunos_fusao.plano_quest(manter, remover, alunos_fusao.quest_das_fichas(
-            db, (manter.id, remover.id), com_agregados=True)),
+        "quest": quest,
+        # Plataformas em que as duas fichas têm conta (contas diferentes) e, se a
+        # fusão vai ser recusada, o porquê — o MESMO texto do 409.
+        "contas_em_conflito": contas,
+        "recusa": alunos_fusao.motivo_da_recusa(quest, contas),
     }
 
 

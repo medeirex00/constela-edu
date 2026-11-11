@@ -72,6 +72,49 @@ MOTIVO_QUEST_NAS_DUAS = (
     "As duas fichas têm progresso no Constela Quest: juntar as duas apagaria o "
     "progresso de uma delas. Por isso esta fusão não é feita — fale com o suporte.")
 
+_NOME_PLATAFORMA = {"matific": "Matific", "elefante": "Elefante Letrado"}
+
+
+def contas_em_conflito(db: Session, pares) -> dict[tuple[int, int], list[str]]:
+    """Por par ``(manter_id, remover_id)``, as plataformas em que AS DUAS fichas têm
+    conta (vínculo em ``IdentidadeExterna``, efetivo ou aposentado). A UNIQUE
+    escola+plataforma+id_externo impede a mesma conta em duas fichas: conta nos dois
+    lados é sempre conta DIFERENTE.
+
+    É o par que a fusão não pode juntar sem a coluna da conta no retrato: o
+    ``SnapshotMatific``/``SnapshotElefante`` não diz de qual conta veio, e a série
+    da ficha que fica passaria a alternar entre as duas — o ganho do período
+    compararia a base de uma conta com o atual da outra, o retrato atual seria o
+    de qualquer uma, e a coleta seguinte gravaria as duas na mesma ficha. Uma
+    consulta só, para qualquer número de pares (a prévia do lote passa todos)."""
+    pares = list(pares)
+    ids = {i for par in pares for i in par}
+    if not ids:
+        return {}
+    plats: dict[int, set[str]] = defaultdict(set)
+    for aluno_id, plataforma in db.execute(
+        select(IdentidadeExterna.aluno_id, IdentidadeExterna.plataforma)
+        .where(IdentidadeExterna.aluno_id.in_(ids))).all():
+        plats[aluno_id].add(plataforma)
+    return {(m, r): sorted(plats[m] & plats[r]) for m, r in pares}
+
+
+def texto_contas_em_conflito(plataformas: list[str]) -> str:
+    nomes = " e no ".join(_NOME_PLATAFORMA.get(p, p) for p in plataformas)
+    return (f"As duas fichas têm contas diferentes no {nomes}: juntar as duas misturaria "
+            "os números das duas contas (a nota e a premiação sairiam de contas "
+            "trocadas). Por isso esta fusão não é feita — fale com o suporte.")
+
+
+def motivo_da_recusa(quest: dict, plataformas: list[str]) -> str | None:
+    """Por que ``fundir_par`` vai recusar este par (None: não recusa). A prévia
+    mostra o MESMO texto antes, para a tela não oferecer a fusão."""
+    if plataformas:
+        return texto_contas_em_conflito(plataformas)
+    if quest["conflito"]:
+        return MOTIVO_QUEST_NAS_DUAS
+    return None
+
 
 def quest_das_fichas(db: Session, aluno_ids, *, com_agregados: bool = False
                       ) -> dict[int, dict]:
@@ -166,9 +209,7 @@ def plano_quest(manter: Aluno, remover: Aluno, info: dict[int, dict]) -> dict:
     fica, sai = manter.nome, remover.nome
     texto = None
     if conflito:
-        texto = ("As duas fichas têm progresso no Constela Quest: esta fusão não será "
-                 "feita, porque juntar as duas apagaria o progresso de uma delas. Fale "
-                 "com o suporte.")
+        texto = MOTIVO_QUEST_NAS_DUAS
     else:
         partes: list[str] = []
         if perfil_fica == "remover" and r["progresso"]:
@@ -404,16 +445,22 @@ def fundir_par(db: Session, escola_id: int, manter: Aluno, remover: Aluno,
     registra a auditoria (com a foto pré-fusão) e apaga o ``remover``. NÃO
     commita nem recalcula — devolve as contagens do que foi movido.
 
-    ``FusaoRecusada`` (antes de qualquer escrita) quando as duas fichas têm
-    progresso no Constela Quest: um perfil é único por criança e juntar dois
-    perfis com jogo (somar XP, escolher estrelas e missões) é regra que não existe —
-    apagar um deles perderia o que a criança fez."""
-    # O Quest decide ANTES de qualquer escrita: recusar no meio deixaria metade
+    ``FusaoRecusada`` (antes de qualquer escrita, ``motivo_da_recusa``) quando:
+      * as duas fichas têm conta na MESMA plataforma (contas diferentes): o
+        retrato não guarda de qual conta veio, e a série juntaria as duas
+        (``contas_em_conflito``);
+      * as duas fichas têm progresso no Constela Quest: um perfil é único por
+        criança e juntar dois perfis com jogo (somar XP, escolher estrelas e
+        missões) é regra que não existe — apagar um deles perderia o que a
+        criança fez."""
+    # A recusa vem ANTES de qualquer escrita: recusar no meio deixaria metade
     # movida (na fusão manual, até o rollback; no lote, o savepoint desfaz o par).
     quest = plano_quest(manter, remover,
                         quest_das_fichas(db, (manter.id, remover.id), com_agregados=True))
-    if quest["conflito"]:
-        raise FusaoRecusada(MOTIVO_QUEST_NAS_DUAS)
+    motivo = motivo_da_recusa(
+        quest, contas_em_conflito(db, [(manter.id, remover.id)])[(manter.id, remover.id)])
+    if motivo is not None:
+        raise FusaoRecusada(motivo)
     manter_nome, remover_nome = manter.nome, remover.nome
     foto = _foto_pre_fusao(db, remover)   # ANTES de mover/apagar qualquer coisa
 
@@ -449,6 +496,8 @@ def fundir_par(db: Session, escola_id: int, manter: Aluno, remover: Aluno,
     # Snapshots das plataformas: reatribuídos INTEGRALMENTE (é aqui que o
     # Matific de um cadastro se junta ao Elefante do outro). Sem UNIQUE; o
     # scoring usa só o snapshot mais recente → juntar históricos não dobra nota.
+    # Juntar duas CONTAS da mesma plataforma é recusado antes (``contas_em_conflito``):
+    # o retrato não diz de qual conta veio.
     snaps_matific = db.execute(
         update(SnapshotMatific).where(SnapshotMatific.aluno_id == remover.id)
         .values(aluno_id=manter.id)
@@ -541,10 +590,10 @@ def fundir_par(db: Session, escola_id: int, manter: Aluno, remover: Aluno,
         eventos_movidos += 1
 
     # Identidade externa (vínculo UUID): RETÉM ambos os vínculos — só descarta o
-    # que for EXATAMENTE igual (mesma plataforma E mesmo id_externo). Se a mesma
-    # plataforma tiver UUIDs diferentes nos dois cadastros, os DOIS passam para o
-    # `manter` (a UNIQUE é por escola+plataforma+id_externo, permite). Assim a
-    # próxima sync recasa por QUALQUER um dos UUIDs e NÃO recria a duplicata.
+    # que for EXATAMENTE igual (mesma plataforma E mesmo id_externo). UUIDs
+    # diferentes na MESMA plataforma não chegam aqui: a fusão foi recusada lá em
+    # cima (``contas_em_conflito``) — juntá-los misturava as séries das duas contas.
+    # Assim a próxima sync recasa pelo UUID que veio e NÃO recria a duplicata.
     # CRÍTICO reatribuir (e não deixar cascatear): sem o UUID, a sync recasaria
     # por NOME e poderia recriar a duplicata, desfazendo a fusão.
     ids_ident_manter = set(db.execute(

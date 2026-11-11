@@ -22,8 +22,8 @@ const SEM_LEITURAS = {
 const TEXTO_MOVE = "Constela Quest: o progresso de “Ana Beatriz Souza” passa para a ficha que fica; "
   + "vale o cartão de “Ana Beatriz Souza”, que é o que a criança usa, e o de "
   + "“Ana Beatriz Souza Lima” deixa de entrar.";
-const TEXTO_CONFLITO = "As duas fichas têm progresso no Constela Quest: esta fusão não será feita, "
-  + "porque juntar as duas apagaria o progresso de uma delas. Fale com o suporte.";
+const TEXTO_CONFLITO = "As duas fichas têm progresso no Constela Quest: juntar as duas apagaria o "
+  + "progresso de uma delas. Por isso esta fusão não é feita — fale com o suporte.";
 
 function previaLote() {
   return {
@@ -34,7 +34,8 @@ function previaLote() {
         quest: { tem_quest: true, conflito: false, texto: TEXTO_MOVE } },
       { loser_id: 20, manter_id: 21, apagar: "Caio Ficticio Rocha", manter: "Caio Ficticio Rocha",
         turma: "3º Ano A", confianca: "alta", motivo: "nome_identico", impacto: IMPACTO,
-        quest: { tem_quest: true, conflito: true, texto: TEXTO_CONFLITO } },
+        quest: { tem_quest: true, conflito: true, texto: TEXTO_CONFLITO },
+        recusa: TEXTO_CONFLITO },
     ],
   };
 }
@@ -46,7 +47,7 @@ test("lote: cada par diz o que acontece com o Quest; o par em conflito não vem 
   renderComApp(<ModalAlunosDuplicados escolaId={1} aoFechar={noop} aoConcluir={noop} />);
 
   expect(await screen.findByText(TEXTO_MOVE)).toBeInTheDocument();
-  expect(screen.getByText(new RegExp(TEXTO_CONFLITO.slice(0, 40)))).toBeInTheDocument();
+  expect(screen.getByText(new RegExp(TEXTO_CONFLITO.slice(0, 40)))).toHaveTextContent("⚠");
   const caixas = screen.getAllByRole("checkbox") as HTMLInputElement[];
   expect(caixas[0].checked).toBe(true);
   expect(caixas[1].checked).toBe(false);   // "alta", mas o servidor vai recusar
@@ -78,7 +79,7 @@ const aluno: Aluno = {
   data_nascimento: null, observacoes: null,
 };
 
-async function abrirFusao(quest: object) {
+async function abrirFusao(quest: object, recusa: string | null = null) {
   responder("GET", /\/alunos\?busca=/, {
     itens: [{ id: 20, nome: "Ana Beatriz Souza Lima", status: "ativo", turma: "3º Ano A" }],
     total: 1, pagina: 1, por_pagina: 8,
@@ -90,6 +91,7 @@ async function abrirFusao(quest: object) {
       remover: { id: Number(q.get("remover_id")), nome: "y" },
       leituras: SEM_LEITURAS,
       quest,
+      recusa,
     };
   });
   responder("POST", /\/alunos\/fundir$/, { ok: true });
@@ -101,8 +103,8 @@ async function abrirFusao(quest: object) {
 }
 
 test("fusão manual: as duas fichas com progresso no Quest — avisa e não libera o botão", async () => {
-  await abrirFusao({ tem_quest: true, conflito: true, texto: TEXTO_CONFLITO });
-  const aviso = await screen.findByRole("note", { name: /Constela Quest/ });
+  await abrirFusao({ tem_quest: true, conflito: true, texto: TEXTO_CONFLITO }, TEXTO_CONFLITO);
+  const aviso = await screen.findByRole("note", { name: /esta fusão não é feita/ });
   expect(aviso).toHaveTextContent("As duas fichas têm progresso no Constela Quest");
   await userEvent.type(screen.getByPlaceholderText("FUNDIR"), "FUNDIR");
   expect(screen.getByRole("button", { name: /Fundir cadastros/ })).toBeDisabled();
