@@ -38,7 +38,7 @@ import {
 import type { TomPastel } from "../components/ui";
 import { useApp } from "../context/AppContext";
 import { useApi } from "../hooks/useApi";
-import { dataHora, nota, numero } from "../lib/formato";
+import { dataHora, numero } from "../lib/formato";
 
 interface Destaque {
   aluno_id: number;
@@ -66,6 +66,13 @@ interface ItemXp {
 /** Quantos eventos do mural e linhas do XP aparecem antes de "Mostrar mais". */
 const PASSO_MURAL = 8;
 const PASSO_XP = 15;
+
+/** Evolução do selo com UMA casa, sempre: `nota()` mostra de 1 a 2 casas conforme o
+ *  valor, e os três selos lado a lado saíam "99,33", "87,3" e "50,0". */
+const FORMATO_SELO = new Intl.NumberFormat("pt-BR", {
+  minimumFractionDigits: 1,
+  maximumFractionDigits: 1,
+});
 
 function CartaoDestaque({ titulo, janela, icone, tom, destaque, carregando, falhou }: {
   titulo: string;
@@ -117,7 +124,7 @@ function CartaoDestaque({ titulo, janela, icone, tom, destaque, carregando, falh
               {destaque.turma && <Chip>{destaque.turma}</Chip>}
               <span className="inline-flex items-center gap-1 whitespace-nowrap rounded-full bg-emerald-50 px-2.5 py-1 text-xs font-semibold tabular-nums text-emerald-700 dark:bg-emerald-500/15 dark:text-emerald-300">
                 <TrendingUp size={12} aria-hidden />
-                evolução {nota(destaque.nota_evolucao)}
+                evolução {FORMATO_SELO.format(destaque.nota_evolucao)}
               </span>
             </div>
           </div>
