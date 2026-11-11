@@ -420,9 +420,10 @@ describe("Escolas no período (tela Escolas)", () => {
     semear();
     abrir();
     await screen.findByTestId("tabela-escolas-periodo");
-    // Alfa: o Matific inteiro sem dado — o porquê uma vez, mais a coleta.
+    // Alfa: o Matific inteiro escondido por poucos alunos medidos — "Protegido" (o nome da
+    // legenda), o porquê uma vez, mais a coleta.
     expect(screen.getByTestId("escola-periodo-2"))
-      .toHaveTextContent("Sem dado: menos de 5 alunos com dado desta plataforma no período");
+      .toHaveTextContent("Protegido: menos de 5 alunos com dado desta plataforma no período");
     // Delta: o acerto sem dado; o desempenho protegido (em complemento). A 1ª célula é a caixa
     // "Comparar" da tela Escolas.
     const delta = screen.getByTestId("escola-periodo-5");

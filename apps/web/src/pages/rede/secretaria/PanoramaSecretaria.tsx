@@ -201,7 +201,7 @@ function RedeNoConstela({ painel, situacoes, erroUso, modulos, ano, anosMistos }
                       valor={<ValorDaLeitura pronto={conta != null} erro={erroUso}>{conta?.com_uso === 0 ? "nenhuma" : numero(conta?.com_uso)}</ValorDaLeitura>}
                       detalhe={anosMistos ? `ano letivo de cada escola (${anosMistos.join(", ")}), pelas coletas`
                         : ano != null ? `ano letivo de ${ano}, pelas coletas` : "pelas coletas"} />
-        <NumeroDaRede testId="numero-demais" rotulo="Sem uso registrado ou sem dado" oQueMede={O_QUE_MEDE_REDE.demais}
+        <NumeroDaRede testId="numero-demais" rotulo="Sem uso registrado, sem dado ou protegidas" oQueMede={O_QUE_MEDE_REDE.demais}
                       valor={<ValorDaLeitura pronto={demais != null} erro={erroUso}>{demais === 0 ? "nenhuma" : numero(demais)}</ValorDaLeitura>}
                       detalhe={conta && demais ? textoDemaisSituacoes(conta, semUsoParcial) : undefined} />
       </div>

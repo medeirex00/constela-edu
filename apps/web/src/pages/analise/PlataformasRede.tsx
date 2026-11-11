@@ -65,6 +65,15 @@ export function semDadoDo(m: MetricasElefante | MetricasMatific | null, situacao
   return null;
 }
 
+/** O mesmo bloco sem número, por extenso e com o nome certo: "Protegido: …" quando o número existe
+ *  e não aparece, para proteger as crianças (poucos alunos medidos ou todas as séries pequenas —
+ *  `numeroProtegido`, a regra da legenda e do Panorama); "Sem dado: …" quando falta de verdade. */
+export function semNumeroDo(m: MetricasElefante | MetricasMatific | null, situacao: string | null | undefined): string | null {
+  const porque = semDadoDo(m, situacao);
+  if (porque == null) return null;
+  return `${numeroProtegido(m) ? "Protegido" : "Sem dado"}: ${porque}`;
+}
+
 /** O selo da escola INATIVA no cadastro (o mesmo texto da tabela das Avaliações externas): a
  *  escola continua na lista — são todas as escolas da rede —, mas não passa por uma escola em
  *  funcionamento. Não diz nada sobre uso. */
@@ -168,8 +177,8 @@ export function TabelaEscolasNoPeriodo({ dados, linkDaEscola, comparar, inativas
           </thead>
           <tbody>
             {escolas.map((e) => {
-              const semElefante = semDadoDo(e.elefante, e.cobertura?.elefante);
-              const semMatific = semDadoDo(e.matific, e.cobertura?.matific);
+              const semElefante = semNumeroDo(e.elefante, e.cobertura?.elefante);
+              const semMatific = semNumeroDo(e.matific, e.cobertura?.matific);
               const link = linkDaEscola?.(e.escola_id);
               return (
                 <tr key={e.escola_id} data-testid={`escola-periodo-${e.escola_id}`}
@@ -198,7 +207,7 @@ export function TabelaEscolasNoPeriodo({ dados, linkDaEscola, comparar, inativas
                       <td className={TD}>{e.alunos == null ? <span className={CINZA}>—</span> : inteiro(e.alunos)}</td>
                       {comElefante && (semElefante ? (
                         <>
-                          <td colSpan={4} className={`${TD} ${CINZA}`}>Sem dado: {semElefante}</td>
+                          <td colSpan={4} className={`${TD} ${CINZA}`}>{semElefante}</td>
                           <td className={TD}><Coleta e={e} p="elefante" /></td>
                         </>
                       ) : e.elefante && (
@@ -212,7 +221,7 @@ export function TabelaEscolasNoPeriodo({ dados, linkDaEscola, comparar, inativas
                       ))}
                       {comMatific && (semMatific ? (
                         <>
-                          <td colSpan={3} className={`${TD} ${CINZA}`}>Sem dado: {semMatific}</td>
+                          <td colSpan={3} className={`${TD} ${CINZA}`}>{semMatific}</td>
                           <td className={TD}><Coleta e={e} p="matific" /></td>
                         </>
                       ) : e.matific && (

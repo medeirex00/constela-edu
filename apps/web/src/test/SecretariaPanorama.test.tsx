@@ -114,7 +114,7 @@ describe("A rede no Constela — cadastradas, ativas e com uso não são sinôni
     expect(screen.getByTestId("numero-ativas")).toHaveTextContent("Ativas no cadastro5");
     expect(screen.getByTestId("numero-com-uso")).toHaveTextContent("Com uso no ano letivo3");
     const demais = screen.getByTestId("numero-demais");
-    expect(demais).toHaveTextContent("Sem uso registrado ou sem dado3");
+    expect(demais).toHaveTextContent("Sem uso registrado, sem dado ou protegidas3");
     expect(demais).toHaveTextContent("1 sem uso registrado · 1 sem dado · 1 protegida");
     // "Ativa" é situação do cadastro: o que mede diz que não indica uso.
     expect(screen.getByTestId("numero-ativas").querySelector("[data-o-que-mede]")).toHaveTextContent(O_QUE_MEDE_REDE.ativas);

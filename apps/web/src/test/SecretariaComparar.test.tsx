@@ -190,8 +190,8 @@ describe("Escolas — comparar lado a lado", () => {
     expect(colunas).toEqual(["No período", "EMEF Sintética Alfa", "EMEF Sintética Beta"]);
     const participacao = within(plataformas).getAllByRole("row").find((r) => r.textContent?.startsWith("Participação"))!;
     expect(participacao).toHaveTextContent(/Participação70%85%/);
-    // Alfa: o Matific sem dado, com o porquê (nunca 0).
-    expect(plataformas).toHaveTextContent("Sem dado: menos de 5 alunos com dado desta plataforma no período");
+    // Alfa: o Matific escondido por poucos alunos medidos — "Protegido", com o porquê (nunca 0).
+    expect(plataformas).toHaveTextContent("Protegido: menos de 5 alunos com dado desta plataforma no período");
     expect(plataformas).toHaveTextContent("coleta parcial (até 20/09/2026)");
     // A frase dos períodos ENTRE as plataformas e as avaliações.
     const frase = within(lado).getByTestId("frase-separacao");

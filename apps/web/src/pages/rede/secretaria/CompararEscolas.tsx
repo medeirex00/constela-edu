@@ -40,7 +40,7 @@ import { OPCOES_ANALISE_DA_ESCOLA, urlAnaliseNoAnoLetivo } from "../../analise/A
 import DetalhesEFontes, { Recolhivel, type ItemDetalhe } from "../../analise/DetalhesFonte";
 import { TEXTO_SUPRESSAO_PADRAO } from "../../analise/Plataformas";
 import {
-  Coleta, SeloInativaNoCadastro, TabelaEscolasNoPeriodo, Valor, pct, porqueCaixaTravada, semDadoDo,
+  Coleta, SeloInativaNoCadastro, TabelaEscolasNoPeriodo, Valor, pct, porqueCaixaTravada, semNumeroDo,
   type LinkDaEscola,
 } from "../../analise/PlataformasRede";
 import { CLASSE_LINK } from "../../analise/RelatoriosRede";
@@ -48,7 +48,8 @@ import {
   FiltrosAplicados, SeloNatureza, TD, TH, ValorOficial, useApiExata, usePlataformasDaRede,
 } from "../../analise/comum";
 import {
-  ROTULO_SITUACAO, decimal, legendaSemRegistro, porNome, rotuloComponente, rotuloEtapa, rotuloSerie, valorComUnidade,
+  ROTULO_SITUACAO, decimal, legendaSemRegistro, numeroProtegido, porNome, rotuloComponente, rotuloEtapa, rotuloSerie,
+  valorComUnidade,
 } from "../../analise/formato";
 import type {
   EscolaPlataformas, MetricasElefante, MetricasMatific, PontoAnalise, RespostaAnaliseEscola, RespostaPlataformas,
@@ -153,8 +154,13 @@ function CelulaPlataforma({ e, p, linha, primeira }: { e: EscolaPlataformas; p: 
   if (e.suprimido) {
     return <span className={discreto}>{primeira ? `Protegido: ${e.texto_supressao ?? TEXTO_SUPRESSAO_PADRAO}.` : "protegido"}</span>;
   }
-  const sem = semDadoDo(e[p], e.cobertura?.[p]);
-  if (sem || !e[p]) return <span className={discreto}>{primeira ? `Sem dado: ${sem ?? "sem dado no período"}.` : "sem dado"}</span>;
+  // Bloco inteiro sem número: "Protegido" (poucos alunos medidos: o número existe e não aparece)
+  // ou "Sem dado" — o mesmo nome da legenda abaixo e do Panorama (`semNumeroDo`).
+  const sem = semNumeroDo(e[p], e.cobertura?.[p]);
+  if (sem || !e[p]) {
+    const resumo = numeroProtegido(e[p]) ? "protegido" : "sem dado";
+    return <span className={discreto}>{primeira ? `${sem ?? "Sem dado: sem dado no período"}.` : resumo}</span>;
+  }
   const bloco = e[p]!;
   return <Valor texto={linha.valor(bloco)} campo={linha.campo} bloco={bloco} />;
 }
