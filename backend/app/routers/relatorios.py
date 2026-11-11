@@ -4,6 +4,7 @@ Cada exportação também deixa uma cópia em /exports e um registro no log.
 """
 import logging
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timezone
 
@@ -489,16 +490,23 @@ def exigir_merito(db: Session, preparo: PreparoCertificado) -> Nota:
 
 
 def conteudo_certificado(db: Session, preparo: PreparoCertificado,
-                         modelo: str | None, bimestre: int | None) -> bytes:
+                         modelo: str | None, bimestre: int | None, *,
+                         antes_de_desenhar: Callable[[], None] | None = None) -> bytes:
     """O PDF do certificado de UM aluno que já passou por
     :func:`preparar_certificado`. Pode LEVANTAR a guarda de mérito (409/422) no
-    Geral — inclusive quando a arte da plataforma falha e a emissão cai nele."""
+    Geral — inclusive quando a arte da plataforma falha e a emissão cai nele.
+
+    ``antes_de_desenhar`` é chamado depois das leituras do banco e logo antes de cada
+    renderização (o Chromium, segundos): o lote o usa para fechar a transação das
+    leituras (``certificados_lote``). Por isso tudo o que o documento imprime é lido
+    ANTES dele — depois, só o desenho, sem banco."""
     escola, aluno, matricula = preparo.escola, preparo.aluno, preparo.matricula
     escola_id = escola.id
+    desenhar_agora = antes_de_desenhar or (lambda: None)
 
     def _geral() -> bytes:
         nota = exigir_merito(db, preparo)
-        return svc.gerar_certificado(
+        campos = dict(
             escola_nome=escola.nome,
             cor=svc.cor_primaria(db, escola_id),
             aluno_nome=aluno.nome,
@@ -513,6 +521,8 @@ def conteudo_certificado(db: Session, preparo: PreparoCertificado,
                 frescor_ranking.frescor_da_escola(db, escola, hoje_br()),
                 ["leitura", "matematica"]),
         )
+        desenhar_agora()
+        return svc.gerar_certificado(**campos)
 
     if modelo in ("elefante", "matific"):
         # A arte da plataforma NÃO passa pela guarda de mérito do `_geral()`, e isso
@@ -520,8 +530,10 @@ def conteudo_certificado(db: Session, preparo: PreparoCertificado,
         # participação na plataforma, não de mérito. `test_certificado_plataforma`
         # trava esse contrato (aluno sem nenhuma Nota recebe 200). Só a guarda de
         # POPULAÇÃO, acima, vale para os três botões da tela.
+        escola_nome, aluno_nome = escola.nome, aluno.nome
+        desenhar_agora()
         try:
-            return svc.gerar_certificado_plataforma(escola.nome, aluno.nome,
+            return svc.gerar_certificado_plataforma(escola_nome, aluno_nome,
                                                     modelo, bimestre=bimestre)
         except Exception:  # noqa: BLE001 — sem Chromium/erro de render: cai no geral
             logger.warning("arte do certificado %s falhou; caindo no geral", modelo,

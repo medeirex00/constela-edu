@@ -13,6 +13,12 @@ inteiro), aluno da escola e do professor (404), situação ativa, turma de 1º a
 Lista Piloto (409) e, só no Geral, mérito (409/422). O fallback também é o dela, aluno a
 aluno: se a arte da plataforma falhar, cai no Geral com as guardas de mérito.
 
+SEM TRANSAÇÃO ABERTA DURANTE O DESENHO. Cada certificado leva ~1,5 s de Chromium, e o
+lote vai até 50: a transação que as leituras das guardas abrem é fechada antes de cada
+renderização (``_fechar_leituras``), e a auditoria vai numa transação curta no fim. Antes,
+a conexão ficava "idle in transaction" pelo lote inteiro (~75 s) — num pooler em
+transaction mode, uma conexão do servidor presa por pedido.
+
 RECUSADO NÃO É SUBSTITUÍDO. Quem pede "os 5 primeiros" e tem um recusado recebe 4
 certificados, não o 6º colocado: trocar a criança mudaria quem foi premiado.
 
@@ -39,6 +45,13 @@ router = APIRouter(prefix="/escolas/{escola_id}", tags=["Relatórios"])
 logger = logging.getLogger("constela.certificados_lote")
 
 NENHUM_APTO = "Nenhum aluno apto para o certificado."
+
+
+def _fechar_leituras(db: Session) -> None:
+    """Fecha a transação que as leituras das guardas abriram, logo antes do Chromium.
+    Nada foi gravado até aqui (a auditoria só entra no fim): o COMMIT apenas devolve a
+    conexão, e a próxima leitura abre outra transação, curta."""
+    db.commit()
 
 
 def _apto(preparo: emissao.PreparoCertificado) -> dict:
@@ -117,8 +130,9 @@ def certificados_lote(
     for aluno_id in pedido.aluno_ids:
         try:
             preparo = emissao.preparar_certificado(db, escola, usuario, aluno_id)
-            conteudo = emissao.conteudo_certificado(db, preparo, pedido.modelo,
-                                                    pedido.bimestre)
+            conteudo = emissao.conteudo_certificado(
+                db, preparo, pedido.modelo, pedido.bimestre,
+                antes_de_desenhar=lambda: _fechar_leituras(db))
         except HTTPException as exc:
             itens.append(_recusado(db, escola, aluno_id, exc))
             continue
