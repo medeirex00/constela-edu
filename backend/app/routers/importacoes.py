@@ -3867,6 +3867,9 @@ def analisar_matriculas(
     # prometia "N aluno(s) novo(s)" para quem a confirmação reconhece (nome completo
     # × abreviado, mudança de sala, grafia) ou manda para revisão.
     simulado = _simular_lista_piloto(db, escola_id, ano, usuario, analise)
+    # Quais linhas ficam para revisão (o motivo e o caminho de cada uma), não só
+    # quantas: os mesmos avisos que a confirmação dará, na redação de prévia.
+    avisos = avisos + simulado.avisos_revisao
 
     return MatriculasAnaliseOut(
         escola_detectada=analise.escola_detectada, ano_letivo=analise.ano_letivo,
@@ -4072,6 +4075,9 @@ class _Resultado:
     em_revisao: int = 0
     vistos: set[int] = field(default_factory=set)
     avisos: list[str] = field(default_factory=list)
+    # Os avisos das linhas em REVISÃO (também em ``avisos``): a prévia mostra só
+    # estes da simulação, na redação de prévia — quais nomes, não só quantos.
+    avisos_revisao: list[str] = field(default_factory=list)
     # Linhas NÃO aplicadas por estarem numa turma ARQUIVADA: turma_id → (turma, n).
     em_turma_arquivada: dict[int, tuple[Turma, int]] = field(default_factory=dict)
     # Fichas EXCLUÍDAS que a linha reativaria, mas cuja conta da plataforma hoje é
@@ -4199,8 +4205,10 @@ def _persistir_linhas(db: Session, escola_id: int, ano: int, usuario: Usuario,
             nomes = ", ".join(sorted(
                 estado.alunos_por_id[i].nome for i in decisao.candidatos
                 if i in estado.alunos_por_id)) or "cadastro já existente"
-            res.avisos.append(matriculas.aviso_revisao(parsed.nome, turma.nome, nomes,
-                                                       decisao.motivo))
+            aviso = matriculas.aviso_revisao(parsed.nome, turma.nome, nomes,
+                                             decisao.motivo, previa=simular)
+            res.avisos.append(aviso)
+            res.avisos_revisao.append(aviso)
             auditar("aluno.revisao_necessaria", escola_id=escola_id,
                     usuario_id=usuario.id, entidade="aluno",
                     entidade_id=decisao.aluno_id,

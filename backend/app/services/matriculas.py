@@ -603,7 +603,7 @@ def aviso_ano_da_lista(ano_lista: int | None, origem: str | None, ano_escola: in
 
 
 def aviso_revisao(nome_linha: str, turma: str, nomes_candidatos: str,
-                  motivo: str = "") -> str:
+                  motivo: str = "", *, previa: bool = False) -> str:
     """O aviso da linha que foi para REVISÃO (nada criado nem alterado nela).
 
     ``mudanca_de_sala_sem_prova`` (nome idêntico em outra sala, ou numa ficha sem turma
@@ -613,13 +613,18 @@ def aviso_revisao(nome_linha: str, turma: str, nomes_candidatos: str,
     caminho que funciona é a própria ficha (a pesquisa do topo a acha; Editar dados ›
     Turma a matricula, e o próximo envio da planilha a reconhece pelo roster da sala).
     Os outros motivos (nomes parecidos na mesma sala, disputa entre linhas) continuam
-    em "Fundir duplicatas"."""
+    em "Fundir duplicatas".
+
+    ``previa=True``: a redação da PRÉVIA (nada foi gravado ainda) — "Esta linha
+    ficará para revisão: nada será criado nem alterado nela"."""
+    nada = ("Esta linha ficará para revisão: nada será criado nem alterado nela"
+            if previa else "Nada foi criado nem alterado nesta linha")
     if motivo == "mudanca_de_sala_sem_prova":
         return (f"“{nome_linha}” (turma {turma}) tem o mesmo nome de um aluno já "
                 "cadastrado em outra turma ou sem turma neste ano letivo "
                 f"({nomes_candidatos}), mas nenhum dado dos dois registros (RA ou data "
-                "de nascimento) confirma que é a mesma criança. Nada foi criado nem "
-                "alterado nesta linha. Se for a mesma criança, procure o nome na "
+                f"de nascimento) confirma que é a mesma criança. {nada}. "
+                "Se for a mesma criança, procure o nome na "
                 "pesquisa do topo da página, abra a ficha e, nos três pontinhos › "
                 f"Editar dados, escolha a turma {turma}; no próximo envio desta "
                 "planilha, a ficha recebe os dados da linha. Se forem crianças "
@@ -627,8 +632,8 @@ def aviso_revisao(nome_linha: str, turma: str, nomes_candidatos: str,
                 "Editar dados, e na planilha) e envie de novo: com datas diferentes, a "
                 "linha vira um cadastro novo.")
     return (f"“{nome_linha}” (turma {turma}) parece ser o mesmo aluno de: "
-            f"{nomes_candidatos} — mas a correspondência NÃO é segura. Nada foi "
-            "criado nem alterado nesta linha, para não abrir uma segunda ficha da "
+            f"{nomes_candidatos} — mas a correspondência NÃO é segura. {nada}, "
+            "para não abrir uma segunda ficha da "
             "mesma criança nem misturar duas crianças diferentes. Resolva em "
             "Alunos › Fundir duplicatas; se forem pessoas diferentes, preencha RA "
             "ou data de nascimento distintos na planilha e reimporte.")
