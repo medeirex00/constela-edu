@@ -60,6 +60,10 @@ FORA_DA_MATRIZ = {
     "PATCH /quest/perfil/nome": "rota do ALUNO do Quest: test_quest_*",
     "GET /quest/perfil/personagens": "rota do ALUNO do Quest: test_quest_*",
     "PATCH /quest/perfil/preferencias": "rota do ALUNO do Quest: test_quest_*",
+    "POST /escolas/{escola_id}/dispositivos/descadastrar":
+        "tira o aparelho do push SEM login, só pelo token_push (o segredo do próprio "
+        "celular): ignora a escola do caminho de propósito e só pode PARAR avisos; "
+        "limite por IP. Conferida em test_aud_mobile_descadastro_sem_login",
 }
 
 # Abertas SEM login (saúde, redefinição de senha por link, entrada do aluno no Quest): a
@@ -133,6 +137,7 @@ DA_EQUIPE = frozenset({
     "POST /escolas/{escola_id}/certificados/lote/previa",
     "GET /escolas/{escola_id}/certificados/{aluno_id}",
     "GET /escolas/{escola_id}/comparar",
+    "GET /escolas/{escola_id}/configuracoes/calendario-bimestres",
     "GET /escolas/{escola_id}/configuracoes/dificuldade",
     "PUT /escolas/{escola_id}/configuracoes/dificuldade",
     "GET /escolas/{escola_id}/configuracoes/dificuldade-livro",
