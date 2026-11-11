@@ -18,7 +18,7 @@ from urllib.parse import urlsplit
 
 from fastapi import APIRouter, Depends, HTTPException, Response, status
 from pydantic import BaseModel, Field
-from sqlalchemy import func, or_, select
+from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
@@ -509,29 +509,37 @@ def _dados_publicos(db: Session, escola: Escola, config: dict) -> dict:
     # de outro ano letivo não soma nas estrelas/atividades do telão.
     # CONTRATO: a plataforma de módulo que a rede não contratou não aparece no
     # telão — o número dela sai `null` (a faixa mostra "—") e nem é somado.
+    # A POPULAÇÃO é uma só para a faixa inteira: a criança ATIVA e matriculada no ano
+    # letivo — a que "alunos" conta, e a mesma do Painel da coordenação
+    # (``rankings.montar_dashboard``). O retrato não é apagado quando a criança sai da
+    # escola (é o histórico), e o "atual" de cada uma varre a escola inteira: sem o
+    # corte, os livros da criança transferida ou arquivada seguiam somando no telão
+    # sem login, ao lado de um "alunos" que já não a contava. Uma matrícula por ano
+    # (``uq_matricula_aluno_ano``), então o tamanho da coorte é o total de alunos.
     fora = svc_modulos.plataformas_fora_do_plano(svc_modulos.modulos_da_escola(db, escola))
-    snaps_m = ({} if "matific" in fora
-               else scoring.snapshots_matific_do_ano(db, escola.id, escola.ano_letivo_ativo))
-    snaps_e = ({} if "elefante" in fora
-               else scoring._snapshots_atuais(db, escola.id, SnapshotElefante))
-    total_alunos = db.execute(
-        select(func.count())
-        .select_from(Matricula)
+    coorte = set(db.execute(
+        select(Matricula.aluno_id)
         .join(Aluno, Matricula.aluno_id == Aluno.id)
         .where(Matricula.escola_id == escola.id,
                Matricula.ano_letivo == escola.ano_letivo_ativo,
                Aluno.status == "ativo")
-    ).scalar() or 0
+    ).scalars())
+    snaps_m = ([] if "matific" in fora else [
+        s for aid, s in scoring.snapshots_matific_do_ano(
+            db, escola.id, escola.ano_letivo_ativo).items() if aid in coorte])
+    snaps_e = ([] if "elefante" in fora else [
+        s for aid, s in scoring._snapshots_atuais(
+            db, escola.id, SnapshotElefante).items() if aid in coorte])
     estatisticas = {
-        "alunos": int(total_alunos),
+        "alunos": len(coorte),
         "atividades": (None if "matific" in fora
-                       else int(sum(s.atividades for s in snaps_m.values()))),
+                       else int(sum(s.atividades for s in snaps_m))),
         # As estrelas que CONTAM (no máximo 5 por atividade: o teto do motor,
         # ``scoring.estrelas_que_contam``) — o telão bate com a nota e os rankings.
         "estrelas": (None if "matific" in fora
-                     else int(sum(scoring.estrelas_que_contam(s) for s in snaps_m.values()))),
+                     else int(sum(scoring.estrelas_que_contam(s) for s in snaps_m))),
         "livros": (None if "elefante" in fora
-                   else int(sum(s.livros_unicos for s in snaps_e.values()))),
+                   else int(sum(s.livros_unicos for s in snaps_e))),
     }
 
     return {
