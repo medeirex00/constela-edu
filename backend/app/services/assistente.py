@@ -484,8 +484,9 @@ def _responder(db: Session, escola_id: int, sistema: str,
     responde o modo local (``CONTINGENCIA``): o assistente nunca sai do ar.
 
     Antes da chamada ao provedor EXTERNO, faz o commit da transação (até aqui, só
-    leituras): durante a rede (``ia.provedores.PRAZO_RESPOSTA_S`` por tentativa), a
-    conexão do banco volta ao pool em vez de ficar presa "idle in transaction"."""
+    leituras): durante a rede (no máximo ``ia.provedores.PRAZO_TOTAL_S``, a chamada
+    inteira), a conexão do banco volta ao pool em vez de ficar presa "idle in
+    transaction"."""
     try:
         # A criação pode falhar (ex.: chave ausente/errada): cai no modo local.
         provedor = _provedor_da_escola(db, escola_id)

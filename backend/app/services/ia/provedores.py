@@ -8,26 +8,117 @@
 from __future__ import annotations
 
 import re
+import time
 import unicodedata
+
+import httpcore
+import httpx
 
 from app.core.config import settings
 from app.services.ia.base import ErroProvedorIA, ProvedorIA
 
 MODELO_ANTHROPIC_PADRAO = "claude-opus-4-8"
 MODELO_OPENAI_PADRAO = "gpt-4o"
+URL_OPENAI = "https://api.openai.com/v1/chat/completions"
 
-# Prazo das chamadas aos provedores externos. Sem ele, o SDK da Anthropic espera
-# 600 s pela resposta e tenta mais 2 vezes: até ~30 min por pergunta, com a
-# thread do worker presa. Estourado o prazo, o assistente responde no modo local.
+# Prazo das chamadas aos provedores externos. Sem prazo, o SDK da Anthropic espera
+# 600 s pela resposta e tenta mais 2 vezes: até ~30 min por pergunta, com a thread
+# do worker presa. E o prazo do httpx vale POR OPERAÇÃO de rede (cada pedaço que
+# chega recomeça a contagem): uma resposta gotejando (um proxy/CDN no caminho) nunca
+# o estoura. Por isso cada chamada tem um PRAZO TOTAL, contado do início: toda
+# operação de rede (conectar, TLS, enviar, receber cabeçalho e corpo) espera no
+# máximo o que resta dele; esgotado, a chamada falha na hora e o assistente responde
+# no modo local. Sem nova tentativa da Anthropic: a pausa do SDK antes dela (o que o
+# provedor pedir, até 60 s) ficaria fora do prazo, e o modo local já cobre a falha.
+# Pior caso de uma pergunta: PRAZO_TOTAL_S (fora dele, só a consulta de DNS, que
+# tem o prazo do próprio sistema).
 PRAZO_CONEXAO_S = 5.0
-PRAZO_RESPOSTA_S = 60.0
-NOVAS_TENTATIVAS_ANTHROPIC = 1  # pior caso: 2 × 60 s
+PRAZO_TOTAL_S = 60.0
+NOVAS_TENTATIVAS_ANTHROPIC = 0
 
 
-def _prazo():
-    import httpx
+def _prazo() -> httpx.Timeout:
+    """Prazo por operação, que o httpx exige; o total vem de ``_cliente_http``."""
+    return httpx.Timeout(PRAZO_TOTAL_S, connect=PRAZO_CONEXAO_S)
 
-    return httpx.Timeout(PRAZO_RESPOSTA_S, connect=PRAZO_CONEXAO_S)
+
+class _RedeComPrazoTotal(httpcore.NetworkBackend):
+    """A rede do httpcore em que cada operação espera no máximo o que resta até
+    ``limite`` (``time.monotonic()``); passado o limite, falha sem esperar."""
+
+    def __init__(self, limite: float):
+        self._limite = limite
+        self._rede = httpcore.SyncBackend()
+
+    def espera(self, timeout: float | None,
+               esgotado: type[httpcore.TimeoutException]) -> float:
+        restante = self._limite - time.monotonic()
+        if restante <= 0:
+            raise esgotado("prazo total da chamada ao provedor de IA esgotado")
+        return restante if timeout is None else min(timeout, restante)
+
+    def connect_tcp(self, host, port, timeout=None, local_address=None,
+                    socket_options=None):
+        fluxo = self._rede.connect_tcp(
+            host, port, timeout=self.espera(timeout, httpcore.ConnectTimeout),
+            local_address=local_address, socket_options=socket_options)
+        return _FluxoComPrazoTotal(fluxo, self)
+
+    def connect_unix_socket(self, path, timeout=None, socket_options=None):
+        fluxo = self._rede.connect_unix_socket(
+            path, timeout=self.espera(timeout, httpcore.ConnectTimeout),
+            socket_options=socket_options)
+        return _FluxoComPrazoTotal(fluxo, self)
+
+    def sleep(self, seconds: float) -> None:
+        self._rede.sleep(seconds)
+
+
+class _FluxoComPrazoTotal(httpcore.NetworkStream):
+    def __init__(self, fluxo: httpcore.NetworkStream, rede: _RedeComPrazoTotal):
+        self._fluxo, self._rede = fluxo, rede
+
+    def read(self, max_bytes: int, timeout: float | None = None) -> bytes:
+        return self._fluxo.read(max_bytes,
+                                timeout=self._rede.espera(timeout, httpcore.ReadTimeout))
+
+    def write(self, buffer: bytes, timeout: float | None = None) -> None:
+        self._fluxo.write(buffer, timeout=self._rede.espera(timeout, httpcore.WriteTimeout))
+
+    def close(self) -> None:
+        self._fluxo.close()
+
+    def start_tls(self, ssl_context, server_hostname=None, timeout=None):
+        fluxo = self._fluxo.start_tls(
+            ssl_context, server_hostname=server_hostname,
+            timeout=self._rede.espera(timeout, httpcore.ConnectTimeout))
+        return _FluxoComPrazoTotal(fluxo, self._rede)
+
+    def get_extra_info(self, info: str):
+        return self._fluxo.get_extra_info(info)
+
+
+class _TransporteComPrazoTotal(httpx.HTTPTransport):
+    """O ``HTTPTransport`` padrão (mesmo TLS, mesmo mapa de erros do httpx) sobre a
+    ``_RedeComPrazoTotal``. O httpx não deixa escolher a rede do httpcore: o pool
+    é refeito com ela (httpx fixado em requirements.txt; a guarda abaixo e o
+    teste do servidor gotejando acusam se a estrutura mudar)."""
+
+    def __init__(self, limite: float):
+        tls = httpx.create_ssl_context()
+        super().__init__(verify=tls)
+        if not isinstance(getattr(self, "_pool", None), httpcore.ConnectionPool):
+            raise RuntimeError("httpx.HTTPTransport sem o _pool esperado: "
+                               "rever _TransporteComPrazoTotal")
+        self._pool = httpcore.ConnectionPool(ssl_context=tls,
+                                             network_backend=_RedeComPrazoTotal(limite))
+
+
+def _cliente_http(limite: float) -> httpx.Client:
+    """Cliente HTTP de UMA chamada a provedor externo: nenhuma operação de rede
+    passa de ``limite`` (``time.monotonic()``). Com o transporte próprio, o httpx
+    não usa proxy de variável de ambiente (HTTPS_PROXY), que o sistema não usa."""
+    return httpx.Client(transport=_TransporteComPrazoTotal(limite), timeout=_prazo())
 
 
 class AnthropicProvedor(ProvedorIA):
@@ -42,24 +133,27 @@ class AnthropicProvedor(ProvedorIA):
     def responder(self, sistema: str, mensagens: list[dict]) -> str:
         import anthropic
 
+        limite = time.monotonic() + PRAZO_TOTAL_S
         try:
-            cliente = anthropic.Anthropic(api_key=self._api_key, timeout=_prazo(),
-                                          max_retries=NOVAS_TENTATIVAS_ANTHROPIC)
-            resposta = cliente.messages.create(
-                model=self._modelo,
-                max_tokens=settings.AI_MAX_TOKENS,
-                # O contexto da escola (~milhares de tokens) repete a cada
-                # pergunta da conversa: o cache reduz custo/latência.
-                cache_control={"type": "ephemeral"},
-                system=sistema,
-                messages=[
-                    {
-                        "role": "user" if m["papel"] == "usuario" else "assistant",
-                        "content": m["conteudo"],
-                    }
-                    for m in mensagens
-                ],
-            )
+            with _cliente_http(limite) as http:
+                cliente = anthropic.Anthropic(api_key=self._api_key, timeout=_prazo(),
+                                              max_retries=NOVAS_TENTATIVAS_ANTHROPIC,
+                                              http_client=http)
+                resposta = cliente.messages.create(
+                    model=self._modelo,
+                    max_tokens=settings.AI_MAX_TOKENS,
+                    # O contexto da escola (~milhares de tokens) repete a cada
+                    # pergunta da conversa: o cache reduz custo/latência.
+                    cache_control={"type": "ephemeral"},
+                    system=sistema,
+                    messages=[
+                        {
+                            "role": "user" if m["papel"] == "usuario" else "assistant",
+                            "content": m["conteudo"],
+                        }
+                        for m in mensagens
+                    ],
+                )
         except anthropic.AnthropicError as erro:
             raise ErroProvedorIA(f"Falha no provedor Anthropic: {erro}") from erro
         # Um 200 fora do formato também é falha do provedor: a página HTML de um
@@ -88,8 +182,6 @@ class OpenAIProvedor(ProvedorIA):
         self._modelo = modelo or MODELO_OPENAI_PADRAO
 
     def responder(self, sistema: str, mensagens: list[dict]) -> str:
-        import httpx
-
         corpo = {
             "model": self._modelo,
             "max_tokens": settings.AI_MAX_TOKENS,
@@ -101,15 +193,16 @@ class OpenAIProvedor(ProvedorIA):
                 for m in mensagens
             ],
         }
+        limite = time.monotonic() + PRAZO_TOTAL_S
         try:
-            resposta = httpx.post(
-                "https://api.openai.com/v1/chat/completions",
-                headers={"Authorization": f"Bearer {self._api_key}"},
-                json=corpo,
-                timeout=_prazo(),
-            )
-            resposta.raise_for_status()
-            dados = resposta.json()
+            with _cliente_http(limite) as cliente:
+                resposta = cliente.post(
+                    URL_OPENAI,
+                    headers={"Authorization": f"Bearer {self._api_key}"},
+                    json=corpo,
+                )
+                resposta.raise_for_status()
+                dados = resposta.json()
         except httpx.HTTPError as erro:
             raise ErroProvedorIA(f"Falha no provedor OpenAI: {erro}") from erro
         except ValueError as erro:

@@ -1,7 +1,9 @@
 """Provedor externo de IA com prazo curto e sem a transação do banco aberta (API_SEGURANCA-3).
 
 * O cliente da Anthropic nasce com prazo curto (o padrão do SDK é 600 s de leitura
-  e 2 novas tentativas: até ~30 min por pergunta, com a thread do worker presa).
+  e 2 novas tentativas: até ~30 min por pergunta, com a thread do worker presa). O
+  prazo TOTAL de cada chamada, com servidor gotejando, está em
+  ``test_aud_misc_assistente_prazo_total.py``.
 * Durante a chamada de rede ao provedor externo (assistente e "Testar
   configuração"), a sessão do banco da requisição NÃO está numa transação: a
   conexão volta ao pool em vez de ficar "idle in transaction" com o INSERT da
@@ -9,6 +11,8 @@
 
 O par ``*_pg.py`` roda os mesmos testes num PostgreSQL local descartável e confere
 o ``pg_stat_activity``. Nada sai para a rede. Dados fictícios."""
+import time
+
 import anthropic
 import httpx
 from sqlalchemy import delete, select
@@ -16,7 +20,7 @@ from sqlalchemy.orm import Session
 
 from app.models import ConversaIA, MensagemIA
 from app.services import assistente
-from app.services.ia import ErroProvedorIA
+from app.services.ia import ErroProvedorIA, provedores
 from app.services.ia.base import ProvedorIA
 from app.services.ia.provedores import AnthropicProvedor, OpenAIProvedor
 
@@ -53,18 +57,17 @@ def test_cliente_anthropic_tem_prazo_curto_e_no_maximo_uma_nova_tentativa(monkey
 
 
 def test_openai_continua_com_prazo_curto(monkeypatch):
-    prazos = []
+    restantes = []
 
-    def post(url, **kwargs):
-        prazos.append(kwargs.get("timeout"))
-        return httpx.Response(200, json={"choices": [{"message": {"content": "Oi."}}]},
-                              request=httpx.Request("POST", url))
-    monkeypatch.setattr(httpx, "post", post)
+    def cliente(limite):
+        restantes.append(limite - time.monotonic())
+        return httpx.Client(transport=httpx.MockTransport(lambda _req: httpx.Response(
+            200, json={"choices": [{"message": {"content": "Oi."}}]})))
+    monkeypatch.setattr(provedores, "_cliente_http", cliente)
 
     assert OpenAIProvedor("sk-ficticia").responder("sistema", CONVERSA) == "Oi."
-    prazo = httpx.Timeout(prazos[0])
-    assert prazo.read is not None and prazo.read <= 60
-    assert prazo.connect is not None and prazo.connect <= 10
+    # O prazo TOTAL da chamada (conectar, enviar e receber), contado do início.
+    assert restantes and 0 < restantes[0] <= 60
 
 
 # --- Nenhuma transação aberta durante a chamada externa --------------------------

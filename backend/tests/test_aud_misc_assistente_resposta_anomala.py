@@ -17,7 +17,7 @@ from fastapi.testclient import TestClient
 
 from app.main import app
 from app.services import assistente
-from app.services.ia import ErroProvedorIA
+from app.services.ia import ErroProvedorIA, provedores
 from app.services.ia.provedores import AnthropicProvedor, OpenAIProvedor
 
 API = "/api/v1"
@@ -34,13 +34,11 @@ def _resposta(corpo) -> httpx.Response:
 
 
 def _openai_responde(monkeypatch, corpo) -> None:
-    """Toda chamada do OpenAIProvedor (``httpx.post``) recebe ``corpo`` com 200."""
+    """Toda chamada do OpenAIProvedor (pelo cliente de ``provedores._cliente_http``)
+    recebe ``corpo`` com 200."""
     transporte = httpx.MockTransport(lambda _req: _resposta(corpo))
-
-    def post(url, **kwargs):
-        with httpx.Client(transport=transporte) as cliente:
-            return cliente.post(url, **kwargs)
-    monkeypatch.setattr(httpx, "post", post)
+    monkeypatch.setattr(provedores, "_cliente_http",
+                        lambda _limite: httpx.Client(transport=transporte))
 
 
 def _anthropic_responde(monkeypatch, corpo) -> None:
