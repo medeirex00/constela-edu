@@ -218,7 +218,9 @@ python -m scripts.recalcular_institucional --pendentes             # recalcula s
 python -m scripts.recalcular_institucional --pendentes --dry-run   # de novo: 0 escolas
 ```
 
-`--pendentes` agora seleciona escolas com alguma Nota do ano ativo (aluno ativo e matriculado)
+`--pendentes` agora seleciona escolas com alguma Nota do ano ativo (aluno ativo e matriculado
+numa turma que concorre, 1º ao 5º ano — a Nota antiga de criança da Educação Infantil não
+conta, porque o recálculo não a regrava)
 **sem carimbo institucional** *ou* **carimbada com versão de dificuldade diferente da vigente**
 (`escolas_com_versao_desatualizada`). É idempotente: depois do recálculo a escola sai da
 seleção. Alternativa por escola: `POST /api/v1/escolas/{id}/recalcular` (admin ou

@@ -1037,10 +1037,8 @@ def _desempenho_da_escola(db: Session, escola_id: int, ano: int,
             func.avg(case((desempenho["matematica"], Nota.nota_matific))),
             # ALCANCE: tem dado de ALGUMA dimensão CONTRATADA — cascata contrato
             # → dado. Uma rede que desligou a Matemática não pode ser cobrada
-            # por snapshots de um produto que ela não assinou.
-            # (`rede._alunos_com_qualquer_dado` ainda varre as duas plataformas
-            # sem olhar o contrato: achado pré-existente da camada da rede,
-            # § Aprovação 10 da spec — não é deste bloco.)
+            # por snapshots de um produto que ela não assinou (o mesmo corte de
+            # `rede._alunos_com_qualquer_dado`, que só conta os módulos contratados).
             func.sum(case((or_(marcas["leitura"], marcas["matematica"]), 1),
                           else_=0)),
         )
