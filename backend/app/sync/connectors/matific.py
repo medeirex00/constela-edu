@@ -150,11 +150,19 @@ def _slug(texto: str) -> str:
 
 
 def _numero_do_placar(valor) -> int | None:
-    """Número do Placar (``score``/``activities_completed``): a API manda TEXTO
-    numérico ('3914'; docs/MATIFIC_API.md, campo não anulável); número também vale.
-    Qualquer outra coisa — objeto, lista, booleano, texto que não é número, vazio,
-    ``null`` — é ILEGÍVEL e devolve ``None``, nunca 0: zero no lugar do número real
-    tirava a criança do pódio e gravava retrato 0/0 (a resposta mudou de formato)."""
+    """Número do Placar (``score``/``activities_completed``). O exemplo do
+    docs/MATIFIC_API.md traz TEXTO numérico ('362'); número também vale. A doc não
+    diz se esses campos podem vir ``null``: não há registro de null em
+    score/activities_completed, e outros campos numéricos do Placar vêm null
+    (``rank_score``, ``bonus_score``). Qualquer outra coisa — objeto, lista,
+    booleano, texto que não é número, vazio e, por ora, ``null`` — é ILEGÍVEL e
+    devolve ``None``, nunca 0: zero no lugar do número real tirava a criança do
+    pódio e gravava retrato 0/0 (a resposta mudou de formato).
+
+    Tratar ``null`` como ilegível é decisão EM ABERTO do dono, com o efeito inteiro:
+    a coleta não grava o retrato daquela criança (alerta "Formato do relatório
+    mudou") e um null de UMA única criança recusa o pódio ao vivo inteiro da
+    "Premiar por período" (``aovivo._recusar_linhas_sem_numeros``)."""
     if valor is None or isinstance(valor, bool) or not isinstance(valor, (str, int, float)):
         return None
     try:

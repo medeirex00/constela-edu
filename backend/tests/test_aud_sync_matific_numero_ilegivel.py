@@ -8,9 +8,12 @@ virava 0 em ``_para_int`` e as guardas da importação ("ausente/ilegível NÃO 
 0") e do placar ao vivo recebiam um zero legítimo: retrato 0/0 gravado com a
 coleta 'concluida', ganhos do período zerados e pódio com 0.
 
-Decisão documentada: ``score``/``activities_completed`` são texto numérico na API
-(docs/MATIFIC_API.md, não anuláveis); ``null`` também é ilegível — vai nulo,
-nunca 0. Dados fictícios; conector real com navegador falso.
+``null``: o exemplo do docs/MATIFIC_API.md traz texto numérico ("362"); não há
+registro de null em ``score``/``activities_completed`` (outros campos numéricos do
+Placar, ``rank_score`` e ``bonus_score``, vêm null). Por ora o null também é
+ilegível — vai nulo, nunca 0 —, e isso é decisão EM ABERTO do dono: um null de uma
+única criança deixa o retrato dela sem gravar e recusa o pódio ao vivo inteiro.
+Dados fictícios; conector real com navegador falso.
 """
 import pytest
 from sqlalchemy import func, select
