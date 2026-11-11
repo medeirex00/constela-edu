@@ -579,6 +579,12 @@ class Settings(BaseSettings):
     # scheduler — evita que muitas fontes (ou uma lenta) estagnem a fila de sync,
     # já que a coleta roda embutida na mesma thread. O resto vai na próxima rodada.
     AVALIACOES_COLETA_POR_RODADA: int = 3
+    # Prazo TOTAL do download de uma fonte do robô de avaliações ("Coletar agora" e a
+    # coleta agendada), em segundos. O timeout do cliente HTTP vale por leitura: sem este
+    # prazo, um servidor que manda o arquivo pouco a pouco seguraria a coleta (a thread, a
+    # conexão do banco e a trava da fonte) por tempo sem limite. O arquivo oficial do INEP
+    # tem ~97 MB: 10 minutos dão folga para um portal lento.
+    AVALIACOES_DOWNLOAD_PRAZO_S: float = Field(default=600.0, gt=0)
     # O robô AUTOMÁTICO de avaliações externas (fontes_avaliacao) grava números
     # SEM prévia e roda embutido no agendador. DESLIGADO por padrão: ligar o
     # agendador não o liga junto. Os indicadores oficiais entram pela importação

@@ -15,6 +15,7 @@ import ipaddress
 import logging
 import re
 import socket
+import time
 import zipfile
 from datetime import datetime, timedelta, timezone
 from itertools import islice
@@ -959,17 +960,37 @@ class _TransporteSoIpPublico(httpx.HTTPTransport):
         pool._network_backend = _RedeSoIpPublico()
 
 
+def _duracao(segundos: float) -> str:
+    return f"{segundos / 60:g} min" if segundos >= 60 else f"{segundos:g} s"
+
+
 def baixar_url(url: str, *, timeout: float = 30.0) -> bytes:
     """Baixa o arquivo oficial (User-Agent de navegador — os portais oficiais
     bloqueiam clientes 'crus'). Guarda anti-SSRF: só https para host público, os
     redirects são seguidos MANUALMENTE revalidando cada destino (o alvo final não
     fica a cargo do upstream) e cada conexão abre no IP conferido
     (``_TransporteSoIpPublico``: sem DNS rebinding). LEVANTA em erro; o chamador
-    registra o status."""
+    registra o status.
+
+    ``timeout`` vale por operação de rede (cada leitura recomeça a contagem); o download
+    INTEIRO, redirects inclusive, tem o prazo ``AVALIACOES_DOWNLOAD_PRAZO_S``: um servidor
+    que manda o arquivo pouco a pouco seguraria a coleta (a thread, a conexão do banco e
+    a trava da fonte) por tempo sem limite. Passou do prazo (no máximo uma leitura
+    depois): ``ValueError`` com a causa."""
+    prazo = settings.AVALIACOES_DOWNLOAD_PRAZO_S
+    fim = time.monotonic() + prazo
+
+    def _dentro_do_prazo() -> None:
+        if time.monotonic() > fim:
+            raise ValueError(
+                f"o download passou do prazo total de {_duracao(prazo)} sem terminar: o "
+                "servidor está mandando o arquivo devagar demais. Tente de novo mais tarde.")
+
     cabecalhos = {"User-Agent": _UA_NAVEGADOR, "Accept": "*/*"}
     with httpx.Client(timeout=timeout, follow_redirects=False, headers=cabecalhos,
                       transport=_TransporteSoIpPublico()) as cli:
         for _ in range(_MAX_REDIRECTS + 1):
+            _dentro_do_prazo()
             _exigir_destino_publico(url)
             with cli.stream("GET", url) as r:
                 if r.is_redirect:
@@ -984,6 +1005,7 @@ def baixar_url(url: str, *, timeout: float = 30.0) -> bytes:
                     buf += chunk
                     if len(buf) > _MAX_DOWNLOAD:
                         raise ValueError("arquivo excede o teto de download")
+                    _dentro_do_prazo()
                 return bytes(buf)
     raise ValueError("excesso de redirects")
 
