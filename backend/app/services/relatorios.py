@@ -82,14 +82,23 @@ def _consulta_ranking_geral(db: Session, escola_id: int,
 def linhas_ranking(db: Session, escola_id: int,
                    turma_ids: list[int] | None = None) -> tuple[list[str], list[list]]:
     """``turma_ids`` (professor): só as matrículas do ano ativo nessas turmas —
-    recorte pelo ID da turma da matrícula, nunca pelo nome (ver ``_recorte``)."""
+    recorte pelo ID da turma da matrícula, nunca pelo nome (ver ``_recorte``).
+
+    A nota da plataforma que a criança NÃO USA (sem retrato: ``Nota.aferido_*``
+    falso) sai ``None`` — célula vazia no CSV/Excel, "—" no cartaz e "-" na
+    reserva do PDF —, como a tela (``notaDaMateria``): a coluna vale 0.0 tanto
+    para quem não usa quanto para o zero legítimo, e imprimir 0,0 afirmaria
+    desempenho onde só há ausência de dado (``rankings._ranking``). A Nota Geral
+    e a posição não mudam."""
     linhas = db.execute(_consulta_ranking_geral(db, escola_id, turma_ids)
                         .order_by(Nota.posicao)).all()
     cabecalho = ["Posição", "Aluno", "Turma", "Série", "Nota Matific",
                  "Nota Elefante", "Nota Geral"]
     return cabecalho, [
         [nota.posicao, aluno.nome, turma.nome, turma.ano_escolar,
-         nota.nota_matific, nota.nota_elefante, nota.nota_geral]
+         nota.nota_matific if nota.aferido_matematica else None,
+         nota.nota_elefante if nota.aferido_leitura else None,
+         nota.nota_geral]
         for nota, aluno, turma in linhas
     ]
 
@@ -321,9 +330,12 @@ def gerar_pdf(titulo: str, escola_nome: str, cor: str,
               cabecalho: list[str], linhas: list[list],
               nota_dados: str | None = None) -> bytes:
     """PDF simples de tabela (fpdf). ``nota_dados`` = a linha "Dados das
-    plataformas: ..." (``legenda_data_dos_dados``) logo abaixo da faixa."""
+    plataformas: ..." (``legenda_data_dos_dados``) logo abaixo da faixa. Valor
+    ausente (``None`` — ex.: nota da plataforma que a criança não usa) sai "-"
+    (o "—" não existe nas fontes latin-1), nunca "None"."""
     from fpdf import FPDF
 
+    linhas = [["-" if valor is None else valor for valor in linha] for linha in linhas]
     pdf = FPDF(orientation="P", unit="mm", format="A4")
     pdf.set_auto_page_break(auto=True, margin=15)
     pdf.add_page()
