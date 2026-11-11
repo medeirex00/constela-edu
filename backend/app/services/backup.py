@@ -151,8 +151,13 @@ ROTULOS: dict[str, str] = {
     "sync_marcadores": "marcadores de sincronização",
 }
 
-# Colunas ignoradas na exportação (recriadas na restauração)
-IGNORADAS = {"id", "escola_id", "usuario_id"}
+# Colunas ignoradas na exportação: a restauração as recria (o id novo; a escola de
+# destino). ``usuario_id`` (quem fez cada importação) NÃO está aqui: antes estava, com
+# o mesmo comentário, mas nada o recriava, e toda restauração apagava o autor do
+# histórico de Importações (G_LGPD-7). Agora sai no arquivo e é uma das
+# ``REFERENCIAS_A_USUARIO``: volta como veio se o usuário existe, NULL se não existe.
+# Arquivo antigo, sem o campo, volta sem autor, como antes.
+IGNORADAS = {"id", "escola_id"}
 
 # Chave, em ``backup.restaurado`` (log de auditoria), do mapa {id novo: ``_id`` do
 # arquivo} das fichas recriadas — só números. É a linhagem que impede um arquivo
@@ -186,8 +191,9 @@ def _referencias_a_usuario(modelo) -> tuple[str, ...]:
                          for fk in coluna.foreign_keys))
 
 
-# Referências a USUÁRIO que viajam no arquivo (hoje só
-# ``identidades_externas.aposentada_por_id``, quem aposentou a conta duplicada).
+# Referências a USUÁRIO que viajam no arquivo (hoje ``importacoes.usuario_id``, quem
+# fez a importação, e ``identidades_externas.aposentada_por_id``, quem aposentou a
+# conta duplicada).
 # Usuários não entram no backup, então elas não são remapeadas: voltam como vieram
 # quando o usuário ainda existe e viram NULL quando ele não existe mais — removido
 # em definitivo depois do backup (DELETE /usuarios/{id}/permanente; na linha viva
