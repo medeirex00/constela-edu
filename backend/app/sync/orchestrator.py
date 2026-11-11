@@ -260,6 +260,56 @@ def reter_quedas_matific(db: Session, escola: Escola, linhas: list,
     return [linha for linha in linhas if id(linha) not in retidas], len(retidas)
 
 
+def _turma_pelo_nome(db: Session, escola_id: int, nome: str) -> Turma | None:
+    """A turma da escola com o nome que a plataforma informou (sem diferenciar
+    maiúsculas) — a mesma busca que define o titular com a política 'permitir'."""
+    return db.execute(
+        select(Turma).where(Turma.escola_id == escola_id,
+                            func.lower(Turma.nome) == (nome or "").strip().lower())
+    ).scalars().first()
+
+
+def _avisar_professor_sem_cadastro(db: Session, escola_id: int, analise, turma_txt: str,
+                                   contexto: Contexto) -> None:
+    """Política 'bloquear': a plataforma informou o professor da turma, e a coleta
+    não cria a conta nem define o titular. Avisa (sem o nome da pessoa) só quando a
+    gestão tem o que fazer, e uma vez por turma em cada coleta:
+
+    * o relatório de LIVROS do Elefante repete os descritores do relatório de turma
+      — só o de turma avisa (antes saíam dois avisos iguais por turma);
+    * a turma que JÁ tem titular no Constela não gera aviso — mandar "cadastre ou
+      vincule o professor" à escola que já fez isso era instrução falsa, repetida
+      em toda coleta, e escondia os avisos reais;
+    * a turma sem titular diz isso; a que não tem esse nome no Constela não afirma
+      o que a coleta não sabe (se a turma correspondente tem titular).
+
+    Só LÊ a turma; acessório: uma falha aqui não derruba a coleta."""
+    if (getattr(analise, "formato", "") or "") == "leituras":
+        return
+    try:
+        turma = _turma_pelo_nome(db, escola_id, turma_txt)
+    except Exception:  # noqa: BLE001 — professor é acessório; aluno é o essencial
+        db.rollback()
+        contexto.log("professores", "warn",
+                     "Não foi possível conferir o professor titular da turma.")
+        return
+    if turma is not None and turma.professor_id is not None:
+        return
+    if turma is not None:
+        contexto.log("professores", "warn",
+                     f"A turma “{turma_txt}” está sem professor titular no Constela e a "
+                     "plataforma informou o(s) professor(es) dela, mas esta escola não "
+                     "cadastra pela plataforma: nenhuma conta de professor foi criada. "
+                     "Cadastre ou vincule o professor da turma em Usuários.")
+        return
+    contexto.log("professores", "warn",
+                 f"A plataforma informou o(s) professor(es) da turma “{turma_txt}”, que "
+                 "não tem esse nome no Constela, mas esta escola não cadastra pela "
+                 "plataforma: nenhuma conta de professor foi criada. Se a turma "
+                 "correspondente estiver sem professor titular, cadastre ou vincule o "
+                 "professor em Usuários.")
+
+
 def aplicar_arquivo(db: Session, escola: Escola, arquivo: ArquivoObtido, *,
                     usuario_id: int | None, recalcular: bool,
                     contexto: Contexto) -> dict:
@@ -440,19 +490,10 @@ def aplicar_arquivo(db: Session, escola: Escola, arquivo: ArquivoObtido, *,
     professor_txt = getattr(analise, "professor_detectado", "") or ""
     turma_txt = getattr(analise, "turma_detectada", "") or ""
     if professor_txt and turma_txt and not confirm.permitir_criar_aluno:
-        contexto.log("professores", "warn",
-                     f"A plataforma informou o(s) professor(es) da turma "
-                     f"“{turma_txt.strip()}”, mas esta escola não cadastra pela "
-                     "plataforma: nenhuma conta de professor foi criada e o titular "
-                     "da turma não foi alterado. Cadastre ou vincule o professor em "
-                     "Usuários.")
+        _avisar_professor_sem_cadastro(db, escola.id, analise, turma_txt.strip(), contexto)
     elif professor_txt and turma_txt:
         try:
-            turma_obj = db.execute(
-                select(Turma).where(
-                    Turma.escola_id == escola.id,
-                    func.lower(Turma.nome) == turma_txt.strip().lower())
-            ).scalars().first()
+            turma_obj = _turma_pelo_nome(db, escola.id, turma_txt)
             n_prof = professores.garantir_professores_da_turma(
                 db, escola.id, turma_obj, professor_txt)
             db.commit()
