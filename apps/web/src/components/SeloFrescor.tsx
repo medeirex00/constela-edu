@@ -48,8 +48,9 @@ export interface BlocoFrescor {
   dias_desde_dado: number | null;
   alunos_com_dado: number;
   alunos_com_dado_antigo: number;
-  /** Dia do ajuste manual (botão Editar) mais novo que a última coleta de alguma
-   *  criança: não renova a data do dado nem o estado — o selo só o menciona. */
+  /** Dia do ajuste manual (botão Editar) mais novo que a última coleta da escola
+   *  (inclusive o de uma criança que a coleta não trouxe): não renova a data do
+   *  dado nem o estado — o selo só o menciona. */
   ajuste_manual_mais_recente_em?: string | null;
   ultima_sincronizacao_ok_em: string | null;
   dias_desde_sincronizacao_ok: number | null;
