@@ -12,6 +12,7 @@ from app.core.database import get_db, leitura_sem_transacao
 from app.core.deps import get_usuario_atual
 from app.core.rate_limit import (
     alerta_global_login,
+    alerta_portao_login,
     chave_conta_ip,
     identidade_da_conta,
     ip_do_cliente,
@@ -22,6 +23,7 @@ from app.core.rate_limit import (
     limitador_login,
     mascarar_ip,
     minutos_de_espera,
+    portao_login,
     rede_para_limite,
 )
 from app.core.security import (
@@ -82,6 +84,9 @@ _GLOBAL = "*"   # valor único da dimensão global (vale para a API inteira)
 ERRO_MUITAS_GLOBAL = ("O acesso está temporariamente limitado por excesso de "
                       "tentativas na plataforma. Aguarde {minutos} minuto(s) e "
                       "tente novamente.")
+# O portão de logins simultâneos (``portao_login``) está cheio: recusado na hora.
+ERRO_LOGIN_OCUPADO = ("Muitas pessoas estão entrando ao mesmo tempo. Aguarde alguns "
+                      "segundos e tente novamente.")
 
 
 def _erro_muitas(espera_s: int) -> str:
@@ -92,9 +97,9 @@ def _erro_muitas(espera_s: int) -> str:
 
 
 def _tetos_de_falha(rede: str):
-    """(dimensão, valor, limitador) dos tetos de falha, na ordem da CONTAGEM: o
-    global por último — a linha mais disputada fica travada só do UPDATE dela até
-    o commit, e todas as transações travam as linhas na mesma ordem."""
+    """(dimensão, valor, limitador) dos tetos de falha: o do IP e o global. A ordem
+    em que o banco trava as linhas é a de ``limites`` (a da chave), a mesma em todos
+    os pedidos."""
     return ((_DIM_IP_FALHA, rede, limitador_ip_falha_login),
             (_DIM_GLOBAL_FALHA, _GLOBAL, limitador_global_falha_login))
 
@@ -135,18 +140,26 @@ def _exigir_tetos_de_falha_livres(db: Session, rede: str, entrada: str,
 
 
 def _contar_falha_nos_tetos(db: Session, rede: str) -> None:
-    """Conta 1 falha no teto do IP e no global, nas duas camadas. NÃO commita:
-    chamar por último, colado no commit do caminho de erro."""
+    """Conta 1 falha no teto do IP e no global, nas duas camadas. No banco é UMA
+    instrução, em AUTOCOMMIT e fora da transação da requisição (``limites.contar``):
+    chamar DEPOIS do commit do caminho de erro, com a sessão sem conexão. Antes ela
+    era contada dentro da transação, e a linha global (uma só para a API inteira)
+    ficava presa até o commit: as falhas passavam em fila por ela (G_CARGA-1). Se a
+    linha estiver presa além do prazo, conta só na memória."""
     from app.quest.services import limites
 
-    falhas_globais = 0
-    for dimensao, valor, limitador in _tetos_de_falha(rede):
+    tetos = _tetos_de_falha(rede)
+    for _, valor, limitador in tetos:
         limitador.registrar_falha(valor)
-        falhas = limites.registrar_falha(
-            db, limites.chave(dimensao, valor),
-            max_tentativas=limitador.max_tentativas, janela_s=limitador.janela_s)
-        if dimensao == _DIM_GLOBAL_FALHA:
-            falhas_globais = falhas
+    chave_global = limites.chave(_DIM_GLOBAL_FALHA, _GLOBAL)
+    try:
+        no_banco = limites.contar(db, [
+            limites.Limite(limites.chave(dimensao, valor), limitador.max_tentativas,
+                           limitador.janela_s)
+            for dimensao, valor, limitador in tetos])
+        falhas_globais = no_banco[chave_global]
+    except limites.LimiteIndisponivel:
+        falhas_globais = limitador_global_falha_login.falhas_na_janela(_GLOBAL)
     if (falhas_globais >= limitador_global_falha_login.max_tentativas
             or limitador_global_falha_login.bloqueado(_GLOBAL)):
         _alertar_teto_global(falhas_globais)
@@ -169,12 +182,42 @@ def _alertar_teto_global(falhas: int) -> None:
     })
 
 
+def _avisar_portao_cheio() -> None:
+    """Log de aviso quando o portão de logins simultâneos recusa (no máximo um por
+    minuto em cada processo). Sem IP nem conta."""
+    if alerta_portao_login.bloqueado("*"):
+        return
+    alerta_portao_login.registrar_falha("*")
+    logger.warning("login_simultaneos_no_teto", extra={
+        "evento": "login.simultaneos_no_teto",
+        "alerta": "seguranca",
+        "vagas": portao_login.vagas,
+        "efeito": ("o /auth/login recusa com 429, sem ir ao banco, quem chega com o "
+                   "teto cheio; as sessões já abertas seguem sendo atendidas"),
+    })
+
+
 @router.post("/login", response_model=LoginOut)
 def login(
     request: Request,
     form: OAuth2PasswordRequestForm = Depends(),
     db: Session = Depends(get_db),
 ):
+    # Portão de logins SIMULTÂNEOS neste processo (``portao_login``), antes de
+    # qualquer ida ao banco: uma rajada anônima ocupava todas as threads e conexões
+    # do worker, e as sessões já abertas esperavam na fila (G_CARGA-1). Acima do
+    # teto, 429 na hora; quem entrou sai no ``finally``.
+    if not portao_login.entrar():
+        _avisar_portao_cheio()
+        raise HTTPException(status.HTTP_429_TOO_MANY_REQUESTS, ERRO_LOGIN_OCUPADO,
+                            headers={"Retry-After": "5"})
+    try:
+        return _login(request, form, db)
+    finally:
+        portao_login.sair()
+
+
+def _login(request: Request, form: OAuth2PasswordRequestForm, db: Session) -> LoginOut:
     # Aceita e-mail OU nome de usuário (com ou sem o "@" na frente).
     entrada = form.username.lower().strip().lstrip("@")
     if len(entrada) > _TETO_IDENTIFICADOR:
@@ -233,8 +276,8 @@ def login(
         registrar(db, "login.falhou",
                   detalhes={"email": identidade_log, "ip": ip_log,
                             "motivo": "conta_inexistente"})
-        _contar_falha_nos_tetos(db, rede)   # por último, colado no commit
         db.commit()
+        _contar_falha_nos_tetos(db, rede)   # depois do commit: fora da transação
         raise HTTPException(status.HTTP_401_UNAUTHORIZED,
                             "E-mail/usuário ou senha incorretos.")
 
@@ -244,8 +287,8 @@ def login(
         registrar(db, "login.falhou", escola_id=usuario.escola_id, usuario_id=usuario.id,
                   detalhes={"email": identidade_log, "ip": ip_log,
                             "motivo": "senha_incorreta"})
-        _contar_falha_nos_tetos(db, rede)
         db.commit()
+        _contar_falha_nos_tetos(db, rede)
         raise HTTPException(status.HTTP_401_UNAUTHORIZED,
                             "E-mail/usuário ou senha incorretos.")
 
@@ -259,8 +302,8 @@ def login(
         registrar(db, "login.falhou", escola_id=usuario.escola_id, usuario_id=usuario.id,
                   detalhes={"email": identidade_log, "ip": ip_log,
                             "motivo": "senha_convencao_antiga"})
-        _contar_falha_nos_tetos(db, rede)
         db.commit()
+        _contar_falha_nos_tetos(db, rede)
         raise HTTPException(status.HTTP_403_FORBIDDEN,
                             "Senha expirada: peça um link de redefinição ao "
                             "administrador.")

@@ -218,7 +218,12 @@ def test_faxina_sob_a_linha_global_nao_da_deadlock_entre_escolas(monkeypatch):
     T2, por sua vez, esperava a linha global: o PostgreSQL abortava uma das duas
     (DeadlockDetected → 500 no login da criança). Agora a faxina só apaga as linhas
     vencidas que ninguém segura (FOR UPDATE SKIP LOCKED): T1 não espera ninguém, as
-    duas falhas contam, e a linha velha sem dono continua sendo apagada."""
+    duas falhas contam, e a linha velha sem dono continua sendo apagada.
+
+    Desde a G_CARGA-1 (11/11/2026) a contagem e a faxina são instruções próprias, em
+    AUTOCOMMIT: nenhuma falha segura linha até um commit. T2 aqui é uma transação
+    qualquer que segura as linhas velhas da escola B (``SELECT ... FOR UPDATE``), e a
+    faxina sorteada na contagem de T1 continua sem esperar por ela."""
     import os
     import threading
     import time
@@ -274,20 +279,21 @@ def test_faxina_sob_a_linha_global_nao_da_deadlock_entre_escolas(monkeypatch):
                 QuestLimiteAcesso.chave == chave_global)).scalar_one()
         _reiniciar_processo()
 
-        # A faxina é sorteada SÓ na chamada da linha global de T1 (a última).
+        # A faxina é sorteada SÓ na contagem de T1 (uma instrução para as dimensões).
         chamadas_t1 = {"n": 0}
 
         def sorteio():
             if threading.current_thread().name == "T1":
                 chamadas_t1["n"] += 1
-                return 0.0 if chamadas_t1["n"] == len(quest_auth._FALHA_CODIGO) else 1.0
+                return 0.0
             return 1.0
 
         monkeypatch.setattr(limites, "random", types.SimpleNamespace(random=sorteio))
 
-        # T2 (escola B, 401): conta as dimensões por IP — trava as linhas VELHAS.
+        # T2 (escola B): uma transação aberta que segura as linhas VELHAS dela.
         s2 = Sessao()
-        escola_b.contar(s2, *por_ip)
+        s2.execute(select(QuestLimiteAcesso.id).where(QuestLimiteAcesso.chave.in_(
+            [escola_b._chave(d) for d in por_ip])).with_for_update()).all()
 
         def t1():
             s1 = Sessao()
@@ -328,14 +334,14 @@ def test_faxina_sob_a_linha_global_nao_da_deadlock_entre_escolas(monkeypatch):
         assert not th.is_alive()
         assert erros == [], [(q, str(e).splitlines()[0][:160]) for q, e in erros]
         assert estado == "terminou"                 # a faxina de T1 não esperou T2
-        assert chamadas_t1["n"] == len(quest_auth._FALHA_CODIGO)
+        assert chamadas_t1["n"] == 1
         with Sessao() as s:
             chaves = set(s.execute(select(QuestLimiteAcesso.chave)).scalars())
             global_depois = s.execute(select(QuestLimiteAcesso.falhas).where(
                 QuestLimiteAcesso.chave == chave_global)).scalar_one()
         assert global_depois == global_antes + 2    # as duas falhas contaram
         assert chave_orfa not in chaves             # a velha sem dono foi apagada
-        # As linhas de B que T2 segurava ficaram para a próxima faxina (e T2 as renovou).
+        # As linhas de B que T2 segurava ficaram para a próxima faxina.
         assert {escola_b._chave(d) for d in por_ip} <= chaves
     finally:
         tabela.drop(engine, checkfirst=True)

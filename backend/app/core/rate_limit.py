@@ -7,7 +7,9 @@ na Vercel chamando a API no Railway direto) NÃO há limite de borda. Por isso o
 por IP e um teto GLOBAL (``limitador_ip_falha_login`` e
 ``limitador_global_falha_login``, abaixo), que o router também grava no banco
 (valem entre workers e sobrevivem ao deploy — ver routers/auth.py). Teto e janela
-desses dois vêm das variáveis EDU_LOGIN_TETO_* (config.py).
+desses dois vêm das variáveis EDU_LOGIN_TETO_* (config.py). E um portão de logins
+SIMULTÂNEOS por processo (``portao_login``, ``PortaoDeConcorrencia``): uma rajada
+anônima não ocupa todas as threads e conexões do worker.
 
 LIMITAÇÃO DE ESCALA (conhecida e aceita): o contador DESTE módulo é POR PROCESSO
 — para os limites por (conta, IP) e por conta, é o único que existe. Com N
@@ -123,6 +125,47 @@ class LimitadorTentativas:
             if excesso < 0:
                 return 0
             return max(0, int(self.janela_s - (agora - vivos[excesso])))
+
+    def falhas_na_janela(self, chave: str) -> int:
+        """Quantas falhas da chave estão na janela, neste processo (o que a camada em
+        memória sabe quando o banco não respondeu a tempo)."""
+        agora = self._agora()
+        with self._lock:
+            fila = self._eventos.get(chave)
+            return sum(1 for t in fila if agora - t <= self.janela_s) if fila else 0
+
+
+class PortaoDeConcorrencia:
+    """Teto de pedidos de uma rota correndo AO MESMO TEMPO neste processo, sem fila:
+    com o teto cheio, ``entrar`` devolve False na hora e quem chamou recusa o pedido
+    sem esperar e sem tocar no banco. Quem entrou chama ``sair`` no fim (``finally``).
+
+    Para rotas anônimas que qualquer um pode disparar em rajada (o /auth/login): sem
+    o portão, a rajada ocupava todas as threads do worker (40 no anyio) e as conexões
+    do pool (10 + 20) e as sessões já abertas esperavam na fila delas. Com ele, a
+    rajada usa no máximo ``vagas`` de cada, e o resto é recusado em microssegundos.
+    Por processo (como os limitadores daqui): com N workers, N × ``vagas``."""
+
+    def __init__(self, vagas: int) -> None:
+        self.vagas = vagas
+        self._ocupadas = 0
+        self._lock = threading.Lock()
+
+    def entrar(self) -> bool:
+        with self._lock:
+            if self._ocupadas >= self.vagas:
+                return False
+            self._ocupadas += 1
+            return True
+
+    def sair(self) -> None:
+        with self._lock:
+            self._ocupadas = max(0, self._ocupadas - 1)
+
+    @property
+    def ocupadas(self) -> int:
+        with self._lock:
+            return self._ocupadas
 
 
 def minutos_de_espera(segundos: int) -> int:
@@ -256,6 +299,14 @@ limitador_global_falha_login = LimitadorTentativas(
 # falha acima do teto chegaria ao alerta).
 alerta_global_login = LimitadorTentativas(
     max_tentativas=1, janela_s=settings.EDU_LOGIN_TETO_GLOBAL_JANELA_S)
+# Logins correndo AO MESMO TEMPO em cada processo (``PortaoDeConcorrencia``): acima
+# disso, 429 na hora, sem tocar no banco. Um login leva ~1–2 s em produção (bcrypt e
+# algumas idas ao banco, a ~195 ms cada) e o uso real tem poucos ao mesmo tempo; com
+# 8, uma rajada anônima ocupa no máximo 8 das 40 threads e 8 das 30 conexões de cada
+# worker, e as sessões já abertas seguem sendo atendidas.
+portao_login = PortaoDeConcorrencia(vagas=8)
+# No máximo UM aviso de "portão do login cheio" por minuto em cada processo.
+alerta_portao_login = LimitadorTentativas(max_tentativas=1, janela_s=60)
 
 
 def identidade_da_conta(usuario) -> str:
