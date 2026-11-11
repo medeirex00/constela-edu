@@ -36,7 +36,7 @@ from sqlalchemy import func, inspect, select  # noqa: E402
 from app.core.config import ENV_DE_DESENVOLVIMENTO, normalizar_env, settings  # noqa: E402
 from app.core.database import SessionLocal, engine  # noqa: E402
 from app.core.migracoes import aplicar_migracoes  # noqa: E402
-from app.core.security import hash_senha  # noqa: E402
+from app.core.security import hash_senha, validar_forca_senha  # noqa: E402
 from app.models import (  # noqa: E402
     Aluno,
     Configuracao,
@@ -62,6 +62,8 @@ ANO_LETIVO = 2026
 # nome de uma escola real da rede, que aparecia na demonstração e nos E2E.
 ESCOLA_DEMO = "EMEF FICTÍCIA VILA CONSTELAÇÃO"
 ADMIN_EMAIL = "admin@constela.local"
+# Senha da conta inicial para deploy automatizado (docs/PUBLICAR.md, passo 5).
+VAR_SENHA_ADMIN = "ADMIN_INITIAL_PASSWORD"
 
 # Configuração inicial dos níveis de dificuldade (PRD §38).
 # (nome, código estável, códigos de letra agrupados, pontos por livro)
@@ -152,19 +154,37 @@ def _escola_ja_semeada(db) -> Escola | None:
     return db.get(Escola, admin.escola_id)
 
 
+def _senha_do_admin_inicial() -> tuple[str, bool]:
+    """(senha, veio do ambiente?) da conta inicial de administração global.
+
+    Sem ``ADMIN_INITIAL_PASSWORD``: aleatória, exibida UMA vez no console (nunca fixa
+    no código ou na documentação). Com ela (deploy automatizado, cuja saída vai para
+    log): passa pela regra de senha de todos os outros fluxos
+    (``validar_forca_senha``) e nunca é impressa — fraca, o seed recusa antes de
+    gravar qualquer coisa, sem ecoar a senha."""
+    do_ambiente = os.environ.get(VAR_SENHA_ADMIN)
+    if not do_ambiente:
+        return secrets.token_urlsafe(9), False
+    motivo = validar_forca_senha(do_ambiente, ADMIN_EMAIL)
+    if motivo:
+        _recusar(f"a senha de {VAR_SENHA_ADMIN} não passa na regra de senha do "
+                 f"sistema: {motivo} Defina uma senha forte ou remova a variável para "
+                 "o seed gerar uma aleatória.")
+    return do_ambiente, True
+
+
 def seed_base(db) -> Escola:
     escola = _escola_ja_semeada(db)
     if escola is not None:
         print("Seed já executado anteriormente — nada a fazer.")
         return escola
 
+    senha_admin, do_ambiente = _senha_do_admin_inicial()
+
     escola = Escola(nome=ESCOLA_DEMO, ano_letivo_ativo=ANO_LETIVO)
     db.add(escola)
     db.flush()
 
-    # Senha inicial: aleatória e exibida UMA vez no console (nunca fixa no
-    # código/documentação). Override por ambiente para deploys automatizados.
-    senha_admin = os.environ.get("ADMIN_INITIAL_PASSWORD") or secrets.token_urlsafe(9)
     db.add(
         Usuario(
             escola_id=escola.id,
@@ -202,9 +222,14 @@ def seed_base(db) -> Escola:
     db.commit()
     print(f"Escola {ESCOLA_DEMO} criada (id={escola.id}).")
     print("=" * 60)
-    print("  USUÁRIO INICIAL — anote agora (não será exibido de novo):")
-    print(f"    E-mail: {ADMIN_EMAIL}")
-    print(f"    Senha:  {senha_admin}")
+    if do_ambiente:
+        print("  USUÁRIO INICIAL:")
+        print(f"    E-mail: {ADMIN_EMAIL}")
+        print(f"    Senha:  a definida em {VAR_SENHA_ADMIN} (não é exibida)")
+    else:
+        print("  USUÁRIO INICIAL — anote agora (não será exibido de novo):")
+        print(f"    E-mail: {ADMIN_EMAIL}")
+        print(f"    Senha:  {senha_admin}")
     print("  Troque a senha no primeiro acesso, em Usuários.")
     print("=" * 60)
     return escola
