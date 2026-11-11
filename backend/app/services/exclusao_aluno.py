@@ -35,6 +35,11 @@ nome — de uma criança que continua na escola. Excluir "Joao Pedro Silva" não
 mexe em "Joao Pedro Silva Testelli" (viva), nem no homônimo vivo "Joao Pedro
 Silva": o texto não prova ser da excluída, e apagar destrói o dado de quem não
 pediu esquecimento.
+FICHAS ABSORVIDAS POR FUSÃO (``fichas_absorvidas``): são a mesma criança. Tudo acima
+vale também para o nome que ela tinha nelas (o do stub da importação ou da coleta,
+"ANA B. SOUZA"), salvo quando esse nome é também o nome — ou parte do nome — de quem
+fica (``nomes_absorvidos_que_contam``, a mesma regra do log); e a candidata de
+revisão que é a ficha absorvida sai da lista, como a da excluída.
 FICA POR OBRIGAÇÃO DE AUDITORIA, SEM NOME: o log de auditoria (o id vira referência
 anônima; inclusive o ``aluno.excluido_permanente``), o registro de cada importação
 (quem, quando, quantos) e o histórico das sincronizações.
@@ -455,13 +460,36 @@ def apagar_arquivos_apos_commit(db: Session, caminhos: list[Path],
 # Ponto de entrada
 # ---------------------------------------------------------------------------
 
+def nomes_absorvidos_que_contam(absorvidas: dict[int, set[str]] | None,
+                                vivos) -> list[str]:
+    """Os nomes das fichas absorvidas (``fichas_absorvidas``) que entram como nome
+    da criança excluída: só os que NÃO são também o nome — ou parte do nome — de
+    uma criança que continua na escola (``vivos``). O nome do stub é muitas vezes
+    abreviado ("ANA SOUZA") e, contido no nome de quem fica ("Ana Souza Lima"), não
+    prova ser dela. A mesma regra do log (``_anonimizar_logs_do_aluno``)."""
+    nomes = {n for ns in (absorvidas or {}).values() for n in ns if n and _palavras(n)}
+    if not nomes:
+        return []
+    vivas = [s.split() for s in {_chave(v) for v in vivos if v and _palavras(v)}]
+    return sorted(n for n in nomes
+                  if not any(_ocorrencias([_chave(n).split()], viva) for viva in vivas))
+
+
 def esquecer_fora_do_cadastro(db: Session, escola_id: int, nomes: dict[int, str],
-                              identidades: set[tuple[str, str]]) -> dict[str, int]:
+                              identidades: set[tuple[str, str]],
+                              absorvidas: dict[int, set[str]] | None = None
+                              ) -> dict[str, int]:
     """Fecha as lacunas listadas no cabeçalho para as crianças ``nomes``
     ({aluno_id: nome}) de ``escola_id``. ``identidades`` = {(plataforma,
     id_externo)} delas, lidas ANTES de apagar ``identidades_externas``. Chamar
     ANTES do DELETE em ``alunos`` (a revisão resolvida para ela ainda aponta o id).
-    Não commita; os arquivos somem no commit. Devolve as contagens (sem nome)."""
+    Não commita; os arquivos somem no commit. Devolve as contagens (sem nome).
+
+    ``absorvidas`` ({id: {nomes}}, de ``fichas_absorvidas``, lidas ANTES de
+    anonimizar o log, que é de onde vêm os nomes): as fichas que elas absorveram
+    por fusão são ELAS. Os ids delas contam nas revisões (a candidata que é a
+    ficha absorvida sai da lista) e os nomes delas são procurados como os delas
+    (``nomes_absorvidos_que_contam``)."""
     from app.models import Aluno
 
     ids = set(nomes)
@@ -470,7 +498,10 @@ def esquecer_fora_do_cadastro(db: Session, escola_id: int, nomes: dict[int, str]
     # ids também: a candidata de revisão só é "de quem fica" se a ficha existe.
     vivos = dict(db.execute(select(Aluno.id, Aluno.nome).where(
         Aluno.escola_id == escola_id, Aluno.id.not_in(list(ids)))).all())
-    alvos = NomesAlvo(nomes.values(), preservar=vivos.values())
+    alvos = NomesAlvo([*nomes.values(),
+                       *nomes_absorvidos_que_contam(absorvidas, vivos.values())],
+                      preservar=vivos.values())
+    ids |= set(absorvidas or {})
     contagens = _esquecer_revisoes(db, escola_id, ids, set(vivos), alvos, identidades)
     contagens["mensagens_sync_redigidas"] = (
         _redigir_mensagens_de_sync(db, escola_id, alvos) if alvos else 0)
@@ -536,9 +567,14 @@ def fichas_absorvidas(db: Session, escola_id: int, aluno_ids) -> dict[int, set[s
     return achadas
 
 
-def conversas_ia_que_citam(db: Session, escola_id: int, nomes: dict[int, str]) -> set[int]:
+def conversas_ia_que_citam(db: Session, escola_id: int, nomes: dict[int, str],
+                           absorvidas: dict[int, set[str]] | None = None) -> set[int]:
     """Ids das conversas da IA de ``escola_id`` que citam alguma das crianças
     ``nomes`` ({aluno_id: nome}) — o direito ao esquecimento APAGA a conversa.
+    Também pelo nome das fichas que elas absorveram por fusão (``absorvidas``, de
+    ``fichas_absorvidas``): enquanto o stub existia, o assistente o citava por ele.
+    Esse nome só conta quando não é também o nome — ou parte do nome — de quem
+    fica (``nomes_absorvidos_que_contam``; nele, nem o homônimo exato apaga).
 
     Antes era ``conteudo ILIKE %nome%``: excluir "Joao Pedro Silva" apagava a
     conversa sobre "Joao Pedro Silva Testelli", que continua na escola, e "Ana"
@@ -554,13 +590,14 @@ def conversas_ia_que_citam(db: Session, escola_id: int, nomes: dict[int, str]) -
     from app.models import Aluno, ConversaIA, MensagemIA
 
     ids = set(nomes)
-    chaves = {_chave(n) for n in nomes.values() if n and _palavras(n)}
-    maiores_vivos = [n for n in db.execute(select(Aluno.nome).where(
-        Aluno.escola_id == escola_id, Aluno.id.not_in(list(ids)))).scalars()
-        if _chave(n or "") not in chaves]
-    alvos = NomesAlvo(nomes.values(), preservar=maiores_vivos, palavra_unica=True)
+    vivos = [n for n in db.execute(select(Aluno.nome).where(
+        Aluno.escola_id == escola_id, Aluno.id.not_in(list(ids)))).scalars() if n]
+    procurados = [*nomes.values(), *nomes_absorvidos_que_contam(absorvidas, vivos)]
+    chaves = {_chave(n) for n in procurados if n and _palavras(n)}
+    maiores_vivos = [n for n in vivos if _chave(n) not in chaves]
+    alvos = NomesAlvo(procurados, preservar=maiores_vivos, palavra_unica=True)
     achadas: set[int] = set()
-    for nome in sorted({n.strip() for n in nomes.values() if n and n.strip()}):
+    for nome in sorted({n.strip() for n in procurados if n and n.strip()}):
         for conversa_id, conteudo in db.execute(
                 select(MensagemIA.conversa_id, MensagemIA.conteudo)
                 .join(ConversaIA, ConversaIA.id == MensagemIA.conversa_id)

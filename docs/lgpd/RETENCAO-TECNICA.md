@@ -119,7 +119,8 @@ contadores parados há mais de 1 dia e sem bloqueio vigente.
   `exclusao_aluno.conversas_ia_que_citam` decide). O nome dentro do nome **maior** de
   quem fica não conta (excluir "Joao Pedro Silva" não apaga a conversa sobre "Joao Pedro
   Silva Santos"); com homônimo vivo **exato** a conversa é apagada, como antes (não há
-  como saber de qual das duas fala, e ela é do usuário, não da outra criança);
+  como saber de qual das duas fala, e ela é do usuário, não da outra criança). Também
+  pelo nome das fichas que ela absorveu por fusão (ver "Fichas absorvidas", abaixo);
 - revisões de identidade **dela**: resolvidas para ela, da identidade externa dela
   (plataforma + id), ou com o nome dela quando **nenhuma outra criança da escola** tem
   o mesmo nome (com homônimo vivo, o nome também é do outro e a revisão fica);
@@ -155,9 +156,9 @@ contadores parados há mais de 1 dia e sem bloqueio vigente.
   motivo da decisão. O `motivo` e a `origem` do vínculo continuam, como o "porquê
   técnico" do registro — ver `_anonimizar_logs_do_aluno`. Com isso, nenhuma entrada que
   o código grava hoje deixa o RA da criança em claro nas entradas dela;
-- revisões de **outra** criança: a excluída sai da lista de candidatos; a candidata de
-  quem **continua** (ficha existente) fica intacta, e a de ficha que não existe mais
-  (duplicata já fundida) perde o nome se ele era o da excluída;
+- revisões de **outra** criança: a excluída — e a ficha que ela absorveu por fusão —
+  sai da lista de candidatos; a candidata de quem **continua** (ficha existente) fica
+  intacta, e a de outra ficha que não existe mais perde o nome se ele era o da excluída;
 - mensagens de sincronização (`sincronizacao_logs`, `_alertas`, `_execucoes.erro_resumo`);
 - `importacoes.arquivo_original` que trazia o nome;
 - original que traz dado de criança que **fica** (é a prova da importação dela, §15):
@@ -169,6 +170,15 @@ Regra única para o texto (revisões, mensagens, `arquivo_original`): o trecho q
 também o nome — ou parte do nome — de uma criança que **continua** na escola não é
 tocado. Excluir "Joao Pedro Silva" não mexe em "Joao Pedro Silva Testelli" nem no homônimo
 vivo "Joao Pedro Silva".
+
+**Fichas absorvidas por fusão** (`exclusao_aluno.fichas_absorvidas`, lidas uma vez, antes
+de anonimizar o log de onde vêm os nomes): são a mesma criança. O nome que ela tinha
+nelas — o do stub criado pela importação ou pela coleta, muitas vezes abreviado ("ANA B.
+SOUZA") — é procurado em **tudo** acima como o nome dela: log de auditoria, revisões de
+identidade, mensagens de sincronização, `arquivo_original` (e o arquivo) e conversas da
+IA. Salvo quando esse nome é também o nome — ou parte do nome — de uma criança que
+continua na escola (`exclusao_aluno.nomes_absorvidos_que_contam`, a mesma regra do log):
+o stub "ANA SOUZA" não prova ser dela se "Ana Souza Lima" continua.
 
 **Fica por obrigação de auditoria, sem nome**
 

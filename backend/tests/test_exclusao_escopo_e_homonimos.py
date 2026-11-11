@@ -361,8 +361,9 @@ def test_falha_ao_apagar_nao_loga_o_nome_do_arquivo(tmp_path, monkeypatch, caplo
 def test_candidata_de_duplicata_ja_fundida_nao_guarda_o_nome(
         cliente_global, db, escola_completa, pastas):
     """A revisão pendente lista [E, D], duas fichas com o mesmo nome. D é FUNDIDA
-    em E e depois E é excluída. A candidata de D não é de ninguém que continua: o
-    nome sai.
+    em E e depois E é excluída. A candidata de D não é de ninguém que continua: é a
+    ficha que E absorveu — a mesma criança (``fichas_absorvidas``) —, então sai da
+    lista como a de E (REG_SEGURANCA-1; antes ficava, com o nome ``[removido]``).
 
     Hoje a fusão já tira D das pendências (A15). O caso continua valendo para o
     PASSIVO: as fusões de antes não mexiam nas revisões, e é o estado que elas
@@ -397,8 +398,7 @@ def test_candidata_de_duplicata_ja_fundida_nao_guarda_o_nome(
 
     revisao = db.get(RevisaoIdentidade, rev.id)
     assert nome not in str(revisao.candidatos)
-    assert revisao.candidatos == [{"aluno_id": dup_id, "nome": MARCA_REMOVIDO, "turma": "3A"},
-                                  candidata_viva]            # a de quem fica, intacta
+    assert revisao.candidatos == [candidata_viva]            # a de quem fica, intacta
 
 
 # --- 8. Custo do casador -------------------------------------------------------

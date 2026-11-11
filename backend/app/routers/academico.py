@@ -1274,17 +1274,20 @@ def _apagar_alunos_e_dados(db: Session, escola_id: int, usuario: Usuario,
         registrar(db, exclusao_aluno.ACAO_EXCLUSAO_PERMANENTE, escola_id=escola_id,
                   usuario_id=usuario.id, entidade="aluno", entidade_id=aid,
                   detalhes=detalhes)
+    # As fichas que ele absorveu por fusão (o stub da importação, a foto pré-fusão)
+    # são dele: lidas UMA vez, ANTES de anonimizar o log — é do log ``aluno.fundido``
+    # que vêm os nomes delas — e usadas no log, fora do cadastro e nas conversas.
+    absorvidas = exclusao_aluno.fichas_absorvidas(db, escola_id, ids)
     # E anonimiza as entradas ANTERIORES do log que citam o nome deste aluno
     # (criação/edição/fusão/importação) — sem isso o nome civil do menor
-    # persistiria para sempre no histórico de auditoria. Inclui as fichas que ele
-    # absorveu por fusão: o stub da importação e a foto pré-fusão são dele.
-    _anonimizar_logs_do_aluno(db, escola_id, ids, set(nomes.values()),
-                              exclusao_aluno.fichas_absorvidas(db, escola_id, ids))
+    # persistiria para sempre no histórico de auditoria.
+    _anonimizar_logs_do_aluno(db, escola_id, ids, set(nomes.values()), absorvidas)
     # Avisos que apontam para a criança não têm FK e não somem no cascade.
     _apagar_avisos_do_aluno(db, escola_id, ids)
     # O que guarda o nome/id fora do cadastro (ANTES do DELETE em alunos: a
     # revisão resolvida para ela ainda aponta o id). Só contagens no log.
-    fora = exclusao_aluno.esquecer_fora_do_cadastro(db, escola_id, nomes, identidades)
+    fora = exclusao_aluno.esquecer_fora_do_cadastro(db, escola_id, nomes, identidades,
+                                                    absorvidas)
     conta["identidades_externas"] = db.execute(
         delete(IdentidadeExterna).where(IdentidadeExterna.aluno_id.in_(ids))).rowcount
     db.execute(delete(Aluno).where(Aluno.id.in_(ids)))
@@ -1296,8 +1299,10 @@ def _apagar_alunos_e_dados(db: Session, escola_id: int, usuario: Usuario,
     # LGPD: esquecimento das conversas da IA que citem algum aluno excluído (a
     # cascata da 0003 apaga as mensagens). Por palavra inteira e sem contar o
     # nome maior de quem fica — regra em ``exclusao_aluno.conversas_ia_que_citam``.
+    # Também pelo nome das fichas absorvidas (o assistente citava o stub por ele).
     from app.models import ConversaIA
-    ids_conversas = exclusao_aluno.conversas_ia_que_citam(db, escola_id, nomes)
+    ids_conversas = exclusao_aluno.conversas_ia_que_citam(db, escola_id, nomes,
+                                                          absorvidas)
     if ids_conversas:
         db.execute(delete(ConversaIA).where(ConversaIA.id.in_(ids_conversas)))
         registrar(db, "ia.conversas_esquecimento", escola_id=escola_id,
