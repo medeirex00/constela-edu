@@ -187,10 +187,25 @@ app.add_middleware(
 # a repetem no ``msg``. Texto do ``loc`` com mais de ``_LOC_MAXIMO_NO_422`` caracteres e
 # ``msg`` com mais de ``_MSG_MAXIMO_NO_422`` voltam só com o começo e "…"; os números
 # (posição na lista), os nomes dos campos e as mensagens comuns ficam como estão.
+#
+# Campo SECRETO não devolve nem o texto curto: a senha nova recusada pela política (curta
+# ou fraca) voltava inteira, em claro, no 422 — também na rota sem login
+# /auth/redefinir-senha (REG_SEGURANCA-4). Qualquer parte do ``loc`` (o campo, o campo
+# de dentro, o cookie) que contenha um destes pedaços, em qualquer caixa, tira o
+# ``input``: senhas, códigos e QR do Quest, tokens (link, push, arquivo), chaves de API e
+# credenciais das plataformas. O resto do erro (onde e por quê) fica.
 _INPUT_MAXIMO_NO_422 = 256
 _ERROS_MAXIMOS_NO_422 = 20
 _LOC_MAXIMO_NO_422 = 64
 _MSG_MAXIMO_NO_422 = 512
+_PEDACOS_DE_CAMPO_SECRETO = ("senha", "password", "token", "codigo", "api_key", "apikey",
+                             "segredo", "secret", "credencia", "cookie", "authorization")
+
+
+def _campo_secreto(loc) -> bool:
+    return any(isinstance(parte, str)
+               and any(pedaco in parte.lower() for pedaco in _PEDACOS_DE_CAMPO_SECRETO)
+               for parte in loc or ())
 
 
 def _input_que_pode_voltar(bruto: object) -> bool:
@@ -215,10 +230,12 @@ async def _erro_de_validacao(request: Request, exc: RequestValidationError) -> J
     erros = []
     for erro in exc.errors()[:_ERROS_MAXIMOS_NO_422]:
         erro = dict(erro)
-        if "input" in erro and not _input_que_pode_voltar(erro["input"]):
-            erro.pop("input")
         if "loc" in erro:
             erro["loc"] = _loc_curto(erro["loc"])
+        # Conferido no ``loc`` já encurtado: uma chave de dict de 30 MB não é varrida.
+        if "input" in erro and (_campo_secreto(erro.get("loc"))
+                                or not _input_que_pode_voltar(erro["input"])):
+            erro.pop("input")
         if isinstance(erro.get("msg"), str):
             erro["msg"] = _curto(erro["msg"], _MSG_MAXIMO_NO_422)
         erros.append(erro)

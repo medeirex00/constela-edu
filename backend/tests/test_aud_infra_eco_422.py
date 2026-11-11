@@ -55,14 +55,16 @@ def test_lista_enorme_gera_resposta_pequena(db):
     assert len(r.content) < 2_000, f"422 de {len(r.content)} bytes"
 
 
-def test_valor_escalar_curto_continua_no_erro(db):
+def test_valor_escalar_curto_continua_no_erro(cliente, escola_completa):
     """O ``input`` curto e escalar ainda ajuda a entender o erro (ex.: número no lugar de
-    texto)."""
-    r = TestClient(app).post(f"{API}/auth/redefinir-senha",
-                             json={"token": 1, "nova_senha": "curta"})
+    texto). Num campo que não é segredo: o de senha, código ou token não devolve nem o
+    valor curto (REG_SEGURANCA-4, test_aud3_seg_422_sem_segredo.py)."""
+    admin = escola_completa["admin"]
+    r = cliente.patch(f"{API}/escolas/{escola_completa['escola'].id}/usuarios/{admin.id}",
+                      json={"nome": 1})
     assert r.status_code == 422
     por_campo = {tuple(e["loc"]): e for e in r.json()["detail"]}
-    assert por_campo[("body", "token")]["input"] == 1
+    assert por_campo[("body", "nome")]["input"] == 1
 
 
 def _responder(erros: list[dict]) -> dict:

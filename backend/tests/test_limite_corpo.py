@@ -173,8 +173,12 @@ def test_422_nao_devolve_o_corpo_enviado(db):
     assert resposta.status_code == 422
     assert "CORPO-QUE-NAO-PODE-VOLTAR" not in resposta.text
     assert resposta.json()["detail"]                       # o erro continua explicado
+    # O valor curto de um campo que é segredo (o token do link) também não volta; o de
+    # um campo comum volta (test_aud_infra_eco_422.py, REG_SEGURANCA-4).
     curto = cliente.post(f"{API}/auth/redefinir-senha", json={"token": 1})
-    assert curto.status_code == 422 and "input" in curto.json()["detail"][0]
+    erro = curto.json()["detail"][0]
+    assert curto.status_code == 422 and erro["loc"] == ["body", "token"]
+    assert "input" not in erro
 
 
 def test_json_acima_do_teto(cliente, tetos_pequenos):
