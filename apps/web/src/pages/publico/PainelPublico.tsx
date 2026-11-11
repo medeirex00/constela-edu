@@ -607,7 +607,16 @@ export default function PainelPublico() {
     const palco = palcoRef.current;
     if (!palco) return;
     const medir = () => {
-      const altura = palco.clientHeight;
+      // A lista mora num invólucro com respiro em cima e embaixo (py-1): a altura
+      // útil é a do palco MENOS esse respiro. Sem o desconto, a lista cortada no
+      // limite passava 8 px do palco — a linha "+ N" ficava escondida na rolagem
+      // invisível e o palco virava parada do Tab (com o nome da escola em 2 linhas,
+      // em 1366×768, num dia útil).
+      if (palco.clientHeight <= 0) return;
+      const conteudo = palco.firstElementChild;
+      const estilo = conteudo ? getComputedStyle(conteudo) : null;
+      const respiro = estilo ? (parseFloat(estilo.paddingTop) || 0) + (parseFloat(estilo.paddingBottom) || 0) : 0;
+      const altura = palco.clientHeight - respiro;
       if (altura > 0) setAlturaPalco(altura);
     };
     medir();
