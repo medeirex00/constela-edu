@@ -890,10 +890,18 @@ def restaurar(db: Session, escola_id: int, dados: dict,
                    and int(linha[campo_fk]) in nao_restaurados
                    for campo_fk, tabela_pai in FKS.get(nome, {}).items()):
                 continue    # dado da criança excluída de vez (ver acima)
+            # ``IGNORADAS`` (o id e a escola) não saem no arquivo, e quem as recria é
+            # a restauração: o id vem da sequência do banco e a escola é a de destino.
+            # Arquivo editado (ou de outra versão) que as traga dentro da linha não as
+            # impõe: com o id do arquivo, o INSERT não avança a sequência do
+            # PostgreSQL e a próxima linha da tabela, de qualquer escola, colidia
+            # (IntegrityError); com a escola, o construtor recebia ``escola_id``
+            # duas vezes (TypeError, erro interno).
             campos = {
                 campo: _desserializar(modelo, campo, valor)
                 for campo, valor in linha.items()
-                if campo != "_id" and campo in modelo.__table__.columns
+                if campo != "_id" and campo not in IGNORADAS
+                and campo in modelo.__table__.columns
             }
             # Remapeia chaves estrangeiras para os novos IDs
             for campo_fk, tabela_pai in FKS.get(nome, {}).items():
