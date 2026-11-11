@@ -533,7 +533,12 @@ def nao_aferidos(
 
     Escopo idêntico ao do ranking: o professor vê só as turmas dele; a
     Secretaria (que não enxerga PII de criança) recebe as listas vazias pelo
-    mesmo mecanismo — `turmas_permitidas` devolve lista vazia para ela.
+    mesmo mecanismo — `turmas_permitidas` devolve lista vazia para ela. E a
+    MESMA população: só as turmas que concorrem (`_apenas_premiaveis`, as Fases
+    não entram) — o motor não carimba `aferido_*` para quem não concorre, então
+    a Nota congelada de uma Fase contaria como "aferida" (e o "N aferidos" não
+    seria o denominador do ranking) e a Fase sem Nota sairia como "sem nenhuma
+    dimensão" mesmo usando as duas plataformas.
     """
     escola = db.get(Escola, escola_id)
     ano = escola.ano_letivo_ativo
@@ -560,6 +565,9 @@ def nao_aferidos(
     if ano_escolar:
         consulta = consulta.where(Turma.ano_escolar == ano_escolar)
     consulta = _aplicar_turno(consulta, turno)   # mesmo recorte do ranking
+    # AS FASES NÃO CONCORREM: a mesma população do ranking e do denominador dele
+    # (`_contar_aferidos`).
+    consulta = _apenas_premiaveis(consulta, db, escola_id, ano)
     if permitidas is not None:
         consulta = consulta.where(Turma.id.in_(permitidas))
 
