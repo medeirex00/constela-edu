@@ -49,6 +49,7 @@ import {
 } from "../components/ui";
 import { useApp } from "../context/AppContext";
 import {
+  LINHA_IGNORADA,
   MOTIVOS_SO_REVISAO,
   MOTIVOS_TURMA_SEM_DESTINO,
   useImportacaoLote,
@@ -588,6 +589,9 @@ export default function Importacoes() {
         gruposIniciais.map((g): Acao => {
           if (g.todasComErro) return { tipo: "ignorar" };
           const c = g.correspondencia;
+          // A confirmação ignora a linha (conta de aluno excluído para sempre, conta
+          // aposentada): nenhum destino a aplicaria.
+          if (c?.status === "ignorado") return { tipo: "ignorar" };
           // Só a ALTA confiança do motor ("vinculado") e o nome EXATO único
           // pré-selecionam o vínculo. Grafia/similaridade parecida NUNCA vira
           // vínculo por 1 clique.
@@ -834,7 +838,7 @@ export default function Importacoes() {
   const tomCorrespondencia = {
     vinculado: "ok", exato: "ok",
     revisar: "alerta", provavel: "alerta", bloqueado: "destaque",
-    nao_encontrado: "neutro",
+    nao_encontrado: "neutro", ignorado: "neutro",
   } as const;
   const rotuloCorrespondencia = {
     vinculado: "Vinculado automaticamente",
@@ -845,11 +849,17 @@ export default function Importacoes() {
     provavel: "Possível duplicata — requer revisão",
     bloqueado: "Bloqueado por conflito de identidade",
     nao_encontrado: "Novo aluno",
+    // Motivo que a tela ainda não conhece (backend mais novo): só o que acontece.
+    ignorado: "Será ignorada",
   } as const;
 
   /** O rótulo da correspondência: na linha "revisar", o motivo em linguagem simples
-   *  e o que acontece com ela — vai para a Revisão, ou a turma escolhida resolve. */
+   *  e o que acontece com ela — vai para a Revisão, ou a turma escolhida resolve; na
+   *  "ignorado", por que a confirmação ignora a linha. */
   function rotuloDe(c: NonNullable<LinhaAnalise["correspondencia"]>): string {
+    if (c.status === "ignorado") {
+      return LINHA_IGNORADA[c.motivo ?? ""]?.rotulo ?? rotuloCorrespondencia.ignorado;
+    }
     const motivo = motivoDaRevisao(c);
     if (motivo) {
       return `${motivo.rotulo} — ${vaiParaRevisao(c) ? "vai para Revisões de identidade" : "escolha a turma"}`;
@@ -1324,6 +1334,13 @@ export default function Importacoes() {
                         <td className={classesTabela.td}>
                           {grupo.todasComErro ? (
                             <span className="text-xs text-zinc-500 dark:text-zinc-400">sem dados válidos — não será importado</span>
+                          ) : correspondencia?.status === "ignorado" ? (
+                            // A confirmação ignora a linha: nenhum destino a aplicaria.
+                            <span className="block max-w-[18rem] text-xs text-zinc-500 dark:text-zinc-400">
+                              não será importada
+                              {LINHA_IGNORADA[correspondencia.motivo ?? ""]
+                                ? ` — ${LINHA_IGNORADA[correspondencia.motivo ?? ""].explicacao}` : ""}
+                            </span>
                           ) : (
                             <div className="flex min-w-[12rem] flex-col gap-1.5">
                               <select

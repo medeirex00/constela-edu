@@ -394,6 +394,9 @@ export default function ImportacaoLote({ aoConcluir }: { aoConcluir?: () => void
                       {detalhe && !it.ignorado && (
                         <p className="mt-0.5 text-xs text-zinc-500 dark:text-zinc-400">{detalhe}</p>
                       )}
+                      {it.ignorado && it.motivoIgnorado && (
+                        <p className="mt-0.5 text-xs text-zinc-500 dark:text-zinc-400">{it.motivoIgnorado}</p>
+                      )}
                     </div>
 
                     {fase === "conferencia" && (

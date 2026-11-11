@@ -411,9 +411,11 @@ export interface Correspondencia {
   // Motor único (prévia = confirmação): "vinculado" (vincula automático),
   // "revisar" (possível duplicata — o gestor decide), "bloqueado" (conflito de
   // identidade). "exato"/"provavel"/"nao_encontrado" = casamento por nome (fallback
-  // fora da turma) mantidos por compatibilidade.
+  // fora da turma) mantidos por compatibilidade. "ignorado" = a confirmação ignora a
+  // linha (``motivo``: conta_esquecida — aluno excluído para sempre —,
+  // identidade_aposentada…); sem aluno nem alternativa a escolher.
   status: "vinculado" | "revisar" | "bloqueado"
-    | "exato" | "provavel" | "nao_encontrado";
+    | "exato" | "provavel" | "nao_encontrado" | "ignorado";
   aluno_id: number | null;
   aluno_nome: string | null;
   similaridade: number | null;

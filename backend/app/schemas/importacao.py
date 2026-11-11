@@ -8,7 +8,9 @@ from app.schemas.comum import ORMModel, _nome_sem_controle
 
 
 class CorrespondenciaOut(BaseModel):
-    status: str  # exato | vinculado | revisar | bloqueado | nao_encontrado
+    # exato | vinculado | revisar | bloqueado | nao_encontrado | ignorado (a
+    # confirmação ignora a linha; ``motivo`` diz por quê: conta_esquecida…)
+    status: str
     aluno_id: int | None = None
     aluno_nome: str | None = None
     similaridade: float | None = None

@@ -42,6 +42,9 @@ export interface ItemLote {
   detalhe: string;
   corrigido: boolean;
   ignorado: boolean;
+  /** Por que o arquivo já vem ignorado da análise: a confirmação o ignoraria (conta de
+   *  aluno excluído permanentemente, conta aposentada — ``LINHA_IGNORADA``). */
+  motivoIgnorado?: string;
   /** "revisao": o servidor gravou o arquivo como pendência em Revisões de identidade
    *  (``qtd_revisoes``) sem aplicar dado a nenhum aluno (``qtd_alunos`` 0). */
   resultado?: "importado" | "revisao" | "erro" | "ignorado" | "pendente";
@@ -89,6 +92,22 @@ export const MOTIVOS_SO_REVISAO = new Set([
   "criacao_bloqueada_por_politica",
   "deixada_para_revisao",
 ]);
+
+/** Por que a confirmação IGNORA a linha (status "ignorado" da prévia, o motivo do
+ *  IGNORAR de ``identidade_aluno.decidir``): o rótulo e o que fazer. Antes a prévia
+ *  mostrava "Novo aluno" (e o lote, "Aluno novo — será criado nesta turma.") e a
+ *  confirmação ignorava a linha. Vale para a prévia de um arquivo por vez e para o lote. */
+export const LINHA_IGNORADA: Record<string, { rotulo: string; explicacao: string }> = {
+  conta_esquecida: {
+    rotulo: "Conta de aluno excluído permanentemente: será ignorada",
+    explicacao: "A conta continua ativa na plataforma: peça o encerramento lá.",
+  },
+  identidade_aposentada: {
+    rotulo: "Conta aposentada: será ignorada",
+    explicacao: "A escola escolheu outra conta desta criança nesta plataforma; o histórico "
+      + "desta continua guardado.",
+  },
+};
 
 /** Motivos de TURMA em que a turma do relatório não recebe a ficha nova e o backend
  *  não escolhe outra (``identidade_aluno._turma_para_criar``): ela está ARQUIVADA, há
@@ -179,6 +198,17 @@ function montarItem(arquivo: File, indice: number, analise: Analise, turmas: Tur
       ...base, status: "erro", origem, alunoNome: nome, turmaNome, totalLivros,
       acao: { tipo: "corrigir" },
       detalhe: "Nenhum registro de leitura válido neste arquivo.",
+    };
+  }
+  // A confirmação IGNORA o arquivo (conta de aluno excluído para sempre, conta
+  // aposentada): ele já vem ignorado, com o porquê.
+  if (corresp?.status === "ignorado") {
+    const porque = LINHA_IGNORADA[corresp.motivo ?? ""];
+    const motivoIgnorado = porque ? `${porque.rotulo}. ${porque.explicacao}`
+      : "A confirmação ignora este arquivo.";
+    return {
+      ...base, ignorado: true, motivoIgnorado, status: "alerta", origem, alunoNome: nome,
+      turmaNome: "", totalLivros, acao: { tipo: "corrigir" }, detalhe: motivoIgnorado,
     };
   }
   // Só a ALTA confiança do motor ("vinculado") e o nome EXATO único auto-importam

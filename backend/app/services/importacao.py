@@ -1357,6 +1357,16 @@ def _correspondencia(ctx, decisao, nome: str, parecidos: "_ParecidosNaEscola",
                      ident=None) -> dict:
     from app.services import identidade_aluno as ida
 
+    if decisao.acao == ida.IGNORAR:
+        # A confirmação IGNORA a linha (conta de criança excluída para sempre, conta
+        # aposentada pela escola; com aluno escolhido, aluno de outra escola ou ficha
+        # excluída): a prévia diz isso. Antes caía no ramo do CRIAR e a tela mostrava
+        # "Novo aluno" — "a confirmação cria a ficha" —, mas a confirmação ignorava a
+        # linha. Sem aluno nem alternativa: nenhuma escolha da tela a aplicaria
+        # (``identidade_aluno.decidir`` ignora antes da escolha explícita).
+        return {"status": "ignorado", "via": decisao.via, "motivo": decisao.motivo,
+                "aluno_id": None, "aluno_nome": None, "similaridade": None,
+                "alternativas": []}
     alternativas = _alternativas(ctx, decisao.candidatos, nome)
     if decisao.acao == ida.ASSOCIAR:
         aluno = ctx.alunos[decisao.aluno_id]
