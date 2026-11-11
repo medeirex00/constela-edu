@@ -76,7 +76,15 @@ interface Mapeamento {
   // Ao salvar: o texto do cabeçalho de cada coluna mapeada no arquivo conferido. Na lista,
   // vem o que o backend guardou (as colunas e, no arquivo do INEP, a etapa).
   cabecalho?: Record<string, unknown>;
+  // Só ao salvar: as linhas do topo do arquivo conferido, até a linha antes dos dados. No
+  // arquivo do INEP, só o topo diz a etapa (Anos Iniciais, Anos Finais...); o backend guarda
+  // só a etapa tirada dele.
+  topo?: string[][];
 }
+// Os limites que o backend aceita no topo (por linha e por célula); a análise já traz no
+// máximo 20 linhas.
+const TOPO_MAX_CELULAS = 1000;
+const TOPO_MAX_TEXTO = 500;
 interface Fonte {
   id: number; avaliacao: string; avaliacao_nome: string | null; nome: string;
   url: string; edicao: number; indicador: string; unidade: string;
@@ -391,6 +399,13 @@ function ImportarAvaliacao({ catalogo, aoImportar, ehGlobal, aoSalvarFonte }: {
           .map((c) => [c, linhaCabecalho?.[mapeamento[c] as number] ?? ""]));
       if (linhaCabecalho && Object.values(cabecalho).every((t) => t.length <= 200)) {
         mapeamento.cabecalho = cabecalho;
+      }
+      // As linhas do topo, do começo até a linha antes dos dados: no arquivo do INEP, os nomes
+      // das colunas são os mesmos em todas as etapas e só o topo diz qual é a deste arquivo.
+      // O robô passa a conferir que o arquivo da URL é da mesma etapa.
+      if (analise && linhaDados >= 1 && linhaDados <= analise.primeiras_linhas.length) {
+        mapeamento.topo = analise.primeiras_linhas.slice(0, linhaDados).map((linha) =>
+          linha.filter((c) => c !== "").slice(0, TOPO_MAX_CELULAS).map((c) => c.slice(0, TOPO_MAX_TEXTO)));
       }
       const criada = await api<Fonte>("/avaliacoes/fontes", {
         method: "POST",
