@@ -181,15 +181,27 @@ a exclusão de turma com alunos não grava a marca)
   `[{"plataforma", "marca"}]`, em que a marca é o HMAC-SHA256 do id externo com a chave
   do servidor (`exclusao_aluno.marca_da_conta`; a mesma família de chaves da cifra em
   repouso). Nem o nome nem o id da conta ficam em claro. Entram as contas vinculadas à
-  ficha (inclusive a aposentada e as que ela absorveu por fusão) e as das revisões dela
-  (a segunda conta que a coleta mandou para a fila); conta vinculada a uma criança que
-  continua na escola nunca entra.
+  ficha (inclusive a aposentada e as que ela absorveu por fusão) e, das revisões dela,
+  só as que **provam** ser dela: a resolvida para ela e a pendência em que o motor achou
+  a ficha dela como a única correspondência segura e só não associou por uma trava
+  (`outra_identidade_na_plataforma` — a segunda conta que a coleta mandou para a fila —,
+  `ficha_inativa`, `deixada_para_revisao`), sem nenhuma ficha que continua na escola
+  entre os candidatos (`exclusao_aluno._donas_pela_pendencia`). A pendência que só tem o
+  nome dela, com motivo de dúvida de identidade (`homonimo_em_outra_sala`,
+  `nome_casa_em_outra_sala`, `candidatos_multiplos`, `correspondencia_insegura`,
+  `criacao_bloqueada_por_politica`, `contas_repetidas_no_relatorio`, `sem_turma`…), é
+  apagada (guarda o nome), mas a conta **não** entra: pode ser de outra criança, de
+  mesmo nome e ainda sem ficha, que a marca tiraria das coletas para sempre. Conta
+  vinculada a uma criança que continua na escola nunca entra.
 - A porta única de identidade (`identidade_aluno.decidir`) ignora a linha de conta
   marcada antes de qualquer outro passo, com o motivo `conta_esquecida`: não associa,
   não cria ficha, não abre revisão. A marca vale na escola que excluiu.
 - Limites: a linha **sem** a conta (relatório ou planilha só com o nome, como a Lista
   Piloto) não tem como ser reconhecida e pode cadastrar a criança de novo — o modal da
-  exclusão avisa e pede o encerramento da conta na plataforma; exclusões feitas antes
+  exclusão avisa e pede o encerramento da conta na plataforma; a conta que estava só
+  numa pendência de dúvida (acima) não é marcada — se era mesmo da criança excluída, a
+  coleta seguinte a trata como conta nova (com "permitir", cria a ficha; com
+  "bloquear", volta para a fila); exclusões feitas antes
   desta versão não têm a marca (as contas não foram guardadas); levantar a marca (a
   criança voltou à escola) ainda não tem ação própria — decisão do dono.
 - Troca de chave: a marca gravada com uma chave só é reconhecida enquanto essa chave
@@ -238,7 +250,10 @@ texto/JSON depois da exclusão (dados fictícios) e falha se sobrar o nome ou o 
 original de outra escola, original com dado de quem fica);
 `tests/test_aud2_lgpd_esquecimento_conta.py` (e o `_pg`, com a exclusão chegando no meio
 de uma coleta) prova que a coleta seguinte não traz a criança de volta, com "permitir" e
-com "bloquear", nem pela segunda conta que estava na fila.
+com "bloquear", nem pela segunda conta que estava na fila; e
+`tests/test_aud2_lgpd_esquecimento_homonima.py` prova que a conta de outra criança, de
+mesmo nome e na fila por dúvida, não é marcada junto (a coleta seguinte cria a ficha
+dela).
 
 ### 2.4 Quest — código de login, limite de tentativas e portão
 

@@ -45,7 +45,9 @@ seguinte a manda de novo. Sem memória, era uma conta desconhecida: com a polít
 padrão a ficha voltava inteira (nome, conta, retrato, ranking); com "bloquear", o
 nome voltava para a fila de revisões e para o log. Por isso a exclusão permanente
 grava no ``aluno.excluido_permanente`` de cada criança (preservado do expurgo,
-``audit.ACOES_PRESERVADAS``) a MARCA de cada conta dela: a plataforma e o HMAC-SHA256
+``audit.ACOES_PRESERVADAS``) a MARCA de cada conta dela — a vinculada à ficha e a da
+revisão que prova ser dela; a pendência que só tem o nome dela (pode ser de uma
+homônima ainda sem ficha) não marca: a plataforma e o HMAC-SHA256
 do id externo com a chave do servidor — nem o nome nem o id em claro. A porta única
 de identidade (``identidade_aluno.decidir``) ignora a linha de conta marcada antes
 de qualquer outro passo. Linha SEM conta (relatório ou planilha só com o nome) não
@@ -197,8 +199,9 @@ def _revisao_dela(rev, ids: set[int], identidades: set[tuple[str, str]],
     """A revisão é da criança excluída: resolvida para ela, da conta dela ou, sem
     ficha escolhida, com o nome dela — este só quando nenhum homônimo continua
     (``e_o_nome`` já exclui o nome de quem fica: com homônimo vivo, o nome não
-    prova ser dela). A MESMA regra apaga a revisão (``_esquecer_revisoes``) e marca
-    a conta dela (``contas_da_crianca``)."""
+    prova ser dela). Esta regra APAGA a revisão (``_esquecer_revisoes``: ela guarda
+    o nome dela). A marca da conta (``contas_da_crianca``) exige mais: o nome
+    sozinho não prova de quem é a conta (``_donas_pela_pendencia``)."""
     return (rev.aluno_escolhido_id in ids
             or (rev.plataforma, rev.id_externo or "") in identidades
             or (rev.aluno_escolhido_id is None
@@ -599,13 +602,44 @@ def marcas_da_conta(plataforma: str, id_externo: str) -> list[str]:
     return [marca_da_conta(plataforma, id_externo, segredo=s) for s in segredos_da_cifra()]
 
 
+# Motivos de pendência em que o motor achou a ficha como a ÚNICA correspondência
+# segura e só não associou por uma trava: a ficha já tem outra conta nesta
+# plataforma, a ficha está inativa, ou quem confirmou a importação pediu a revisão.
+# A conta da pendência é da criança dessa ficha. Os demais motivos sem ficha
+# escolhida são dúvida de identidade ("homonimo_em_outra_sala",
+# "nome_casa_em_outra_sala", "candidatos_multiplos", "correspondencia_insegura",
+# "criacao_bloqueada_por_politica", "contas_repetidas_no_relatorio", "sem_turma"…):
+# a conta pode ser de OUTRA criança, de mesmo nome e ainda sem ficha — e a marca a
+# tiraria das coletas da escola para sempre (não há ação para levantá-la).
+_MOTIVOS_DA_PROPRIA_FICHA = frozenset({
+    "outra_identidade_na_plataforma", "ficha_inativa", "deixada_para_revisao",
+})
+
+
+def _donas_pela_pendencia(rev, ids: set[int], vivos: set[int]) -> set[int]:
+    """Das crianças ``ids``, de quem a conta da pendência SEM ficha escolhida
+    provadamente é: só com motivo de ``_MOTIVOS_DA_PROPRIA_FICHA``, o id dela entre
+    os candidatos e nenhuma ficha que continua na escola (``vivos``) entre eles.
+    Vazio quando a pendência não prova de quem é a conta."""
+    if rev.aluno_escolhido_id is not None or rev.motivo not in _MOTIVOS_DA_PROPRIA_FICHA:
+        return set()
+    candidatos = {c.get("aluno_id") for c in (rev.candidatos or []) if isinstance(c, dict)}
+    return set() if candidatos & vivos else candidatos & ids
+
+
 def contas_da_crianca(db: Session, escola_id: int,
                       nomes: dict[int, str]) -> dict[int, set[tuple[str, str]]]:
     """As contas da plataforma (plataforma, id externo) de cada criança ``nomes``
     ({aluno_id: nome}) de ``escola_id``: as vinculadas à ficha (qualquer situação,
-    inclusive a aposentada e as que ela absorveu por fusão) e as das revisões DELA
-    (``_revisao_dela``, a mesma regra que as apaga) — por exemplo a segunda conta
-    que a coleta mandou para a fila. Ler ANTES de apagar identidades e revisões.
+    inclusive a aposentada e as que ela absorveu por fusão) e, das revisões dela
+    (``_revisao_dela``), só as que PROVAM ser dela: a resolvida para ela e a
+    pendência que aponta só para a ficha dela (``_donas_pela_pendencia``) — por
+    exemplo a segunda conta que a coleta mandou para a fila
+    ("outra_identidade_na_plataforma"). Ler ANTES de apagar identidades e revisões.
+
+    A pendência que só tem o nome dela não basta: a de OUTRA criança, homônima e
+    ainda sem ficha ("homonimo_em_outra_sala"), também tem. Ela é apagada (guarda o
+    nome), mas a conta não é marcada e a coleta seguinte a trata como conta nova.
 
     Conta vinculada a uma ficha que CONTINUA na escola nunca entra: é de outra
     criança, e marcá-la a apagaria das coletas (a revisão resolvida para a excluída
@@ -625,7 +659,6 @@ def contas_da_crianca(db: Session, escola_id: int,
     vivos = dict(db.execute(select(Aluno.id, Aluno.nome).where(
         Aluno.escola_id == escola_id, Aluno.id.not_in(list(ids)))).all())
     alvos = NomesAlvo(nomes.values(), preservar=vivos.values())
-    chaves = {aid: _chave(nome) for aid, nome in nomes.items() if nome}
     contas: dict[tuple[str, str], set[int]] = {
         conta: {aid} for conta, aid in vinculadas.items()}
     identidades = set(vinculadas)
@@ -640,10 +673,10 @@ def contas_da_crianca(db: Session, escola_id: int,
             donas = {rev.aluno_escolhido_id}
         elif conta in vinculadas:
             donas = {vinculadas[conta]}
-        else:   # pelo nome (``e_o_nome``): a criança de mesmo nome
-            chave = _chave(rev.nome_recebido or "")
-            donas = {aid for aid, sua in chaves.items() if sua == chave}
-        contas.setdefault(conta, set()).update(donas)
+        else:   # sem ficha escolhida: o nome não basta (``_donas_pela_pendencia``)
+            donas = _donas_pela_pendencia(rev, ids, set(vivos))
+        if donas:
+            contas.setdefault(conta, set()).update(donas)
     de_quem_fica = {(plataforma, id_externo) for plataforma, id_externo in db.execute(
         select(IdentidadeExterna.plataforma, IdentidadeExterna.id_externo).where(
             IdentidadeExterna.escola_id == escola_id,
