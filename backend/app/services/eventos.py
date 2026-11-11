@@ -20,10 +20,11 @@ from collections import defaultdict
 from datetime import datetime
 from itertools import groupby
 
-from sqlalchemy import delete, insert, select
-from sqlalchemy.orm import Session
+from sqlalchemy import delete, exists, insert, select
+from sqlalchemy.orm import Session, aliased
 
-from app.models import Aluno, EventoAluno, LogAuditoria
+from app.core.database import bloquear_escola_para_importacao
+from app.models import Aluno, Escola, EventoAluno, LogAuditoria
 from app.services.audit import registrar
 
 
@@ -251,6 +252,11 @@ def _fichas_absorvidas(db: Session, escola_id: int | None) -> dict[int, set[int]
     return fechadas
 
 
+def escolas_da_limpeza(db: Session) -> list[int]:
+    """As escolas que a limpeza do passivo percorre quando não se pede uma só."""
+    return list(db.execute(select(Escola.id).order_by(Escola.id)).scalars())
+
+
 def deduplicar_eventos_por_conteudo(db: Session, *, escola_id: int | None = None,
                                     aplicar: bool = False) -> dict:
     """Limpa o PASSIVO de eventos duplicados que as fusões anteriores ao conserto
@@ -269,17 +275,58 @@ def deduplicar_eventos_por_conteudo(db: Session, *, escola_id: int | None = None
     ``aluno.eventos_duplicados_removidos`` da ficha (só ids, instante, livro e
     chave). Com ``aplicar=False`` só conta.
 
+    Escola por escola (``escola_id`` ou, sem ela, ``escolas_da_limpeza``). Com
+    ``aplicar``, toma a trava da escola (``bloquear_escola_para_importacao``, a da
+    fusão, da importação e da coleta) ANTES de ler os eventos dela: nenhuma fusão
+    muda as fichas entre a leitura e o DELETE — a fusão confirmada no meio movia
+    para a ficha que fica a cópia que o plano velho mandava apagar, e a leitura
+    perdia a única cópia. A trava só cai no commit de quem chama: o script
+    commita escola por escola. E o DELETE só apaga o que ainda está como no plano
+    (``_apagar_como_no_plano``) — a defesa onde a trava não existe (SQLite) —; o
+    log e as contagens dizem só o que saiu de fato.
+
     Lê em fluxo, uma ficha por vez, para caber na memória numa rede inteira; as
     remoções acontecem depois da leitura."""
+    escolas = [escola_id] if escola_id is not None else escolas_da_limpeza(db)
+    alunos = eventos = 0
+    for escola in escolas:
+        resultado = _deduplicar_escola(db, escola, aplicar=aplicar)
+        alunos += resultado["alunos"]
+        eventos += resultado["eventos_duplicados"]
+    return {"alunos": alunos, "eventos_duplicados": eventos}
+
+
+def _apagar_como_no_plano(db: Session, aluno_id: int, saem: list[dict]) -> list[dict]:
+    """Apaga as cópias ``saem`` da ficha ``aluno_id`` só se o plano ainda vale: o
+    evento continua NESTA ficha e a cópia que fica (``igual_ao_evento_id``) também
+    — sem ela, o evento planejado pode ser a única cópia que restou. Devolve as
+    que saíram de fato."""
+    fica_ainda = aliased(EventoAluno)
+    por_fica: dict[int, list[int]] = defaultdict(list)
+    for s in saem:
+        por_fica[s["igual_ao_evento_id"]].append(s["evento_id"])
+    apagados: set[int] = set()
+    for fica, ids in por_fica.items():
+        apagados.update(db.execute(
+            delete(EventoAluno)
+            .where(EventoAluno.id.in_(ids), EventoAluno.aluno_id == aluno_id,
+                   exists().where(fica_ainda.id == fica, fica_ainda.aluno_id == aluno_id))
+            .returning(EventoAluno.id)).scalars())
+    return [s for s in saem if s["evento_id"] in apagados]
+
+
+def _deduplicar_escola(db: Session, escola_id: int, *, aplicar: bool) -> dict:
+    """A limpeza de UMA escola (regra em ``deduplicar_eventos_por_conteudo``)."""
+    if aplicar:
+        bloquear_escola_para_importacao(db, escola_id)
     absorvidas = _fichas_absorvidas(db, escola_id)
     consulta = (select(EventoAluno.id, EventoAluno.escola_id, EventoAluno.aluno_id,
                        EventoAluno.plataforma, EventoAluno.tipo_evento,
                        EventoAluno.conteudo_titulo, EventoAluno.ocorrido_em,
                        EventoAluno.chave_natural, EventoAluno.livro_id)
+                .where(EventoAluno.escola_id == escola_id)
                 .order_by(EventoAluno.aluno_id, EventoAluno.id)
                 .execution_options(yield_per=2000))
-    if escola_id is not None:
-        consulta = consulta.where(EventoAluno.escola_id == escola_id)
 
     remocoes: dict[tuple[int, int], list[dict]] = {}
     for aluno_id, linhas in groupby(db.execute(consulta), key=lambda linha: linha.aluno_id):
@@ -315,14 +362,18 @@ def deduplicar_eventos_por_conteudo(db: Session, *, escola_id: int | None = None
         if saem:
             remocoes[(escola_da_ficha, aluno_id)] = saem
 
-    total = sum(len(saem) for saem in remocoes.values())
     if aplicar:
+        feitas: dict[tuple[int, int], list[dict]] = {}
         for (escola_da_ficha, aluno_id), saem in remocoes.items():
-            db.execute(delete(EventoAluno).where(
-                EventoAluno.id.in_([s["evento_id"] for s in saem])))
+            saem = _apagar_como_no_plano(db, aluno_id, saem)
+            if not saem:
+                continue
+            feitas[(escola_da_ficha, aluno_id)] = saem
             registrar(db, "aluno.eventos_duplicados_removidos",
                       escola_id=escola_da_ficha, entidade="aluno", entidade_id=aluno_id,
                       detalhes={"motivo": "mesma linha do relatório gravada duas vezes "
                                           "na ficha por uma fusão anterior",
                                 "eventos": saem})
+        remocoes = feitas
+    total = sum(len(saem) for saem in remocoes.values())
     return {"alunos": len(remocoes), "eventos_duplicados": total}

@@ -16,6 +16,12 @@ a primeira leitura de uma ficha que tem releitura do mesmo livro nunca sai
     python -m scripts.deduplicar_eventos_por_conteudo --escola 11     # simulação, 1 escola
     python -m scripts.deduplicar_eventos_por_conteudo --aplicar       # apaga
 
+Com ``--aplicar``, roda escola por escola: toma a trava da escola (a mesma da fusão,
+da importação e da coleta) antes de ler os eventos dela e confirma ao fim de cada
+escola. Uma "Fundir duplicatas" pedida no meio espera a escola terminar, em vez de
+mudar as fichas entre a leitura e a remoção (o que apagava a única cópia de uma
+leitura).
+
 Rodar em produção é decisão do dono: primeiro a simulação, depois o backup, só
 então ``--aplicar``.
 """
@@ -23,7 +29,7 @@ import argparse
 import sys
 
 from app.core.database import SessionLocal
-from app.services.eventos import deduplicar_eventos_por_conteudo
+from app.services.eventos import deduplicar_eventos_por_conteudo, escolas_da_limpeza
 from scripts._saida import forcar_saida_utf8
 
 
@@ -36,14 +42,21 @@ def main(argv: list[str] | None = None) -> int:
                         help="só a escola com este id (padrão: todas)")
     args = parser.parse_args(argv)
 
+    resultado = {"alunos": 0, "eventos_duplicados": 0}
     db = SessionLocal()
     try:
-        resultado = deduplicar_eventos_por_conteudo(db, escola_id=args.escola,
-                                                    aplicar=args.aplicar)
-        if args.aplicar:
-            db.commit()
-        else:
-            db.rollback()
+        escolas = [args.escola] if args.escola is not None else escolas_da_limpeza(db)
+        for escola in escolas:
+            # Uma escola por transação: a trava dela (tomada lá dentro, com
+            # --aplicar) cai no commit, e a próxima escola não espera esta.
+            parcial = deduplicar_eventos_por_conteudo(db, escola_id=escola,
+                                                      aplicar=args.aplicar)
+            if args.aplicar:
+                db.commit()
+            else:
+                db.rollback()
+            for chave in resultado:
+                resultado[chave] += parcial[chave]
     finally:
         db.close()
 
