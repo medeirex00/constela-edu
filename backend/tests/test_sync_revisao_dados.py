@@ -24,7 +24,7 @@ from tests._ano_letivo import no_ano_de_hoje
 
 K_A = "3 ANO A (300396804)"
 K_B = "4 ANO B (300396805)"
-K_6 = "6 ANO B (300396806)"
+K_6 = "3 ANO C (300396806)"   # a outra sala da série (troca de sala na coleta)
 
 
 def _snaps(db, aluno_id):
@@ -203,7 +203,9 @@ def test_troca_de_turma_sem_numero_novo_recalcula(db, escola_completa, monkeypat
     ec = escola_completa
     eid = ec["escola"].id
     a, b, c = ec["alunos"]
-    t6 = Turma(escola_id=eid, nome="6º Ano B", ano_escolar="6º Ano", ano_letivo=2026)
+    # Sala da MESMA série: mudar de série é a virada do ano letivo, que a coleta não
+    # faz (S_G_VIRADA-1) — antes o destino era o "6º Ano B".
+    t6 = Turma(escola_id=eid, nome="3º Ano C", ano_escolar="3º Ano", ano_letivo=2026)
     db.add(t6)
     db.commit()
     credencial(db, eid, "matific")

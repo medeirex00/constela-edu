@@ -216,8 +216,11 @@ def test_troca_de_turma_nao_move_para_a_fase_nem_para_a_arquivada(db, escola_com
 
 
 def test_troca_de_turma_ainda_move_para_turma_ativa_da_mesma_etapa(db, escola_completa):
+    # A criança sai de uma sala da MESMA série ("1º Ano B"): mudar de série é a virada
+    # do ano letivo, que a coleta não faz (S_G_VIRADA-1) — antes o teste partia do
+    # "2º Ano A" e afirmava a mudança de série.
     escola = escola_completa["escola"]
-    segundo = turma(db, escola.id, "2º Ano A", "2º Ano")
+    segundo = turma(db, escola.id, "1º Ano B", "1º Ano")
     turma(db, escola.id, "1ª Fase A", "1ª Fase")
     primeiro = turma(db, escola.id, "1º Ano A", "1º Ano")
     iris = aluno(db, escola.id, segundo, "IRIS FICTICIA SEGUNDO")

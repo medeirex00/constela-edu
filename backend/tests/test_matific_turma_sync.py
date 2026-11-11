@@ -50,13 +50,16 @@ def test_move_para_turma_existente_casando_por_tokens(db, escola_completa):
     escola, ana = escola_completa["escola"], escola_completa["alunos"][0]
     ano = escola.ano_letivo_ativo
     turma_a = escola_completa["turma"]                       # "3º Ano A"
-    turma_b = _turma(db, escola.id, ano, "4º Ano B", "4º Ano")   # destino cadastrado
+    # Destino cadastrado da MESMA série: troca de sala. (Era a "4º Ano B": mover para
+    # outra série é a virada do ano letivo, que a coleta não faz — S_G_VIRADA-1,
+    # ``test_aud3_virada_coleta_serie``.)
+    turma_b = _turma(db, escola.id, ano, "3º Ano B", "3º Ano")
     db.add(IdentidadeExterna(escola_id=escola.id, aluno_id=ana.id,
                              plataforma="matific", id_externo="u-ana"))
     db.commit()
-    # klassName cru do Matific — difere por sufixo de turno/anualidade, mas é a "4º Ano B".
+    # klassName cru do Matific — difere por sufixo de turno/anualidade, mas é a "3º Ano B".
     resolvidos = {ana.id: (ana, [_linha(ana.nome, ana.id, "identidade", "u-ana",
-                                        "4 ANO B MANHA ANUAL")])}
+                                        "3 ANO B MANHA ANUAL")])}
     avisos: list[str] = []
     n = _sincronizar_turma_matific(db, escola.id, ano, resolvidos, avisos)
     assert n == 1

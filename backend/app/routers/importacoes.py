@@ -1894,6 +1894,18 @@ def _turma_existente_por_tokens(db: Session, escola_id: int, ano: int,
     return candidatas[0][1]
 
 
+def _mesma_serie(atual: Turma | None, nova: Turma) -> bool:
+    """As duas turmas são da MESMA série (``matriculas.serie_da_sala``, a leitura
+    única de série do sistema: o ``ano_escolar`` e, sem ele, o nome)? Série que não
+    se lê num dos lados ("Turma Azul", "EJA 2") não prova que é a mesma: False —
+    mover criança de sala sem supervisão exige certeza."""
+    if atual is None:
+        return False
+    serie = matriculas.serie_da_sala(atual.nome, atual.ano_escolar or "")
+    return serie is not None and serie == matriculas.serie_da_sala(
+        nova.nome, nova.ano_escolar or "")
+
+
 def _sincronizar_turma_matific(db: Session, escola_id: int, ano: int,
                                resolvidos: dict, avisos: list[str], *,
                                ctx: "ida.Contexto | None" = None,
@@ -1915,6 +1927,10 @@ def _sincronizar_turma_matific(db: Session, escola_id: int, ano: int,
       INTEGRAL" × "4º Ano", única turma ativa da série e da etapa) é a MESMA
       turma: não move nem avisa (antes saía um aviso falso a cada coleta);
     * destino só turma ATIVA e da mesma ETAPA (``_turma_existente_por_tokens``);
+    * e da mesma SÉRIE (``_mesma_serie``): mudar de série é a virada do ano
+      letivo, não troca de sala — a turma de outra série vira aviso e a matrícula
+      fica onde está (S_G_VIRADA-1: na virada, o Placar já com as turmas do ano
+      seguinte levava o 3º A inteiro para o 4º A do ano que terminou);
     * com a política ``bloquear`` (``politica_sync.pode_mover_matricula``) a
       matrícula segue a Lista Piloto, pela mesma regra que impede a sync de criar
       ficha (a plataforma não matricula; P15 é a recomendação de 26/10, aplicada por
@@ -1969,6 +1985,19 @@ def _sincronizar_turma_matific(db: Session, escola_id: int, ano: int,
                 "automaticamente).")
             continue
         if nova.id == matricula.turma_id:
+            continue
+        if not _mesma_serie(atual, nova):
+            # Mudança de SÉRIE é a virada do ano letivo, não troca de sala: o Placar
+            # com as turmas do ano seguinte (a escola ainda no ano que terminou) ou
+            # ainda com as do ano anterior (a escola já virada) levava a turma
+            # inteira para a série errada dentro do ano letivo ativo.
+            avisos.append(
+                f"{aluno.nome}: o Matific indica a turma “{nova.nome}”, de outra série "
+                f"que a turma da matrícula (“{atual.nome if atual is not None else '—'}”) "
+                "— não movi: a coleta não muda a série de ninguém. Se o ano letivo "
+                "virou, a matrícula do ano novo vem da Lista Piloto; se a turma no "
+                "Matific está desatualizada, corrija-a lá; se a criança mudou mesmo de "
+                "série, troque a turma dela em Alunos.")
             continue
         if mover is None:
             mover = politica_sync.pode_mover_matricula(db, escola_id)
