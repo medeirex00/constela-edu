@@ -123,6 +123,12 @@ docker compose exec backend python scripts/seed.py
 > **Anote a senha exibida no console.** O seed gera uma senha aleatória para
 > o administrador inicial e a imprime uma única vez. (Para automatizar, defina
 > `ADMIN_INITIAL_PASSWORD` no ambiente antes de rodar o seed.)
+>
+> **O seed é só para banco novo.** Num banco que já tem escolas ou contas de
+> administração global que não vieram dele, o seed se recusa e não grava nada:
+> confira se está apontando para o banco certo. (`--forcar` passa por cima, só
+> se tiver certeza.) Os dados de demonstração (`--demo`) nunca entram com
+> `ENV=producao`.
 
 ## Passo 6 — Primeiro acesso e segurança
 

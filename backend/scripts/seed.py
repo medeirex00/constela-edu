@@ -3,6 +3,14 @@
 Uso:
     python scripts/seed.py            # escola de demonstração + admin + padrões
     python scripts/seed.py --demo     # inclui turmas, alunos e dados de exemplo
+    python scripts/seed.py --forcar   # semeia mesmo num banco que já tem dados
+
+O seed é só para banco NOVO (instalação nova, desenvolvimento): antes de migrar ou
+gravar qualquer coisa, ele recusa o banco que já tem escola que não é a dele ou conta
+de administração global que não é a inicial (``dados_alheios``). Rodar de novo no
+banco que ele mesmo semeou continua sem efeito. ``--forcar`` existe para o caso
+consciente. ``--demo`` (crianças inventadas com notas) só roda com ENV de
+desenvolvimento, com ou sem ``--forcar``.
 
 Todos os valores criados aqui (pesos, níveis, critérios) são apenas o
 ponto de partida descrito no PRD — depois do seed, a fonte da verdade é
@@ -13,16 +21,19 @@ Tudo o que o seed cria é FICTÍCIO, a começar pelo nome da escola
 real da rede (a matriz de prontidão, §4.1, proíbe nome real de escola em
 tela de dado fictício). ``tests/test_seed_ficticio.py`` trava isso.
 """
+import argparse
 import os
 import random
 import secrets
 import sys
 from pathlib import Path
+from typing import NoReturn
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from sqlalchemy import select  # noqa: E402
+from sqlalchemy import func, inspect, select  # noqa: E402
 
+from app.core.config import ENV_DE_DESENVOLVIMENTO, normalizar_env, settings  # noqa: E402
 from app.core.database import SessionLocal, engine  # noqa: E402
 from app.core.migracoes import aplicar_migracoes  # noqa: E402
 from app.core.security import hash_senha  # noqa: E402
@@ -85,6 +96,39 @@ DEMO_LIVROS = [
     ("Contos da Montanha", "Marcos Vila", "Q"),
     ("O Último Farol", "Helena Prado", "T"),
 ]
+
+
+def _recusar(motivo: str) -> NoReturn:
+    sys.stderr.write(f"Seed recusado: {motivo}\n")
+    raise SystemExit(2)
+
+
+def dados_alheios(motor) -> tuple[int, int]:
+    """(escolas, contas de administração global) do banco que NÃO vieram deste seed.
+
+    A escola do seed é a de demonstração (``ESCOLA_DEMO``) ou, num banco semeado
+    quando ela tinha outro nome, a escola do admin inicial — a mesma regra de
+    ``_escola_ja_semeada``. A conta global do seed é a do ``ADMIN_EMAIL``. Banco sem
+    as tabelas (novo, antes das migrações) devolve (0, 0). Só lê, e só as colunas de
+    que precisa: roda ANTES das migrações."""
+    tabelas = set(inspect(motor).get_table_names())
+    if not tabelas & {Escola.__tablename__, Usuario.__tablename__}:
+        return 0, 0
+    with motor.connect() as conn:
+        escola_do_admin = conn.execute(
+            select(Usuario.escola_id).where(Usuario.email == ADMIN_EMAIL)
+        ).scalar_one_or_none()
+        filtro_escola = [Escola.nome != ESCOLA_DEMO]
+        if escola_do_admin is not None:
+            filtro_escola.append(Escola.id != escola_do_admin)
+        escolas = conn.execute(
+            select(func.count()).select_from(Escola).where(*filtro_escola)
+        ).scalar_one()
+        globais = conn.execute(
+            select(func.count()).select_from(Usuario)
+            .where(Usuario.is_global.is_(True), Usuario.email != ADMIN_EMAIL)
+        ).scalar_one()
+    return escolas, globais
 
 
 def _escola_ja_semeada(db) -> Escola | None:
@@ -244,13 +288,36 @@ def seed_demo(db, escola: Escola) -> None:
     print(f"Dados de demonstração criados: {total} alunos com notas e ranking calculados.")
 
 
-def main() -> None:
+def _argumentos(argv: list[str] | None) -> argparse.Namespace:
+    p = argparse.ArgumentParser(description="Configuração inicial de um banco NOVO.")
+    p.add_argument("--demo", action="store_true",
+                   help="inclui turmas, alunos inventados e dados de exemplo (só em dev)")
+    p.add_argument("--forcar", action="store_true",
+                   help="semeia mesmo num banco que já tem escolas ou contas globais")
+    return p.parse_args(argv)
+
+
+def main(argv: list[str] | None = None) -> None:
     forcar_saida_utf8()
+    args = _argumentos(argv)
+    # As travas vêm ANTES das migrações e de qualquer gravação.
+    if args.demo and normalizar_env(settings.ENV) not in ENV_DE_DESENVOLVIMENTO:
+        _recusar(f"--demo cria crianças inventadas com notas e só roda com ENV de "
+                 f"desenvolvimento (aqui ENV={settings.ENV or 'vazio'}). Para uma "
+                 "demonstração, use um banco próprio com ENV=dev.")
+    escolas, globais = dados_alheios(engine)
+    if (escolas or globais) and not args.forcar:
+        _recusar(f"este banco já tem dados que não vieram do seed: {escolas} escola(s) e "
+                 f"{globais} conta(s) de administração global. O seed é só para banco "
+                 "NOVO (instalação nova ou desenvolvimento): num banco em uso ele pode "
+                 "criar outra conta de administração global, a escola de demonstração e, "
+                 "com --demo, crianças inventadas. Confira a DATABASE_URL. Se tiver "
+                 "certeza, rode de novo com --forcar.")
     aplicar_migracoes(engine)   # cria o schema (banco novo) já versionado no Alembic
     db = SessionLocal()
     try:
         escola = seed_base(db)
-        if "--demo" in sys.argv:
+        if args.demo:
             seed_demo(db, escola)
     finally:
         db.close()
