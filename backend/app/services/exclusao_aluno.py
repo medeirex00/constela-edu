@@ -459,6 +459,55 @@ def esquecer_fora_do_cadastro(db: Session, escola_id: int, nomes: dict[int, str]
     return contagens
 
 
+def fichas_absorvidas(db: Session, escola_id: int, aluno_ids) -> dict[int, set[str]]:
+    """As fichas que ``aluno_ids`` absorveram por FUSÃO — direta ou em cadeia —,
+    com os nomes que elas tinham: ``{id da absorvida: {nomes}}``.
+
+    É a MESMA criança. As entradas antigas dessas fichas no log (o
+    ``aluno.criado_auto`` do stub da importação, a fusão em que elas absorveram
+    outra) ficam com o id DELAS, e a foto pré-fusão da absorvida (nascimento,
+    observações, foto) fica na entrada da fusão. Sem isto, o esquecimento não as
+    alcança. A fonte é o próprio log ``aluno.fundido`` da escola
+    (``mantido.id`` ← ``removido.id``): a ficha absorvida já não existe.
+
+    Id que hoje é de uma ficha VIVA fica de fora: a absorvida foi apagada, então o
+    id em uso é de outra criança (reaproveitamento de id)."""
+    from app.models import Aluno, LogAuditoria
+
+    filhos: dict[int, list[tuple[int, set[str]]]] = {}
+    for entidade_id, detalhes in db.execute(
+        select(LogAuditoria.entidade_id, LogAuditoria.detalhes).where(
+            LogAuditoria.escola_id == escola_id, LogAuditoria.acao == "aluno.fundido")
+        .execution_options(yield_per=500)
+    ):
+        detalhes = detalhes if isinstance(detalhes, dict) else {}
+        mantido = (detalhes.get("mantido") or {}).get("id", entidade_id)
+        removido = detalhes.get("removido") or {}
+        foto = detalhes.get("foto_pre_fusao") or {}
+        if not isinstance(mantido, int) or not isinstance(removido.get("id"), int):
+            continue
+        nomes = {n for n in (removido.get("nome"), foto.get("nome"))
+                 if isinstance(n, str) and n.strip() and n != MARCA_REMOVIDO}
+        filhos.setdefault(mantido, []).append((removido["id"], nomes))
+
+    removidos = {filho for lista in filhos.values() for filho, _ in lista}
+    # Nem entra nem é percorrida: as fusões gravadas com esse id podem ser da
+    # criança viva que o reaproveitou.
+    vivas = set(db.execute(select(Aluno.id).where(
+        Aluno.id.in_(list(removidos)))).scalars()) if removidos else set()
+    alvos = set(aluno_ids)
+    achadas: dict[int, set[str]] = {}
+    pilha = list(alvos)
+    while pilha:
+        for filho, nomes in filhos.get(pilha.pop(), ()):
+            if filho in alvos or filho in vivas:
+                continue
+            if filho not in achadas:
+                pilha.append(filho)
+            achadas.setdefault(filho, set()).update(nomes)
+    return achadas
+
+
 def conversas_ia_que_citam(db: Session, escola_id: int, nomes: dict[int, str]) -> set[int]:
     """Ids das conversas da IA de ``escola_id`` que citam alguma das crianças
     ``nomes`` ({aluno_id: nome}) — o direito ao esquecimento APAGA a conversa.

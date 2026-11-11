@@ -880,18 +880,34 @@ _CHAVES_SO_DE_NOME = _CHAVES_COM_NOME_DE_PESSOA - {"origem", "origem_linha"}
 # procedência não compartilha nenhum pedaço do nome e sobrevive intacta.
 _PARTICULAS_DE_NOME = frozenset({"de", "da", "do", "dos", "das", "e"})
 
+# Dado pessoal da criança que NÃO é nome e que algumas entradas guardam: a foto da
+# ficha absorvida na fusão (``aluno.fundido`` → ``foto_pre_fusao``: nascimento,
+# observações — campo livre, sensível — e foto) e as duas datas de
+# ``aluno.nascimento_divergente``. Nas entradas da própria criança, caem pela chave.
+_CHAVES_DE_DADO_PESSOAL = frozenset({
+    "data_nascimento", "observacoes", "foto_url", "na_ficha", "na_planilha",
+})
+
 _MARCA_REMOVIDO = "[removido]"
 
 
 def _anonimizar_logs_do_aluno(db: Session, escola_id: int,
-                              aluno_ids: list[int], nomes: set[str]) -> None:
+                              aluno_ids: list[int], nomes: set[str],
+                              absorvidas: dict[int, set[str]] | None = None) -> None:
     """Redige o nome civil das entradas ANTERIORES do log de auditoria que se
     referem ao aluno excluído (LGPD/direito ao esquecimento).
 
     Anonimiza, NÃO apaga: o "quê/quando/por quem/sobre qual registro" — e o
     porquê técnico (decisão, motivo, turma, RA) — continuam intactos; só o nome
-    de pessoa vira ``"[removido]"``. O ``entidade_id`` fica como referência
+    de pessoa (e o dado pessoal de ``_CHAVES_DE_DADO_PESSOAL``) vira
+    ``"[removido]"``. O ``entidade_id`` fica como referência
     anônima. ``logs_auditoria`` é permanente por design (``models/nota.py``).
+
+    ``absorvidas`` ({id: {nomes}}, de ``exclusao_aluno.fichas_absorvidas``): as
+    fichas que a criança absorveu por fusão. São ELA: as entradas com o id delas
+    contam como "do aluno excluído" (critério 2), e os nomes delas entram no
+    critério 2 e — quando nenhuma criança que continua na escola tem o mesmo
+    nome — no critério 1.
 
     A varredura é por ESCOLA, sem filtrar ``entidade``/``entidade_id`` (C-07):
     o caminho de importação — que é o normal — grava ``entidade_id=None``, e
@@ -935,11 +951,23 @@ def _anonimizar_logs_do_aluno(db: Session, escola_id: int,
                 if len(parte.strip(".")) > 1
                 and parte.strip(".") not in _PARTICULAS_DE_NOME}
 
+    absorvidas = absorvidas or {}
+    nomes_absorvidos = {n for ns in absorvidas.values() for n in ns if n and n.strip()}
     alvos = {normalizar_nome(n) for n in nomes if n and n.strip()}
-    if not alvos:
+    if nomes_absorvidos:
+        # O nome da ficha absorvida (muitas vezes abreviado: "ANA B. SOUZA",
+        # "JOAO PEDRO") só vale no critério por valor se não for também o nome —
+        # ou parte do nome — de quem continua na escola.
+        vivos = [normalizar_nome(n) for n in db.execute(select(Aluno.nome).where(
+            Aluno.escola_id == escola_id, Aluno.id.not_in(list(aluno_ids)))).scalars()
+            if n]
+        alvos |= {a for a in map(normalizar_nome, nomes_absorvidos)
+                  if not any(re.search(rf"\b{re.escape(a)}\b", v) for v in vivos)}
+    if not alvos and not absorvidas:
         return
-    tokens_alvo = set().union(*(_tokens(n) for n in nomes if n and n.strip()))
-    ids_alvo = set(aluno_ids)
+    tokens_alvo = set().union(*(_tokens(n) for n in (*nomes, *nomes_absorvidos)
+                                if n and n.strip()))
+    ids_alvo = set(aluno_ids) | set(absorvidas)
     # Nomes com 2+ partes são específicos o bastante para serem procurados
     # DENTRO de um texto maior sem risco de falso positivo. Um nome de uma
     # palavra só ("Ana") não entra aqui: casaria "Susana", "Ananias".
@@ -972,10 +1000,12 @@ def _anonimizar_logs_do_aluno(db: Session, escola_id: int,
                 chave: (
                     _MARCA_REMOVIDO
                     if isinstance(item, str)
-                    and chave in _CHAVES_COM_NOME_DE_PESSOA
-                    and (_e_nome_de_alvo(item)
-                         or (por_chave and (chave in _CHAVES_SO_DE_NOME
-                                            or _parece_nome_do_alvo(item))))
+                    and ((chave in _CHAVES_COM_NOME_DE_PESSOA
+                          and (_e_nome_de_alvo(item)
+                               or (por_chave and (chave in _CHAVES_SO_DE_NOME
+                                                  or _parece_nome_do_alvo(item)))))
+                         or (por_chave and chave in _CHAVES_DE_DADO_PESSOAL
+                             and item.strip()))
                     else _redigir(item, por_chave=por_chave)
                 )
                 for chave, item in valor.items()
@@ -1086,8 +1116,10 @@ def _apagar_alunos_e_dados(db: Session, escola_id: int, usuario: Usuario,
                   detalhes={"tipo": "exclusao_permanente"})
     # E anonimiza as entradas ANTERIORES do log que citam o nome deste aluno
     # (criação/edição/fusão/importação) — sem isso o nome civil do menor
-    # persistiria para sempre no histórico de auditoria.
-    _anonimizar_logs_do_aluno(db, escola_id, ids, set(nomes.values()))
+    # persistiria para sempre no histórico de auditoria. Inclui as fichas que ele
+    # absorveu por fusão: o stub da importação e a foto pré-fusão são dele.
+    _anonimizar_logs_do_aluno(db, escola_id, ids, set(nomes.values()),
+                              exclusao_aluno.fichas_absorvidas(db, escola_id, ids))
     # Avisos que apontam para a criança não têm FK e não somem no cascade.
     _apagar_avisos_do_aluno(db, escola_id, ids)
     # O que guarda o nome/id fora do cadastro (ANTES do DELETE em alunos: a
@@ -1140,6 +1172,10 @@ def excluir_alunos_permanente(
             status.HTTP_400_BAD_REQUEST,
             "Confirmação inválida. Digite EXCLUIR para confirmar a exclusão "
             "permanente e irreversível.")
+    # Mesma trava da fusão, da importação e da coleta (no-op no SQLite), ANTES de
+    # ler as fichas: nenhuma fusão grava no log da criança (nem lhe passa dados)
+    # entre a leitura do estado e a anonimização.
+    bloquear_escola_para_importacao(db, escola_id)
     alunos = _alunos_selecionados(db, escola_id, dados.aluno_ids)
     n = _apagar_alunos_e_dados(db, escola_id, usuario, [a.id for a in alunos])
     db.commit()
