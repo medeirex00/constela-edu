@@ -174,3 +174,20 @@ def test_topo_grande_demais_e_recusado(cliente_global, topo):
         "indicador": "ideb", "unidade": "indice", "cadencia": "manual",
         "mapeamento": {"linha_dados": 8, "col_inep": 3, "col_valor": 115, "topo": topo}})
     assert r.status_code == 422, r.text
+
+
+def test_fonte_sem_referencia_com_o_codigo_fora_de_id_escola_e_recusada(db, escola):
+    """Sem referência, o código também tem de vir de ID_ESCOLA (como no 1 clique): a
+    coluna mapeada que caiu em outra variável não vira a referência das coletas."""
+    av = svc.obter_avaliacao(db, "ideb")
+    fonte = FonteAvaliacao(avaliacao_id=av.id, nome="IDEB AI 2023 (inventada)", url=URL,
+                           edicao=2023, indicador="ideb", unidade="indice", cadencia="manual",
+                           mapeamento={"linha_dados": 8, "col_inep": 4, "col_valor": 115,
+                                       "etapa_fixa": "anos_iniciais"})
+    db.add(fonte)
+    db.commit()
+    saida = _coletar(db, fonte, _zip_inep(_ANOS_2023, [(INEP, {"VL_OBSERVADO_2023": "5.9"})]))
+    assert saida["status"] == "erro", saida
+    assert "NO_ESCOLA" in fonte.ultimo_erro and "ID_ESCOLA" in fonte.ultimo_erro
+    assert _gravados(db) == []
+    assert "cabecalho" not in fonte.mapeamento
