@@ -31,6 +31,7 @@ from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from app.core import expurgo_arquivos
 from app.core.config import settings
 from app.core.database import bloquear_escola_para_importacao, get_db
 from app.core.deps import escola_autorizada, exigir_papeis
@@ -110,25 +111,18 @@ TAMANHO_MAXIMO = 10 * 1024 * 1024  # 10 MB
 # por linha, e os 10 MB deixavam ~200 mil linhas (minutos de uma thread presa). Um
 # relatório de turma tem dezenas de linhas; o de leituras da escola, milhares.
 LINHAS_MAXIMAS_TEXTO = 20_000
-IDADE_MAXIMA_TEMP_S = 24 * 3600     # PDFs de prévia não confirmados expiram em 24h
-_TOKEN_VALIDO = re.compile(r"^[0-9a-f]{32}\.(pdf|xlsx)$")
+# O prazo da prévia não confirmada (24 h) e o nome do token que a rota grava são os do
+# expurgo de fundo (``app/core/expurgo_arquivos.py``): uma regra só.
+IDADE_MAXIMA_TEMP_S = expurgo_arquivos.IDADE_MAXIMA_TEMP_S
+_TOKEN_VALIDO = expurgo_arquivos.NOME_DA_PREVIA
 
 
 def _limpar_temporarios_orfaos() -> None:
     """Remove arquivos de prévia abandonados (usuário fechou sem confirmar).
-    Chamado a cada nova análise — barato e evita crescimento sem limite."""
-    import itertools
-
-    pasta = settings.UPLOADS_DIR / "temporarios"
-    if not pasta.exists():
-        return
-    limite = time.time() - IDADE_MAXIMA_TEMP_S
-    for arquivo in itertools.chain(pasta.glob("*.pdf"), pasta.glob("*.xlsx")):
-        try:
-            if arquivo.stat().st_mtime < limite:
-                arquivo.unlink(missing_ok=True)
-        except OSError:
-            pass
+    Chamado a cada nova análise — barato e evita crescimento sem limite. A mesma
+    regra do expurgo de fundo: só a prévia com o nome que o app grava
+    (``NOME_DA_PREVIA``); um PDF/XLSX de outro nome em ``temporarios`` fica."""
+    expurgo_arquivos.limpar_temporarios()
 
 
 def _guardar_temporario(conteudo: bytes, extensao: str) -> str | None:

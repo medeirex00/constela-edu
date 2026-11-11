@@ -3,7 +3,6 @@
 Cada exportação também deixa uma cópia em /exports e um registro no log.
 """
 import logging
-import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -12,6 +11,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.core import expurgo_arquivos
 from app.core.config import settings
 from app.core.database import get_db
 from app.core.deps import escola_autorizada, get_usuario_atual
@@ -33,21 +33,12 @@ logger = logging.getLogger("constela.relatorios")
 def _expurgar_exports_antigos() -> None:
     """Remove cópias de relatórios além da retenção (LGPD/minimização — contêm
     nomes de alunos). Chamado a cada nova exportação — barato e evita acúmulo
-    indefinido de PII em disco. EXPORTS_RETENCAO_DIAS=0 desliga."""
-    dias = settings.EXPORTS_RETENCAO_DIAS
-    if dias <= 0 or not settings.EXPORTS_DIR.exists():
-        return
-    limite = time.time() - dias * 86_400
-    for arquivo in settings.EXPORTS_DIR.iterdir():
-        # Preserva dotfiles de infraestrutura (ex.: .gitkeep) — só expurga as
-        # cópias de relatórios de fato.
-        if arquivo.name.startswith("."):
-            continue
-        try:
-            if arquivo.is_file() and arquivo.stat().st_mtime < limite:
-                arquivo.unlink(missing_ok=True)
-        except OSError:
-            pass
+    indefinido de PII em disco. EXPORTS_RETENCAO_DIAS=0 desliga. A mesma regra do
+    expurgo de fundo (``app/core/expurgo_arquivos.py``): só a cópia com o nome que o
+    app grava (``NOME_DA_COPIA``). Em desenvolvimento ``EXPORTS_DIR`` é
+    ``<repo>/exports``, onde o dono guarda as entregas: um arquivo de outro nome (e as
+    subpastas, e o ``.gitkeep``) fica, por mais velho que seja."""
+    expurgo_arquivos.expurgar_exports()
 
 
 def _arquivar_copia(nome_arquivo: str, conteudo: bytes) -> None:
