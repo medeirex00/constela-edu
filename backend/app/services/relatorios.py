@@ -1087,8 +1087,9 @@ def estatisticas_cartaz_materia(db: Session, escola_id: int, materia: str,
         escola = db.get(Escola, escola_id)
         atuais = scoring.snapshots_matific_do_ano(db, escola_id, escola.ano_letivo_ativo)
         snaps = [s for aid, s in atuais.items() if aid in listados]
+        # As estrelas que CONTAM (no máximo 5 por atividade, o teto do motor).
         return {"atividades": int(sum(s.atividades or 0 for s in snaps)),
-                "estrelas": int(sum(s.estrelas or 0 for s in snaps))}
+                "estrelas": int(sum(scoring.estrelas_que_contam(s) for s in snaps))}
     except Exception:  # noqa: BLE001 — cartões decorativos: nunca derrubam o cartaz
         if materia == "leitura":
             return {"livros": 0, "tempo_leitura_min": 0}

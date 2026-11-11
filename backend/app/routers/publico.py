@@ -526,8 +526,10 @@ def _dados_publicos(db: Session, escola: Escola, config: dict) -> dict:
         "alunos": int(total_alunos),
         "atividades": (None if "matific" in fora
                        else int(sum(s.atividades for s in snaps_m.values()))),
+        # As estrelas que CONTAM (no máximo 5 por atividade: o teto do motor,
+        # ``scoring.estrelas_que_contam``) — o telão bate com a nota e os rankings.
         "estrelas": (None if "matific" in fora
-                     else int(sum(s.estrelas for s in snaps_m.values()))),
+                     else int(sum(scoring.estrelas_que_contam(s) for s in snaps_m.values()))),
         "livros": (None if "elefante" in fora
                    else int(sum(s.livros_unicos for s in snaps_e.values()))),
     }
