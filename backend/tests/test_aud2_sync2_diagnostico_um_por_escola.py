@@ -132,11 +132,32 @@ def test_rota_responde_409_com_um_diagnostico_em_andamento(cliente, db, duas_esc
         assert con.comecou.wait(10)
         r = cliente.post(f"{API}/escolas/{a}/sync/elefante/diagnostico")
         assert r.status_code == 409, r.text
-        assert "em andamento" in r.json()["detail"]
+        detalhe = r.json()["detail"]
+        assert "em andamento" in detalhe
+        # REV2-SYNC2-3: quem recebe o 409 é OUTRA aba, outra pessoa ou quem recarregou
+        # a página — o diagnóstico só tem o POST (nenhum GET do último inventário) e a
+        # tela só mostra a resposta do PRÓPRIO pedido. O texto não pode prometer "veja
+        # o resultado" do que está rodando: diz que ele não aparece ali e manda rodar de
+        # novo depois (o novo diagnóstico compara com o último inventário gravado).
+        assert "veja o resultado" not in detalhe.lower(), detalhe
+        assert "O resultado dele não aparece aqui" in detalhe, detalhe
+        assert "aguarde alguns minutos e rode de novo" in detalhe, detalhe
+        assert "o novo diagnóstico mostra o que mudou desde o último" in detalhe, detalhe
     finally:
         con.soltar.set()
         primeiro.join(10)
     assert con.comecos == [a]
+
+
+def test_rota_do_diagnostico_so_tem_o_post():
+    """Premissa do texto do 409 (REV2-SYNC2-3): não há rota que mostre o resultado do
+    diagnóstico de outro pedido. Se um GET do último inventário surgir, o texto do
+    ``_OCUPADO`` pode voltar a apontar para ele."""
+    from app.sync.router import router
+    metodos = {m for rota in router.routes
+               if getattr(rota, "path", "").endswith("/elefante/diagnostico")
+               for m in getattr(rota, "methods", set())}
+    assert metodos == {"POST"}, metodos
 
 
 # --- Entre workers (PostgreSQL): o advisory lock ------------------------------

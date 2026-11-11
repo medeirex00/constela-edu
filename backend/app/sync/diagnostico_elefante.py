@@ -36,8 +36,15 @@ _CHAVE = "ultimo"
 _TIMEOUT_S = 180
 
 _DEMOROU = "O diagnóstico do Elefante demorou demais. Tente de novo."
-_OCUPADO = ("Já existe um diagnóstico do Elefante em andamento para esta escola. "
-            "Aguarde ele terminar e veja o resultado; depois, se quiser, rode de novo.")
+# Quem recebe o 409 é outra aba, outra pessoa ou quem recarregou a página: o
+# diagnóstico só tem o POST (nenhum GET do último inventário) e a tela mostra só a
+# resposta do PRÓPRIO pedido — o resultado do que está rodando não chega a quem foi
+# recusado. O texto não promete mostrá-lo: manda rodar de novo depois (o novo compara
+# com o último inventário gravado). Até _TIMEOUT_S (3 min): "alguns minutos".
+_OCUPADO = ("Já existe um diagnóstico do Elefante em andamento para esta escola (aberto "
+            "em outra aba, por outra pessoa ou antes de a página ser recarregada). O "
+            "resultado dele não aparece aqui: aguarde alguns minutos e rode de novo; o "
+            "novo diagnóstico mostra o que mudou desde o último.")
 _LOCK_NS = 0x4445                      # 'DE' — namespace do advisory lock do Postgres
 _FORA_DO_AR = ("Não foi possível rodar o diagnóstico agora: a conexão com o site do "
                "Elefante falhou ou ele não respondeu. Tente de novo em alguns minutos.")
