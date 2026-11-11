@@ -187,6 +187,18 @@ function soData(iso: string | null | undefined): string | null {
     : null;
 }
 
+/** O período RESPONDIDO pelo backend contém o dia de hoje? O "Nº bimestre" é resolvido
+ *  no ANO LETIVO da escola: na virada (escola ainda no ano anterior), o "1º bimestre" é
+ *  o do ano passado, já encerrado, enquanto o 1º do ano novo está em curso. Ponta sem
+ *  data é aberta. Compara o texto AAAA-MM-DD, sem passar por fuso (como `soData`). */
+function periodoContemHoje(p: { inicio: string | null; fim: string | null }, hoje: Date): boolean {
+  const dois = (n: number) => String(n).padStart(2, "0");
+  const dia = `${hoje.getFullYear()}-${dois(hoje.getMonth() + 1)}-${dois(hoje.getDate())}`;
+  const inicio = p.inicio?.split("T")[0];
+  const fim = p.fim?.split("T")[0];
+  return (!inicio || inicio <= dia) && (!fim || dia <= fim);
+}
+
 /** A janela usada na Matemática difere do período pedido? Devolve o texto a
  *  exibir, ou null quando o cabeçalho já conta a verdade. */
 function janelaDivergente(dados: RespostaPremiacoes): string | null {
@@ -899,11 +911,14 @@ export default function Premiacoes() {
   const avisoAno = avisoPopulacao(dados?.populacao, turmaId ? "turma" : undefined);
 
   // Chip do cabeçalho: só quando o período escolhido É o bimestre em curso
-  // ("Este bimestre" ou o número dele), pelo calendário oficial (o do backend).
+  // ("Este bimestre" ou o número dele), pelo calendário oficial (o do backend), e o
+  // período que o backend respondeu para este pódio contém hoje — o número sozinho não
+  // basta: na virada, o "1º bimestre" da escola ainda em 2026 é o de 2026, encerrado.
   const calendario = useCalendarioBimestres(escolaId);
   const bimestre = bimestreEmCurso(new Date(), calendario);
-  const ehBimestreEmCurso = bimestre != null
-    && (periodo.preset === "bimestre" || periodo.preset === `bimestre_${bimestre.numero}`);
+  const ehBimestreEmCurso = bimestre != null && dados != null
+    && (periodo.preset === "bimestre" || periodo.preset === `bimestre_${bimestre.numero}`)
+    && periodoContemHoje(dados.periodo, new Date());
 
   // De onde sai o Top N do lote (D7): a premiação, o período e o recorte da tela.
   const nomeTurma = turmaId ? (turmas ?? []).find((t) => String(t.id) === turmaId)?.nome : undefined;
