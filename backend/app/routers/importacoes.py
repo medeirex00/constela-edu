@@ -4771,9 +4771,11 @@ def resolver_revisao(
         if svc.texto_ilegivel(rev.nome_recebido or ""):
             # Letra ilegível ("�", acento perdido no arquivo): a ficha nova nasceria
             # com ela — a mesma trava da criação pela importação (``_resolver_aluno``).
-            # A pendência continua pendente para o gestor ESCOLHER o aluno.
+            # A pendência continua pendente para o gestor ESCOLHER o aluno. 400, não
+            # 409: na tela de Revisões o 409 é "a pendência já não está pendente"
+            # (fecha o painel e relê a fila); o 400 mostra o motivo ali mesmo.
             raise HTTPException(
-                status.HTTP_409_CONFLICT,
+                status.HTTP_400_BAD_REQUEST,
                 f"O nome recebido tem letra ilegível (“{ILEGIVEL}”, acento perdido no "
                 "arquivo) e a ficha nova nasceria com ela. Cadastre a criança em Alunos "
                 "com o nome certo e escolha-a nesta pendência.")

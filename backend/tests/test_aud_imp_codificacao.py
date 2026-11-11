@@ -267,7 +267,9 @@ def test_linha_com_letra_ilegivel_deixada_para_a_revisao_nao_vira_ficha_nova(
     assert rev is not None, r.json()
     url = f"/api/v1/escolas/{eid}/importacoes/revisoes/{rev.id}/resolver"
     r = cliente.post(url, json={"criar_em_turma_id": escola_completa["turma"].id})
-    assert r.status_code == 409, r.text
+    # 400, não 409: na tela de Revisões o 409 quer dizer "a pendência já não está
+    # pendente" e fecha o painel relendo a fila; o 400 mostra o motivo ali mesmo.
+    assert r.status_code == 400, r.text
     assert "ilegível" in r.json()["detail"], r.json()
     db.expire_all()
     assert db.get(RevisaoIdentidade, rev.id).status == "pendente"
