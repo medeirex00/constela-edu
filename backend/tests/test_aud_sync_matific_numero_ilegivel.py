@@ -215,3 +215,83 @@ def test_formato_ao_lado_de_falha_que_repetir_completa_diz_as_duas_coisas():
     msg = _mensagem_parcial(ap, "coleta_parcial")
     assert "Sincronize de novo para completar." in msg, msg
     assert "O que veio em outro formato não volta com outra coleta" in msg, msg
+
+
+# --------------------------------------------------------------------------
+# REV-SYNC-4: o alerta crítico "Formato do relatório mudou" diz em palavras QUAIS
+# campos não vieram — nunca o código interno ("campos_ausentes:estrelas").
+# --------------------------------------------------------------------------
+def _campos_do_critico(db, eid) -> str:
+    critico = _alertas_txt(db, eid)["parser_incompativel"]
+    assert "campos_ausentes" not in critico and "_" not in critico, critico
+    inicio = "A resposta da plataforma veio sem campos que o Constela usa ("
+    assert critico.startswith(inicio), critico
+    campos = critico[len(inicio):].split(")", 1)[0]
+    assert ":" not in campos, critico
+    return campos
+
+
+def test_critico_diz_o_campo_em_palavras_numa_crianca_com_numero_nulo(
+        db, escola_completa, monkeypatch):
+    ec = escola_completa
+    eid = ec["escola"].id
+    a, b, c = ec["alunos"]
+    credencial(db, eid, "matific")
+    placar = PlacarFake()
+    placar.linhas = [("u-a", a.nome, K, 12, 4), ("u-b", b.nome, K, 9, 3),
+                     ("u-c", c.nome, K, 5, 2)]
+    original = placar.school_student
+
+    def _novo(expr):
+        res = original(expr)
+        for item in res["body"][0]["data"]:
+            if item.get("uuid") == "u-c":
+                item["score"] = None
+        return res
+    placar.school_student = _novo
+    instalar(monkeypatch, placar=placar)
+
+    rodar(db, eid, "matific", parametros=P_SET)
+
+    assert _campos_do_critico(db, eid) == "estrelas"
+
+
+def test_critico_diz_os_campos_em_palavras_numa_turma_inteira_ilegivel(
+        db, escola_completa, monkeypatch):
+    from tests.test_aud_sync_ponta_a_ponta import escola_ficticia
+    eid, (a, b, c, d) = escola_ficticia(db, escola_completa)
+    credencial(db, eid, "matific")
+    placar = PlacarFake()
+    placar.linhas = [("u-a", a.nome, K, 12, 4), ("u-b", b.nome, K, 9, 3),
+                     ("u-c", c.nome, K, 7, 2), ("u-d", d.nome, K_B, 5, 2)]
+    original = placar.school_student
+
+    def _novo(expr):      # só a turma K muda de formato; a outra vem normal
+        res = original(expr)
+        for item in res["body"][0]["data"]:
+            if item.get("klassName") == K:
+                item["score"] = {"valor": item["score"]}
+                item["activities_completed"] = {"valor": item["activities_completed"]}
+        return res
+    placar.school_student = _novo
+    instalar(monkeypatch, placar=placar)
+
+    ex, _ = rodar(db, eid, "matific")
+
+    assert ex.status == "parcial", (ex.status, ex.motivo)
+    assert _campos_do_critico(db, eid) == "atividades, estrelas"
+
+
+def test_rotulo_dos_campos_essenciais_de_cada_plataforma():
+    """Os campos essenciais de cada plataforma (``CAMPOS_ESSENCIAIS_SYNC``) têm nome
+    para quem lê o alerta; um código novo sai sem o "_" e sem o prefixo."""
+    from app.routers.importacoes import CAMPOS_ESSENCIAIS_SYNC
+    from app.sync.service import _campos_dos_avisos
+    for campos in CAMPOS_ESSENCIAIS_SYNC.values():
+        for campo in campos:
+            assert "_" not in _campos_dos_avisos([f"campos_ausentes:{campo}"]), campo
+    assert _campos_dos_avisos(["campos_ausentes:livros_unicos"]) == "livros lidos"
+    assert _campos_dos_avisos(["campos_ausentes:estrelas",
+                               "campos_ausentes:atividades,estrelas"]) == "atividades, estrelas"
+    assert _campos_dos_avisos(["campos_ausentes:campo_novo"]) == "campo novo"
+    assert _campos_dos_avisos([]) == ""

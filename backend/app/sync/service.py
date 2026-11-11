@@ -1847,13 +1847,31 @@ def _mensagem_parcial(ap: _Apuracao, motivo: str | None) -> str:
     return texto
 
 
+# Os campos do retrato como a tela de Integrações os diz (o vocabulário da
+# importação): os não essenciais que podem sumir de todas as linhas e os ESSENCIAIS
+# da sync (``CAMPOS_ESSENCIAIS_SYNC``) que o alerta "Formato do relatório mudou" cita.
 _ROTULO_CAMPO = {"tempo_leitura_min": "tempo de leitura",
                  "questoes_tentativas": "questões respondidas",
-                 "questoes_acertos": "questões aprovadas"}
+                 "questoes_acertos": "questões aprovadas",
+                 "estrelas": "estrelas",
+                 "atividades": "atividades",
+                 "livros_unicos": "livros lidos"}
 
 
 def _rotulos_campos(campos) -> str:
-    return ", ".join(_ROTULO_CAMPO.get(c, c) for c in campos)
+    """Rótulos dos campos; um código novo sai sem o "_" de código."""
+    return ", ".join(_ROTULO_CAMPO.get(c) or str(c).replace("_", " ") for c in campos)
+
+
+def _campos_dos_avisos(avisos) -> str:
+    """Os campos dos avisos críticos ``campos_ausentes:<campo>,<campo>`` (código
+    estável da importação e do orquestrador) em palavras e sem repetição —
+    "atividades, estrelas" —, nunca o código interno."""
+    campos: set[str] = set()
+    for aviso in avisos:
+        _codigo, _sep, lista = str(aviso).partition(":")
+        campos.update(c.strip() for c in lista.split(",") if c.strip())
+    return _rotulos_campos(sorted(campos))
 
 
 def _recalcular_se_preciso(db: Session, execucao: SincronizacaoExecucao, ap: _Apuracao,
@@ -2020,9 +2038,11 @@ def _concluir(db: Session, execucao: SincronizacaoExecucao, ap: _Apuracao,
                            if not str(a).startswith(orchestrator.AVISO_NAO_ATUALIZADOS)})
         partes = []
         if perdidas or not ap.campos_nao_atualizados:
+            # Os campos em palavras ("estrelas"), não o aviso cru da importação
+            # ("campos_ausentes:estrelas") — o gestor lê este alerta.
             partes.append("A resposta da plataforma veio sem campos que o Constela usa "
-                          f"({', '.join(perdidas) or 'formato'}): essas linhas não foram "
-                          "gravadas.")
+                          f"({_campos_dos_avisos(perdidas) or 'formato'}): essas linhas "
+                          "não foram gravadas.")
         if ap.campos_nao_atualizados:
             # O que a coleta gravou depende do status: na 'parcial' há aluno com livro
             # novo, e os livros entraram; na 'sem_atualizacao' nenhum aluno foi
