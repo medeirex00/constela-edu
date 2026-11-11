@@ -3400,7 +3400,14 @@ def _confirmar_sem_commit(
             "meses seguintes em ordem.")
 
     importacao.qtd_alunos = len(resolvidos)
-    importacao.qtd_erros = len(dados.linhas) - sum(len(l) for _, l in resolvidos.values())
+    # ERROS = só as linhas descartadas por DEFEITO (sem nome utilizável, turma
+    # inválida, aluno de outra escola ou excluído, campos ausentes). A linha que foi
+    # para a Revisão de identidade não é erro — está guardada esperando uma decisão
+    # (``linhas_em_revisao``) — nem a da conta que a escola aposentou (decisão dela).
+    # Antes era "linhas que não viraram dado", e o histórico mostrava em vermelho,
+    # como "Erros", as linhas em revisão de um arquivo sem nenhum defeito.
+    importacao.qtd_erros = sum(int(n or 0) for motivo, n in linhas_descartadas.items()
+                               if motivo not in ida.MOTIVOS_DESCARTE_DECIDIDO)
     importacao.tempo_ms = int((time.monotonic() - inicio) * 1000)
 
     # LGPD/§15: o log de auditoria é permanente — não persistir os avisos brutos,
