@@ -412,12 +412,18 @@ def invalidar_senhas_derivadas(db: Session, escola_id: int | None = None, *,
     trocadas: list[dict] = []
     if aplicar:
         lidos = classificacao["hashes_lidos"]
+        # Os hashes novos (bcrypt, ~0,2 s cada) saem TODOS antes do 1º UPDATE: cada
+        # UPDATE trava a linha da conta até o commit de quem chama, e o bcrypt dentro
+        # do laço prendia a 1ª conta por (N-1) x custo — o heartbeat e o PATCH dela
+        # esperavam sem prazo, segurando conexão do pool e thread do worker
+        # (S_G_SCRIPTS-3). Gerados antes, a janela de trava é só a dos UPDATEs.
+        novos = {item["usuario_id"]: senha_hash_sem_acesso() for item in alvos}
         for item in alvos:
             uid = item["usuario_id"]
             resultado = db.execute(
                 update(Usuario)
                 .where(Usuario.id == uid, Usuario.senha_hash == lidos[uid])
-                .values(senha_hash=senha_hash_sem_acesso(),
+                .values(senha_hash=novos[uid],
                         token_version=func.coalesce(Usuario.token_version, 0) + 1)
                 .execution_options(synchronize_session=False))
             if resultado.rowcount != 1:
