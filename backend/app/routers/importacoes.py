@@ -70,7 +70,8 @@ from app.schemas.importacao import (
 from app.services import elegibilidade, identidade_aluno as ida
 from app.services import importacao as svc
 from app.services import lista_piloto, matching, matriculas, perfis_pdf, planilhas
-from app.services import dificuldade_livro, professores, push, scoring
+from app.services import dificuldade_livro, livros_homonimos_saneamento
+from app.services import professores, push, scoring
 from app.services import identidade_efetiva, politica_sync, triagem_revisoes
 from app.services import turma_arquivada
 from app.services import modulos as svc_modulos
@@ -2340,10 +2341,54 @@ class _AcervoEscola:
         self.restaurados = 0
         self.divergentes = 0
         self.fora_catalogo = 0     # livros SEM casamento no catálogo com nível divergente
+        # Títulos homônimos do catálogo oficial ("Cadê?" B/BB, "Chapeuzinho
+        # Vermelho" I/K) e as leituras que a coleta deixou de gravar porque a
+        # MESMA leitura já estava na outra linha do título (regra PROVADA do
+        # saneamento) — auditadas de forma agregada em ``finalizar``.
+        self.ambiguos = livros_homonimos_saneamento.titulos_auditados()
+        self.homonimas_evitadas: list[dict] = []
         for livro in db.execute(
             select(Livro).where(Livro.escola_id == escola_id).order_by(Livro.id)
         ).scalars():
             self._indexar(livro)
+
+    def livros_homonimos(self) -> dict[int, Livro]:
+        """Livros JÁ gravados da escola cujo título é homônimo no catálogo."""
+        return {l.id: l for chave, grupo in self.por_titulo.items()
+                if chave in self.ambiguos for l in grupo if l.id is not None}
+
+    def e_homonimo(self, livro: Livro) -> bool:
+        """O título do livro é um dos homônimos do catálogo oficial?"""
+        return dificuldade_livro.normalizar_titulo(livro.titulo) in self.ambiguos
+
+    def leitura_homonima_provada(self, livro: Livro, quando, tempo, existentes):
+        """A leitura que a coleta traz para ``livro`` JÁ está gravada na OUTRA
+        linha do mesmo título homônimo? É a regra PROVADA do saneamento
+        (``livros_homonimos_saneamento.recusa_do_par``): uma linha ``legado`` e
+        uma ``fonte``, mesmo segundo, mesmo tempo de leitura. Sem esta conferência
+        a coleta recriava o par que o saneamento remove — a deduplicação de
+        releitura compara só o ``livro_id``.
+
+        ``existentes``: ``(livro, leitura_id, data, tempo)`` das leituras do aluno
+        em livros homônimos, lidas antes do lote. Devolve a que forma o par, ou
+        None."""
+        chave = dificuldade_livro.normalizar_titulo(livro.titulo)
+        if chave not in self.ambiguos:
+            return None
+        nova = livros_homonimos_saneamento.LadoDoPar(
+            livro.id, livro.origem_nivel, livro.elefante_id, quando, tempo)
+        for existente in existentes:
+            outro, _leitura_id, data, tempo_existente = existente
+            if outro is livro or dificuldade_livro.normalizar_titulo(outro.titulo) != chave:
+                continue
+            gravada = livros_homonimos_saneamento.LadoDoPar(
+                outro.id, outro.origem_nivel, outro.elefante_id, data, tempo_existente)
+            legado, fonte = ((gravada, nova) if outro.origem_nivel == "legado"
+                             else (nova, gravada))
+            if not livros_homonimos_saneamento.recusa_do_par(
+                    chave, legado, fonte, ambiguos=self.ambiguos):
+                return existente
+        return None
 
     def _indexar(self, livro: Livro) -> None:
         chave = dificuldade_livro.normalizar_titulo(livro.titulo)
@@ -2534,6 +2579,17 @@ class _AcervoEscola:
     def finalizar(self, db, importacao, avisos: list) -> None:
         """Auditoria AGREGADA por importação dos vínculos à identidade oficial
         (uma linha, não uma por livro) e avisos-resumo das reconciliações."""
+        if self.homonimas_evitadas:
+            registrar(db, "leitura.duplicata_homonima_evitada", escola_id=self.escola_id,
+                      usuario_id=importacao.usuario_id, entidade="importacao",
+                      entidade_id=importacao.id,
+                      detalhes={"qtd": len(self.homonimas_evitadas),
+                                "regra": "mesmo aluno, mesmo título homônimo do "
+                                         "catálogo, uma linha 'legado' e uma "
+                                         "'fonte', instante idêntico ao segundo e "
+                                         "mesmo tempo de leitura: a leitura já "
+                                         "constava e não foi gravada de novo",
+                                "itens": self.homonimas_evitadas[:500]})
         if self.vinculados:
             registrar(db, "livro.vinculado_catalogo", escola_id=self.escola_id,
                       usuario_id=importacao.usuario_id, entidade="importacao",
@@ -2601,6 +2657,26 @@ def _ja_lidos_por_aluno(db, aluno_ids) -> dict:
     return mapa
 
 
+def _leituras_homonimas_por_aluno(db, aluno_ids, acervo: _AcervoEscola) -> dict:
+    """{aluno_id: [(livro, leitura_id, data, tempo)]} das leituras já gravadas em
+    livros de título HOMÔNIMO no catálogo — UMA consulta em lote, só nesses
+    livros (são dois títulos). É o que ``_AcervoEscola.leitura_homonima_provada``
+    confere antes de gravar uma leitura nova."""
+    mapa: dict[int, list] = {}
+    ids = list(aluno_ids)
+    livros = acervo.livros_homonimos()
+    if not ids or not livros:
+        return mapa
+    for leitura_id, aid, lid, data, tempo in db.execute(
+        select(Leitura.id, Leitura.aluno_id, Leitura.livro_id, Leitura.data,
+               Leitura.tempo_leitura_min)
+        .where(Leitura.aluno_id.in_(ids), Leitura.livro_id.in_(list(livros)))
+        .order_by(Leitura.id)
+    ).all():
+        mapa.setdefault(aid, []).append((livros[lid], leitura_id, data, tempo))
+    return mapa
+
+
 def _data_do_retrato_das_leituras(data_referencia, ultima_leitura):
     """Data do retrato DERIVADO do relatório individual: max(data do relatório,
     leitura mais nova do aluno), nunca depois de agora. O retrato é o TOTAL de todas
@@ -2621,7 +2697,8 @@ def _data_do_retrato_das_leituras(data_referencia, ultima_leitura):
 
 def _importar_elefante_leituras(db, escola_id, importacao, aluno, linhas,
                                 data_referencia, avisos, catalogo, ja_lidos,
-                                codigos_faixa, *, sem_retrato_repetido: bool = False):
+                                codigos_faixa, *, sem_retrato_repetido: bool = False,
+                                homonimas=()):
     """Formato "uma linha por livro concluído": registra leituras únicas (§35).
 
     Todo o trabalho de banco é feito EM LOTE. O ``catalogo`` (livros da escola),
@@ -2636,6 +2713,13 @@ def _importar_elefante_leituras(db, escola_id, importacao, aluno, linhas,
     conflito). A deduplicação de releitura é pela IDENTIDADE do livro, não pelo
     título — homônimos oficiais ("Cadê?" B e BB) são livros distintos e as duas
     leituras contam. A linha do tempo usa a MESMA resolução.
+
+    EXCEÇÃO PROVADA (homônimos): a linha ``legado`` antiga de um título homônimo
+    guarda leitura das duas obras. Quando a coleta traz a MESMA leitura (mesmo
+    segundo, mesmo tempo) e a resolve para a linha ``fonte`` do outro nível (ou o
+    contrário), ela "já constava": não é gravada de novo — aviso e auditoria
+    agregada. ``homonimas`` são as leituras do aluno nesses livros, lidas UMA vez
+    por lote (``_leituras_homonimas_por_aluno``); a regra é a do saneamento.
 
     NÍVEL CONGELADO: toda leitura nova nasce com ``Leitura.nivel_codigo`` = o
     nível EFETIVO do livro NESTE momento — que, depois da reconciliação do
@@ -2658,8 +2742,10 @@ def _importar_elefante_leituras(db, escola_id, importacao, aluno, linhas,
     vistos: set[int] = set()            # id() dos livros já processados NESTE lote
     resolvidos: dict[int, Livro] = {}   # nº da linha → livro resolvido (linha do tempo)
     rejeitadas: set[int] = set()        # nível fora do vocabulário: sem leitura nem evento
-    # (livro, quando, tempo, nível congelado) de cada leitura nova deste aluno.
-    novas: list[tuple] = []
+    # id() do livro → (livro, quando, tempo, nível congelado) de cada leitura nova
+    # deste aluno (dict: uma leitura pendente sai se a prova homônima vier depois).
+    novas: dict[int, tuple] = {}
+    evitados: set[int] = set()          # id() dos livros cuja leitura já constava no homônimo
     # Versão do catálogo VIGENTE nesta importação — carimbo idêntico ao que a
     # nota grava em ``detalhes.elefante.dificuldade.catalogo``. None sem arquivo.
     versao_cat = dificuldade_livro.versao_catalogo().get("versao")
@@ -2676,16 +2762,6 @@ def _importar_elefante_leituras(db, escola_id, importacao, aluno, linhas,
         if livro is None:
             continue
         resolvidos[indice] = livro
-        # Releitura no MESMO relatório (livro repetido): dedup em memória —
-        # senão a UniqueConstraint derrubaria a importação (autoflush=False).
-        if id(livro) in vistos:
-            avisos.append(f"“{titulo}” aparece mais de uma vez no relatório de "
-                          f"{aluno.nome} — contado uma vez (§35).")
-            continue
-        if livro.id is not None and livro.id in ja_lidos:
-            avisos.append(f"“{titulo}” já constava para {aluno.nome} — releitura não pontua (§35).")
-            continue
-        vistos.add(id(livro))
         # Relatórios individuais informam a data e o HORÁRIO reais da conclusão.
         quando = data_referencia
         try:
@@ -2699,11 +2775,51 @@ def _importar_elefante_leituras(db, escola_id, importacao, aluno, linhas,
         if quando.tzinfo is not None:
             quando = quando.replace(tzinfo=None)
         tempo_livro = linha.dados.get("tempo_livro_min")
+        ja_lido = livro.id is not None and livro.id in ja_lidos
+        if not ja_lido and id(livro) not in evitados and catalogo.e_homonimo(livro):
+            # A MESMA leitura já está na outra linha do título homônimo (regra
+            # PROVADA do saneamento): já constava. Vale para qualquer linha do
+            # relatório — a releitura listada antes da leitura provada também sai.
+            try:
+                tempo = _num(tempo_livro, int) if tempo_livro is not None else None
+            except HTTPException:
+                tempo = None    # sem tempo legível não há prova: segue o caminho de sempre
+            existente = catalogo.leitura_homonima_provada(livro, quando, tempo,
+                                                          homonimas)
+            if existente is not None:
+                evitados.add(id(livro))
+                vistos.add(id(livro))
+                novas.pop(id(livro), None)
+                outro, leitura_id, _, _ = existente
+                catalogo.homonimas_evitadas.append({
+                    "aluno_id": aluno.id, "titulo": titulo, "data": quando.isoformat(),
+                    "tempo_min": tempo, "leitura_existente_id": leitura_id,
+                    "livro_existente_id": outro.id,
+                    "livro_existente_origem": outro.origem_nivel,
+                    "livro_existente_elefante_id": outro.elefante_id,
+                    "livro_da_coleta_id": livro.id,
+                    "livro_da_coleta_origem": livro.origem_nivel,
+                    "livro_da_coleta_elefante_id": livro.elefante_id})
+                avisos.append(
+                    f"“{titulo}” já constava para {aluno.nome} no outro livro com o "
+                    "mesmo título (mesmo horário e mesmo tempo de leitura) — não foi "
+                    "contado de novo. Registrado na auditoria.")
+                continue
+        # Releitura no MESMO relatório (livro repetido): dedup em memória —
+        # senão a UniqueConstraint derrubaria a importação (autoflush=False).
+        if id(livro) in vistos:
+            avisos.append(f"“{titulo}” aparece mais de uma vez no relatório de "
+                          f"{aluno.nome} — contado uma vez (§35).")
+            continue
+        if ja_lido:
+            avisos.append(f"“{titulo}” já constava para {aluno.nome} — releitura não pontua (§35).")
+            continue
+        vistos.add(id(livro))
         # O nível é lido AQUI, depois da reconciliação desta linha: é o nível
         # efetivo do livro no instante em que a leitura passa a existir.
-        novas.append((livro, quando,
-                      _num(tempo_livro, int) if tempo_livro is not None else None,
-                      livro.nivel_codigo))
+        novas[id(livro)] = (livro, quando,
+                            _num(tempo_livro, int) if tempo_livro is not None else None,
+                            livro.nivel_codigo)
 
     # Persiste PRIMEIRO os livros novos (ganham id) e então grava todas as
     # leituras num único INSERT executemany — uma ida ao banco, não N.
@@ -2715,7 +2831,7 @@ def _importar_elefante_leituras(db, escola_id, importacao, aluno, linhas,
              "data": quando, "tempo_leitura_min": tempo,
              # NÍVEL CONGELADO + versão do catálogo que o resolveu.
              "nivel_codigo": nivel or None, "catalogo_versao": versao_cat}
-            for livro, quando, tempo, nivel in novas
+            for livro, quando, tempo, nivel in novas.values()
         ])
 
     # ESPELHO evento a evento (linha do tempo): 1 EventoAluno por leitura do
@@ -3508,11 +3624,15 @@ def _confirmar_sem_commit(
     # PERFORMANCE das leituras (Elefante): catálogo de livros, faixas de nível e
     # "já lidos" carregados UMA vez para o arquivo inteiro — antes eram relidos
     # por aluno (~190× numa escola de 10 turmas), o gargalo da sync de ~15 min.
-    cat_livros = cod_faixa = ja_lidos_map = None
+    cat_livros = cod_faixa = ja_lidos_map = homonimas_map = None
     if dados.formato == "leituras" and resolvidos:
         cat_livros = _catalogo_livros(db, escola_id)
         cod_faixa = _codigos_faixa_escola(db, escola_id)
-        ja_lidos_map = _ja_lidos_por_aluno(db, [a.id for a, _ in resolvidos.values()])
+        ids_lote = [a.id for a, _ in resolvidos.values()]
+        ja_lidos_map = _ja_lidos_por_aluno(db, ids_lote)
+        # Leituras já gravadas nos títulos homônimos do catálogo: a coleta não
+        # grava de novo a que já está na outra linha do título (regra provada).
+        homonimas_map = _leituras_homonimas_por_aluno(db, ids_lote, cat_livros)
 
     aplicados: list[int] = []        # alunos cujo dado MUDOU nesta importação
     for aluno, linhas_aluno in resolvidos.values():
@@ -3531,7 +3651,8 @@ def _confirmar_sem_commit(
                                                 linhas_aluno, data_referencia, avisos,
                                                 cat_livros, ja_lidos_map.get(aluno.id, set()),
                                                 cod_faixa,
-                                                sem_retrato_repetido=sem_retrato_repetido)
+                                                sem_retrato_repetido=sem_retrato_repetido,
+                                                homonimas=homonimas_map.get(aluno.id, ()))
         else:
             mudou = _importar_elefante_resumo(db, escola_id, importacao, aluno,
                                               linhas_aluno[-1].dados, data_referencia,
