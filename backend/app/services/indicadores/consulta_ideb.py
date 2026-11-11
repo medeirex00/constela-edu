@@ -22,9 +22,12 @@ O que a Secretaria e o admin global leem (plano, 2.2, 3.2, 4.6, 4.7, 4.8 e 5.1;
   data da gravação — e ``difere_do_oficial`` quando uma importação oficial recusou
   (resposta "não") trocá-los pelo número diferente do arquivo;
 * CADASTRO QUE MUDOU DEPOIS DA IMPORTAÇÃO (a regra do SARESP, ``consulta_saresp``):
-  um número oficial só vale se a importação aplicada da edição casou a escola com o
-  código INEP ATUAL dela; senão, nada dela nessa edição e o motivo pede a
-  reimportação;
+  um número oficial só vale se a importação aplicada da edição que traz a linha da
+  escola casou a escola com o código INEP ATUAL dela; senão, nada dela nessa edição e
+  o motivo pede a reimportação. O arquivo mais novo que não traz uma escola não apaga
+  o número dela (o pipeline não apaga): ele continua na tela, com a fonte da
+  importação que o gravou; "fora do arquivo" só quando nenhuma importação aplicada da
+  edição trouxe a escola;
 * COBERTURA por edição: escolas com Ideb e com Saeb, sem resultado (com o motivo),
   sem linha no arquivo, sem código INEP, e os códigos do arquivo sem escola no
   cadastro — sempre pelo CÓDIGO, nunca pelo nome;
@@ -67,7 +70,8 @@ from app.services.indicadores.consulta_ideb_rede import comparar_meta as _compar
 from app.services.indicadores.consulta_saresp import (MOTIVO_CADASTRADO_DEPOIS,
                                                       MOTIVO_FORA_DO_ARQUIVO,
                                                       MOTIVO_INEP_ALTERADO,
-                                                      MOTIVO_SEM_IMPORTACAO, _descarte)
+                                                      MOTIVO_SEM_IMPORTACAO,
+                                                      _arquivo_da_escola, _descarte)
 from app.services.indicadores.pipeline import codigo_ibge_da_rede
 
 # Campos por escola em `resultados_avaliacao` (componente gravado → campo da API).
@@ -202,13 +206,20 @@ def _aplicadas(db: Session, codigo: str | None) -> list[ImportacaoIndicador]:
                   key=lambda i: (i.aplicado_em or datetime.min, i.id))
 
 
-def _arquivo_da_edicao(aplicadas: list[ImportacaoIndicador], edicao: int):
-    """O arquivo que VALE para a edição — a precedência do pipeline: a divulgação mais
-    nova; na mesma, a data interna mais nova; depois, a aplicada por último."""
+def _da_edicao(aplicadas: list[ImportacaoIndicador], edicao: int) -> list[ImportacaoIndicador]:
+    """As importações aplicadas que trazem a edição, na precedência do pipeline (a que
+    VALE primeiro): a divulgação mais nova; na mesma, a data interna mais nova; depois,
+    a aplicada por último."""
     candidatas = [i for i in aplicadas if edicao in ((i.resumo or {}).get("edicoes") or [])]
-    return max(candidatas, default=None,
-               key=lambda i: (i.edicao_arquivo, i.arquivo_data or datetime.min,
-                              i.aplicado_em or datetime.min, i.id))
+    return sorted(candidatas, reverse=True,
+                  key=lambda i: (i.edicao_arquivo, i.arquivo_data or datetime.min,
+                                 i.aplicado_em or datetime.min, i.id))
+
+
+def _arquivo_da_edicao(aplicadas: list[ImportacaoIndicador], edicao: int):
+    """O arquivo que VALE para a edição (o 1º de ``_da_edicao``); None sem importação."""
+    candidatas = _da_edicao(aplicadas, edicao)
+    return candidatas[0] if candidatas else None
 
 
 def _conteudo(imp: ImportacaoIndicador) -> dict:
@@ -408,6 +419,10 @@ def ideb_da_rede(db: Session, rede: Rede) -> dict:
                        | {ed for (_, ed, ind, _) in referencia if ind == ideb.IND_META})
     arquivo_de = {ed: _arquivo_da_edicao(aplicadas, ed) for ed in edicoes}
     conteudos = {i.id: _conteudo(i) for i in aplicadas}
+    # Todas as aplicadas de cada edição, na precedência: a escola se confere contra a
+    # que traz a linha dela (``_arquivo_da_escola``), não só contra a mais nova.
+    arquivos_da_edicao = {ed: [conteudos[i.id] for i in _da_edicao(aplicadas, ed)]
+                          for ed in edicoes}
     recusadas = _recusadas(aplicadas)
 
     linhas = []
@@ -416,11 +431,11 @@ def ideb_da_rede(db: Session, rede: Rede) -> dict:
         serie = []
         for ed in edicoes:
             imp_arquivo = arquivo_de[ed]
-            arquivo = conteudos.get(imp_arquivo.id) if imp_arquivo is not None else None
             # O cadastro mudou depois da importação? Então nenhum número OFICIAL da
             # escola nesta edição (seria de outra linha do arquivo). Os números sem
-            # registro oficial (1 clique) valem pelo código com que foram gravados.
-            descarte = _descarte(arquivo, e.id, inep)
+            # registro oficial (1 clique) valem pelo código com que foram gravados. A
+            # conferência é contra a importação que traz a linha da escola.
+            descarte = _descarte(_arquivo_da_escola(arquivos_da_edicao[ed], inep), e.id, inep)
             numeros: dict[str, dict | None] = {}
             for campo in CAMPOS_RESULTADO:
                 r = resultados.get((e.id, ed, campo))

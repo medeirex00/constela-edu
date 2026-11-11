@@ -19,10 +19,13 @@ O que a Secretaria lê (plano, 4.6, 4.8, 4.9 e 5.1), a partir do que a E4 grava:
   cadastro) e as escolas do arquivo sem escola no cadastro — sempre pelo CÓDIGO,
   nunca pelo nome;
 * CADASTRO QUE MUDOU DEPOIS DA IMPORTAÇÃO: um número por escola só vale se a
-  importação aplicada da edição casou a escola com o código INEP ATUAL dela. Se o
-  código foi cadastrado ou trocado depois, a linha não mostra número nenhum (nem a
-  proficiência gravada pela escola, nem participação/IEE pelo código — seriam de
-  linhas diferentes do arquivo) e o motivo pede a reimportação;
+  importação aplicada da edição que traz a linha da escola casou a escola com o código
+  INEP ATUAL dela. Se o código foi cadastrado ou trocado depois, a linha não mostra
+  número nenhum (nem a proficiência gravada pela escola, nem participação/IEE pelo
+  código — seriam de linhas diferentes do arquivo) e o motivo pede a reimportação. A
+  retificação que não traz uma escola não apaga o número dela (o pipeline não apaga):
+  ele continua na tela, com a fonte da versão que o gravou; "fora do arquivo" só quando
+  nenhuma importação aplicada da edição trouxe a escola;
 * NÍVEIS: os pontos de corte do SARESP estão "a confirmar" (``escalas``); sem corte
   confirmado, nenhuma média recebe nível (nem distância até o Adequado);
 * QUEBRAS DE ESCALA: a série do 2º ano não é ligada de 2022 para 2023 (a TRI passou
@@ -262,14 +265,15 @@ def _niveis(edicoes: set[int]) -> dict:
     }
 
 
-def _ultimas_iee(db: Session, codigo: str | None) -> dict[int, ImportacaoIndicador]:
-    """A importação APLICADA mais recente do IEE de cada edição, para esta rede."""
+def _iee_aplicadas(db: Session, codigo: str | None) -> dict[int, list[ImportacaoIndicador]]:
+    """As importações APLICADAS do IEE de cada edição, para esta rede, da que VALE (a
+    aplicada por último: o SARESP não desempata pela data do arquivo) para a mais antiga."""
     if codigo is None:
         return {}
     imps = leituras.aplicadas_do_territorio(db, codigo, (seduc.PARSER_IEE,))
-    saida: dict[int, ImportacaoIndicador] = {}
-    for imp in sorted(imps, key=lambda i: (i.aplicado_em or datetime.min, i.id)):
-        saida[imp.edicao_arquivo] = imp
+    saida: dict[int, list[ImportacaoIndicador]] = {}
+    for imp in sorted(imps, key=lambda i: (i.aplicado_em or datetime.min, i.id), reverse=True):
+        saida.setdefault(imp.edicao_arquivo, []).append(imp)
     return saida
 
 
@@ -298,7 +302,21 @@ def _arquivo_iee(imp: ImportacaoIndicador | None) -> dict | None:
             if (len(item) >= 6 and item[1] == imp.edicao_arquivo
                     and item[2] == seduc.IND_PROFICIENCIA):
                 mantidas.add((item[3], item[4], item[5]))
-    return {"casadas": casadas, "linhas": linhas, "mantidas_d2": mantidas}
+    return {"casadas": casadas, "linhas": linhas, "mantidas_d2": mantidas, "importacao": imp}
+
+
+def _arquivo_da_escola(arquivos: list[dict | None], inep: str | None) -> dict | None:
+    """Entre os arquivos APLICADOS da edição (``arquivos``, na precedência do pipeline: o
+    que vale primeiro), o que traz a linha do código INEP ATUAL da escola. O pipeline
+    aplica a precedência número a número e não apaga o número de uma escola que um
+    arquivo mais novo (ou a retificação) não traz: esse número continua valendo, com a
+    fonte da importação que o gravou — e é contra ela que a escola se confere. Nenhum
+    arquivo traz a linha: o que vale para a edição (aí, sim, "fora do arquivo"). Sem
+    importação, ou com uma cujo resumo não guardou as escolas casadas (não há como
+    conferir), ``None``."""
+    if not arquivos or any(a is None for a in arquivos):
+        return None
+    return next((a for a in arquivos if inep and inep in a["linhas"]), arquivos[0])
 
 
 def _descarte(arquivo: dict | None, escola_id: int, inep: str | None) -> str | None:
@@ -440,7 +458,8 @@ def saresp_da_rede(db: Session, rede: Rede) -> dict:
             elif r.valor is not None and (r.etapa in ETAPAS or not r.etapa):
                 estimativas.setdefault(r.escola_id, []).append(r)
 
-    iee = _ultimas_iee(db, codigo)
+    iee_todas = _iee_aplicadas(db, codigo)
+    iee = {edicao: lista[0] for edicao, lista in iee_todas.items()}   # a que vale na edição
     ids_imp = ({ln.importacao_id for ln in territorio}
                | {ln.importacao_id for lns in por_inep.values() for ln in lns}
                | {r.importacao_id for rs in oficiais.values() for r in rs}
@@ -455,17 +474,23 @@ def saresp_da_rede(db: Session, rede: Rede) -> dict:
     edicoes_escola = sorted({r.edicao for rs in oficiais.values() for r in rs}
                             | {ln.edicao for lns in por_inep.values() for ln in lns}
                             | set(iee), reverse=True)
-    arquivos = {edicao: _arquivo_iee(iee.get(edicao)) for edicao in edicoes_escola}
+    # Todas as aplicadas de cada edição, na precedência (a 1ª é a que vale): a escola se
+    # confere contra a que traz a linha dela (``_arquivo_da_escola``).
+    arquivos_da_edicao = {edicao: [_arquivo_iee(i) for i in iee_todas.get(edicao, [])]
+                          for edicao in edicoes_escola}
+    arquivos = {edicao: (lista[0] if lista else None)
+                for edicao, lista in arquivos_da_edicao.items()}
     linhas_escola = []
     for e in escolas:
         inep = inep_de[e.id]
         por_edicao = []
         for edicao in edicoes_escola:
-            arquivo = arquivos[edicao]
+            arquivo = _arquivo_da_escola(arquivos_da_edicao[edicao], inep)
             imp_iee = iee.get(edicao)
             # O cadastro mudou depois da importação? Então nada desta escola nesta
             # edição: a proficiência gravada (pela escola) e a participação/IEE (pelo
-            # código atual) seriam de linhas diferentes do arquivo.
+            # código atual) seriam de linhas diferentes do arquivo. A conferência é
+            # contra a importação que traz a linha da escola, não só a mais recente.
             descarte = _descarte(arquivo, e.id, inep)
             prof = {et: {c: None for c in COMPONENTES} for et in ETAPAS}
             participacao = {et: None for et in ETAPAS}
@@ -500,7 +525,7 @@ def saresp_da_rede(db: Session, rede: Rede) -> dict:
                             prof[r.etapa][comp] = _numero(
                                 edicao=edicao, valor=None, casas=None,
                                 unidade=seduc.UNIDADE_SARESP, motivo=MOTIVO_ESTIMATIVA_D2,
-                                imp=imp_iee, proficiencia=(r.etapa, comp))
+                                imp=arquivo["importacao"], proficiencia=(r.etapa, comp))
             numeros = [n for et in ETAPAS for n in prof[et].values() if n]
             tem_resultado = any(n["valor"] is not None for n in numeros)
             no_arquivo = bool(numeros) or any(
