@@ -121,6 +121,15 @@ function nomeDaFichaNova(rev: RevisaoIdentidade, turmaId: number): string {
   return rev.nome_ficha_nova_por_turma?.[String(turmaId)] ?? rev.nome_ficha_nova ?? rev.nome_recebido;
 }
 
+/** A letra que a leitura do arquivo não conseguiu ler (acento perdido). */
+const LETRA_ILEGIVEL = "�";
+
+/** O nome recebido tem letra ilegível? O /resolver recusa criar a ficha com ela (ela
+ *  nasceria assim no certificado e no ranking); vincular a uma ficha existente vale. */
+function nomeIlegivel(rev: RevisaoIdentidade): boolean {
+  return (rev.nome_recebido ?? "").includes(LETRA_ILEGIVEL);
+}
+
 /** Total real de pendências (a lista vem limitada a `LIMITE_LISTA`). */
 interface ContagemRevisoes {
   pendentes: number;
@@ -1145,46 +1154,58 @@ function DetalheRevisao({
           {/* CRIAR NOVO ALUNO — só por escolha explícita, com turma escolhida */}
           <Bloco titulo="Criar novo aluno">
             <Card className="space-y-3 p-4">
-              <p className="text-xs text-zinc-500 dark:text-zinc-400">
-                Use apenas se esta criança ainda não tem ficha na escola. Uma ficha nova é criada com o
-                nome recebido (sem a turma, quando ela vem escrita no fim do nome) e passa a receber estes
-                dados.
-              </p>
-              {turmasErro && turmas.length === 0 ? (
-                <Mensagem tipo="erro">Não foi possível carregar as turmas: {turmasErro.message}</Mensagem>
-              ) : turmasCarregando && turmas.length === 0 ? (
-                <p className="text-xs text-zinc-500">Carregando turmas…</p>
-              ) : turmas.length === 0 ? (
+              {/* Nome com letra ilegível: o /resolver recusa a ficha nova (400). Em vez de
+                  deixar clicar para descobrir depois, o bloco diz o caminho que funciona. */}
+              {nomeIlegivel(rev) ? (
                 <p className="text-sm text-amber-700 dark:text-amber-300">
-                  Não há turma ativa cadastrada no ano letivo. Cadastre a turma (Lista Piloto ou Turmas)
-                  antes de criar o aluno.
+                  O nome recebido tem letra ilegível (“{LETRA_ILEGIVEL}”, acento perdido no arquivo) e a
+                  ficha nova nasceria com ela. Cadastre a criança em Alunos com o nome certo e escolha-a
+                  nesta pendência.
                 </p>
               ) : (
-                <Campo rotulo="Turma da ficha nova">
-                  <select className={estiloInput} value={turmaNova}
-                    onChange={(e) => setTurmaNova(e.target.value)}>
-                    <option value="">Escolha a turma…</option>
-                    {turmas.map((t) => (
-                      <option key={t.id} value={String(t.id)}>{t.nome}</option>
-                    ))}
-                  </select>
-                </Campo>
+                <>
+                  <p className="text-xs text-zinc-500 dark:text-zinc-400">
+                    Use apenas se esta criança ainda não tem ficha na escola. Uma ficha nova é criada com o
+                    nome recebido (sem a turma, quando ela vem escrita no fim do nome) e passa a receber estes
+                    dados.
+                  </p>
+                  {turmasErro && turmas.length === 0 ? (
+                    <Mensagem tipo="erro">Não foi possível carregar as turmas: {turmasErro.message}</Mensagem>
+                  ) : turmasCarregando && turmas.length === 0 ? (
+                    <p className="text-xs text-zinc-500">Carregando turmas…</p>
+                  ) : turmas.length === 0 ? (
+                    <p className="text-sm text-amber-700 dark:text-amber-300">
+                      Não há turma ativa cadastrada no ano letivo. Cadastre a turma (Lista Piloto ou Turmas)
+                      antes de criar o aluno.
+                    </p>
+                  ) : (
+                    <Campo rotulo="Turma da ficha nova">
+                      <select className={estiloInput} value={turmaNova}
+                        onChange={(e) => setTurmaNova(e.target.value)}>
+                        <option value="">Escolha a turma…</option>
+                        {turmas.map((t) => (
+                          <option key={t.id} value={String(t.id)}>{t.nome}</option>
+                        ))}
+                      </select>
+                    </Campo>
+                  )}
+                  {turmaEscolhida && (
+                    <dl className="space-y-0.5 text-xs">
+                      <Linha rotulo="Nome">{nomeDaFichaNova(rev, turmaEscolhida.id)}</Linha>
+                      <Linha rotulo="Turma">{turmaEscolhida.nome} · {turmaEscolhida.ano_escolar}</Linha>
+                      {rev.id_externo && <Linha rotulo={rotuloId}>{rev.id_externo}</Linha>}
+                    </dl>
+                  )}
+                  <Botao variante="secundario" disabled={!turmaEscolhida || resolver.enviando}
+                    onClick={() => {
+                      if (!turmaEscolhida) return;
+                      resolver.limparErro();
+                      setDestino({ tipo: "novo", turmaId: turmaEscolhida.id, turmaNome: turmaEscolhida.nome });
+                    }}>
+                    <UserPlus size={15} /> Criar novo aluno
+                  </Botao>
+                </>
               )}
-              {turmaEscolhida && (
-                <dl className="space-y-0.5 text-xs">
-                  <Linha rotulo="Nome">{nomeDaFichaNova(rev, turmaEscolhida.id)}</Linha>
-                  <Linha rotulo="Turma">{turmaEscolhida.nome} · {turmaEscolhida.ano_escolar}</Linha>
-                  {rev.id_externo && <Linha rotulo={rotuloId}>{rev.id_externo}</Linha>}
-                </dl>
-              )}
-              <Botao variante="secundario" disabled={!turmaEscolhida || resolver.enviando}
-                onClick={() => {
-                  if (!turmaEscolhida) return;
-                  resolver.limparErro();
-                  setDestino({ tipo: "novo", turmaId: turmaEscolhida.id, turmaNome: turmaEscolhida.nome });
-                }}>
-                <UserPlus size={15} /> Criar novo aluno
-              </Botao>
             </Card>
           </Bloco>
 
