@@ -326,8 +326,10 @@ def test_professor_ranking_renumerado_1n(cenario_professor, escola_completa, db)
     posicoes = {alunos[0].id: 100, alunos[1].id: 105, alunos[2].id: 110, fora.id: 103}
     valores = {alunos[0].id: 50.0, alunos[1].id: 40.0, alunos[2].id: 30.0, fora.id: 45.0}
     for aid, pos in posicoes.items():
+        # Aferidos em Leitura (nota > 0 só sai de quem tem dado): o Ranking Geral
+        # só lista quem tem dado de alguma dimensão (DEC-19).
         db.add(Nota(escola_id=escola.id, aluno_id=aid, ano_letivo=2026,
-                    nota_geral=valores[aid], posicao=pos))
+                    nota_geral=valores[aid], posicao=pos, aferido_leitura=True))
     db.commit()
 
     r = c["professor"].get(f"/api/v1/escolas/{escola.id}/ranking")

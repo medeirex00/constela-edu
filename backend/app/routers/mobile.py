@@ -248,7 +248,10 @@ def sincronizar(
                                               escola.ano_letivo_ativo, permitidas)
         alertas = permissoes.filtrar_por_aluno(alertas, alunos)
 
-    ranking = _ranking(db, escola_id, escola.ano_letivo_ativo, turma_ids=permitidas)
+    # Aba "Ranking Geral": a mesma lista da web (`rankings.ranking_geral`), só com
+    # quem tem dado de alguma dimensão — sem posição nem 0,0 para a ausência.
+    ranking = _ranking(db, escola_id, escola.ano_letivo_ativo, turma_ids=permitidas,
+                       so_com_dado=True)
     if permitidas is not None:
         # Professor: posição RELATIVA às turmas dele (1..N), como a web
         # (`rankings.ranking_geral`) e o Top 10 deste mesmo pacote

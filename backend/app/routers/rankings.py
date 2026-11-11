@@ -124,10 +124,12 @@ def _ranking(db: Session, escola_id: int, ano: int, turma_id=None, ano_escolar=N
     do dashboard, pacote do app). A ordenação não muda.
 
     ``so_com_dado=True`` deixa no LEGADO só quem é aferido em ALGUMA dimensão
-    (o corte ``publico._com_algum_dado`` do telão): é o Top 10 do painel, uma
-    vitrine com medalha. O corte vai na CONSULTA, antes do ``limite``, para a
-    vaga de quem não tem dado ser ocupada por quem tem. A posição exibida segue
-    a carimbada (``Nota.posicao``), como no telão.
+    (o corte ``publico._com_algum_dado`` do telão): é o Top 10 do painel, o
+    Ranking Geral (``ranking_geral``) e a aba "Ranking Geral" do app — criança
+    sem NENHUM dado não ganha posição nem 0,0 (ausência não é zero). O corte vai
+    na CONSULTA, antes do ``limite``, para a vaga de quem não tem dado ser
+    ocupada por quem tem. A posição exibida segue a carimbada (``Nota.posicao``),
+    como no telão (pode pular um número).
     """
     modulos = svc_modulos.modulos_da_escola(db, db.get(Escola, escola_id))
     mostra_matific = "matematica" in modulos
@@ -287,8 +289,13 @@ def ranking_geral(
     if dimensao:
         _exigir_dimensao(db, escola_id, dimensao)
     permitidas = permissoes.turmas_permitidas(db, escola_id, usuario)
+    # LEGADO: só quem tem dado de ALGUMA dimensão (o corte do telão e do Top 10).
+    # Quem não tem retrato nenhum não ganha posição nem 0,0 — e, no recorte,
+    # também não empurra a numeração de quem tem. Por dimensão o corte já é o
+    # aferido dela.
     itens = _ranking(db, escola_id, ano, turma_id, ano_escolar,
-                     turma_ids=permitidas, dimensao=dimensao, turno=turno)
+                     turma_ids=permitidas, dimensao=dimensao, turno=turno,
+                     so_com_dado=not dimensao)
     # Posição RELATIVA ao recorte: professor (só as turmas dele) e/ou turno (só
     # as turmas daquele turno). Sem recorte vale a posição carimbada da escola.
     recortado = permitidas is not None or turno is not None
@@ -303,8 +310,8 @@ def ranking_geral(
     elif recortado:
         # LEGADO recortado (professor e/ou turno): a posição foi renumerada
         # 1..N dentro do recorte, então o denominador é o tamanho do recorte —
-        # sem ele "2º" não diz "de quantos". O legado lista quem TEM Nota no
-        # ano (inclusive quem ainda não foi aferido em nenhuma dimensão).
+        # sem ele "2º" não diz "de quantos". O legado lista quem tem dado de
+        # alguma dimensão (o zero legítimo entra; a ausência, não).
         total = len(itens)
     else:
         # LEGADO sem recorte: contrato antigo preservado (`n_aferidos` ausente).
@@ -1164,13 +1171,12 @@ def montar_dashboard(db: Session, escola_id: int,
     # Professor: posição RELATIVA às turmas dele (1..N), igual ao Ranking Geral —
     # o Top 10 e a tela de ranking não podem mostrar posições diferentes.
     # A posição sai da lista INTEIRA do professor (a mesma que `ranking_geral`
-    # e o pacote do app renumeram), e não da ordem do Top 10 já sem quem não
-    # tem dado: senão uma criança sem dado no meio dos zeros empurra o retrato
-    # zerado para 3º no Ranking Geral e o deixa 2º no Painel. A posição pode
-    # pular um número, como já acontece na gestão e no telão.
+    # e o pacote do app renumeram, também sem quem não tem dado nenhum), e não
+    # da ordem do Top 10 já cortado pelo `limite`.
     if turma_ids is not None:
         ordem = {item.aluno_id: n for n, item in enumerate(
-            _ranking(db, escola_id, ano, turma_ids=turma_ids), start=1)}
+            _ranking(db, escola_id, ano, turma_ids=turma_ids, so_com_dado=True),
+            start=1)}
         for item in top10:
             item.posicao = ordem.get(item.aluno_id, item.posicao)
 

@@ -124,7 +124,9 @@ def test_os_demais_perfis_seguem_com_o_pacote(cenario, perfil):
     # Professor: a turma é dele, então vê as 4 crianças; gestão vê a escola inteira.
     assert pacote["dashboard"]["total_alunos"] == 4
     assert pacote["dashboard"]["total_turmas"] == 1
-    assert len(pacote["ranking"]) == 4
+    # A aba Ranking Geral lista as 3 que têm dado: a quarta não tem dado nenhum e
+    # não ganha posição nem 0,0 (DEC-19).
+    assert len(pacote["ranking"]) == 3
 
 
 def test_secretaria_segue_lendo_a_lista_de_escolas(cenario):

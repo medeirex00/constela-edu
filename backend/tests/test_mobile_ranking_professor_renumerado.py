@@ -70,12 +70,12 @@ def test_app_gestao_segue_com_a_posicao_global(cenario_professor, escola_complet
 
 def test_professor_zero_legitimo_depois_de_quem_nao_tem_dado_tem_uma_posicao_so(
         cenario_professor, escola_completa, db):  # noqa: F811
-    """O Top 10 do Painel do professor tira quem não tem dado (``so_com_dado``);
-    o Ranking Geral dele não tira (decisão do dono, RANKINGS-4-legado-geral).
-    A posição no Top 10 tem de ser a do Ranking Geral, tirada da lista INTEIRA
-    do professor, e não a ordem do Top 10 já cortado: senão, com uma criança
-    sem dado no meio dos zeros (desempate alfabético) antes de um retrato
-    zerado, a mesma criança é 2º no Painel e 3º no Ranking Geral (REV-RANK-1).
+    """O Top 10 do Painel do professor e o Ranking Geral dele (web e app) tiram
+    quem não tem dado nenhum (``so_com_dado``; DEC-19, RANKINGS-4-legado-geral:
+    criança sem dado não ganha posição nem 0,0). A posição no Top 10 tem de ser
+    a do Ranking Geral (REV-RANK-1): com uma criança sem dado no meio dos zeros
+    (desempate alfabético) antes de um retrato zerado, o zero legítimo é 2º nas
+    três listas — e não 3º, empurrado por quem não tem dado.
 
     Cenário pelo motor: Ana tem retrato do Matific com atividade, João não tem
     dado nenhum e Sofia tem retrato zerado (abriu e não produziu: zero
@@ -108,15 +108,12 @@ def test_professor_zero_legitimo_depois_de_quem_nao_tem_dado_tem_uma_posicao_so(
     pos_app = {i["aluno_id"]: i["posicao"] for i in pacote["ranking"]}
     top_app = {i["aluno_id"]: i["posicao"] for i in pacote["dashboard"]["top10"]}
 
-    # O cenário é o do defeito: João (sem dado) fica ENTRE Ana e Sofia no
-    # Ranking Geral do professor, que continua listando quem não tem dado.
-    assert pos_web == {ana.id: 1, joao.id: 2, sofia.id: 3}, pos_web
+    # João (sem dado) ficaria ENTRE Ana e Sofia: não entra em lista nenhuma.
+    assert pos_web == {ana.id: 1, sofia.id: 2}, pos_web
     assert pos_app == pos_web, ("app x web", pos_app, pos_web)
-    # O Top 10 do Painel continua sem quem não tem dado...
     assert joao.id not in top_web and joao.id not in top_app, (top_web, top_app)
-    # ...e cada criança dele tem a MESMA posição do Ranking Geral (pode pular um
-    # número, como já acontece na gestão e no telão).
-    assert top_web == {ana.id: 1, sofia.id: 3}, ("Painel x Ranking Geral", top_web, pos_web)
+    # Cada criança do Top 10 tem a MESMA posição do Ranking Geral.
+    assert top_web == pos_web, ("Painel x Ranking Geral", top_web, pos_web)
     assert top_app == top_web, ("app: Top 10 do Painel x web", top_app, top_web)
     for aid, pos in top_app.items():
         assert pos_app[aid] == pos, ("app: Top 10 do Painel x aba Ranking Geral",

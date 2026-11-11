@@ -160,8 +160,9 @@ def test_sincronizacao_devolve_pacote_completo(cliente, db, escola_completa):
     for chave in ("gerado_em", "dashboard", "ranking", "evolucao", "alertas", "mural"):
         assert chave in corpo, f"faltou {chave}"
     assert corpo["dashboard"]["escola"]["nome"] == "ESCOLA TESTE"
-    assert len(corpo["ranking"]) == 3
-    assert corpo["ranking"][0]["nome"] == ana.nome
+    # Só a Ana tem dado: quem não tem dado nenhum não ganha posição nem 0,0 na
+    # aba Ranking Geral (DEC-19) — e continua nos alertas logo abaixo.
+    assert [item["nome"] for item in corpo["ranking"]] == [ana.nome]
     # Alunos sem snapshot geram alertas de sem_dados no mesmo pacote
     assert any(alerta["tipo"] == "sem_dados" for alerta in corpo["alertas"])
 
