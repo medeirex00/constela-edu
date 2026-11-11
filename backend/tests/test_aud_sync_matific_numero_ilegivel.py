@@ -126,3 +126,92 @@ def test_placar_ao_vivo_recusa_o_numero_ilegivel():
     with pytest.raises(ErroConector) as exc:
         aovivo._recusar_linhas_sem_numeros(alunos)
     assert exc.value.codigo == "parser_incompativel"
+
+
+# --------------------------------------------------------------------------
+# REV-SYNC-1: o alerta "Coleta parcial" não manda sincronizar de novo o que veio
+# em outro formato. A linha sem campo essencial ('campos_ausentes') é o próprio
+# formato que mudou — o crítico ao lado diz "Sincronizar de novo não resolve".
+# --------------------------------------------------------------------------
+K_B = "4 ANO B (300397061)"
+
+
+def _alertas_txt(db, eid):
+    return {al.tipo: al.mensagem for al in db.execute(select(SincronizacaoAlerta).where(
+        SincronizacaoAlerta.escola_id == eid, SincronizacaoAlerta.resolvido.is_(False))).scalars()}
+
+
+def _coleta_parcial_coerente_com_o_formato(db, eid, ex):
+    alertas = _alertas_txt(db, eid)
+    assert ex.status == "parcial", (ex.status, ex.motivo, alertas)
+    assert "parser_incompativel" in alertas, alertas
+    assert "Sincronizar de novo não resolve" in alertas["parser_incompativel"]
+    msg = alertas["coleta_parcial"]
+    assert "Sincronize de novo para completar" not in msg, msg
+    assert "O que veio em outro formato não volta com outra coleta" in msg, msg
+    assert "Formato do relatório mudou" in msg, msg
+
+
+@pytest.mark.parametrize("parametros", [None, P_SET], ids=["acumulado", "periodo"])
+def test_turma_inteira_ilegivel_nao_manda_sincronizar_de_novo(db, escola_completa, monkeypatch,
+                                                              parametros):
+    """O Placar de UMA turma veio com o número em outro formato (todas as linhas
+    dela); a outra turma veio normal e foi aplicada."""
+    from tests.test_aud_sync_ponta_a_ponta import escola_ficticia
+    eid, (a, b, c, d) = escola_ficticia(db, escola_completa)
+    credencial(db, eid, "matific")
+    placar = PlacarFake()
+    placar.linhas = [("u-a", a.nome, K, 12, 4), ("u-b", b.nome, K, 9, 3),
+                     ("u-c", c.nome, K, 7, 2), ("u-d", d.nome, K_B, 5, 2)]
+    original = placar.school_student
+
+    def _novo(expr):
+        res = original(expr)
+        for item in res["body"][0]["data"]:
+            if item.get("klassName") == K:
+                item["score"] = {"valor": item["score"]}
+        return res
+    placar.school_student = _novo
+    instalar(monkeypatch, placar=placar)
+
+    ex, _ = rodar(db, eid, "matific", parametros=parametros)
+
+    assert snap_atual(db, SnapshotMatific, d.id) is not None   # a outra turma entrou
+    _coleta_parcial_coerente_com_o_formato(db, eid, ex)
+
+
+def test_uma_crianca_com_numero_nulo_no_periodo_nao_manda_sincronizar_de_novo(
+        db, escola_completa, monkeypatch):
+    """Só uma criança veio com ``score`` nulo no período: as outras entram."""
+    ec = escola_completa
+    eid = ec["escola"].id
+    a, b, c = ec["alunos"]
+    credencial(db, eid, "matific")
+    placar = PlacarFake()
+    placar.linhas = [("u-a", a.nome, K, 12, 4), ("u-b", b.nome, K, 9, 3),
+                     ("u-c", c.nome, K, 5, 2)]
+    original = placar.school_student
+
+    def _novo(expr):
+        res = original(expr)
+        for item in res["body"][0]["data"]:
+            if item.get("uuid") == "u-c":
+                item["score"] = None
+        return res
+    placar.school_student = _novo
+    instalar(monkeypatch, placar=placar)
+
+    ex, _ = rodar(db, eid, "matific", parametros=P_SET)
+
+    _coleta_parcial_coerente_com_o_formato(db, eid, ex)
+
+
+def test_formato_ao_lado_de_falha_que_repetir_completa_diz_as_duas_coisas():
+    """Com uma turma que falhou de passagem E linhas sem campo essencial, repetir
+    completa a turma — e o que veio em outro formato continua sem voltar."""
+    from app.sync.service import _Apuracao, _mensagem_parcial
+    ap = _Apuracao(aplicados={1}, descartes={"campos_ausentes": 2},
+                   falhas=[{"unidade": "turma", "id": "1", "codigo": "http_502", "http": 502}])
+    msg = _mensagem_parcial(ap, "coleta_parcial")
+    assert "Sincronize de novo para completar." in msg, msg
+    assert "O que veio em outro formato não volta com outra coleta" in msg, msg
