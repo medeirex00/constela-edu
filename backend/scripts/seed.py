@@ -12,6 +12,12 @@ banco que ele mesmo semeou continua sem efeito. ``--forcar`` existe para o caso
 consciente. ``--demo`` (crianças inventadas com notas) só roda com ENV de
 desenvolvimento, com ou sem ``--forcar``.
 
+O ano letivo da escola de demonstração é o ano de HOJE em Brasília
+(``ano_letivo_corrente``), e os retratos e leituras da demonstração são datados
+dentro do ano letivo da escola (``momento_no_ano_letivo``): as Premiações e o
+ranking de Matemática medem pela janela desse ano, e o E2E do CI semeia do zero a
+cada execução — com o ano fixo, a partir de 2027 tudo caía fora da janela.
+
 Todos os valores criados aqui (pesos, níveis, critérios) são apenas o
 ponto de partida descrito no PRD — depois do seed, a fonte da verdade é
 o banco, editável pela interface.
@@ -26,6 +32,7 @@ import os
 import random
 import secrets
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import NoReturn
 
@@ -37,6 +44,7 @@ from app.core.config import ENV_DE_DESENVOLVIMENTO, normalizar_env, settings  # 
 from app.core.database import SessionLocal, engine  # noqa: E402
 from app.core.migracoes import aplicar_migracoes  # noqa: E402
 from app.core.security import hash_senha, validar_forca_senha  # noqa: E402
+from app.core.tempo import hoje_br  # noqa: E402
 from app.models import (  # noqa: E402
     Aluno,
     Configuracao,
@@ -53,10 +61,9 @@ from app.models import (  # noqa: E402
     Turma,
     Usuario,
 )
+from app.models.base import agora  # noqa: E402
 from app.services import scoring  # noqa: E402
 from scripts._saida import forcar_saida_utf8  # noqa: E402
-
-ANO_LETIVO = 2026
 
 # Nome INVENTADO e inequivocamente fictício (a palavra está no nome). Antes era o
 # nome de uma escola real da rede, que aparecia na demonstração e nos E2E.
@@ -98,6 +105,23 @@ DEMO_LIVROS = [
     ("Contos da Montanha", "Marcos Vila", "Q"),
     ("O Último Farol", "Helena Prado", "T"),
 ]
+
+
+def ano_letivo_corrente() -> int:
+    """O ano letivo de uma escola semeada HOJE: o ano do calendário em Brasília (o
+    fuso das janelas por período), e não um ano escrito no código."""
+    return hoje_br().year
+
+
+def momento_no_ano_letivo(ano: int) -> datetime:
+    """Agora (UTC, como os retratos e as leituras são gravados), trazido para DENTRO
+    do ano letivo ``ano``. As janelas por período comparam o retrato com as datas do
+    ano letivo; nas últimas horas de 31/12 em Brasília o UTC já é o ano seguinte, e o
+    retrato da demonstração cairia fora do ano letivo da escola. Num ano letivo que
+    já passou, fica no último instante dele."""
+    inicio = datetime(ano, 1, 1, tzinfo=timezone.utc)
+    fim = datetime(ano, 12, 31, 23, 59, 59, tzinfo=timezone.utc)
+    return min(max(agora(), inicio), fim)
 
 
 def _recusar(motivo: str) -> NoReturn:
@@ -181,7 +205,7 @@ def seed_base(db) -> Escola:
 
     senha_admin, do_ambiente = _senha_do_admin_inicial()
 
-    escola = Escola(nome=ESCOLA_DEMO, ano_letivo_ativo=ANO_LETIVO)
+    escola = Escola(nome=ESCOLA_DEMO, ano_letivo_ativo=ano_letivo_corrente())
     db.add(escola)
     db.flush()
 
@@ -241,6 +265,8 @@ def seed_demo(db, escola: Escola) -> None:
         return
 
     random.seed(42)
+    ano = escola.ano_letivo_ativo
+    momento = momento_no_ano_letivo(ano)
 
     prof_a = Professor(escola_id=escola.id, nome="Mariana Lopes")
     prof_b = Professor(escola_id=escola.id, nome="Carlos Eduardo Braga")
@@ -249,11 +275,11 @@ def seed_demo(db, escola: Escola) -> None:
 
     turmas = [
         Turma(escola_id=escola.id, nome="2º Ano A", ano_escolar="2º Ano",
-              ano_letivo=ANO_LETIVO, professor_id=prof_a.id),
+              ano_letivo=ano, professor_id=prof_a.id),
         Turma(escola_id=escola.id, nome="4º Ano A", ano_escolar="4º Ano",
-              ano_letivo=ANO_LETIVO, professor_id=prof_a.id),
+              ano_letivo=ano, professor_id=prof_a.id),
         Turma(escola_id=escola.id, nome="5º Ano A", ano_escolar="5º Ano",
-              ano_letivo=ANO_LETIVO, professor_id=prof_b.id),
+              ano_letivo=ano, professor_id=prof_b.id),
     ]
     db.add_all(turmas)
     db.flush()
@@ -278,12 +304,13 @@ def seed_demo(db, escola: Escola) -> None:
         db.add(aluno)
         db.flush()
         db.add(Matricula(escola_id=escola.id, aluno_id=aluno.id,
-                         turma_id=turma.id, ano_letivo=ANO_LETIVO))
+                         turma_id=turma.id, ano_letivo=ano))
 
         # Matific — valores cumulativos plausíveis
         db.add(
             SnapshotMatific(
                 escola_id=escola.id, aluno_id=aluno.id, importacao_id=importacao_m.id,
+                data_referencia=momento,
                 atividades=random.randint(8, 120),
                 estrelas=random.randint(40, 600),
                 pontuacao_media=round(random.uniform(55, 98), 1),
@@ -294,12 +321,14 @@ def seed_demo(db, escola: Escola) -> None:
         lidos = random.sample(livros, k=random.randint(1, 8))
         por_nivel: dict[str, int] = {}
         for livro in lidos:
-            db.add(Leitura(escola_id=escola.id, aluno_id=aluno.id, livro_id=livro.id))
+            db.add(Leitura(escola_id=escola.id, aluno_id=aluno.id, livro_id=livro.id,
+                           data=momento))
             por_nivel[livro.nivel_codigo] = por_nivel.get(livro.nivel_codigo, 0) + 1
         tentativas = len(lidos) * random.randint(3, 6)
         db.add(
             SnapshotElefante(
                 escola_id=escola.id, aluno_id=aluno.id, importacao_id=importacao_e.id,
+                data_referencia=momento,
                 livros_unicos=len(lidos),
                 tempo_leitura_min=len(lidos) * random.randint(15, 40),
                 questoes_tentativas=tentativas,
