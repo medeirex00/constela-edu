@@ -101,6 +101,7 @@ import {
   TituloCartao,
   ValorProtegido,
   VitrinePublica,
+  valorParaOrdenar,
   type DashboardRede,
   type EscolaCartao,
   type MetaProgresso,
@@ -447,7 +448,8 @@ function TopEscolas({ escolas, aoAbrir }: { escolas: EscolaCartao[]; aoAbrir: (i
   const m = METRICAS_TOP[metrica];
   // Indicador AUSENTE não pode derrubar o painel: um bundle servido pelo cache do
   // PWA pode ser mais novo/velho que a API (já causou a regressão do Dashboard).
-  const val = (e: EscolaCartao) => Number(e[m.chave] ?? 0);
+  // Per capita: pela conta exata, não pelo número arredondado do cartão (`valorParaOrdenar`).
+  const val = (e: EscolaCartao) => valorParaOrdenar(e, m.chave);
   // Entrada = a do Ranking da Rede (`escolaComparada`), em TODOS os critérios,
   // inclusive Engajamento: é o resumo dele, e o atalho leva para lá.
   // `null` (≠ ausente) = o critério está escondido da Secretaria nesta escola (grupo
@@ -1117,9 +1119,13 @@ interface RedeCartao {
   estrelas: number;
   escolas_em_atencao: number;
   // Comparação ENTRE REDES: per capita + índice 0–1000 na coorte "todas as
-  // redes" (mesmo motor das escolas, outro escopo).
+  // redes" (mesmo motor das escolas, outro escopo). O per capita vem arredondado
+  // para exibir; a ordem usa os totais de quem concorre (`valorParaOrdenar`).
   livros_por_matricula: number;
   estrelas_por_matricula: number;
+  alunos_premiaveis?: number;
+  livros_premiaveis?: number;
+  estrelas_premiaveis?: number;
   pontuacao_geral: number;
   posicao?: number;
 }
@@ -1151,7 +1157,7 @@ function ConteudoGlobal({ aoAbrirRede }: { aoAbrirRede: (id: number) => void }) 
   const m = METRICAS_REDE[metrica];
   const redesRanked = useMemo(
     () => [...(dados?.redes ?? [])]
-      .sort((a, b) => Number(b[m.chave] ?? 0) - Number(a[m.chave] ?? 0)),
+      .sort((a, b) => valorParaOrdenar(b, m.chave) - valorParaOrdenar(a, m.chave)),
     [dados, m.chave],
   );
   const cabecalho = (acoes?: ReactNode) => (

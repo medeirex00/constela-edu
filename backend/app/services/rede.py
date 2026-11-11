@@ -96,6 +96,7 @@ def escolas_com_notas_pendentes(db: Session) -> list[int]:
 from app.services import (dificuldade_livro, elegibilidade, grupo_pequeno,
                           matific_destaque, modulos, scoring)
 from app.services.analise import K_MINIMO
+from app.services.indicadores.ica import arredondar
 
 # Regras de "escola que precisa de atenção" (transparentes e auditáveis).
 ADOCAO_BAIXA = 40.0      # % de alunos ativos com nota abaixo disto = pouca adoção
@@ -608,10 +609,12 @@ def _cartoes_da_rede(db: Session, rede_id: int, *, com_contribuintes: bool = Fal
             # (``_top_escolas``). Só contagens, nenhum dado individual.
             "com_livros_premiaveis": int(ep["com_livros_unicos"]) if ep else 0,
             "com_estrelas_premiaveis": int(mp["com_estrelas"]) if mp else 0,
-            "livros_por_matricula": round(livros_p / n_p, 1) if n_p else 0.0,
-            "estrelas_por_matricula": round(estrelas_p / n_p, 1) if n_p else 0.0,
-            "atividades_por_matricula": round(atividades_p / n_p, 1) if n_p else 0.0,
-            "tempo_por_matricula_min": round(tempo_p / n_p, 1) if n_p else 0.0,
+            # Para EXIBIR (``_exibir``); régua, índice e ordem leem a conta exata
+            # (``_per_capita_exato``).
+            "livros_por_matricula": _exibir(livros_p / n_p) if n_p else 0.0,
+            "estrelas_por_matricula": _exibir(estrelas_p / n_p) if n_p else 0.0,
+            "atividades_por_matricula": _exibir(atividades_p / n_p) if n_p else 0.0,
+            "tempo_por_matricula_min": _exibir(tempo_p / n_p) if n_p else 0.0,
         })
         if com_contribuintes:
             cartoes[-1]["_contribuintes"] = _contribuintes_do_cartao(
@@ -672,6 +675,40 @@ def _contribuintes_do_cartao(medias: dict, totais: dict) -> dict:
 # a ordem do ranking e a pontuação nunca se contradizem — e a leitura é direta:
 # "1000 = melhor da rede; 500 = metade do desempenho da melhor".
 ESCALA_INDICE = 10.0          # 0–100 do motor → 0–1000 exibido na rede
+
+# PER CAPITA de quem concorre: o campo EXIBIDO no cartão → o numerador dele (o
+# denominador é sempre ``alunos_premiaveis``). O campo do cartão é arredondado para
+# exibir; quem COMPARA escolas (a régua e o índice, a ordem do Ranking da Rede, os
+# destaques e a vitrine) lê a conta exata (``_per_capita_exato``). Comparando o valor
+# arredondado, 12,25 livros por aluno empatava com 12,2: as duas escolas levavam
+# índice 1000 e o desempate pela adoção dava o 1º lugar à que lê menos.
+_NUMERADOR_DO_PER_CAPITA = {
+    "livros_por_matricula": "livros_premiaveis",
+    "estrelas_por_matricula": "estrelas_premiaveis",
+    "atividades_por_matricula": "atividades_premiaveis",
+    "tempo_por_matricula_min": "tempo_premiaveis_min",
+}
+
+
+def _exibir(valor: float) -> float:
+    """Um per capita com 1 casa, meio para cima (o arredondamento da divulgação, o
+    mesmo da Análise Educacional) — só para mostrar, nunca para comparar."""
+    return arredondar(valor, 1)
+
+
+def _per_capita_exato(cartao: dict, chave: str):
+    """O valor de ``chave`` para COMPARAR cartões. Per capita (``_NUMERADOR_DO_PER_CAPITA``)
+    = numerador ÷ ``alunos_premiaveis``, sem arredondar; qualquer outra chave, ou cartão
+    sem o numerador, = o próprio valor do cartão. Nulo continua nulo (a matéria escondida
+    da Secretaria: o numerador sai junto com o per capita)."""
+    numerador = _NUMERADOR_DO_PER_CAPITA.get(chave)
+    valor = cartao.get(chave)
+    if numerador is None or numerador not in cartao or valor is None:
+        return valor
+    total, alunos = cartao[numerador], cartao.get("alunos_premiaveis") or 0
+    if total is None:
+        return None
+    return total / alunos if alunos else 0.0
 
 
 def _indice_da_rede(valor: float, melhor: float) -> float:
@@ -735,16 +772,19 @@ def _pontuar_por_percapita(cartoes: list[dict], sufixo: str = "") -> None:
         ativos_cartao = c.get(f"{ativos}_premiaveis", c[ativos])
         return ativos_cartao > 0 and dimensao in (c.get("modulos") or list(modulos.TODOS))
 
-    melhor_leitura = max((c["livros_por_matricula"] for c in cartoes
+    # A régua e o índice saem do per capita EXATO, não do exibido (``_per_capita_exato``).
+    melhor_leitura = max((_per_capita_exato(c, "livros_por_matricula") for c in cartoes
                           if _na_coorte(c, "leitura", "ativos_elefante")), default=0.0)
-    melhor_matematica = max((c["estrelas_por_matricula"] for c in cartoes
+    melhor_matematica = max((_per_capita_exato(c, "estrelas_por_matricula") for c in cartoes
                              if _na_coorte(c, "matematica", "ativos_matific")), default=0.0)
     for c in cartoes:
         tem_leitura = _na_coorte(c, "leitura", "ativos_elefante")
         tem_matematica = _na_coorte(c, "matematica", "ativos_matific")
-        leitura = (_indice_da_rede(c["livros_por_matricula"], melhor_leitura)
+        leitura = (_indice_da_rede(_per_capita_exato(c, "livros_por_matricula"),
+                                   melhor_leitura)
                    if tem_leitura else 0.0)
-        matematica = (_indice_da_rede(c["estrelas_por_matricula"], melhor_matematica)
+        matematica = (_indice_da_rede(_per_capita_exato(c, "estrelas_por_matricula"),
+                                      melhor_matematica)
                       if tem_matematica else 0.0)
         c["pontuacao_leitura" + sufixo] = leitura
         c["pontuacao_matematica" + sufixo] = matematica
@@ -1248,7 +1288,9 @@ def ranking_escolas(db: Session, rede_id: int, limite: int = 50,
     desempate = DESEMPATE_DA_DIMENSAO.get(DIMENSAO_DA_METRICA.get(metrica), "adocao")
     cartoes = [c for c in cartoes_da_rede(db, rede_id, secretaria=secretaria)
                if tem_dado_de_quem_concorre(c) and c[chave] is not None]
-    cartoes.sort(key=lambda c: (-c[chave], -c[desempate], c["nome"].casefold()))
+    # Ordem pela conta EXATA (o per capita exibido é arredondado: 12,25 e 12,2 empatavam).
+    cartoes.sort(key=lambda c: (-_per_capita_exato(c, chave), -c[desempate],
+                                c["nome"].casefold()))
     for posicao, cartao in enumerate(cartoes[:limite], start=1):
         cartao["posicao"] = posicao
     return cartoes[:limite]
@@ -1260,7 +1302,9 @@ def ranking_escolas(db: Session, rede_id: int, limite: int = 50,
 # ---------------------------------------------------------------------------
 
 def _por(total: int, alunos: int) -> float:
-    return round(total / alunos, 1) if alunos else 0.0
+    """Per capita de uma rede, para EXIBIR (``_exibir``); a comparação entre redes lê
+    a conta exata dos totais que vão no cartão (``_per_capita_exato``)."""
+    return _exibir(total / alunos) if alunos else 0.0
 
 
 def dashboard_global(db: Session) -> dict:
@@ -1309,8 +1353,11 @@ def dashboard_global(db: Session) -> dict:
             "ativos_elefante": sum(c["ativos_elefante"] for c in cartoes),
             "ativos_matific": sum(c["ativos_matific"] for c in cartoes),
             "modulos": sorted(modulos.modulos_da_rede(db, rede.id)),
-            # Per capita da rede só de quem concorre (a mesma régua das escolas).
+            # Per capita da rede só de quem concorre (a mesma régua das escolas),
+            # com os numeradores: a régua e o índice entre redes leem a conta exata.
             "alunos_premiaveis": sum(c["alunos_premiaveis"] for c in cartoes),
+            "livros_premiaveis": sum(c["livros_premiaveis"] for c in cartoes),
+            "estrelas_premiaveis": sum(c["estrelas_premiaveis"] for c in cartoes),
             "ativos_elefante_premiaveis": sum(c["ativos_elefante_premiaveis"] for c in cartoes),
             "ativos_matific_premiaveis": sum(c["ativos_matific_premiaveis"] for c in cartoes),
             "livros_por_matricula": _por(sum(c["livros_premiaveis"] for c in cartoes),
@@ -1540,9 +1587,10 @@ def _top_escolas(cartoes: list[dict], chave: str, contribuintes: str,
     validos = [c for c in cartoes if c["alunos_com_dados"] > 0 and c.get(chave, 0) > 0
                and c.get("alunos_premiaveis", 0) >= K_MINIMO
                and c.get(contribuintes, 0) >= K_MINIMO]
-    validos.sort(key=lambda c: (-c[chave], c["nome"].casefold()))
+    # Ordem pela conta EXATA; o valor publicado é o exibido no cartão (meio para cima).
+    validos.sort(key=lambda c: (-_per_capita_exato(c, chave), c["nome"].casefold()))
     return [{**({"escola_id": c["escola_id"]} if com_id else {}),
-             "nome": c["nome"], "valor": round(float(c[chave]), 1)}
+             "nome": c["nome"], "valor": _exibir(_per_capita_exato(c, chave))}
             for c in validos[:limite]]
 
 

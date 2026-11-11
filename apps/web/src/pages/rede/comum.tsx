@@ -76,10 +76,17 @@ export interface EscolaCartao {
   livros_por_aluno: number | null;
   // Per capita por MATRÍCULA (÷ total de alunos) — critério de ranking JUSTO entre
   // escolas de tamanhos diferentes (não favorece a escola grande pelo volume bruto).
+  // Arredondados para EXIBIR; para ordenar, `valorParaOrdenar` (a conta exata).
   livros_por_matricula: number | null;
   estrelas_por_matricula: number | null;
   atividades_por_matricula: number | null;
   tempo_por_matricula_min: number | null;
+  // Numerador e denominador do per capita (só quem concorre, 1º–5º ano).
+  alunos_premiaveis?: number;
+  livros_premiaveis?: number | null;
+  estrelas_premiaveis?: number | null;
+  atividades_premiaveis?: number | null;
+  tempo_premiaveis_min?: number | null;
   // Índice da REDE (0–1000): o per capita normalizado na régua da rede (melhor
   // escola = 1000). Comparável ENTRE escolas — ao contrário de media_* (0–100),
   // que é normalizada dentro da própria escola e serve ao ranking interno.
@@ -171,6 +178,27 @@ export interface DashboardRede {
   atencao: EscolaCartao[];
   /** Só para a Secretaria: escolas com alguma matéria escondida (grupo pequeno). */
   ocultas?: { escola_id: number; nome: string; grupo_pequeno: boolean; oculto: OcultoPorMateria }[];
+}
+
+/** Numerador de cada per capita do cartão (o denominador é `alunos_premiaveis`). */
+const NUMERADOR_DO_PER_CAPITA: Record<string, string> = {
+  livros_por_matricula: "livros_premiaveis",
+  estrelas_por_matricula: "estrelas_premiaveis",
+  atividades_por_matricula: "atividades_premiaveis",
+  tempo_por_matricula_min: "tempo_premiaveis_min",
+};
+
+/** O valor de `chave` para ORDENAR cartões (de escola ou de rede). O per capita do cartão
+ *  vem arredondado para exibir (1 casa): ordenando por ele, 12,24 e 12,2 livros por aluno
+ *  empatavam e o desempate escolhia. Aqui ele é refeito pela conta exata (numerador ÷
+ *  `alunos_premiaveis`), a mesma ordem do Ranking da Rede no backend. Outra chave, ou
+ *  cartão sem o numerador (API anterior), = o próprio valor; ausente = 0. */
+export function valorParaOrdenar(cartao: object, chave: string): number {
+  const c = cartao as Record<string, unknown>;
+  const total = NUMERADOR_DO_PER_CAPITA[chave] ? c[NUMERADOR_DO_PER_CAPITA[chave]] : undefined;
+  const alunos = Number(c.alunos_premiaveis ?? 0);
+  if (typeof total === "number" && c[chave] !== null && alunos > 0) return total / alunos;
+  return Number(c[chave] ?? 0);
 }
 
 /** Os totais da rede vistos pela Secretaria deixam escolas de fora numa matéria (grupo
