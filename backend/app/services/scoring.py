@@ -75,27 +75,42 @@ _JANELAS_TURNO: dict[str, tuple[time, time]] = {
 
 def _bonus_leitura_na_escola(
     db: Session, escola_id: int, turno_por_aluno: dict[int, str | None],
-    pontos_por_livro: float,
+    pontos_por_livro: float, *,
+    turno_por_ano: dict[tuple[int, int], str | None] | None = None,
 ) -> dict[int, float]:
     """Pontos extras de cada aluno = `pontos_por_livro` × (livros lidos DENTRO da
     janela do turno da turma dele, seg–sex). Usa a data+hora real de cada leitura
     (Leitura.data, do relatório individual do Elefante). Livro sem hora conhecida
-    ou fora da janela não gera extra."""
-    alvos = {aid: _JANELAS_TURNO[t] for aid, t in turno_por_aluno.items()
-             if t in _JANELAS_TURNO}
-    if not alvos or pontos_por_livro <= 0:
+    ou fora da janela não gera extra.
+
+    As leituras são de TODOS os anos (o contador do Elefante é vitalício), e cada
+    uma é julgada pelo turno da turma do ANO LETIVO dela (``turno_por_ano``,
+    ``(aluno_id, ano) → turno``, da Matrícula daquele ano): a leitura das 9h de
+    um ano em que a criança estudava à tarde foi feita em casa. Ano sem matrícula
+    conhecida na escola: o turno atual (``turno_por_aluno``)."""
+    turno_por_ano = turno_por_ano or {}
+    com_janela = ({aid for aid, t in turno_por_aluno.items() if t in _JANELAS_TURNO}
+                  | {aid for (aid, _ano), t in turno_por_ano.items()
+                     if aid in turno_por_aluno and t in _JANELAS_TURNO})
+    if not com_janela or pontos_por_livro <= 0:
         return {}
     bonus: dict[int, float] = {}
     for aluno_id, data in db.execute(
         select(Leitura.aluno_id, Leitura.data)
-        .where(Leitura.escola_id == escola_id, Leitura.aluno_id.in_(alvos.keys()))
+        .where(Leitura.escola_id == escola_id, Leitura.aluno_id.in_(com_janela))
     ):
         if data is None:
             continue
         quando = data.replace(tzinfo=None) if data.tzinfo is not None else data
         if quando.weekday() >= 5:                       # só segunda a sexta
             continue
-        ini, fim = alvos[aluno_id]
+        chave = (aluno_id, quando.year)                 # o ano letivo é o ano civil
+        turno = (turno_por_ano[chave] if chave in turno_por_ano
+                 else turno_por_aluno.get(aluno_id))
+        janela = _JANELAS_TURNO.get(turno)
+        if janela is None:
+            continue
+        ini, fim = janela
         if ini <= quando.time() < fim:                  # dentro da janela do turno
             bonus[aluno_id] = bonus.get(aluno_id, 0.0) + pontos_por_livro
     return {aid: round(b, 2) for aid, b in bonus.items()}
@@ -122,8 +137,20 @@ def pontos_dif_com_bonus(db: Session, escola_id: int, matriculas,
         # dos fundos (nota de Leitura > 0 numa rede que não a contratou).
         return dict(pontos_dif), {}
     turno_por_aluno = {m.aluno_id: t.turno for m, t in matriculas}
+    # O turno de CADA ano letivo, pelas matrículas da criança na escola (a Matrícula
+    # guarda o histórico por ano): a leitura de um ano anterior é julgada pelo turno
+    # de então, não pelo de hoje. Uma consulta só.
+    turno_por_ano = {
+        (aluno_id, ano): turno
+        for aluno_id, ano, turno in db.execute(
+            select(Matricula.aluno_id, Matricula.ano_letivo, Turma.turno)
+            .join(Turma, Matricula.turma_id == Turma.id)
+            .where(Matricula.escola_id == escola_id,
+                   Matricula.aluno_id.in_(turno_por_aluno.keys())))
+    } if turno_por_aluno else {}
     bonus_por_aluno = _bonus_leitura_na_escola(
-        db, escola_id, turno_por_aluno, float(extra["pontos_por_livro"]))
+        db, escola_id, turno_por_aluno, float(extra["pontos_por_livro"]),
+        turno_por_ano=turno_por_ano)
     somados = dict(pontos_dif)
     for aid, b in bonus_por_aluno.items():
         somados[aid] = somados.get(aid, 0.0) + b
