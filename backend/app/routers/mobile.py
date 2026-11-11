@@ -81,6 +81,10 @@ def registrar_dispositivo(
     db.execute(
         select(Usuario.id).where(Usuario.id == usuario.id).with_for_update(key_share=True)
     )
+    # A SECRET_KEY mudou desde o último registro na escola: os aparelhos dela são de
+    # sessões que já não valem e saem antes deste registro (``push.
+    # conferir_chave_de_sessao``); este fica com a chave atual.
+    svc_push.conferir_chave_de_sessao(db, escola_id)
     dispositivo = db.execute(
         select(DispositivoMovel).where(DispositivoMovel.token_push == dados.token_push)
     ).scalar_one_or_none()

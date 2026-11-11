@@ -12,10 +12,13 @@ import logging
 import re
 
 from sqlalchemy import delete, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from app.models import DispositivoMovel, Escola, Usuario
+from app.core.security import impressao_da_chave_de_sessao
+from app.models import Configuracao, DispositivoMovel, Escola, Usuario
 from app.services import permissoes
+from app.services.audit import registrar
 
 logger = logging.getLogger(__name__)
 
@@ -117,6 +120,73 @@ def remover_aparelhos_da_conta(db: Session, usuario_id: int) -> int:
     ).rowcount or 0
 
 
+# Impressão da chave de sessão com que os aparelhos da escola foram registrados
+# (``security.impressao_da_chave_de_sessao``), guardada em ``configuracoes`` — uma linha
+# por escola, sem migração. O aparelho não guarda nada da sessão que o registrou; quando
+# a SECRET_KEY muda, todas as sessões caem, e a impressão diferente mostra que os
+# aparelhos da escola também são de sessões que não valem mais.
+NAMESPACE_CHAVE_DE_SESSAO = "push"
+CHAVE_IMPRESSAO = "chave_de_sessao"
+
+
+def conferir_chave_de_sessao(db: Session, escola_id: int, *,
+                             sem_marca_apaga: bool = False) -> tuple[int, bool]:
+    """Os aparelhos (push) saem com as sessões também na troca da SECRET_KEY.
+
+    Compara a impressão gravada para a escola com a da chave atual. Diferente: apaga
+    os aparelhos da escola (registrados com sessões que já dão 401 — inclusive uma
+    sessão forjada com a chave exposta) e grava a atual; o app volta a se registrar
+    no próximo login. Igual: nada. Sem impressão gravada: grava a atual e, só com
+    ``sem_marca_apaga`` (o boot), apaga os aparelhos — não há como saber com que
+    chave foram registrados.
+
+    Devolve ``(aparelhos removidos, gravou algo)``. Não comita: vai na transação de
+    quem chama. Dois pedidos gravando a primeira impressão ao mesmo tempo: o segundo
+    acha a linha do primeiro (a mesma impressão) e segue."""
+    atual = impressao_da_chave_de_sessao()
+    marca = db.execute(select(Configuracao).where(
+        Configuracao.escola_id == escola_id,
+        Configuracao.namespace == NAMESPACE_CHAVE_DE_SESSAO,
+        Configuracao.chave == CHAVE_IMPRESSAO)).scalar_one_or_none()
+    if marca is not None and marca.valor == atual:
+        return 0, False
+    removidos = 0
+    if marca is not None or sem_marca_apaga:
+        removidos = db.execute(
+            delete(DispositivoMovel).where(DispositivoMovel.escola_id == escola_id)
+        ).rowcount or 0
+    if marca is not None:
+        marca.valor = atual
+    else:
+        try:
+            with db.begin_nested():
+                db.add(Configuracao(escola_id=escola_id,
+                                    namespace=NAMESPACE_CHAVE_DE_SESSAO,
+                                    chave=CHAVE_IMPRESSAO, valor=atual))
+        except IntegrityError:
+            pass  # outro pedido gravou a mesma impressão agora
+    if removidos:
+        registrar(db, "dispositivo.chave_de_sessao_trocada", escola_id=escola_id,
+                  detalhes={"removidos": removidos})
+        logger.info("Push: %s aparelho(s) da escola %s removido(s): registrados com "
+                    "sessões de outra chave de sessão (SECRET_KEY trocada)",
+                    removidos, escola_id)
+    return removidos, True
+
+
+def conferir_chave_de_sessao_no_boot(db: Session) -> int:
+    """No boot: confere a chave de sessão de cada escola que tem aparelho e apaga os
+    registrados com outra chave — ou sem impressão gravada, de antes desta conferência
+    existir (``conferir_chave_de_sessao(sem_marca_apaga=True)``). Comita. Devolve quantos
+    aparelhos saíram."""
+    escolas = db.execute(select(DispositivoMovel.escola_id).distinct()).scalars().all()
+    removidos = 0
+    for escola_id in escolas:
+        removidos += conferir_chave_de_sessao(db, escola_id, sem_marca_apaga=True)[0]
+    db.commit()
+    return removidos
+
+
 def _ve_a_crianca(db: Session, escola_id: int, ano: int | None, usuario: Usuario,
                   aluno_id: int) -> bool:
     """A mesma régua da API para abrir a ficha da criança
@@ -158,7 +228,12 @@ def notificar_escola(db: Session, escola_id: int, titulo: str, corpo: str,
     ao Expo (até 15 s por lote); os tokens mortos são apagados numa transação curta,
     depois. Antes, a leitura deixava a transação da requisição aberta durante a rede
     e, no PostgreSQL, a conexão ficava presa ao pool ("idle in transaction").
+
+    Chave de sessão trocada (``conferir_chave_de_sessao``): os aparelhos da escola
+    registrados com a SECRET_KEY anterior saem antes da leitura dos destinos — a
+    sessão que os registrou já não vale, e o aviso não vai a eles.
     """
+    _, gravou_marca = conferir_chave_de_sessao(db, escola_id)
     linhas = db.execute(
         select(DispositivoMovel.token_push, Usuario)
         .join(Usuario, Usuario.id == DispositivoMovel.usuario_id)
@@ -178,7 +253,7 @@ def notificar_escola(db: Session, escola_id: int, titulo: str, corpo: str,
         tokens = [token for token, usuario in linhas
                   if _ve_a_crianca(db, escola_id, ano, usuario, aluno_id)]
     if not tokens:
-        if lixo:
+        if lixo or gravou_marca:
             db.commit()
         return 0
 

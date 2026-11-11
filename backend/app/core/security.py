@@ -344,3 +344,19 @@ def decodificar_token(token: str) -> dict | None:
         return payload
     except (jwt.PyJWTError, TypeError, ValueError):
         return None
+
+
+def impressao_da_chave_de_sessao() -> str:
+    """Impressão da chave que assina as sessões (SECRET_KEY), para saber se ela mudou
+    sem guardá-la: HMAC-SHA256 de um rótulo fixo com a chave, 32 caracteres hex. Não
+    revela a chave (nem serve para assinar nada).
+
+    Trocar a SECRET_KEY derruba TODAS as sessões (``decodificar_token`` só conhece a
+    atual). Os aparelhos de push registrados com as sessões antigas saem junto
+    (``push.conferir_chave_de_sessao``): a impressão fica gravada por escola, e a
+    diferença mostra que a chave mudou."""
+    import hashlib
+    import hmac
+
+    return hmac.new(settings.SECRET_KEY.encode("utf-8"), b"constela:sessao:dispositivo-push",
+                    hashlib.sha256).hexdigest()[:32]

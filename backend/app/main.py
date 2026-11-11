@@ -116,6 +116,26 @@ if not _schema_errado_no_boot:
     except Exception:  # noqa: BLE001
         logger.warning("Falha ao liberar órfãs de sync no boot", exc_info=True)
 
+    # Aparelhos de push registrados com sessões de outra SECRET_KEY (trocada desde o
+    # último boot) ou de antes desta conferência existir saem no boot: a troca da chave
+    # derruba as sessões, e os aparelhos saem com elas (``push.
+    # conferir_chave_de_sessao_no_boot``). O app volta a se registrar no próximo login.
+    # Nunca impede o boot.
+    try:
+        from app.services import push as _push  # noqa: E402
+
+        _db_boot = next(get_db())
+        try:
+            _removidos = _push.conferir_chave_de_sessao_no_boot(_db_boot)
+            if _removidos:
+                logger.info("Push: %d aparelho(s) de sessões de outra chave removido(s) "
+                            "no boot.", _removidos)
+        finally:
+            _db_boot.close()
+    except Exception:  # noqa: BLE001
+        logger.warning("Falha ao conferir a chave de sessão dos aparelhos no boot",
+                       exc_info=True)
+
 # /docs, /redoc e /openapi.json só quando explicitamente habilitados (dev).
 _docs = "/docs" if settings.DOCS_HABILITADOS else None
 _redoc = "/redoc" if settings.DOCS_HABILITADOS else None
