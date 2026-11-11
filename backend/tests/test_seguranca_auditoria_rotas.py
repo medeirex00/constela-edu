@@ -13,6 +13,7 @@ from app.core.security import hash_senha
 from app.main import app
 from app.models import Escola, Importacao, Rede, SnapshotMatific, Usuario
 from app.services import scoring
+from tests._ano_letivo import escola_no_ano_de_hoje  # noqa: F401 — fixture
 
 SENHA = "s3nh4-sintetica"
 NOVA = "farol-cedro-lua-38"

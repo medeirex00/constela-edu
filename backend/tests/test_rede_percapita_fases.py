@@ -11,11 +11,12 @@ A cobertura (``total_alunos``, adoção) continua sobre TODOS os matriculados.
 from app.models import (Aluno, Escola, Importacao, Matricula, Rede, SnapshotElefante,
                         SnapshotMatific, Turma)
 from app.services import rede as svc
+from tests._ano_letivo import ANO
 
 
 def _escola(db, rede, nome, fundamental, fase):
     """``fundamental`` / ``fase`` = lista de (livros, estrelas) por criança."""
-    esc = Escola(nome=nome, ano_letivo_ativo=2026, rede_id=rede.id, status="ativa")
+    esc = Escola(nome=nome, ano_letivo_ativo=ANO, rede_id=rede.id, status="ativa")
     db.add(esc)
     db.flush()
     imp = Importacao(escola_id=esc.id, plataforma="seed", tipo="seed")
@@ -23,7 +24,7 @@ def _escola(db, rede, nome, fundamental, fase):
     db.flush()
     for rotulo, criancas in (("3º Ano", fundamental), ("1ª Fase", fase)):
         turma = Turma(escola_id=esc.id, nome=f"{rotulo} A", ano_escolar=rotulo,
-                      ano_letivo=2026, status="ativa")
+                      ano_letivo=ANO, status="ativa")
         db.add(turma)
         db.flush()
         for i, (livros, estrelas) in enumerate(criancas):
@@ -31,7 +32,7 @@ def _escola(db, rede, nome, fundamental, fase):
             db.add(a)
             db.flush()
             db.add(Matricula(escola_id=esc.id, aluno_id=a.id, turma_id=turma.id,
-                             ano_letivo=2026))
+                             ano_letivo=ANO))
             db.add(SnapshotElefante(escola_id=esc.id, aluno_id=a.id, importacao_id=imp.id,
                                     livros_unicos=livros, tempo_leitura_min=livros * 10))
             db.add(SnapshotMatific(escola_id=esc.id, aluno_id=a.id, importacao_id=imp.id,

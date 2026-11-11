@@ -26,6 +26,7 @@ from app.services import evolucao as svc_evolucao
 from app.services import grupo_pequeno, scoring
 from app.services import rede as svc_rede
 from app.services import relatorios as svc_relatorios
+from tests._ano_letivo import ANO
 
 API = "/api/v1"
 GP = grupo_pequeno.MOTIVO_GRUPO_PEQUENO
@@ -68,14 +69,14 @@ def _escola(db, rede_id, nome, *, livros, notas, questoes=None, matific=None,
     como depois do import do relatório da turma e do recálculo. ``matific`` =
     lista de (atividades, estrelas, pontuação, nota) da mesma criança.
     ``fase_livros``: crianças da 1ª Fase (não concorrem), só com retrato."""
-    esc = Escola(nome=nome, ano_letivo_ativo=2026, rede_id=rede_id, status="ativa")
+    esc = Escola(nome=nome, ano_letivo_ativo=ANO, rede_id=rede_id, status="ativa")
     db.add(esc)
     db.flush()
     imp = Importacao(escola_id=esc.id, plataforma="seed", tipo="seed")
     terceiro = Turma(escola_id=esc.id, nome="3o Ano A", ano_escolar="3º Ano",
-                     ano_letivo=2026, status="ativa")
+                     ano_letivo=ANO, status="ativa")
     fase = Turma(escola_id=esc.id, nome="1a Fase A", ano_escolar="1ª Fase",
-                 ano_letivo=2026, status="ativa")
+                 ano_letivo=ANO, status="ativa")
     db.add_all([imp, terceiro, fase])
     db.flush()
     ontem = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(days=1)
@@ -84,7 +85,7 @@ def _escola(db, rede_id, nome, *, livros, notas, questoes=None, matific=None,
         a = Aluno(escola_id=esc.id, nome=f"ALUNO_SINT {nome} {turma.nome} {i}")
         db.add(a)
         db.flush()
-        db.add(Matricula(escola_id=esc.id, aluno_id=a.id, turma_id=turma.id, ano_letivo=2026))
+        db.add(Matricula(escola_id=esc.id, aluno_id=a.id, turma_id=turma.id, ano_letivo=ANO))
         tempo = TEMPO if qtd_livros == LIVROS else qtd_livros * 10
         db.add(SnapshotElefante(escola_id=esc.id, aluno_id=a.id, importacao_id=imp.id,
                                 data_referencia=ontem, livros_unicos=qtd_livros,
@@ -101,7 +102,7 @@ def _escola(db, rede_id, nome, *, livros, notas, questoes=None, matific=None,
                                    data_referencia=ontem, atividades=atividades,
                                    estrelas=estrelas, pontuacao_media=pontuacao))
         db.add(Nota(detalhes=scoring.carimbo_institucional(), escola_id=esc.id,
-                    aluno_id=a.id, ano_letivo=2026, nota_geral=notas[i],
+                    aluno_id=a.id, ano_letivo=ANO, nota_geral=notas[i],
                     nota_elefante=notas[i], nota_elefante_institucional=notas[i],
                     aferido_leitura=True, nota_matific=nota_mat,
                     nota_matific_institucional=nota_mat, aferido_matematica=bool(matific)))

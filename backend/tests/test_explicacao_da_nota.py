@@ -26,6 +26,7 @@ from app.models import (
 )
 from app.services import modulos as svc
 from app.services import scoring
+from tests._ano_letivo import ANO
 
 
 @pytest.fixture()
@@ -34,12 +35,12 @@ def rede_com_notas(db):
     rede = Rede(nome="Rede Explicacao", status="ativa")
     db.add(rede)
     db.flush()
-    esc = Escola(nome="EM Explicacao", ano_letivo_ativo=2026, rede_id=rede.id,
+    esc = Escola(nome="EM Explicacao", ano_letivo_ativo=ANO, rede_id=rede.id,
                  status="ativa")
     db.add(esc)
     db.flush()
     turma = Turma(escola_id=esc.id, nome="1ºA", ano_escolar="1º Ano",
-                  ano_letivo=2026, status="ativa")
+                  ano_letivo=ANO, status="ativa")
     db.add(turma)
     db.flush()
     imp = Importacao(escola_id=esc.id, plataforma="seed", tipo="seed")
@@ -50,7 +51,7 @@ def rede_com_notas(db):
         db.add(a)
         db.flush()
         db.add(Matricula(escola_id=esc.id, aluno_id=a.id, turma_id=turma.id,
-                         ano_letivo=2026))
+                         ano_letivo=ANO))
         db.add(SnapshotElefante(escola_id=esc.id, aluno_id=a.id, importacao_id=imp.id,
                                 livros_unicos=5 + i, tempo_leitura_min=60 + i * 10,
                                 questoes_tentativas=20, questoes_acertos=16))

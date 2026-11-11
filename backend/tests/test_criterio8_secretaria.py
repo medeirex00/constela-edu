@@ -42,13 +42,14 @@ from app.models import (
 from app.services import rede as svc_rede
 from app.services import scoring
 from tests.regua_legada import referencias_legado_com_vazamento
+from tests._ano_letivo import ANO
 
 # ---------------------------------------------------------------------------
 # Montagem de uma rede heterogênea (o pior caso para a Secretaria)
 # ---------------------------------------------------------------------------
 
 def _escola(db, rede, nome):
-    esc = Escola(nome=nome, ano_letivo_ativo=2026, status="ativa", rede_id=rede.id)
+    esc = Escola(nome=nome, ano_letivo_ativo=ANO, status="ativa", rede_id=rede.id)
     db.add(esc)
     db.flush()
     for ns, val in scoring.PESOS_PADRAO.items():
@@ -58,7 +59,7 @@ def _escola(db, rede, nome):
                             codigos=["D"], pontos_padrao=4.0, ordem=1))
     db.add(ReferenciaNormalizacao(escola_id=esc.id, modo="auto"))
     turma = Turma(escola_id=esc.id, nome="5ºA", ano_escolar="5º Ano",
-                  ano_letivo=2026, status="ativa")
+                  ano_letivo=ANO, status="ativa")
     db.add(turma)
     db.add(Usuario(escola_id=esc.id, nome="G", email=f"g{esc.id}@sec.local",
                    senha_hash=hash_senha("s3nh4secret4ri4"), cargo="coordenador"))
@@ -85,7 +86,7 @@ def _aluno(db, esc, turma, imp, nome, *, ele=None, mat=None):
     db.add(a)
     db.flush()
     db.add(Matricula(escola_id=esc.id, aluno_id=a.id, turma_id=turma.id,
-                     ano_letivo=2026))
+                     ano_letivo=ANO))
     if ele is not None:
         db.add(SnapshotElefante(escola_id=esc.id, aluno_id=a.id,
                                 importacao_id=imp.id, **_ele(ele)))

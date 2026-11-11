@@ -45,6 +45,7 @@ from app.models import (
     Usuario,
 )
 from app.services import scoring
+from tests._ano_letivo import ANO_DAS_DATAS_FIXAS
 
 
 def pytest_configure(config):
@@ -193,9 +194,23 @@ def db():
 
 
 @pytest.fixture()
-def escola_completa(db):
-    """Escola com admin, turma, alunos e configurações padrão."""
-    escola = Escola(nome="ESCOLA TESTE", ano_letivo_ativo=2026)
+def ano_letivo_da_escola() -> int:
+    """O ano letivo da ``escola_completa``: o do mundo de datas fixas em que a suíte foi
+    escrita (``tests._ano_letivo.ANO_DAS_DATAS_FIXAS``) — Listas Piloto "de 2026",
+    retratos de março, relógios presos em 20/10/2026 —, que vale em qualquer ano.
+
+    O módulo (ou o teste) que grava retratos e leituras "agora" sobrescreve esta fixture
+    com o ano de HOJE (``tests._ano_letivo.escola_no_ano_de_hoje``): senão, a partir de
+    01/01 do ano seguinte, o dado de agora fica fora do ano letivo da escola (TESTES-1)."""
+    return ANO_DAS_DATAS_FIXAS
+
+
+@pytest.fixture()
+def escola_completa(db, ano_letivo_da_escola):
+    """Escola com admin, turma, alunos e configurações padrão, no ano letivo
+    ``ano_letivo_da_escola``."""
+    ano = ano_letivo_da_escola
+    escola = Escola(nome="ESCOLA TESTE", ano_letivo_ativo=ano)
     db.add(escola)
     db.flush()
 
@@ -215,7 +230,7 @@ def escola_completa(db):
     db.add(ReferenciaNormalizacao(escola_id=escola.id, modo="auto"))
 
     turma = Turma(escola_id=escola.id, nome="3º Ano A", ano_escolar="3º Ano",
-                  ano_letivo=2026)
+                  ano_letivo=ano)
     db.add(turma)
     db.flush()
 
@@ -225,7 +240,7 @@ def escola_completa(db):
         db.add(aluno)
         db.flush()
         db.add(Matricula(escola_id=escola.id, aluno_id=aluno.id,
-                         turma_id=turma.id, ano_letivo=2026))
+                         turma_id=turma.id, ano_letivo=ano))
         alunos.append(aluno)
     db.commit()
     return {"escola": escola, "turma": turma, "alunos": alunos, "admin": admin}

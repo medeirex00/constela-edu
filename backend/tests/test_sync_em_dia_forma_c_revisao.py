@@ -31,6 +31,7 @@ from tests._sync_nucleo_fakes import (
     vincular)
 from tests.test_sync_em_dia_forma_c import (
     CID_A, K, _agenda_diaria, _alerta, _da_escola, _status_plataforma)
+from tests._ano_letivo import no_ano_de_hoje
 
 
 def _mensagem(db, eid, plataforma="elefante"):
@@ -118,6 +119,7 @@ def test_vinculados_todos_de_fichas_inativas_tem_texto_proprio(db, escola_comple
 # ---------------------------------------------------------------------------
 # 3. Queda retida de conta de ficha inativa não "confere a escola"
 # ---------------------------------------------------------------------------
+@no_ano_de_hoje
 def test_queda_de_conta_de_ficha_transferida_nao_conta_como_conferida(
         db, escola_completa, monkeypatch):
     """Credencial de outra escola: lá está a criança A (transferida para lá), com

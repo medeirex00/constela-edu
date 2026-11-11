@@ -23,6 +23,7 @@ from app.models import (Aluno, Importacao, Matricula, ModuloRede, Rede,
 from app.routers import relatorios as rota_relatorios
 from app.services import relatorios as svc
 from app.services import scoring
+from tests._ano_letivo import escola_no_ano_de_hoje  # noqa: F401 — fixture
 
 API = "/api/v1"
 
@@ -253,12 +254,12 @@ def _dados_com_cartoes(db, escola_completa) -> None:
     ana, joao, _ = escola_completa["alunos"]
     _dados(db, escola_completa)
     fase = Turma(escola_id=escola.id, nome="1ª Fase A", ano_escolar="1ª Fase",
-                 ano_letivo=2026)
+                 ano_letivo=escola.ano_letivo_ativo)
     caio = Aluno(escola_id=escola.id, nome="Caio da Fase")
     db.add_all([fase, caio])
     db.flush()
     db.add(Matricula(escola_id=escola.id, aluno_id=caio.id, turma_id=fase.id,
-                     ano_letivo=2026))
+                     ano_letivo=escola.ano_letivo_ativo))
     importacao = Importacao(escola_id=escola.id, plataforma="elefante", tipo="seed")
     db.add(importacao)
     db.flush()

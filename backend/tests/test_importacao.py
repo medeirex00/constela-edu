@@ -4,6 +4,7 @@ import pytest
 
 from app.models import Importacao, Leitura, Livro, Nota, SnapshotElefante, SnapshotMatific
 from app.services import importacao as svc
+from tests._ano_letivo import escola_no_ano_de_hoje  # noqa: F401 — fixture
 
 TEXTO_MATIFIC = """Relatório Matific — Turma 3º Ano A
 Nome do aluno\tAtividades finalizadas\tPontuação média\tEstrelas

@@ -37,6 +37,7 @@ from app.models.sincronizacao import (
 )
 from app.services import modulos as svc_modulos
 from app.services import scoring
+from tests._ano_letivo import escola_no_ano_de_hoje  # noqa: F401 — fixture
 
 API = "/api/v1"
 

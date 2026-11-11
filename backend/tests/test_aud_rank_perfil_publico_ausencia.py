@@ -14,6 +14,7 @@ from app.main import app
 from app.models import Importacao, Nota, SnapshotMatific
 from app.services import scoring
 from tests.test_publico import _ativar_painel
+from tests._ano_letivo import escola_no_ano_de_hoje  # noqa: F401 — fixture
 
 API = "/api/v1"
 

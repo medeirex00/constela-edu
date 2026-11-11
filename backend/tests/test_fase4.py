@@ -8,6 +8,7 @@ from app.models import Importacao, Leitura, Livro, SnapshotElefante, SnapshotMat
 from app.services import backup as svc_backup
 from app.services import gamificacao as svc_gami
 from app.services import scoring
+from tests._ano_letivo import escola_no_ano_de_hoje  # noqa: F401 — fixture
 
 
 def _dados_basicos(db, escola_completa):

@@ -18,6 +18,7 @@ from app.models import (
     Turma,
 )
 from app.services import scoring
+from tests._ano_letivo import ANO
 
 
 @pytest.fixture()
@@ -30,7 +31,7 @@ def db():
 
 
 def montar_escola(db, modo_referencia="manual"):
-    escola = Escola(nome="ESCOLA TESTE", ano_letivo_ativo=2026)
+    escola = Escola(nome="ESCOLA TESTE", ano_letivo_ativo=ANO)
     db.add(escola)
     db.flush()
 
@@ -68,7 +69,7 @@ def montar_escola(db, modo_referencia="manual"):
     db.add(referencias)
 
     turma = Turma(escola_id=escola.id, nome="1º Ano A",
-                  ano_escolar="1º Ano", ano_letivo=2026)
+                  ano_escolar="1º Ano", ano_letivo=ANO)
     db.add(turma)
     db.flush()
 
@@ -83,7 +84,7 @@ def novo_aluno(db, escola, turma, nome):
     db.add(aluno)
     db.flush()
     db.add(Matricula(escola_id=escola.id, aluno_id=aluno.id,
-                     turma_id=turma.id, ano_letivo=2026))
+                     turma_id=turma.id, ano_letivo=ANO))
     return aluno
 
 
@@ -98,7 +99,7 @@ def test_normalizacao_basica():
 
 def test_pesos_defensivos_sempre_somam_um(db):
     """Mesmo com pesos inválidos no banco, o motor nunca gera nota > 100."""
-    escola = Escola(nome="X", ano_letivo_ativo=2026)
+    escola = Escola(nome="X", ano_letivo_ativo=ANO)
     db.add(escola)
     db.flush()
     db.add(Configuracao(escola_id=escola.id, namespace="pesos.matific",

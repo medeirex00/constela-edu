@@ -29,6 +29,7 @@ from app.sync import service
 from tests._sync_nucleo_fakes import (
     API, NavElefante, PlacarFake, aluno_el, alertas_abertos, credencial, execucoes, ident,
     instalar, livro, novo_aluno, rodar, vincular)
+from tests._ano_letivo import no_ano_de_hoje
 
 K = "3 ANO A (300396804)"
 CID_A, CID_B, CID_OUTRA = 511434, 600001, 777001
@@ -260,6 +261,7 @@ def test_mistura_vinculados_conferidos_e_pendencias_e_em_dia_com_alerta(
     assert "nenhuma conta da escola conferida" not in mensagem
 
 
+@no_ano_de_hoje
 def test_matific_queda_retida_com_pendencia_conta_como_conferida(db, escola_completa,
                                                                  monkeypatch):
     """Decisão registrada: o total menor RETIDO só acontece para uuid já vinculado

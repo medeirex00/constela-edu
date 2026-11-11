@@ -19,6 +19,7 @@ from app.sync import aovivo, orchestrator, service
 from tests._sync_nucleo_fakes import (
     API, NavElefante, PlacarFake, aluno_el, alertas_abertos, contagens, credencial,
     execucoes, instalar, livro, logs, nota, novo_aluno, ranking, rodar, snap_atual, vincular)
+from tests._ano_letivo import no_ano_de_hoje
 
 K1, K2 = "3 ANO A (300396804)", "4 ANO B (300397061)"
 P_SET = {"matific_start_date": "2026-09-01", "matific_end_date": "2026-09-30"}
@@ -47,7 +48,8 @@ def _notas_refletem_retratos(db, eid):
 def _matific_duas_turmas(db, ec, monkeypatch):
     eid = ec["escola"].id
     a = ec["alunos"][0]
-    t2 = Turma(escola_id=eid, nome="4º Ano B", ano_escolar="4º Ano", ano_letivo=2026)
+    t2 = Turma(escola_id=eid, nome="4º Ano B", ano_escolar="4º Ano",
+               ano_letivo=ec["escola"].ano_letivo_ativo)
     db.add(t2)
     db.flush()
     d = novo_aluno(db, eid, t2, "Crianca Ficticia Quarto Ano")
@@ -62,7 +64,8 @@ def _matific_duas_turmas(db, ec, monkeypatch):
 def _elefante_duas_turmas(db, ec, monkeypatch):
     eid = ec["escola"].id
     a, b, _c = ec["alunos"]
-    t2 = Turma(escola_id=eid, nome="4º Ano B", ano_escolar="4º Ano", ano_letivo=2026)
+    t2 = Turma(escola_id=eid, nome="4º Ano B", ano_escolar="4º Ano",
+               ano_letivo=ec["escola"].ano_letivo_ativo)
     db.add(t2)
     db.flush()
     d = novo_aluno(db, eid, t2, "Crianca Ficticia Quarto Ano")
@@ -138,6 +141,7 @@ def test_teto_padrao_tem_folga_sobre_a_maior_coleta_vista():
 # ===========================================================================
 # 2. FALHA DEPOIS DE GRAVAR → 'parcial' (falha_apos_gravacao) + recálculo
 # ===========================================================================
+@no_ano_de_hoje
 def test_matific_excecao_no_2o_arquivo_e_parcial_e_o_gravado_esta_nas_notas(
         db, cliente, escola_completa, monkeypatch):
     eid, a, d, placar = _matific_duas_turmas(db, escola_completa, monkeypatch)
@@ -216,6 +220,7 @@ def test_falha_antes_de_gravar_continua_erro_sem_dado(db, escola_completa, monke
 # ===========================================================================
 # 3. Recálculo que falha → recalculo_pendente + alerta crítico; fecha no próximo
 # ===========================================================================
+@no_ano_de_hoje
 def test_recalculo_que_falha_fica_pendente_e_fecha_no_proximo(
         db, cliente, escola_completa, monkeypatch):
     eid, a, d, placar = _matific_duas_turmas(db, escola_completa, monkeypatch)

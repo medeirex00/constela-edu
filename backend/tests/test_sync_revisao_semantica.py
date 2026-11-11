@@ -17,6 +17,7 @@ from app.sync import service, vault
 from tests._sync_nucleo_fakes import (
     API, NavElefante, PlacarFake, aluno_el, alertas_abertos, credencial, instalar, livro,
     logs, novo_aluno, rodar)
+from tests._ano_letivo import no_ano_de_hoje
 
 K = "3 ANO A (300396804)"
 CID_A, CID_B = 511434, 600001
@@ -199,6 +200,7 @@ def test_concluida_com_linhas_em_revisao_mantem_correspondencia_pendente(
 # ---------------------------------------------------------------------------
 # Achado 5 — queda retida do Matific não é "correspondência pendente".
 # ---------------------------------------------------------------------------
+@no_ano_de_hoje
 def test_queda_retida_tem_motivo_proprio_e_nao_manda_para_revisao(db, escola_completa,
                                                                  monkeypatch):
     eid = escola_completa["escola"].id

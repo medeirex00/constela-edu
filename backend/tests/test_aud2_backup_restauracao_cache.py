@@ -20,6 +20,7 @@ from app.models import Aluno, Importacao, Matricula, SnapshotMatific
 from app.services import backup as svc_backup
 from app.services import scoring
 from app.sync import aovivo
+from tests._ano_letivo import escola_no_ano_de_hoje  # noqa: F401 — fixture
 
 API = "/api/v1"
 
@@ -42,7 +43,8 @@ def test_restauracao_atualiza_o_telao_na_hora(db, escola_completa, cliente, clie
     nova = Aluno(escola_id=eid, nome="Crianca Ficticia Aud2 Depois Do Backup")
     db.add(nova)
     db.flush()
-    db.add(Matricula(escola_id=eid, aluno_id=nova.id, turma_id=turma.id, ano_letivo=2026))
+    db.add(Matricula(escola_id=eid, aluno_id=nova.id, turma_id=turma.id,
+                     ano_letivo=turma.ano_letivo))
     db.add(SnapshotMatific(escola_id=eid, aluno_id=nova.id, importacao_id=imp.id,
                            atividades=99, estrelas=99, pontuacao_media=99))
     db.commit()

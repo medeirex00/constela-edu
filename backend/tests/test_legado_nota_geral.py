@@ -59,6 +59,7 @@ from app.models import (
 from app.services import dimensoes as svc_dimensoes
 from app.services import insights as svc_insights
 from app.services import scoring
+from tests._ano_letivo import ANO
 
 RAIZ_BACKEND = pathlib.Path(__file__).resolve().parents[1]
 RAIZ_REPO = RAIZ_BACKEND.parent
@@ -646,7 +647,7 @@ MATIFIC_FRACO = {"atividades": 10, "pontuacao_media": 2.0, "estrelas": 20}
 def escola_mista(db):
     """Escola com as quatro situações que a arquitetura distingue: usa as duas,
     usa só uma, usa só a outra, não usa nenhuma."""
-    escola = Escola(nome="EM LEGADO", ano_letivo_ativo=2026, status="ativa")
+    escola = Escola(nome="EM LEGADO", ano_letivo_ativo=ANO, status="ativa")
     db.add(escola)
     db.flush()
     for namespace, valores in scoring.PESOS_PADRAO.items():
@@ -656,7 +657,7 @@ def escola_mista(db):
                             codigos=["D", "E"], pontos_padrao=4.0, ordem=1))
     db.add(ReferenciaNormalizacao(escola_id=escola.id, modo="auto"))
     turma = Turma(escola_id=escola.id, nome="4ºA", ano_escolar="4º Ano",
-                  ano_letivo=2026, status="ativa")
+                  ano_letivo=ANO, status="ativa")
     db.add(turma)
     db.add(Usuario(escola_id=escola.id, nome="Gestora",
                    email="gestora@legado.local",
@@ -671,7 +672,7 @@ def escola_mista(db):
         db.add(aluno)
         db.flush()
         db.add(Matricula(escola_id=escola.id, aluno_id=aluno.id,
-                         turma_id=turma.id, ano_letivo=2026))
+                         turma_id=turma.id, ano_letivo=ANO))
         if elefante is not None:
             db.add(SnapshotElefante(escola_id=escola.id, aluno_id=aluno.id,
                                     importacao_id=imp.id, **elefante))

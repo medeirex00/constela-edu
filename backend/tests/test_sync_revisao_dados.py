@@ -20,6 +20,7 @@ from tests._sync_nucleo_fakes import (NavElefante, PlacarFake, aluno_el, alertas
 from tests.sync_integridade_comum import (aplicar, com_nome, dono, elefante_resumo, fichas,
                                           matific, pendentes, sem_disco, snap_matific, turma,
                                           turmas_de)
+from tests._ano_letivo import no_ano_de_hoje
 
 K_A = "3 ANO A (300396804)"
 K_B = "4 ANO B (300396805)"
@@ -226,6 +227,7 @@ def test_troca_de_turma_sem_numero_novo_recalcula(db, escola_completa, monkeypat
 # ---------------------------------------------------------------------------
 # Achado 3 (regressão de visibilidade) — o processo morre no recálculo.
 # ---------------------------------------------------------------------------
+@no_ano_de_hoje
 def test_processo_que_morre_no_recalculo_deixa_a_marca(db, escola_completa, monkeypatch):
     ec = escola_completa
     eid = ec["escola"].id

@@ -25,14 +25,14 @@ def cenario_professor(db, escola_completa):
     turma_a = escola_completa["turma"]
 
     turma_b = Turma(escola_id=escola.id, nome="5º Ano B", ano_escolar="5º Ano",
-                    ano_letivo=2026)
+                    ano_letivo=escola.ano_letivo_ativo)
     db.add(turma_b)
     db.flush()
     outro = Aluno(escola_id=escola.id, nome="Aluno De Outra Turma")
     db.add(outro)
     db.flush()
     db.add(Matricula(escola_id=escola.id, aluno_id=outro.id,
-                     turma_id=turma_b.id, ano_letivo=2026))
+                     turma_id=turma_b.id, ano_letivo=escola.ano_letivo_ativo))
 
     # Vínculo: cadastro de Professor com o MESMO e-mail do usuário professor.
     professor = Professor(escola_id=escola.id, nome="Prof. Carla",

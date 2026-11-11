@@ -42,6 +42,7 @@ from app.sync import orchestrator, service
 from tests._sync_nucleo_fakes import (
     API, NavElefante, PlacarFake, aluno_el, alertas_abertos, contar, credencial,
     execucoes, instalar, livro, rodar, snap_atual)
+from tests._ano_letivo import no_ano_de_hoje
 
 K = "3 ANO A (300396804)"
 CID_A = 511434
@@ -86,6 +87,7 @@ def test_leaderboard_falhando_sem_numero_mudado_e_parcial_nao_erro(db, escola_co
     assert service.ultimo_em_dia_em(db, eid, "matific") < ex.finalizada_em
 
 
+@no_ano_de_hoje
 def test_leaderboard_falhando_com_total_retido_abre_o_alerta_de_queda(db, escola_completa,
                                                                      monkeypatch):
     """Total do ano MENOR que o gravado (retido) + falha só do endpoint dos nomes: a
@@ -298,6 +300,7 @@ def _reiniciar_servico(db, exid):
     return db.get(SincronizacaoExecucao, exid)
 
 
+@no_ano_de_hoje
 def test_morte_depois_de_gravar_um_arquivo_marca_recalculo_e_a_coleta_seguinte_recalcula(
         db, escola_completa, monkeypatch):
     eid, (a, b, c), placar = _matific_em_dia(db, escola_completa, monkeypatch)

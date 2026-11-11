@@ -37,8 +37,13 @@ def _snaps(db, escola, alunos, livros, estrelas):
                                 livros_unicos=livros, tempo_leitura_min=10 * livros,
                                 questoes_tentativas=0, questoes_acertos=0,
                                 livros_por_nivel={}))
+        # Datado como o do Elefante, no ano letivo da escola (o de ``nova_escola``).
+        # Sem data, o retrato era de "agora" e, a partir de 2027, o contador do ANO
+        # do Matific o deixava de fora (TESTES-1).
         db.add(SnapshotMatific(escola_id=escola.id, aluno_id=aluno.id,
-                               importacao_id=imp.id, atividades=10, estrelas=estrelas))
+                               importacao_id=imp.id,
+                               data_referencia=datetime(escola.ano_letivo_ativo, 9, 30, 3, 0),
+                               atividades=10, estrelas=estrelas))
 
 
 def test_vitrine_omite_escola_com_menos_de_k_criancas_que_concorrem(db):

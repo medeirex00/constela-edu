@@ -38,6 +38,7 @@ from app.sync import connectors, orchestrator, service, vault
 from app.sync.connectors import elefante as con_elefante
 from app.sync.connectors import matific as con_matific
 from app.sync.interfaces import Credenciais
+from tests._ano_letivo import escola_no_ano_de_hoje  # noqa: F401 — fixture
 
 API = "/api/v1"
 SCHOOL_UUID = "c93c93c9-0000-0000-0000-000000000001"
@@ -190,7 +191,8 @@ def _livro(titulo, nivel, quando, tempo_s):
 def _montar(db, escola_completa):
     escola = escola_completa["escola"]
     eid = escola.id
-    t2 = Turma(escola_id=eid, nome="4º Ano B", ano_escolar="4º Ano", ano_letivo=2026)
+    t2 = Turma(escola_id=eid, nome="4º Ano B", ano_escolar="4º Ano",
+               ano_letivo=escola.ano_letivo_ativo)
     db.add(t2)
     db.flush()
     alunos = list(escola_completa["alunos"])
@@ -199,7 +201,8 @@ def _montar(db, escola_completa):
         a = Aluno(escola_id=eid, nome=nome)
         db.add(a)
         db.flush()
-        db.add(Matricula(escola_id=eid, aluno_id=a.id, turma_id=t2.id, ano_letivo=2026))
+        db.add(Matricula(escola_id=eid, aluno_id=a.id, turma_id=t2.id,
+                         ano_letivo=escola.ano_letivo_ativo))
         alunos.append(a)
     esperado = []
     for i, al in enumerate(alunos, start=1):

@@ -6,6 +6,7 @@ import pytest
 from app.models import Importacao, SnapshotElefante, SnapshotMatific
 from app.services import evolucao as svc
 from app.services import scoring
+from tests._ano_letivo import escola_no_ano_de_hoje  # noqa: F401 — fixture
 
 
 def _importacao(db, escola_id) -> Importacao:

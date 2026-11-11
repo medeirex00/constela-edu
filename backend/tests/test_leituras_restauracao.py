@@ -19,6 +19,7 @@ from app.models import (Aluno, Configuracao, EventoAluno, Leitura, Livro,
                         LogAuditoria, Matricula)
 from app.services import leituras_restauracao as lr
 from app.services.eventos import chave_evento
+from tests._ano_letivo import no_ano_de_hoje
 
 # Ficha ABSORVIDA pela fusão: já não existe como registro, e não precisa — o que
 # a identifica é estar DENTRO do hash da chave natural do evento.
@@ -479,15 +480,18 @@ def test_nao_cria_leitura_que_nao_existe(db, escola_completa):
     assert db.execute(select(Leitura)).scalars().all() == antes
 
 
+@no_ano_de_hoje
 def test_recusa_data_no_futuro(db, escola_completa):
     escola = escola_completa["escola"]
     aluno = escola_completa["alunos"][0]
     livro = _livro(db, escola.id)
     _leitura(db, escola.id, aluno.id, livro.id)
-    futuro = datetime(2026, 12, 31, 23, 59)
+    futuro = datetime(escola.ano_letivo_ativo, 12, 31, 23, 59)
     evento = _evento(db, escola.id, aluno.id, livro, quando=futuro)
     db.commit()
-    # (ano letivo ativo é 2026, então o que barra aqui é a guarda de futuro)
+    # (a escola está no ano letivo de hoje — @no_ano_de_hoje —, então o que barra aqui
+    # é a guarda de futuro; com 2026 escrito no código, a data deixava de ser futuro
+    # em 2027)
     with pytest.raises(lr.RestauracaoInvalida, match="no futuro"):
         lr.restaurar(db, escola.id, [_item(aluno.id, livro.id, evento)],
                      usuario_id=None)

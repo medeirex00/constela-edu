@@ -12,6 +12,7 @@ Achado RANKINGS-2. Cenário de `tests/test_mobile_evolucao_regua_justa.py`;
 dados fictícios.
 """
 from tests.test_mobile_evolucao_regua_justa import _cenario
+from tests._ano_letivo import escola_no_ano_de_hoje  # noqa: F401 — fixture
 
 API = "/api/v1"
 

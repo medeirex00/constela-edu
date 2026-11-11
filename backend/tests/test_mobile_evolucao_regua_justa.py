@@ -18,6 +18,7 @@ from datetime import datetime, timedelta, timezone
 from app.models import Importacao, SnapshotMatific
 from app.services import scoring
 from tests.test_permissoes import _cliente_como, cenario_professor  # noqa: F401 — fixture
+from tests._ano_letivo import escola_no_ano_de_hoje  # noqa: F401 — fixture
 
 
 def _cenario(db, escola_completa):

@@ -16,7 +16,7 @@ funções do motor):
   * a resposta diz qual régua usou (``perfil``);
   * ``pontuacao_media`` na escala do Matific (0–5).
 """
-from datetime import date, datetime, time
+from datetime import date, datetime, time, timedelta
 from types import SimpleNamespace
 
 import pytest
@@ -33,6 +33,7 @@ from app.models import (
     SnapshotMatific,
 )
 from app.services import scoring
+from tests._ano_letivo import escola_no_ano_de_hoje  # noqa: F401 — fixture
 
 # Config LOCAL deliberadamente diferente da institucional em TODOS os namespaces.
 PESOS_LOCAIS = {
@@ -177,7 +178,8 @@ def test_personalizado_com_bonus_de_leitura_na_escola_bate_com_o_recalculo(
     escola = escola_completa["escola"]
     escola_completa["turma"].turno = "manha"          # janela 07–13h, seg–sex
     ana = next(a for a in escola_completa["alunos"] if a.nome == "Ana Beatriz Souza")
-    segunda = date(2026, 7, 6)
+    julho = date(escola.ano_letivo_ativo, 7, 1)
+    segunda = julho + timedelta(days=-julho.weekday() % 7)   # 1ª segunda de julho
     assert segunda.weekday() == 0
     for i in range(4):
         livro = Livro(escola_id=escola.id, titulo=f"Livro da escola {i}", nivel_codigo="D")

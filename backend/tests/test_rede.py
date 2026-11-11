@@ -21,6 +21,7 @@ from app.models import (
 )
 from app.services import rede as svc_rede
 from app.services import scoring
+from tests._ano_letivo import ANO
 
 
 def _login(email: str, senha: str) -> TestClient:
@@ -44,11 +45,11 @@ def _escola_com_notas(db, rede_id, nome, notas_gerais, *, livros_cada=5,
     índice per capita, que é a métrica comparável entre escolas (C-02). As
     ``notas_gerais`` continuam alimentando as médias 0–100 (régua interna).
     """
-    esc = Escola(nome=nome, ano_letivo_ativo=2026, rede_id=rede_id, status="ativa")
+    esc = Escola(nome=nome, ano_letivo_ativo=ANO, rede_id=rede_id, status="ativa")
     db.add(esc)
     db.flush()
     turma = Turma(escola_id=esc.id, nome="1º Ano A", ano_escolar="1º Ano",
-                  ano_letivo=2026, status="ativa")
+                  ano_letivo=ANO, status="ativa")
     db.add(turma)
     db.flush()
     imp = Importacao(escola_id=esc.id, plataforma="seed", tipo="seed")
@@ -58,7 +59,7 @@ def _escola_com_notas(db, rede_id, nome, notas_gerais, *, livros_cada=5,
         a = Aluno(escola_id=esc.id, nome=f"Crianca {nome} {i}")
         db.add(a)
         db.flush()
-        db.add(Matricula(escola_id=esc.id, aluno_id=a.id, turma_id=turma.id, ano_letivo=2026))
+        db.add(Matricula(escola_id=esc.id, aluno_id=a.id, turma_id=turma.id, ano_letivo=ANO))
         db.add(SnapshotElefante(escola_id=esc.id, aluno_id=a.id, importacao_id=imp.id,
                                 livros_unicos=livros_cada, tempo_leitura_min=60))
         db.add(SnapshotMatific(escola_id=esc.id, aluno_id=a.id, importacao_id=imp.id,
@@ -67,7 +68,7 @@ def _escola_com_notas(db, rede_id, nome, notas_gerais, *, livros_cada=5,
         # escola). Como o teste semeia a Nota direto (sem recalcular_escola), é
         # aqui que a institucional precisa nascer com o MESMO valor da local —
         # senão a média da rede leria 0.0 (CAUSA A).
-        db.add(Nota(detalhes=scoring.carimbo_institucional(), escola_id=esc.id, aluno_id=a.id, ano_letivo=2026,
+        db.add(Nota(detalhes=scoring.carimbo_institucional(), escola_id=esc.id, aluno_id=a.id, ano_letivo=ANO,
                     nota_geral=ng, nota_elefante=ng, nota_matific=ng,
                     nota_elefante_institucional=ng, nota_matific_institucional=ng,
                     posicao=i + 1))
@@ -326,8 +327,8 @@ def _admin_global(db, email="root@constela.local", senha="s3nh4rootglobal"):
 
 def test_crud_rede_provisiona_escolas_coords_e_secretaria(db):
     # Duas escolas soltas (sem rede) + um usuário que vira Secretaria.
-    e1 = Escola(nome="EM Centro", ano_letivo_ativo=2026, status="ativa")
-    e2 = Escola(nome="EM Litoral", ano_letivo_ativo=2026, status="ativa")
+    e1 = Escola(nome="EM Centro", ano_letivo_ativo=ANO, status="ativa")
+    e2 = Escola(nome="EM Litoral", ano_letivo_ativo=ANO, status="ativa")
     db.add_all([e1, e2])
     db.flush()
     futura_sec = Usuario(nome="Futura Secretaria", email="fut@sec.gov",
@@ -377,8 +378,8 @@ def test_desvincular_escola_ao_redefinir_o_conjunto(db):
     rede = Rede(nome="Rede Y", status="ativa")
     db.add(rede)
     db.flush()
-    e1 = Escola(nome="EM Uma", ano_letivo_ativo=2026, status="ativa", rede_id=rede.id)
-    e2 = Escola(nome="EM Outra", ano_letivo_ativo=2026, status="ativa", rede_id=rede.id)
+    e1 = Escola(nome="EM Uma", ano_letivo_ativo=ANO, status="ativa", rede_id=rede.id)
+    e2 = Escola(nome="EM Outra", ano_letivo_ativo=ANO, status="ativa", rede_id=rede.id)
     db.add_all([e1, e2])
     db.commit()
     e1_id, e2_id, rede_id = e1.id, e2.id, rede.id
@@ -582,10 +583,10 @@ def _escola_publico(db, rede_id, nome, matific, elefante, *, livros=5, estrelas=
     desde a correção do C-02 — ordenar pela média coroaria publicamente a escola
     de distribuição mais homogênea, que pode ser a que menos lê.
     """
-    esc = Escola(nome=nome, ano_letivo_ativo=2026, rede_id=rede_id, status="ativa")
+    esc = Escola(nome=nome, ano_letivo_ativo=ANO, rede_id=rede_id, status="ativa")
     db.add(esc)
     db.flush()
-    turma = Turma(escola_id=esc.id, nome="1A", ano_escolar="1º Ano", ano_letivo=2026,
+    turma = Turma(escola_id=esc.id, nome="1A", ano_escolar="1º Ano", ano_letivo=ANO,
                   status="ativa")
     db.add(turma)
     db.flush()
@@ -597,7 +598,7 @@ def _escola_publico(db, rede_id, nome, matific, elefante, *, livros=5, estrelas=
         db.add(a)
         db.flush()
         db.add(Matricula(escola_id=esc.id, aluno_id=a.id, turma_id=turma.id,
-                         ano_letivo=2026))
+                         ano_letivo=ANO))
         # Snapshots: sem eles o aluno não tem "dado da plataforma" e fica fora da
         # média de desempenho (que agora mede só quem usa).
         db.add(SnapshotElefante(escola_id=esc.id, aluno_id=a.id, importacao_id=imp.id,
@@ -605,7 +606,7 @@ def _escola_publico(db, rede_id, nome, matific, elefante, *, livros=5, estrelas=
         db.add(SnapshotMatific(escola_id=esc.id, aluno_id=a.id, importacao_id=imp.id,
                                atividades=20, estrelas=estrelas))
         db.add(Nota(detalhes=scoring.carimbo_institucional(), escola_id=esc.id,
-                    aluno_id=a.id, ano_letivo=2026,
+                    aluno_id=a.id, ano_letivo=ANO,
                     nota_geral=(matific + elefante) / 2, nota_matific=matific,
                     nota_elefante=elefante, posicao=i + 1))
     return esc

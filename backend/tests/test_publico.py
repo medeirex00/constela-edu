@@ -1,6 +1,7 @@
 """Testes da Fase 5 — Painel Público sem login, restrito a dados pedagógicos."""
 from app.models import Importacao, SnapshotMatific
 from app.services import scoring
+from tests._ano_letivo import escola_no_ano_de_hoje  # noqa: F401 — fixture
 
 
 def _ativar_painel(cliente, escola_id: int) -> str:
@@ -104,7 +105,8 @@ def test_b2_perfil_publico_bloqueia_enumeracao_fora_do_painel(cliente, db, escol
     db.add(fora_aluno)
     db.flush()
     db.add(Matricula(escola_id=escola_id, aluno_id=fora_aluno.id,
-                     turma_id=escola_completa["turma"].id, ano_letivo=2026))
+                     turma_id=escola_completa["turma"].id,
+                     ano_letivo=escola_completa["escola"].ano_letivo_ativo))
     db.commit()
     fora_id = fora_aluno.id
 

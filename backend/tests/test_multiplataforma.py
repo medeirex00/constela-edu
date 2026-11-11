@@ -3,6 +3,7 @@ import pytest
 
 from app.models import DispositivoMovel
 from app.services import push, scoring
+from tests._ano_letivo import escola_no_ano_de_hoje  # noqa: F401 — fixture
 
 TOKEN = "ExponentPushToken[abcdef1234567890]"
 # Tokens no formato do Expo: texto fora dele não é aparelho e não vai ao Expo.

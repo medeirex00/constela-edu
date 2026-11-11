@@ -17,6 +17,7 @@ from datetime import datetime, timedelta, timezone
 from app.models import Importacao, SnapshotMatific
 from app.services import relatorios as svc_relatorios
 from tests.test_permissoes import _cliente_como, cenario_professor  # noqa: F401 — fixture
+from tests._ano_letivo import escola_no_ano_de_hoje  # noqa: F401 — fixture
 
 _DIMENSOES = ["leitura", "matematica"]
 

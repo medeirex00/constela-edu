@@ -13,16 +13,17 @@ from app.models import (Aluno, Escola, Importacao, Matricula, Nota, Rede, Snapsh
                         SnapshotMatific, Turma)
 from app.services import rede as svc
 from app.services import scoring
+from tests._ano_letivo import ANO
 
 
 def _escola(db, rede, nome, grupos):
     """``grupos``: (quantas crianças do 3º ano, plataformas com retrato, nota)."""
-    esc = Escola(nome=nome, ano_letivo_ativo=2026, rede_id=rede.id, status="ativa")
+    esc = Escola(nome=nome, ano_letivo_ativo=ANO, rede_id=rede.id, status="ativa")
     db.add(esc)
     db.flush()
     imp = Importacao(escola_id=esc.id, plataforma="seed", tipo="seed")
     db.add(imp)
-    turma = Turma(escola_id=esc.id, nome="3º Ano A", ano_escolar="3º Ano", ano_letivo=2026,
+    turma = Turma(escola_id=esc.id, nome="3º Ano A", ano_escolar="3º Ano", ano_letivo=ANO,
                   status="ativa")
     db.add(turma)
     db.flush()
@@ -34,7 +35,7 @@ def _escola(db, rede, nome, grupos):
             db.add(a)
             db.flush()
             db.add(Matricula(escola_id=esc.id, aluno_id=a.id, turma_id=turma.id,
-                             ano_letivo=2026))
+                             ano_letivo=ANO))
             if "ele" in plataformas:
                 db.add(SnapshotElefante(escola_id=esc.id, aluno_id=a.id, importacao_id=imp.id,
                                         livros_unicos=10, tempo_leitura_min=60))
@@ -43,7 +44,7 @@ def _escola(db, rede, nome, grupos):
                                        atividades=10, estrelas=100))
             posicao += 1
             db.add(Nota(detalhes=scoring.carimbo_institucional(), escola_id=esc.id,
-                        aluno_id=a.id, ano_letivo=2026, nota_geral=nota,
+                        aluno_id=a.id, ano_letivo=ANO, nota_geral=nota,
                         nota_elefante=nota, nota_matific=nota,
                         nota_elefante_institucional=nota if "ele" in plataformas else 0.0,
                         nota_matific_institucional=nota if "mat" in plataformas else 0.0,

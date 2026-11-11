@@ -19,10 +19,12 @@ import pytest
 
 from app.models import (Aluno, Escola, Importacao, Leitura, Livro, Matricula, Nota, Rede,
                         SnapshotElefante, SnapshotMatific, Turma)
+from app.models.base import agora
 from app.services import rede as svc
 from app.services import scoring
+from tests._ano_letivo import ANO
 
-ANO_PASSADO = datetime(2025, 6, 1)
+ANO_PASSADO = datetime(ANO - 1, 6, 1)
 
 
 def _rede(db, nome):
@@ -37,17 +39,17 @@ def _escola(db, rede, nome, *, medidas, nota, so_matific_antigo=0, so_leitura=0,
     """Uma escola com uma turma do 3º ano.
 
     ``medidas``: crianças com retrato das duas plataformas (Matific do ano) e Nota
-    calculada ``nota``. ``so_matific_antigo``: só o retrato do Matific de 2025, Nota
+    calculada ``nota``. ``so_matific_antigo``: só o retrato do Matific do ano anterior, Nota
     calculada 0 (a média não as mede). ``so_leitura``: só Leitura itemizada no
     Elefante (sem retrato nenhum), Nota calculada ``nota`` (a média as mede).
     ``sem_nota``: retrato das duas plataformas e nenhuma Nota (o recálculo ainda não
     passou). ``nota_pendente``: retrato das duas e Nota sem o carimbo institucional."""
-    esc = Escola(nome=nome, ano_letivo_ativo=2026, rede_id=rede.id, status="ativa")
+    esc = Escola(nome=nome, ano_letivo_ativo=ANO, rede_id=rede.id, status="ativa")
     db.add(esc)
     db.flush()
     imp = Importacao(escola_id=esc.id, plataforma="seed", tipo="seed")
     db.add(imp)
-    turma = Turma(escola_id=esc.id, nome="3º Ano A", ano_escolar="3º Ano", ano_letivo=2026,
+    turma = Turma(escola_id=esc.id, nome="3º Ano A", ano_escolar="3º Ano", ano_letivo=ANO,
                   status="ativa")
     db.add(turma)
     livro = Livro(escola_id=esc.id, titulo=f"Livro Inventado {nome}", nivel_codigo="K")
@@ -64,7 +66,7 @@ def _escola(db, rede, nome, *, medidas, nota, so_matific_antigo=0, so_leitura=0,
             db.add(a)
             db.flush()
             db.add(Matricula(escola_id=esc.id, aluno_id=a.id, turma_id=turma.id,
-                             ano_letivo=2026))
+                             ano_letivo=ANO))
             if tipo in ("medida", "sem_nota", "pendente"):
                 db.add(SnapshotElefante(escola_id=esc.id, aluno_id=a.id, importacao_id=imp.id,
                                         livros_unicos=10, tempo_leitura_min=60))
@@ -76,14 +78,14 @@ def _escola(db, rede, nome, *, medidas, nota, so_matific_antigo=0, so_leitura=0,
                                        data_referencia=ANO_PASSADO))
             else:
                 db.add(Leitura(escola_id=esc.id, aluno_id=a.id, livro_id=livro.id,
-                               data=datetime(2026, 9, 1), tempo_leitura_min=10,
+                               data=agora().replace(tzinfo=None), tempo_leitura_min=10,
                                nivel_codigo="K"))
             if tipo == "sem_nota":
                 continue
             n = 0.0 if tipo == "matific_antigo" else nota
             posicao += 1
             db.add(Nota(detalhes=None if tipo == "pendente" else scoring.carimbo_institucional(),
-                        escola_id=esc.id, aluno_id=a.id, ano_letivo=2026, nota_geral=n,
+                        escola_id=esc.id, aluno_id=a.id, ano_letivo=ANO, nota_geral=n,
                         nota_elefante=n, nota_matific=n,
                         nota_elefante_institucional=n,
                         nota_matific_institucional=0.0 if tipo == "so_leitura" else n,
@@ -98,7 +100,7 @@ def _cartoes(painel):
 
 def _mundo_matific_antigo(db, nome="Rede Ficticia Matific Antigo"):
     """Alfa: 10 medidas, nota 80. Beta: 10 medidas, nota 40, e mais 30 só com o
-    retrato do Matific de 2025 (o motor não as afere: Matific é contador do ano)."""
+    retrato do Matific do ano anterior (o motor não as afere: Matific é contador do ano)."""
     rede = _rede(db, nome)
     _escola(db, rede, "EMEF Inventada Alfa", medidas=10, nota=80.0)
     _escola(db, rede, "EMEF Inventada Beta", medidas=10, nota=40.0, so_matific_antigo=30)
@@ -204,11 +206,11 @@ def test_peso_da_media_e_o_dos_modulos_contratados(db):
                   status="ativo")
         db.add(a)
         db.flush()
-        db.add(Matricula(escola_id=beta.id, aluno_id=a.id, turma_id=turma.id, ano_letivo=2026))
+        db.add(Matricula(escola_id=beta.id, aluno_id=a.id, turma_id=turma.id, ano_letivo=ANO))
         db.add(SnapshotMatific(escola_id=beta.id, aluno_id=a.id, importacao_id=imp.id,
                                atividades=10, estrelas=100))
         db.add(Nota(detalhes=scoring.carimbo_institucional(), escola_id=beta.id,
-                    aluno_id=a.id, ano_letivo=2026, nota_geral=0.0, nota_elefante=0.0,
+                    aluno_id=a.id, ano_letivo=ANO, nota_geral=0.0, nota_elefante=0.0,
                     nota_matific=0.0, nota_elefante_institucional=0.0,
                     nota_matific_institucional=0.0, posicao=100 + i))
     db.commit()

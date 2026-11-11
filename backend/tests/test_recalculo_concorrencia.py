@@ -25,6 +25,7 @@ from sqlalchemy import event, func, select
 from app.core import database as core_db
 from app.models import Configuracao, Nota, SnapshotElefante, SnapshotMatific
 from app.services import scoring
+from tests._ano_letivo import no_ano_de_hoje
 
 # Tabelas cujo SELECT ALIMENTA o cálculo: se algum destes for lido antes da
 # trava, a trava chegou tarde (o valor lido pode já estar obsoleto).
@@ -305,6 +306,7 @@ def test_recalculo_e_idempotente(db, escola_completa):
     assert total == 3, "1 nota por aluno/ano — nada duplicado"
 
 
+@no_ano_de_hoje
 def test_formula_inalterada(db, escola_completa):
     """Valores CONGELADOS antes da introdução da trava. A trava é exclusão
     mútua: não pode mexer em peso, normalização, nota nem desempate. Se este
