@@ -42,6 +42,12 @@ das PRÓXIMAS leituras em diante.
   ("desconhecido", 0 ponto): regravá-lo mudaria o valor da leitura.
 * **NÃO recalcula notas** e não muda nível de livro: o valor gravado é o que a
   leitura já vale hoje.
+* **Corrida com a API**: o ``UPDATE`` só congela a leitura cujo livro AINDA está
+  no nível lido na análise (e a escola fica travada durante a gravação, como na
+  importação). Se o Admin Global corrigir o livro ou a coleta restaurar o nível
+  oficial entre a análise e a gravação, a leitura fica nula — seguindo o nível
+  atual do livro, o mesmo valor de antes — e entra numa próxima passada; a
+  auditoria conta o que foi gravado e quantas ficaram de fora (``puladas``).
 * Leitura cujo livro está SEM nível fica como está (nulo): congelar vazio não
   guarda informação e o fallback já dá o mesmo resultado.
 * ``catalogo_versao`` recebe a versão do catálogo VIGENTE no congelamento — é ela
@@ -68,9 +74,9 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from sqlalchemy import select, update  # noqa: E402
+from sqlalchemy import func, select, update  # noqa: E402
 
-from app.core.database import SessionLocal  # noqa: E402
+from app.core.database import SessionLocal, bloquear_escola_para_importacao  # noqa: E402
 from app.models import Escola, Leitura, Livro  # noqa: E402
 from app.services import dificuldade_livro  # noqa: E402
 from app.services.audit import registrar  # noqa: E402
@@ -238,23 +244,45 @@ def congelar(db, relatorio: RelatorioCongelamento) -> int:
     O ``UPDATE`` repete a condição de "ainda não congelada" (``IS NULL``, o mesmo
     corte do ``coalesce`` do motor): rodar duas vezes — ou rodar em paralelo com
     uma sincronização/ação do Admin Global que já congelou a linha — nunca
-    sobrescreve um nível congelado antes."""
+    sobrescreve um nível congelado antes.
+
+    E confere, no MESMO comando, que o livro AINDA está no nível que a análise
+    leu: entre a análise e a gravação o Admin Global pode corrigir o livro
+    (PATCH /livros) ou a coleta pode restaurar o nível oficial. Gravar o valor
+    lido congelaria a leitura no nível VELHO — e ela já valia o novo pelo
+    ``coalesce``. A leitura que mudou fica nula (o mesmo valor de antes) e é
+    contada em ``puladas``. A trava da escola (a mesma da importação; no-op no
+    SQLite) segura a coleta enquanto as linhas são gravadas."""
+    bloquear_escola_para_importacao(db, relatorio.escola_id)
     versao = dificuldade_livro.versao_catalogo().get("versao")
     total = 0
+    gravadas: dict[str, int] = {}
     for nivel, ids in sorted(relatorio.por_nivel.items()):
+        # Mesma normalização da análise (maiúsculas, sem espaços nas pontas).
+        livro_ainda_no_nivel = select(Livro.id).where(
+            Livro.id == Leitura.livro_id,
+            func.upper(func.trim(Livro.nivel_codigo)) == nivel).exists()
         for inicio in range(0, len(ids), _LOTE):
             lote = ids[inicio:inicio + _LOTE]
-            total += db.execute(
+            n = db.execute(
                 update(Leitura)
-                .where(Leitura.id.in_(lote), Leitura.nivel_codigo.is_(None))
+                .where(Leitura.id.in_(lote), Leitura.nivel_codigo.is_(None),
+                       livro_ainda_no_nivel)
                 .values(nivel_codigo=nivel, catalogo_versao=versao)
+                .execution_options(synchronize_session=False)
             ).rowcount or 0
+            gravadas[nivel] = gravadas.get(nivel, 0) + n
+            total += n
     if total:
         registrar(db, "leitura.nivel_congelado", escola_id=relatorio.escola_id,
                   entidade="escola", entidade_id=relatorio.escola_id,
                   detalhes={"origem": "scripts.vincular_livros_catalogo --congelar-niveis",
                             "qtd": total, "catalogo_versao": versao,
-                            "por_nivel": {n: len(ids) for n, ids in sorted(relatorio.por_nivel.items())},
+                            # O que FOI gravado (não o que a análise previa).
+                            "por_nivel": {n: q for n, q in sorted(gravadas.items()) if q},
+                            # Livro corrigido no meio, ou leitura congelada por
+                            # outra ação: ficam como estavam.
+                            "puladas": relatorio.congelaveis - total,
                             "sem_nivel_no_livro": relatorio.sem_nivel_no_livro,
                             "nota": "nível congelado = nível ATUAL do livro; nenhum "
                                     "valor de leitura muda, nenhuma nota é recalculada"})
