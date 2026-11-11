@@ -201,6 +201,11 @@ PREFERENCIAS_PERMITIDAS = {"som", "musica", "narracao", "reduzir_animacoes"}
 
 NOME_EXIBICAO_MAX = 20
 
+# "Letras" (isalpha, categoria Lo) que não desenham nada: os preenchimentos do
+# Hangul — o U+3164 é o "nome invisível" que circula em jogos — e os brancos dos
+# hieróglifos. Com elas o nome some das falas e do "É você, {nome}?".
+LETRAS_INVISIVEIS = frozenset("\u115f\u1160\u3164\uffa0\U00013441\U00013442")
+
 
 def validar_nome_exibicao(nome: str) -> str:
     """Nome que a criança escolheu na cerimônia ("como você quer ser
@@ -215,7 +220,7 @@ def validar_nome_exibicao(nome: str) -> str:
     limpo = " ".join((nome or "").split())
     if not (2 <= len(limpo) <= NOME_EXIBICAO_MAX):
         raise ValueError("O nome precisa ter entre 2 e 20 letras.")
-    if not all(c.isalpha() or c == " " for c in limpo):
+    if not all((c.isalpha() and c not in LETRAS_INVISIVEIS) or c == " " for c in limpo):
         raise ValueError("Use só letras, sem números ou símbolos.")
     saida = unicodedata.normalize("NFC", limpo.title())
     if not (2 <= len(saida) <= NOME_EXIBICAO_MAX):
@@ -229,8 +234,11 @@ def primeiro_nome_cadastro(nome_civil: str) -> str:
 
 def nome_para_falas(perfil: QuestPerfil, aluno_nome: str) -> str:
     """Nome usado em toda a interface: o escolhido pela criança, ou o
-    primeiro nome do cadastro enquanto ela não escolher."""
-    return (perfil.nome_exibicao or "").strip() or primeiro_nome_cadastro(aluno_nome)
+    primeiro nome do cadastro enquanto ela não escolher. Letra invisível de um
+    nome gravado antes da validação recusá-la não vai para as falas."""
+    escolhido = "".join(c for c in (perfil.nome_exibicao or "")
+                        if c not in LETRAS_INVISIVEIS)
+    return " ".join(escolhido.split()) or primeiro_nome_cadastro(aluno_nome)
 
 
 def travar_perfil(db: Session, perfil: QuestPerfil) -> QuestPerfil:

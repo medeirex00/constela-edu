@@ -14,6 +14,7 @@ import type { Avatar } from "@constela/quest-core";
 import { InvocacaoSkate } from "../cosmo/InvocacaoSkate";
 import { Palco3D } from "../personagem/Palco3D";
 import { narrar, tocar } from "../audio/audio";
+import { soLetrasDoNome } from "../cerimonia/nome";
 import { useSessao } from "../estado/sessao";
 import { AmbienteEspacial } from "../lobby/AmbienteEspacial";
 import "./vestiario.css";
@@ -162,7 +163,7 @@ export function Vestiario() {
             <span>Meu apelido</span>
             <div className="apelido-linha">
               <input value={apelido} maxLength={20}
-                     onChange={(e) => setApelido(e.target.value.replace(/[^\p{L} ]/gu, ""))}
+                     onChange={(e) => setApelido(soLetrasDoNome(e.target.value))}
                      onKeyDown={(e) => e.key === "Enter" && salvarApelido()} aria-label="Meu apelido" />
               <button className="botao3d sol" onClick={salvarApelido}
                       disabled={salvando || apelido.trim().length < 2 || apelido.trim() === perfil.nome}>Salvar</button>
