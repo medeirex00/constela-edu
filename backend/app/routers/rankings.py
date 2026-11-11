@@ -103,6 +103,29 @@ def _apenas_premiaveis(consulta, db: Session, escola_id: int, ano: int):
         Turma.id.in_(elegibilidade.turmas_premiaveis(db, escola_id, ano)))
 
 
+def _recortar_turmas(consulta, populacao: periodos.PopulacaoDoPeriodo, escola_id: int,
+                     turma_ids: list[int]):
+    """Recorte de TURMA (o filtro da tela ou as turmas do professor) numa lista por
+    PERÍODO. No ano letivo ativo, a turma da matrícula, como sempre. Num período de ano
+    letivo encerrado, as turmas de agora — as únicas que os seletores e as permissões
+    conhecem — escolhem QUEM aparece (``PopulacaoDoPeriodo.alunos_das_turmas``), e cada
+    criança segue com a turma e a série daquele ano; sem isso, a lista do professor
+    ficava sempre vazia depois da virada. A consulta precisa já ter ``Aluno`` e
+    ``Turma`` no FROM/JOIN."""
+    if not populacao.outro_ano:
+        return consulta.where(Turma.id.in_(turma_ids))
+    return consulta.where(Aluno.id.in_(populacao.alunos_das_turmas(escola_id, turma_ids)))
+
+
+def _marcar_populacao(item: dict, populacao: periodos.PopulacaoDoPeriodo) -> None:
+    """De que ano letivo são a criança e a turma desta linha (``ano_letivo``) e por quê
+    (``populacao``: ``ano_ativo`` | ``ano_do_periodo`` | ``atravessa_anos``). As listas
+    por período não têm outro lugar para dizer isso, e a tela avisa quando não é o ano
+    de agora."""
+    item["ano_letivo"] = populacao.ano_letivo
+    item["populacao"] = populacao.origem
+
+
 def _ranking(db: Session, escola_id: int, ano: int, turma_id=None, ano_escolar=None,
              limite=None, turma_ids: list[int] | None = None,
              dimensao: str | None = None, turno: str | None = None,
@@ -643,16 +666,22 @@ def ranking_leitura(
 ):
     """Ranking de LEITURA por PERÍODO: livros lidos, pontos de dificuldade e
     tempo somados apenas no intervalo escolhido — base do "melhor leitor da
-    semana/mês/bimestre" e de premiações por maior quantidade/dificuldade."""
+    semana/mês/bimestre" e de premiações por maior quantidade/dificuldade.
+
+    As crianças, a turma e a série são as do ano letivo da POPULAÇÃO do período
+    (``periodos.populacao_do_periodo``, a mesma das premiações): o do período quando
+    ele cai inteiro num ano letivo já encerrado, senão o ativo. Cada linha diz qual
+    (``ano_letivo`` e ``populacao``) — a lista não tem outro lugar para isso."""
     escola = db.get(Escola, escola_id)
-    ano = escola.ano_letivo_ativo
     try:
         ini, fim_dt, _ = periodos.resolver(
-            periodo, hoje_br(), ano,
+            periodo, hoje_br(), escola.ano_letivo_ativo,
             periodos._parse_data(inicio), periodos._parse_data(fim))
     except ValueError as exc:
         raise HTTPException(status.HTTP_400_BAD_REQUEST,
                             "Data inválida (use AAAA-MM-DD).") from exc
+    populacao = periodos.populacao_do_periodo(ini, fim_dt, escola.ano_letivo_ativo)
+    ano = populacao.ano_letivo
 
     # NÍVEL CONGELADO da leitura (``Leitura.nivel_codigo``) e, só quando ele é
     # nulo (leitura anterior a esta versão), o nível ATUAL do livro. Mesma
@@ -674,7 +703,7 @@ def ranking_leitura(
     if fim_dt is not None:
         consulta = consulta.where(Leitura.data <= fim_dt)
     if turma_id:
-        consulta = consulta.where(Turma.id == turma_id)
+        consulta = _recortar_turmas(consulta, populacao, escola_id, [turma_id])
     if ano_escolar:
         consulta = consulta.where(Turma.ano_escolar == ano_escolar)
     consulta = _aplicar_turno(consulta, turno)
@@ -683,7 +712,7 @@ def ranking_leitura(
     consulta = _apenas_premiaveis(consulta, db, escola_id, ano)
     permitidas = permissoes.turmas_permitidas(db, escola_id, usuario)
     if permitidas is not None:  # professor: só as turmas dele
-        consulta = consulta.where(Turma.id.in_(permitidas))
+        consulta = _recortar_turmas(consulta, populacao, escola_id, permitidas)
 
     # Valor de CADA leitura pela FONTE ÚNICA de dificuldade (v1 global: nível ×
     # ajuste do livro × série do aluno; ou a régua legada da escola personalizada)
@@ -763,6 +792,7 @@ def ranking_leitura(
     for posicao, item in enumerate(itens, start=1):
         item["posicao"] = posicao
         item["pontos"] = round(item["pontos"], 2)
+        _marcar_populacao(item, populacao)
     return itens
 
 
@@ -784,18 +814,24 @@ def ranking_matematica(
     conquistadas apenas no intervalo escolhido — o espelho do Ranking de
     Leitura para os melhores da matemática. Como o Matific não tem eventos
     individuais datados, o ganho vem dos snapshots (os imports mensais com
-    "Intervalo de datas" criam exatamente um ponto por período)."""
+    "Intervalo de datas" criam exatamente um ponto por período).
+
+    As crianças, a turma, a série e o ano do contador do Matific são os da
+    POPULAÇÃO do período (``periodos.populacao_do_periodo``), como na "Melhor
+    Matemática" das premiações: as duas telas não podem discordar sobre o mesmo
+    período de um ano já encerrado."""
     from app.services.evolucao import _delta, _janela, _series_por_aluno
 
     escola = db.get(Escola, escola_id)
-    ano = escola.ano_letivo_ativo
     try:
         ini, fim_dt, _ = periodos.resolver(
-            periodo, hoje_br(), ano,
+            periodo, hoje_br(), escola.ano_letivo_ativo,
             periodos._parse_data(inicio), periodos._parse_data(fim))
     except ValueError as exc:
         raise HTTPException(status.HTTP_400_BAD_REQUEST,
                             "Data inválida (use AAAA-MM-DD).") from exc
+    populacao = periodos.populacao_do_periodo(ini, fim_dt, escola.ano_letivo_ativo)
+    ano = populacao.ano_letivo
 
     consulta = (
         select(Aluno.id, Aluno.nome, Turma.nome, Turma.ano_escolar)
@@ -804,7 +840,7 @@ def ranking_matematica(
         .where(Aluno.escola_id == escola_id, Aluno.status == "ativo")
     )
     if turma_id:
-        consulta = consulta.where(Turma.id == turma_id)
+        consulta = _recortar_turmas(consulta, populacao, escola_id, [turma_id])
     if ano_escolar:
         consulta = consulta.where(Turma.ano_escolar == ano_escolar)
     consulta = _aplicar_turno(consulta, turno)
@@ -812,7 +848,7 @@ def ranking_matematica(
     consulta = _apenas_premiaveis(consulta, db, escola_id, ano)
     permitidas = permissoes.turmas_permitidas(db, escola_id, usuario)
     if permitidas is not None:  # professor: só as turmas dele
-        consulta = consulta.where(Turma.id.in_(permitidas))
+        consulta = _recortar_turmas(consulta, populacao, escola_id, permitidas)
 
     series = _series_por_aluno(db, escola_id, SnapshotMatific)
     itens: list[dict] = []
@@ -875,6 +911,7 @@ def ranking_matematica(
                               x["aluno_id"]))
     for posicao, item in enumerate(itens, start=1):
         item["posicao"] = posicao
+        _marcar_populacao(item, populacao)
     return itens
 
 
@@ -906,7 +943,11 @@ def premiacoes(
     Privacidade: com menos de ``MINIMO_ALUNOS_REFERENCIA_MATIFIC`` alunos com
     atividade no período, a régua sai sem ``k`` e as linhas da Melhor Matemática
     saem com ``valor: null`` (o índice, que com estrelas e atividades devolveria
-    o ``k``) — em todos os pódios da resposta. A ordem é a mesma."""
+    o ``k``) — em todos os pódios da resposta. A ordem é a mesma.
+
+    ``populacao`` diz de que ano letivo são as crianças e as turmas dos pódios: o
+    do período, quando ele cai inteiro num ano letivo já encerrado (a cerimônia de
+    2026 depois da virada); senão, o ativo (``periodos.populacao_do_periodo``)."""
     escola = db.get(Escola, escola_id)
     try:
         ini, fim_dt, rotulo = periodos.resolver(

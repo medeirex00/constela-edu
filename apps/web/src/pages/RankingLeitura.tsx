@@ -34,7 +34,8 @@ import {
   rotuloDoPeriodo,
   tabelaRanking as t,
 } from "../components/RankingUi";
-import { SeletorPeriodo, periodoParaQuery } from "../components/SeletorPeriodo";
+import { SeletorPeriodo, avisoPopulacao, periodoParaQuery } from "../components/SeletorPeriodo";
+import type { OrigemPopulacao } from "../components/SeletorPeriodo";
 import { SeloFrescorDaEscola } from "../components/SeloFrescor";
 import { SeletorTurno } from "../components/SeletorTurno";
 import { TabelaRolavel } from "../components/TabelaRolavel";
@@ -48,6 +49,14 @@ import { numero, tempoLeitura } from "../lib/formato";
 import { bimestreDoPeriodo } from "../lib/tiposCertificados";
 import { TURNO_SEM, TURNO_TODOS, aplicarTurno, rotuloTurno, turnoEfetivo } from "../lib/turnos";
 import type { RankingLeituraItem, Turma } from "../lib/types";
+
+/** Linha do ranking por período com o ANO LETIVO da criança e da turma (`ano_letivo`)
+ *  e por quê (`populacao`): num período de um ano já encerrado, as daquele ano. Ainda
+ *  não está em packages/core, por isso o tipo é estendido aqui. */
+type ItemLeituraPeriodo = RankingLeituraItem & {
+  ano_letivo?: number;
+  populacao?: OrigemPopulacao;
+};
 
 export default function RankingLeitura({ embutido = false, alvoAcoes }: {
   embutido?: boolean;
@@ -77,10 +86,18 @@ export default function RankingLeitura({ embutido = false, alvoAcoes }: {
     erro,
     carregando,
     recarregar,
-  } = useApi<RankingLeituraItem[]>(
+  } = useApi<ItemLeituraPeriodo[]>(
     escolaId ? `/escolas/${escolaId}/ranking/leitura?${q}` : null,
   );
   const lista = useMemo(() => itens ?? [], [itens]);
+  // De que ano são as crianças e as turmas da lista (todas as linhas dizem o mesmo):
+  // num período de um ano já encerrado, as daquele ano; num que passa por dois anos,
+  // as de agora. A lista vazia não tem o que avisar.
+  const primeira = lista[0];
+  const avisoAno = primeira?.populacao && primeira.ano_letivo != null
+    ? avisoPopulacao({ ano_letivo: primeira.ano_letivo, origem: primeira.populacao },
+                     alvo.turma_id ? "turma" : undefined)
+    : null;
   // Janelamento: em escolas grandes só as primeiras linhas entram no DOM.
   const { visiveis, restantes, mostrarMais } = useJanela(lista);
 
@@ -172,6 +189,11 @@ export default function RankingLeitura({ embutido = false, alvoAcoes }: {
                  descricao="Sincronize o Elefante Letrado (ou importe o relatório), ou escolha um período maior, como “Ano letivo”, para ver a leitura do ano inteiro." />
         ) : (
           <>
+            {avisoAno && (
+              <p role="note" className="mx-4 mt-3 rounded-xl bg-amber-50 px-3 py-2 text-xs text-amber-900 ring-1 ring-amber-200 sm:mx-5 dark:bg-amber-500/10 dark:text-amber-200 dark:ring-amber-500/25">
+                {avisoAno}
+              </p>
+            )}
             <FaixaPodio itens={podio} rotulo="Pódio da leitura no período" />
             {/* Celular: os PONTOS (o que ordena) ficam presos à direita. */}
             <TabelaRolavel rotulo="Leitura no período: tabela completa">

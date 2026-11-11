@@ -53,6 +53,45 @@ export function periodoParaQuery(p: Periodo): string {
   return q.toString();
 }
 
+/** De que ano letivo vêm as crianças de uma consulta por período (`periodos.
+ *  populacao_do_periodo` no backend): `populacao` nas premiações e no Relatório por
+ *  Período; `ano_letivo` + `populacao` em cada linha do Ranking de Leitura por período.
+ *  Ainda não está em packages/core, por isso é tipado aqui. */
+export type OrigemPopulacao = "ano_ativo" | "ano_do_periodo" | "atravessa_anos";
+
+export interface PopulacaoDoPeriodo {
+  ano_letivo: number;
+  origem: OrigemPopulacao;
+  ano_letivo_ativo?: number;
+}
+
+/** O aviso de que ano são as crianças e as turmas — a mesma frase do PDF do Relatório
+ *  por Período (`relatorios_periodo_pdf._populacao`). `null` no caso de sempre (o
+ *  período está no ano letivo ativo). `recorte`: há turma escolhida, ou o professor vê
+ *  só as turmas dele — num ano encerrado, essas turmas são as de agora e escolhem QUEM
+ *  aparece, cada criança com a turma que tinha naquele ano. */
+export function avisoPopulacao(
+  pop: PopulacaoDoPeriodo | null | undefined,
+  recorte?: "turma" | "suas_turmas",
+): string | null {
+  if (!pop) return null;
+  const ano = pop.ano_letivo;
+  if (pop.origem === "ano_do_periodo") {
+    const turmas = recorte === "turma"
+      ? ` A turma escolhida é a de agora: aparecem as crianças dela, com a turma que tinham em ${ano}.`
+      : recorte === "suas_turmas"
+        ? ` Suas turmas são as de agora: aparecem as crianças delas, com a turma que tinham em ${ano}.`
+        : "";
+    return `Período do ano letivo de ${ano}, que já terminou: entram as crianças matriculadas em ${ano}, `
+      + `com a turma e a série daquele ano.${turmas}`;
+  }
+  if (pop.origem === "atravessa_anos") {
+    return `O período passa por mais de um ano letivo: entram as crianças matriculadas em ${ano}, `
+      + `o ano letivo atual da escola, com a turma de agora. Quem não tem matrícula em ${ano} não aparece.`;
+  }
+  return null;
+}
+
 const estiloData = estiloDataPilula;
 
 /** As datas do "personalizado" (início e fim) e do "dia", no contrato do backend.

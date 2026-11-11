@@ -258,12 +258,19 @@ def resolver_janela(preset: str, ano_letivo: int, *,
 def _coorte(db: Session, escola_id: int, ano: int, *,
             turma_id: int | None = None,
             aluno_id: int | None = None,
-            turma_ids: list[int] | None = None) -> dict[int, dict]:
+            turma_ids: list[int] | None = None,
+            populacao: periodos.PopulacaoDoPeriodo | None = None) -> dict[int, dict]:
     """População ATIVA MATRICULADA no ano, já recortada pelo escopo. UMA query.
 
     ``turma_ids`` é o recorte de PERMISSÃO (professor restrito às turmas dele),
     não de escopo: ele se aplica também ao relatório "da escola", senão um
     professor pediria escopo=escola e receberia a escola inteira.
+
+    ``populacao`` de OUTRO ano letivo (período inteiro num ano já encerrado): a turma
+    do escopo e as do professor são as de agora, as únicas que os seletores e as
+    permissões conhecem — elas escolhem QUEM entra pelas matrículas nelas
+    (``PopulacaoDoPeriodo.alunos_das_turmas``), e cada criança segue com a turma e a
+    série do ano ``ano``.
     """
     consulta = (
         select(Aluno.id, Aluno.nome, Turma.id, Turma.nome, Turma.ano_escolar,
@@ -272,12 +279,17 @@ def _coorte(db: Session, escola_id: int, ano: int, *,
         .join(Turma, Matricula.turma_id == Turma.id)
         .where(Aluno.escola_id == escola_id, Aluno.status == "ativo",
                Matricula.ano_letivo == ano))
+    outro_ano = populacao is not None and populacao.outro_ano
     if turma_id is not None:
-        consulta = consulta.where(Turma.id == turma_id)
+        consulta = consulta.where(
+            Aluno.id.in_(populacao.alunos_das_turmas(escola_id, [turma_id])) if outro_ano
+            else Turma.id == turma_id)
     if aluno_id is not None:
         consulta = consulta.where(Aluno.id == aluno_id)
     if turma_ids is not None:
-        consulta = consulta.where(Turma.id.in_(turma_ids))
+        consulta = consulta.where(
+            Aluno.id.in_(populacao.alunos_das_turmas(escola_id, turma_ids)) if outro_ano
+            else Turma.id.in_(turma_ids))
     return {aid: {"nome": nome, "turma_id": tid, "turma": tnome,
                   "ano_escolar": serie, "turno": turno}
             for aid, nome, tid, tnome, serie, turno in db.execute(consulta).all()}
@@ -1157,12 +1169,18 @@ def gerar(db: Session, escola_id: int, *, preset: str,
     if escopo == "aluno" and aluno_id is None:
         raise RelatorioInvalido("O escopo 'aluno' exige aluno_id.")
 
-    ano = escola.ano_letivo_ativo
-    janela = resolver_janela(preset, ano, inicio=inicio, fim=fim, hoje=hoje)
+    janela = resolver_janela(preset, escola.ano_letivo_ativo, inicio=inicio, fim=fim,
+                             hoje=hoje)
+    # De que ano letivo são as crianças, as turmas e o contador do Matific: o do período
+    # quando ele cai inteiro num ano já encerrado (a mesma regra das premiações e do
+    # ranking por período); senão, o ativo. A resposta diz qual (``populacao``).
+    populacao = periodos.populacao_do_periodo(janela.inicio, janela.fim,
+                                              escola.ano_letivo_ativo)
+    ano = populacao.ano_letivo
     coorte = _coorte(db, escola_id, ano,
                      turma_id=turma_id if escopo in ("turma", "aluno") else None,
                      aluno_id=aluno_id if escopo == "aluno" else None,
-                     turma_ids=turma_ids)
+                     turma_ids=turma_ids, populacao=populacao)
 
     # O NOME da turma do recorte, do banco: com a coorte vazia (turma nova, ou com todos
     # transferidos) não há linha de resultado de onde tirá-lo, e o PDF — que circula
@@ -1175,7 +1193,9 @@ def gerar(db: Session, escola_id: int, *, preset: str,
             turma_nome = turma.nome
 
     saida: dict = {
-        "escola": {"id": escola_id, "nome": escola.nome, "ano_letivo": ano},
+        "escola": {"id": escola_id, "nome": escola.nome,
+                   "ano_letivo": escola.ano_letivo_ativo},
+        "populacao": populacao.como_dict(),
         "periodo": {"preset": janela.preset, "rotulo": janela.rotulo,
                     "inicio": janela.inicio.isoformat() if janela.inicio else None,
                     "fim": janela.fim.isoformat() if janela.fim else None,

@@ -400,9 +400,15 @@ def test_periodo_vazio_sem_vencedor(db):
     regua = dados["regua_matematica"]
     assert regua["k_mediana_atividades"] is None and regua["zeros_extras"] is None
     assert regua["alunos_com_atividade"] == 0
-    # Período fora do ano letivo: sem janela e sem vencedor.
-    fora = premiacoes.premiacoes(db, esc.id, datetime(2025, 8, 1), datetime(2025, 8, 31))
+    # Período fora do ano letivo (depois dele, antes da virada): sem janela e sem vencedor.
+    fora = premiacoes.premiacoes(db, esc.id, datetime(2027, 8, 1), datetime(2027, 8, 31))
     assert _mm(fora) == [] and fora["regua_matematica"]["modo"] == "fora_do_ano_letivo"
+    # Período inteiro num ano letivo JÁ ENCERRADO: as crianças e o contador daquele ano
+    # (S_G_VIRADA-2). Ninguém matriculado em 2025 aqui: sem vencedor, sem "fora do ano".
+    anterior = premiacoes.premiacoes(db, esc.id, datetime(2025, 8, 1), datetime(2025, 8, 31))
+    assert _mm(anterior) == [] and anterior["populacao"]["origem"] == "ano_do_periodo"
+    assert (anterior["regua_matematica"]["modo"],
+            anterior["regua_matematica"]["ano_letivo"]) == ("periodo", 2025)
     # Datas trocadas (início depois do fim): sem janela, sem vencedor e rótulo honesto.
     trocado = premiacoes.premiacoes(db, esc.id, AGO_FIM, AGO_INI)
     assert _mm(trocado) == [] and trocado["regua_matematica"]["modo"] == "periodo_invalido"

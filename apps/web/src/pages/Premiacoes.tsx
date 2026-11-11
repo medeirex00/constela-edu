@@ -35,6 +35,11 @@
  * ninguém fez atividade — o que era falso justamente quando o dado existia e
  * foi descartado pelo filtro de ano. Nada aqui recalcula: só lê e formata.
  *
+ * ANO DAS CRIANÇAS: num período de um ano letivo já encerrado (a cerimônia de 2026
+ * feita depois da virada), o backend monta os pódios com as crianças e as turmas
+ * daquele ano e diz isso em `populacao`; a tela avisa, e também quando o período
+ * passa por dois anos letivos (aí valem as crianças de agora).
+ *
  * ÍNDICE OCULTO: com poucos alunos com atividade no período, o backend devolve
  * as linhas da Matemática com `valor: null` (o índice, junto das estrelas e das
  * atividades, revelaria a mediana da escola — e com ela a contagem de uma
@@ -71,7 +76,8 @@ import type { ReactNode } from "react";
 import { Link } from "react-router-dom";
 
 import GerarCertificados from "../components/GerarCertificados";
-import { SeletorPeriodo, periodoParaQuery } from "../components/SeletorPeriodo";
+import { SeletorPeriodo, avisoPopulacao, periodoParaQuery } from "../components/SeletorPeriodo";
+import type { PopulacaoDoPeriodo } from "../components/SeletorPeriodo";
 import { MolduraPilula, estiloSelectPilula } from "../components/SeletorPilula";
 import { SeletorTurno } from "../components/SeletorTurno";
 import { SeloFrescor, type Frescor } from "../components/SeloFrescor";
@@ -162,10 +168,14 @@ interface ReguaMatematica {
 
 /** `frescor`: DE QUANDO é o dado dos pódios (`frescor_ranking`, o mesmo bloco
  *  de `/ranking/frescor`, com a população do pódio). Um pódio de "outubro"
- *  montado com a última coleta de 01/10 parece completo e não é. */
+ *  montado com a última coleta de 01/10 parece completo e não é.
+ *  `populacao`: de que ANO LETIVO são as crianças e as turmas dos pódios — num
+ *  período de um ano já encerrado (a cerimônia de 2026 depois da virada), as daquele
+ *  ano; num período que passa por dois anos, as do ano atual (a tela avisa). */
 type RespostaPremiacoes = PremiacoesT & {
   regua_matematica?: ReguaMatematica;
   frescor?: Frescor | null;
+  populacao?: PopulacaoDoPeriodo;
 };
 
 /** "2026-01-31T23:59:59.999999" → "31/01/2026". Sem passar por `Date`: a data
@@ -884,6 +894,9 @@ export default function Premiacoes() {
   // Régua da Matemática: o período do cabeçalho pode não ser o intervalo usado.
   const regua = dados?.regua_matematica;
   const avisoJanela = dados ? janelaDivergente(dados) : null;
+  // De que ano são as crianças e as turmas dos pódios: num período de um ano já
+  // encerrado, as daquele ano; num período que passa por dois anos, as de agora.
+  const avisoAno = avisoPopulacao(dados?.populacao, turmaId ? "turma" : undefined);
 
   // Chip do cabeçalho: só quando o período escolhido É o bimestre em curso
   // ("Este bimestre" ou o número dele), pelo calendário oficial (o do backend).
@@ -946,6 +959,13 @@ export default function Premiacoes() {
       {/* Data do dado: o backend já manda o bloco na resposta (sem pedido a
           mais); só as dimensões contratadas aparecem. */}
       {dados && <SeloFrescor frescor={dados.frescor} dimensoes={["leitura", "matematica"]} />}
+
+      {avisoAno && (
+        <Faixa papel="note" tom={dados?.populacao?.origem === "atravessa_anos" ? "alerta" : "info"}
+               icone={CalendarClock}>
+          {avisoAno}
+        </Faixa>
+      )}
 
       {avisoJanela && (
         <Faixa papel="note" tom="alerta" icone={AlertTriangle}>

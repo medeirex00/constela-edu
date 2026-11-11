@@ -29,7 +29,8 @@ import {
 import { useEffect, useMemo, useState } from "react";
 
 import { IconePlataforma } from "../components/identidadePlataforma";
-import { SeletorPeriodo, periodoParaQuery } from "../components/SeletorPeriodo";
+import { SeletorPeriodo, avisoPopulacao, periodoParaQuery } from "../components/SeletorPeriodo";
+import type { PopulacaoDoPeriodo } from "../components/SeletorPeriodo";
 import { MolduraPilula, estiloSelectPilula } from "../components/SeletorPilula";
 import { TabelaRolavel } from "../components/TabelaRolavel";
 import {
@@ -181,6 +182,9 @@ interface LinhaAluno {
 
 interface RelatorioPeriodoT {
   escola: { id: number; nome: string; ano_letivo: number };
+  /** De que ano letivo são as crianças e as turmas medidas: num período de um ano já
+   *  encerrado, as daquele ano (não as do ano ativo da escola, em `escola`). */
+  populacao?: PopulacaoDoPeriodo;
   periodo: { preset: string; rotulo: string; inicio: string | null; fim: string | null; inclusivo: boolean };
   escopo: { tipo: string; turma_id: number | null; aluno_id: number | null; restrito_a_turmas: number[] | null };
   plataformas: string[];
@@ -684,6 +688,14 @@ export default function RelatorioPeriodo() {
     ele?.primeiro_evento_da_escola && dados?.periodo.inicio
       ? dados.periodo.inicio < ele.primeiro_evento_da_escola
       : false;
+  // De que ano são as crianças e as turmas medidas: num período de um ano já encerrado,
+  // as daquele ano (o cabeçalho diz esse ano, não o ativo da escola); num período que
+  // passa por dois anos, as de agora. A mesma frase do PDF.
+  const anoLetivo = dados?.populacao?.ano_letivo ?? dados?.escola.ano_letivo;
+  const avisoAno = avisoPopulacao(
+    dados?.populacao,
+    dados?.escopo.turma_id ? "turma" : dados?.escopo.restrito_a_turmas ? "suas_turmas" : undefined,
+  );
 
   // Ao trocar o recorte, o relatório anterior fica na tela até o novo chegar: o aviso
   // "Atualizando" diz que os números ainda são do recorte de antes.
@@ -831,7 +843,7 @@ export default function RelatorioPeriodo() {
                   <p className="mt-1 flex items-start gap-1.5 text-xs text-zinc-500 dark:text-zinc-400">
                     <School size={13} aria-hidden className="mt-px shrink-0" />
                     <span className="min-w-0">
-                      {dados.plataformas_rotulo} · {dados.escola.nome} · ano letivo {dados.escola.ano_letivo}
+                      {dados.plataformas_rotulo} · {dados.escola.nome} · ano letivo {anoLetivo}
                       {dados.periodo.inclusivo && " · intervalo inclusivo nas duas datas"}
                     </span>
                   </p>
@@ -854,6 +866,12 @@ export default function RelatorioPeriodo() {
             {dados.escopo.restrito_a_turmas && (
               <p className="mt-4 text-xs text-zinc-500 dark:text-zinc-400">
                 Você vê as turmas vinculadas ao seu cadastro ({dados.escopo.restrito_a_turmas.length}).
+              </p>
+            )}
+            {avisoAno && (
+              <p role="note" className={`mt-4 flex gap-2 ${CAIXA_ALERTA}`}>
+                <Info size={14} aria-hidden className={ICONE_ALERTA} />
+                <span>{avisoAno}</span>
               </p>
             )}
             {antesDoHistorico && (

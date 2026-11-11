@@ -317,16 +317,51 @@ def _tiles(dados: dict) -> list[tuple[str, str]]:
     return tiles[:5]
 
 
+def _ano_letivo(dados: dict) -> str:
+    """O ano letivo do relatório: o das crianças medidas (``populacao``), que num
+    período de ano encerrado não é o ano ativo da escola. Resultado de antes do campo:
+    o da escola."""
+    ano = ((dados.get("populacao") or {}).get("ano_letivo")
+           or (dados.get("escola") or {}).get("ano_letivo"))
+    return str(ano or "")
+
+
+def _populacao(dados: dict) -> tuple[str, str, str] | None:
+    """De que ano são as crianças e as turmas, quando isso precisa ser dito: (frase
+    inteira da vitrine, valor e detalhe CURTOS da reserva). A mesma regra e as mesmas
+    frases da tela (``avisoPopulacao`` em components/SeletorPeriodo.tsx). ``None`` no
+    caso de sempre (o período está no ano letivo ativo)."""
+    pop = dados.get("populacao") or {}
+    ano, ativo = pop.get("ano_letivo"), pop.get("ano_letivo_ativo")
+    if pop.get("origem") == "ano_do_periodo":
+        escopo = dados.get("escopo") or {}
+        turmas = (f" A turma escolhida é a de agora: aparecem as crianças dela, com a "
+                  f"turma que tinham em {ano}." if escopo.get("turma_id")
+                  # O papel circula: "suas turmas" (como na tela) seria de quem lê.
+                  else f" As turmas de quem gerou são as de agora: aparecem as crianças "
+                       f"delas, com a turma que tinham em {ano}."
+                  if escopo.get("restrito_a_turmas")
+                  else "")
+        return (f"Período do ano letivo de {ano}, que já terminou: entram as crianças "
+                f"matriculadas em {ano}, com a turma e a série daquele ano.{turmas}",
+                f"as de {ano}", f"ano do período; escola já em {ativo}")
+    if pop.get("origem") == "atravessa_anos":
+        return (f"O período passa por mais de um ano letivo: entram as crianças "
+                f"matriculadas em {ano}, o ano letivo atual da escola, com a turma de "
+                f"agora. Quem não tem matrícula em {ano} não aparece.",
+                f"as de {ano}", "período em mais de um ano letivo")
+    return None
+
+
 def _periodo_html(dados: dict) -> str:
     periodo = dados.get("periodo") or {}
-    escola = dados.get("escola") or {}
     escopo = dados.get("escopo") or {}
     itens = [
         ("Período", _intervalo(periodo)),
         ("Tipo de período", str(periodo.get("rotulo") or "")),
         ("Plataformas", dados.get("plataformas_rotulo") or ""),
         ("Escopo", _ROTULO_ESCOPO.get(escopo.get("tipo"), str(escopo.get("tipo") or ""))),
-        ("Ano letivo", str(escola.get("ano_letivo") or "")),
+        ("Ano letivo", _ano_letivo(dados)),
     ]
     quem = _quem(dados)
     if quem:
@@ -341,6 +376,11 @@ def _periodo_html(dados: dict) -> str:
                      ("Recorte do usuário",
                       f"{len(restrito)} turma(s) vinculada(s) ao cadastro de quem "
                       f"gerou — NÃO é a escola inteira"))
+    # Pelo mesmo motivo: um relatório de out–dez/2026 tirado depois da virada diz que
+    # as crianças e as turmas são as de 2026, não as de agora.
+    populacao = _populacao(dados)
+    if populacao:
+        itens.append(("Crianças e turmas", populacao[0]))
     corpo = "".join(
         f'<tr><td class="esq">{_esc_html(r)}</td>'
         f'<td class="esq rp-val">{_esc_html(v)}</td></tr>' for r, v in itens)
@@ -1008,6 +1048,11 @@ def _reserva(dados: dict, cor: str) -> bytes:
         # Curto para caber inteiro na 3ª coluna (como os ``curto`` de "Como ler").
         linhas.append(["Recorte do usuário", f"{len(restrito)} turma(s)",
                        "turmas de quem gerou - não é a escola inteira"])
+    populacao = _populacao(dados)
+    if populacao:
+        # De que ano são as crianças e as turmas (período de um ano já encerrado, ou
+        # que passa por mais de um): curto, para caber inteiro.
+        linhas.append(["Crianças e turmas", populacao[1], populacao[2]])
     linhas.append(["RESUMO DO PERÍODO", "", ""])
     linhas += [list(linha) for linha in linhas_resumo(dados)]
 

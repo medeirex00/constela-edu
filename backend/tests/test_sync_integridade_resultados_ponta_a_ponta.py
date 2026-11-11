@@ -45,6 +45,7 @@ SCHOOL_UUID = "c93c93c9-0000-0000-0000-000000000001"
 COMP_UUID = "c93c93c9-0000-0000-0000-0000000000cc"
 K1, K2 = "3 ANO A (300396804)", "4 ANO B (300397061)"
 CID1, CID2 = 511434, 600001
+ANO_DAS_LEITURAS = 2026      # as datas fixas das leituras da plataforma falsa
 
 
 # ---------------------------------------------------------------------------
@@ -204,6 +205,21 @@ def _montar(db, escola_completa):
         db.add(Matricula(escola_id=eid, aluno_id=a.id, turma_id=t2.id,
                          ano_letivo=escola.ano_letivo_ativo))
         alunos.append(a)
+    # As leituras do cenário têm datas fixas de 2026 (setembro e outubro). Com o relógio
+    # adiantado a escola já está no ano seguinte (``escola_no_ano_de_hoje``), e o ranking
+    # e as premiações de um período de ano letivo ENCERRADO contam as crianças
+    # matriculadas NAQUELE ano (S_G_VIRADA-2): quem leu em 2026 estava matriculado em
+    # 2026, e o cenário passa a dizer isso.
+    if escola.ano_letivo_ativo != ANO_DAS_LEITURAS:
+        for nome_turma, serie, grupo in (("3º Ano A", "3º Ano", alunos[:3]),
+                                         ("4º Ano B", "4º Ano", alunos[3:])):
+            antiga = Turma(escola_id=eid, nome=nome_turma, ano_escolar=serie,
+                           ano_letivo=ANO_DAS_LEITURAS)
+            db.add(antiga)
+            db.flush()
+            for a in grupo:
+                db.add(Matricula(escola_id=eid, aluno_id=a.id, turma_id=antiga.id,
+                                 ano_letivo=ANO_DAS_LEITURAS))
     esperado = []
     for i, al in enumerate(alunos, start=1):
         livros = [_livro(f"Livro Ficticio {i}-{j}", "E" if j % 2 else "D",

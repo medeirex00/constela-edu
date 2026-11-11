@@ -8,8 +8,13 @@ estatísticas por qualquer janela de tempo (base das premiações por período).
 """
 from __future__ import annotations
 
+from collections.abc import Iterable
+from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta
 
+from sqlalchemy import Select, select
+
+from app.models import Matricula
 from app.services import bimestres
 
 # Presets aceitos pela API (o frontend usa exatamente estas chaves).
@@ -219,3 +224,90 @@ def _parse_data(texto: str | None) -> date | None:
     if not texto:
         return None
     return date.fromisoformat(texto)  # aceita "AAAA-MM-DD"; ValueError se inválido
+
+
+# ---------------------------------------------------------------------------
+# A POPULAÇÃO do período: de que ano letivo vêm as crianças
+# ---------------------------------------------------------------------------
+#: As crianças do ano letivo ATIVO da escola — o período está nele (ou depois dele, antes
+#: da virada manual), ou é "Todo o histórico". A regra de sempre, sem aviso.
+ORIGEM_ANO_ATIVO = "ano_ativo"
+#: O período cai INTEIRO num ano letivo ANTERIOR ao ativo: as crianças matriculadas
+#: NAQUELE ano, com a turma e a série dele.
+ORIGEM_ANO_DO_PERIODO = "ano_do_periodo"
+#: O período passa por mais de um ano letivo (ou não tem uma das pontas): a regra de
+#: sempre (o ano ativo), DECLARADA — quem não tem matrícula no ano ativo não aparece.
+ORIGEM_ATRAVESSA_ANOS = "atravessa_anos"
+
+
+@dataclass(frozen=True)
+class PopulacaoDoPeriodo:
+    """De que ANO LETIVO vêm as crianças de uma consulta por período — a fonte única das
+    premiações, do Ranking de Leitura e de Matemática por período e do Relatório por
+    Período (tela e PDF).
+
+    ``ano_letivo`` decide as MATRÍCULAS (quem entra, com a turma e a série daquele ano) e
+    o ano do contador do Matific, que zera a cada ano. O ano letivo é o ano civil — a
+    mesma janela do preset "Ano letivo" e de ``matific_destaque.janela_ano_letivo``.
+
+    Por que existe (S_G_VIRADA-2): depois da virada, a cerimônia de 2026 feita em
+    fevereiro pedia out–dez/2026 e recebia as crianças de 2027 — a formanda do 5º ano que
+    liderou sumia do pódio e as demais apareciam na turma do ano novo, sem aviso."""
+    ano_letivo: int
+    origem: str
+    ano_letivo_ativo: int
+
+    @property
+    def outro_ano(self) -> bool:
+        """As crianças são de um ano letivo que não é o ativo da escola?"""
+        return self.ano_letivo != self.ano_letivo_ativo
+
+    def como_dict(self) -> dict:
+        """O bloco ``populacao`` das respostas: a tela e o PDF dizem de que ano são as
+        crianças e as turmas, e por quê."""
+        return {"ano_letivo": self.ano_letivo, "origem": self.origem,
+                "ano_letivo_ativo": self.ano_letivo_ativo}
+
+    def alunos_das_turmas(self, escola_id: int, turma_ids: Iterable[int]) -> Select:
+        """As crianças que um RECORTE DE TURMA escolhe — a turma do filtro da tela ou as
+        turmas do professor —, como subconsulta de ``Aluno.id``.
+
+        Os seletores de turma e as permissões só conhecem as turmas de AGORA (as do ano
+        ativo). Num período de ano encerrado, a turma escolhida não tem matrícula naquele
+        ano: filtrar pela turma da matrícula do período deixaria a lista sempre vazia (o
+        professor, depois da virada, não veria nada do bimestre passado). Então o recorte
+        escolhe QUEM aparece pela matrícula na turma — no ano ativo ou no ano do período
+        (uma turma é de um ano só) — e cada criança continua saindo com a turma e a série
+        que tinha no ano do período. A criança tem uma matrícula por ano
+        (``uq_matricula_aluno_ano``), então no ano ativo isto é o mesmo que filtrar pela
+        turma da matrícula."""
+        anos = sorted({self.ano_letivo, self.ano_letivo_ativo})
+        return select(Matricula.aluno_id).where(
+            Matricula.escola_id == escola_id,
+            Matricula.turma_id.in_(list(turma_ids)),
+            Matricula.ano_letivo.in_(anos))
+
+
+def populacao_do_periodo(inicio: datetime | date | None, fim: datetime | date | None,
+                         ano_letivo_ativo: int) -> PopulacaoDoPeriodo:
+    """A população de um período já resolvido (``resolver``) numa escola cujo ano letivo
+    ativo é ``ano_letivo_ativo``.
+
+    * período INTEIRO num ano letivo ANTERIOR ao ativo → as crianças daquele ano
+      (``ano_do_periodo``): o pódio de um ano fechado é o mesmo antes e depois da virada;
+    * "Todo o histórico", período dentro do ano ativo, ou inteiro num ano posterior (em
+      janeiro, antes de alguém virar o ano da escola) → as crianças de agora
+      (``ano_ativo``), como sempre;
+    * período que passa por mais de um ano letivo, ou com uma ponta só que não fica no ano
+      ativo em diante → a regra de sempre, declarada (``atravessa_anos``).
+    """
+    if inicio is None and fim is None:
+        return PopulacaoDoPeriodo(ano_letivo_ativo, ORIGEM_ANO_ATIVO, ano_letivo_ativo)
+    if inicio is not None and fim is not None and inicio.year == fim.year:
+        if inicio.year < ano_letivo_ativo:
+            return PopulacaoDoPeriodo(inicio.year, ORIGEM_ANO_DO_PERIODO, ano_letivo_ativo)
+        return PopulacaoDoPeriodo(ano_letivo_ativo, ORIGEM_ANO_ATIVO, ano_letivo_ativo)
+    if fim is None and inicio.year >= ano_letivo_ativo:
+        # "A partir de 01/03/2027" numa escola em 2027: é o ano ativo daqui em diante.
+        return PopulacaoDoPeriodo(ano_letivo_ativo, ORIGEM_ANO_ATIVO, ano_letivo_ativo)
+    return PopulacaoDoPeriodo(ano_letivo_ativo, ORIGEM_ATRAVESSA_ANOS, ano_letivo_ativo)

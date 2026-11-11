@@ -4,6 +4,11 @@
     "nome": "ESCOLA TESTE",
     "ano_letivo": 2026
   },
+  "populacao": {
+    "ano_letivo": 2026,
+    "origem": "ano_ativo",
+    "ano_letivo_ativo": 2026
+  },
   "periodo": {
     "preset": "personalizado",
     "rotulo": "01/09/2026 a 30/09/2026",
