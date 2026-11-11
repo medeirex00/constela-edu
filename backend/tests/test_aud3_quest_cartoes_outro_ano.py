@@ -141,3 +141,61 @@ def test_rotacionar_a_turma_de_outro_ano_segue_derrubando_o_cartao_de_quem_saiu(
     assert r.status_code == 200, r.text
     assert r.headers["content-type"] == "application/pdf"
     assert _entra(codigo_de_quem_saiu) == 401
+
+
+# REV3-QUEST-1: a recusa só diz o que vale sempre (o ano da turma, o ano ativo e que
+# nada foi gerado). Ela não afirma que cada criança já está numa turma do ano ativo,
+# nem chama de "histórico" as matrículas de uma turma que pode ser do ano SEGUINTE.
+FRASES_QUE_NEM_SEMPRE_SAO_VERDADE = ("já está na turma", "são histórico", "histórico",
+                                     "turma atual")
+
+
+def _matriculas_no_ano(db, alunos, ano: int) -> int:
+    return db.execute(select(func.count()).select_from(Matricula)
+                      .where(Matricula.ano_letivo == ano,
+                             Matricula.aluno_id.in_([a.id for a in alunos]))).scalar_one()
+
+
+def _confere_recusa(r, ano_da_turma: int, ano_ativo: int) -> None:
+    assert r.status_code == 409, r.text
+    texto = r.json()["detail"]
+    falsas = [f for f in FRASES_QUE_NEM_SEMPRE_SAO_VERDADE if f in texto]
+    assert falsas == [], f"o texto afirma o que pode não ser verdade ({falsas}): {texto!r}"
+    assert f"ano letivo {ano_da_turma}" in texto
+    assert f"ano letivo ativo é {ano_ativo}" in texto
+    assert "Nenhum cartão foi gerado" in texto
+
+
+def test_recusa_logo_depois_da_virada_nao_diz_que_a_crianca_ja_esta_na_turma_nova(
+        cliente, db, escola_completa):
+    """Virada feita e a Lista Piloto do ano novo ainda não entrou: nenhuma criança
+    tem matrícula no ano ativo, e o texto não pode dizer que ela já está lá."""
+    escola, turma_velha = escola_completa["escola"], escola_completa["turma"]
+    alunos = escola_completa["alunos"]
+    assert _folha(cliente, escola.id, turma_velha.id).status_code == 200
+    esc = db.get(Escola, escola.id)
+    esc.ano_letivo_ativo += 1
+    novo = esc.ano_letivo_ativo
+    db.commit()
+    assert _matriculas_no_ano(db, alunos, novo) == 0
+
+    r = _folha(cliente, escola.id, turma_velha.id)
+
+    _confere_recusa(r, turma_velha.ano_letivo, novo)
+
+
+def test_recusa_na_turma_do_ano_seguinte_nao_chama_as_matriculas_de_historico(
+        cliente, db, escola_completa):
+    """Turma criada para o ano SEGUINTE antes da virada: as matrículas dela não são
+    histórico e as crianças não estão em turma "do ano letivo ativo" por causa dela."""
+    escola = escola_completa["escola"]
+    esc = db.get(Escola, escola.id)
+    ativo = esc.ano_letivo_ativo
+    futura = Turma(escola_id=escola.id, nome="4º Ano A", ano_escolar="4º Ano",
+                   ano_letivo=ativo + 1)
+    db.add(futura)
+    db.commit()
+
+    r = _folha(cliente, escola.id, futura.id)
+
+    _confere_recusa(r, ativo + 1, ativo)

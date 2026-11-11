@@ -42,10 +42,15 @@ def _turma_da_escola(db: Session, escola_id: int, turma_id: int) -> Turma:
 def _exigir_reimpressao_no_ano_ativo(turma: Turma, escola: Escola | None) -> None:
     """Reimpressão (sem revogação) da folha de uma turma de OUTRO ano letivo: 409.
 
-    A turma de outro ano lista as matrículas daquele ano (histórico), mas a
-    credencial é uma por criança: a folha sairia com o nome da turma velha em cada
-    cartão ("3º Ano A" para quem já está no "4º Ano A") e criaria credencial e
-    perfil para quem não tinha. O cartão sai na turma atual da criança.
+    A turma de outro ano (a do ano anterior, ou a do ano seguinte criada antes da
+    virada) lista as matrículas daquele ano, mas a credencial é uma por criança: a
+    folha sairia com o nome dessa turma em cada cartão ("3º Ano A" para quem já
+    está no "4º Ano A") e criaria credencial e perfil para quem não tinha. O cartão
+    sai pela turma do ano letivo ativo.
+
+    O texto da recusa só diz o que vale sempre: logo depois da virada, antes da
+    Lista Piloto do ano novo, nenhuma criança tem matrícula no ano ativo, e quem
+    saiu da escola não terá (REV3-QUEST-1).
 
     A revogação (``regenerar``/``rotacionar_codigo``) dessa turma segue valendo:
     depois da virada, é o caminho em lote que derruba o cartão de quem saiu da
@@ -55,10 +60,10 @@ def _exigir_reimpressao_no_ano_ativo(turma: Turma, escola: Escola | None) -> Non
         return
     raise HTTPException(
         status.HTTP_409_CONFLICT,
-        f"A turma “{turma.nome}” é do ano letivo {turma.ano_letivo}, e as matrículas "
-        "dela são histórico. Os cartões do Quest saem com o nome da turma, e cada "
-        f"criança já está na turma dela do ano letivo {ano}. Nenhum cartão foi gerado. "
-        f"Para imprimir os cartões, abra a turma atual da criança, do ano letivo {ano}.")
+        f"A turma “{turma.nome}” é do ano letivo {turma.ano_letivo}, e o ano letivo "
+        f"ativo é {ano}. Os cartões do Quest saem com o nome da turma, então a folha "
+        "desta turma não é impressa. Nenhum cartão foi gerado. Imprima os cartões "
+        f"pela turma do ano letivo {ano} em que a criança estiver matriculada.")
 
 
 def _slug_ascii(texto: str) -> str:
@@ -175,7 +180,8 @@ def gerar_cartoes(turma_id: int,
     ano — a criança nunca perde acesso sozinha.
 
     Turma de OUTRO ano letivo: a reimpressão é 409 (o cartão sairia com o nome
-    da turma velha); a revogação segue valendo (``_exigir_reimpressao_no_ano_ativo``).
+    de uma turma que não é a do ano ativo); a revogação segue valendo
+    (``_exigir_reimpressao_no_ano_ativo``).
     """
     turma = _turma_da_escola(db, escola_id, turma_id)
     # Professor restrito não gera/regenera/rotaciona credenciais de turma alheia
