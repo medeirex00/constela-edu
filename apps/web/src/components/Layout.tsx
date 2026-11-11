@@ -74,7 +74,7 @@ import { dataHora } from "../lib/formato";
 import { normalizar } from "../lib/nomes";
 import { podeAbrirRota } from "../lib/rotasGuardadas";
 import { Logo, LogoHorizontal } from "./Logo";
-import { Avatar, BotaoIcone, Carregando, IconePastel } from "./ui";
+import { Avatar, Botao, BotaoIcone, Carregando, IconePastel } from "./ui";
 
 /** Seção da barra lateral (identidade v2): o rótulo em caixa alta sobre os grupos. Cada
  *  PERFIL tem as suas (`secoesDoPerfil`) — as fixas "Projeto"/"Gestão" não diziam nada à
@@ -948,6 +948,9 @@ function Notificacoes() {
   const [naoLidas, setNaoLidas] = useState(0);
   const [itens, setItens] = useState<Notificacao[]>([]);
   const [carregando, setCarregando] = useState(false);
+  // Falha ao LISTAR não é "nenhuma novidade": o contador pode estar dizendo que há
+  // avisos (inclusive os críticos de coleta) e o popover não pode negar isso.
+  const [falhou, setFalhou] = useState(false);
   const caixa = useRef<HTMLDivElement | null>(null);
 
   // Badge: busca o contador em segundo plano (~60s), independente do popover
@@ -979,23 +982,33 @@ function Notificacoes() {
     return () => document.removeEventListener("mousedown", fechar);
   }, []);
 
-  async function alternar() {
-    const abrindo = !aberto;
-    setAberto(abrindo);
-    if (!abrindo) return;
+  async function carregar() {
     setCarregando(true);
+    setFalhou(false);
     try {
       const lista = await api<Notificacao[]>("/notificacoes");
       setItens(lista);
       if (lista.some((n) => !n.lida)) {
-        await api("/notificacoes/marcar-lidas", { method: "POST" }).catch(() => {});
+        // Abrir = visto tudo, mas só quando o servidor GRAVOU a leitura: com o
+        // marcar-lidas falhando, o contador continua (a próxima busca dele, em
+        // segundo plano, segue dizendo a verdade).
+        await api("/notificacoes/marcar-lidas", { method: "POST" })
+          .then(() => setNaoLidas(0), () => undefined);
+      } else {
+        setNaoLidas(0);
       }
-      setNaoLidas(0); // abrir = visto tudo
     } catch {
       setItens([]);
+      setFalhou(true);
     } finally {
       setCarregando(false);
     }
+  }
+
+  function alternar() {
+    const abrindo = !aberto;
+    setAberto(abrindo);
+    if (abrindo) void carregar();
   }
 
   // Aviso que aponta para uma tela que o perfil não abre (ex.: backup →
@@ -1037,6 +1050,13 @@ function Notificacoes() {
           </p>
           {carregando ? (
             <p className="px-4 py-4 text-sm text-zinc-500 dark:text-zinc-400">Carregando…</p>
+          ) : falhou ? (
+            <div role="alert" className="flex flex-col items-center px-4 py-6 text-center">
+              <p className="text-sm text-zinc-600 dark:text-zinc-300">Não foi possível carregar as notificações.</p>
+              <Botao variante="secundario" tamanho="sm" className="mt-3" onClick={() => void carregar()}>
+                Tentar de novo
+              </Botao>
+            </div>
           ) : itens.length === 0 ? (
             <div className="flex flex-col items-center px-4 py-7 text-center">
               <IconePastel icone={Bell} tom="violeta" />
