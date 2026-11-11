@@ -12,7 +12,7 @@ import pytest
 from app.services import relatorios as svc
 
 DADOS = "Dados das plataformas: Leitura de 19/10/2026; Matemática de 18/10/2026"
-ESCOLA_CURTA = "EMEF JOAO THIMOTEO"
+ESCOLA_CURTA = "EMEF FICTICIA AURORA"
 ESCOLA_LONGA = ("EMEF PROFESSORA MARIA APARECIDA DE OLIVEIRA SANTOS CARVALHO "
                 "- JARDIM CALIFÓRNIA")
 NOME_43 = "Maria Eduarda Aparecida dos Santos Oliveira"
