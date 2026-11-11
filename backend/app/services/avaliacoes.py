@@ -19,7 +19,7 @@ import time
 import zipfile
 from datetime import datetime, timedelta, timezone
 from itertools import islice
-from typing import Callable, Iterator
+from typing import Any, Callable, Iterator
 from urllib.parse import urlparse
 
 import httpcore
@@ -926,20 +926,112 @@ def _exigir_destino_publico(url: str) -> list[str]:
     return _resolver_publico(host, partes.port or 443)
 
 
+def _duracao(segundos: float) -> str:
+    return f"{segundos / 60:g} min" if segundos >= 60 else f"{segundos:g} s"
+
+
+class _PrazoTotal:
+    """O prazo do download INTEIRO (``AVALIACOES_DOWNLOAD_PRAZO_S``), medido com
+    ``time.monotonic``, e se foi ele — e não a espera por operação — que fez uma operação
+    de rede desistir (``estourou``)."""
+
+    def __init__(self, segundos: float) -> None:
+        self.segundos = segundos
+        self.fim = time.monotonic() + segundos
+        self.estourou = False
+
+    def erro(self) -> ValueError:
+        return ValueError(
+            f"o download passou do prazo total de {_duracao(self.segundos)} sem terminar: o "
+            "servidor está respondendo devagar demais. Tente de novo mais tarde.")
+
+    def conferir(self) -> None:
+        if time.monotonic() >= self.fim:
+            raise self.erro()
+
+    def espera(self, timeout: float | None, esgotado: type[Exception]
+               ) -> tuple[float | None, bool]:
+        """A espera de UMA operação de rede: o menor entre ``timeout`` e o que resta do
+        prazo, e se foi o prazo que a limitou. Sem tempo restante, levanta ``esgotado`` (a
+        exceção de tempo esgotado do httpcore para a operação) sem esperar nada."""
+        resta = self.fim - time.monotonic()
+        if resta <= 0:
+            self.estourou = True
+            raise esgotado("o download passou do prazo total")
+        if timeout is None or resta < timeout:
+            return resta, True
+        return timeout, False
+
+    def limitar(self, operacao: Callable[[float | None], Any], timeout: float | None,
+                esgotado: type[Exception]):
+        """Roda ``operacao(espera)`` com a espera limitada pelo prazo e marca ``estourou``
+        quando a operação desistiu por causa dele."""
+        espera, pelo_prazo = self.espera(timeout, esgotado)
+        try:
+            return operacao(espera)
+        except httpcore.TimeoutException:
+            if pelo_prazo:
+                self.estourou = True
+            raise
+
+
+class _ConexaoComPrazo(httpcore.NetworkStream):
+    """A conexão aberta pelo ``_RedeSoIpPublico`` com o prazo total do download em CADA
+    leitura e escrita: o cabeçalho HTTP, a conexão segura (TLS) e o corpo. O ``timeout`` do
+    httpx vale por operação (cada leitura recomeça a contagem); conferir o prazo só entre
+    os pedaços do corpo deixava de fora o cabeçalho — o httpcore aceita até 100 KB dele —,
+    e um servidor que o gotejasse seguraria a coleta por semanas (REV3-INDIC-1)."""
+
+    def __init__(self, conexao: httpcore.NetworkStream, prazo: _PrazoTotal) -> None:
+        self._conexao, self._prazo = conexao, prazo
+
+    def read(self, max_bytes: int, timeout: float | None = None) -> bytes:
+        return self._prazo.limitar(lambda espera: self._conexao.read(max_bytes, espera),
+                                   timeout, httpcore.ReadTimeout)
+
+    def write(self, buffer: bytes, timeout: float | None = None) -> None:
+        self._prazo.limitar(lambda espera: self._conexao.write(buffer, espera),
+                            timeout, httpcore.WriteTimeout)
+
+    def close(self) -> None:
+        self._conexao.close()
+
+    def start_tls(self, ssl_context, server_hostname=None, timeout=None):
+        try:
+            segura = self._prazo.limitar(
+                lambda espera: self._conexao.start_tls(ssl_context, server_hostname, espera),
+                timeout, httpcore.ConnectTimeout)
+        except Exception:
+            self._conexao.close()   # como o start_tls do httpcore: não fica conexão aberta
+            raise
+        return _ConexaoComPrazo(segura, self._prazo)
+
+    def get_extra_info(self, info: str):
+        return self._conexao.get_extra_info(info)
+
+
 class _RedeSoIpPublico(httpcore.SyncBackend):
     """Backend de rede do httpcore que abre o socket SÓ no IP conferido: o nome é
     resolvido uma vez, na hora da conexão, cada IP passa por ``_ip_publico`` e a
     conexão TCP vai ao IP conferido — não a uma 2ª resolução, que um DNS com TTL 0
     poderia apontar para a rede interna. O TLS continua verificando o certificado pelo
-    NOME do endereço (o SNI e o cabeçalho Host são os do URL)."""
+    NOME do endereço (o SNI e o cabeçalho Host são os do URL). A conexão aberta leva o
+    prazo total do download (``_ConexaoComPrazo``)."""
+
+    def __init__(self, prazo: _PrazoTotal) -> None:
+        self._prazo = prazo
 
     def connect_tcp(self, host, port, timeout=None, local_address=None, socket_options=None):
+        abrir = super().connect_tcp
         erro: Exception | None = None
         for ip in _resolver_publico(host, port):
             try:
-                return super().connect_tcp(ip, port, timeout=timeout,
-                                           local_address=local_address,
-                                           socket_options=socket_options)
+                conexao = self._prazo.limitar(
+                    lambda espera, ip=ip: abrir(ip, port, timeout=espera,
+                                                local_address=local_address,
+                                                socket_options=socket_options),
+                    timeout, httpcore.ConnectTimeout)
+                return _ConexaoComPrazo(conexao, self._prazo)
             except (httpcore.ConnectError, httpcore.ConnectTimeout) as exc:
                 erro = exc                       # tenta o próximo IP do host, como o socket
         raise erro
@@ -950,18 +1042,14 @@ class _TransporteSoIpPublico(httpx.HTTPTransport):
     ``_RedeSoIpPublico``. Passado ao cliente, ele também deixa de fora o proxy das
     variáveis de ambiente: a conexão vai direto ao IP conferido."""
 
-    def __init__(self) -> None:
+    def __init__(self, prazo: _PrazoTotal) -> None:
         super().__init__()
         pool = getattr(self, "_pool", None)
         if not hasattr(pool, "_network_backend"):
             # Fecha em vez de abrir: sem o ponto de extensão, o IP não ficaria fixado.
             raise RuntimeError("httpx/httpcore sem o backend de rede configurável: a coleta "
                                "não conecta sem fixar o IP conferido pela guarda anti-SSRF.")
-        pool._network_backend = _RedeSoIpPublico()
-
-
-def _duracao(segundos: float) -> str:
-    return f"{segundos / 60:g} min" if segundos >= 60 else f"{segundos:g} s"
+        pool._network_backend = _RedeSoIpPublico(prazo)
 
 
 def baixar_url(url: str, *, timeout: float = 30.0) -> bytes:
@@ -973,40 +1061,40 @@ def baixar_url(url: str, *, timeout: float = 30.0) -> bytes:
     registra o status.
 
     ``timeout`` vale por operação de rede (cada leitura recomeça a contagem); o download
-    INTEIRO, redirects inclusive, tem o prazo ``AVALIACOES_DOWNLOAD_PRAZO_S``: um servidor
-    que manda o arquivo pouco a pouco seguraria a coleta (a thread, a conexão do banco e
-    a trava da fonte) por tempo sem limite. Passou do prazo (no máximo uma leitura
-    depois): ``ValueError`` com a causa."""
-    prazo = settings.AVALIACOES_DOWNLOAD_PRAZO_S
-    fim = time.monotonic() + prazo
-
-    def _dentro_do_prazo() -> None:
-        if time.monotonic() > fim:
-            raise ValueError(
-                f"o download passou do prazo total de {_duracao(prazo)} sem terminar: o "
-                "servidor está mandando o arquivo devagar demais. Tente de novo mais tarde.")
-
+    INTEIRO tem o prazo ``AVALIACOES_DOWNLOAD_PRAZO_S``, que limita cada operação da
+    conexão (``_ConexaoComPrazo``): a abertura, a conexão segura (TLS), o pedido, o
+    cabeçalho e o corpo da resposta, em todos os redirects. Um servidor que goteja a
+    resposta seguraria a coleta (a thread, a conexão do banco e a trava da fonte) por tempo
+    sem limite. Passou do prazo: ``ValueError`` com a causa (e não a falha de conexão).
+    A resolução do nome (DNS) fica com o resolvedor do sistema, que tem os próprios
+    limites."""
+    prazo = _PrazoTotal(settings.AVALIACOES_DOWNLOAD_PRAZO_S)
     cabecalhos = {"User-Agent": _UA_NAVEGADOR, "Accept": "*/*"}
-    with httpx.Client(timeout=timeout, follow_redirects=False, headers=cabecalhos,
-                      transport=_TransporteSoIpPublico()) as cli:
-        for _ in range(_MAX_REDIRECTS + 1):
-            _dentro_do_prazo()
-            _exigir_destino_publico(url)
-            with cli.stream("GET", url) as r:
-                if r.is_redirect:
-                    destino = r.headers.get("location")
-                    if not destino:
-                        raise ValueError("redirect sem destino")
-                    url = str(r.url.join(destino))  # resolve relativo → absoluto
-                    continue
-                r.raise_for_status()
-                buf = bytearray()
-                for chunk in r.iter_bytes():
-                    buf += chunk
-                    if len(buf) > _MAX_DOWNLOAD:
-                        raise ValueError("arquivo excede o teto de download")
-                    _dentro_do_prazo()
-                return bytes(buf)
+    try:
+        with httpx.Client(timeout=timeout, follow_redirects=False, headers=cabecalhos,
+                          transport=_TransporteSoIpPublico(prazo)) as cli:
+            for _ in range(_MAX_REDIRECTS + 1):
+                prazo.conferir()
+                _exigir_destino_publico(url)
+                with cli.stream("GET", url) as r:
+                    if r.is_redirect:
+                        destino = r.headers.get("location")
+                        if not destino:
+                            raise ValueError("redirect sem destino")
+                        url = str(r.url.join(destino))  # resolve relativo → absoluto
+                        continue
+                    r.raise_for_status()
+                    buf = bytearray()
+                    for chunk in r.iter_bytes():
+                        buf += chunk
+                        if len(buf) > _MAX_DOWNLOAD:
+                            raise ValueError("arquivo excede o teto de download")
+                        prazo.conferir()
+                    return bytes(buf)
+    except httpx.TimeoutException as exc:
+        if prazo.estourou:
+            raise prazo.erro() from exc
+        raise
     raise ValueError("excesso de redirects")
 
 

@@ -88,6 +88,19 @@ PRAZOS = {
      "test_coletar_agora_com_download_lento_termina_em_erro_sem_gravar"):
         "o mesmo prazo total de 1 s pela coleta da fonte (coletar_fonte), contra os ~4 s "
         "do gotejamento",
+    ("test_aud3_indic_download_prazo_total.py",
+     "test_cabecalho_que_goteja_para_no_prazo_total"):
+        "REV3-INDIC-1: o mesmo prazo total de 1 s contra o CABEÇALHO HTTP que goteja por "
+        "~4 s: o teto de 2,5 s separa a desistência no prazo do gotejamento inteiro",
+    ("test_aud3_indic_download_prazo_total.py",
+     "test_coletar_agora_com_cabecalho_gotejado_diz_que_passou_do_prazo"):
+        "REV3-INDIC-1: o mesmo prazo de 1 s pela coleta da fonte, contra os ~4 s do "
+        "cabeçalho gotejado",
+    ("test_aud3_indic_download_prazo_total.py",
+     "test_conexao_segura_parada_para_no_prazo_total"):
+        "REV3-INDIC-1: prazo total de 1 s contra a conexão segura (TLS) parada, com a "
+        "espera por operação de 3 s: o teto de 2,5 s separa o prazo total da espera por "
+        "operação",
     ("test_aud_rel_pdf_teto_navegadores.py",
      "test_sem_vaga_no_prazo_cai_na_reserva_sem_abrir_navegador"):
         "ESPERA_POR_NAVEGADOR_S=0,2 contra a espera padrão de 30 s com as vagas todas "
