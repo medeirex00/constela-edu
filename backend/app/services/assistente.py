@@ -643,9 +643,19 @@ def purgar_conversas_ia_expiradas(db: Session, dias: int | None = None) -> int:
     """Retenção LGPD (direito ao esquecimento / minimização): apaga conversas do
     assistente com created_at mais antigo que `dias` (padrão
     settings.IA_RETENCAO_DIAS). A cascata (migração 0003) remove as mensagens
-    junto. Idempotente. Devolve o nº de conversas apagadas."""
+    junto. Idempotente. Devolve o nº de conversas apagadas.
+
+    `dias` menor que 1 levanta ValueError SEM apagar nada: o corte é "agora -
+    dias", então 0 apagaria todas as conversas (inclusive a de 1 minuto atrás) e
+    um valor negativo poria o corte no futuro — e nas variáveis RETENCAO_*
+    vizinhas 0 quer dizer "desligado". O boot só registra a falha e segue."""
     from app.core.config import settings
     dias = settings.IA_RETENCAO_DIAS if dias is None else dias
+    if dias < 1:
+        raise ValueError(
+            "IA_RETENCAO_DIAS precisa ser 1 ou mais (dias de guarda das conversas do "
+            "assistente; padrão 90): com 0 ou negativo a purga apagaria todas as "
+            "conversas. Nenhuma conversa foi apagada.")
     # created_at é gravado em UTC mas a coluna DateTime (sem tz) devolve NAIVE do
     # banco (SQLite/Postgres); usa corte NAIVE em UTC para casar a comparação.
     # synchronize_session=False: DELETE puro em SQL (a cascata 0003 apaga as

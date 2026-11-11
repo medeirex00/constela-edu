@@ -360,6 +360,12 @@ class Settings(BaseSettings):
             riscos.append(
                 "DOCS_HABILITADOS=true: /docs, /redoc e /openapi.json publicam o mapa da "
                 "API; desligue (remova a variável).")
+        if self.IA_RETENCAO_DIAS < 1:
+            riscos.append(
+                "IA_RETENCAO_DIAS menor que 1: o prazo de guarda das conversas do "
+                "assistente tem de ser de 1 dia ou mais (0 não desliga a purga: ela "
+                "apagaria todas as conversas, e por isso recusa); remova a variável para "
+                "o padrão de 90 dias.")
         return riscos
 
     def _validar_url_do_banco(self) -> None:
@@ -517,7 +523,9 @@ class Settings(BaseSettings):
     AI_MAX_TOKENS: int = 1024
     # LGPD (retenção/minimização): conversas do assistente são apagadas depois
     # de IA_RETENCAO_DIAS a partir de created_at. São dados derivados; a fonte
-    # oficial (notas/snapshots) é a autoritativa.
+    # oficial (notas/snapshots) é a autoritativa. Mínimo 1: diferente das
+    # RETENCAO_*, 0 NÃO desliga (a purga recusa em vez de apagar tudo; o boot
+    # de produção recusa e o de dev avisa — ``riscos_de_producao``).
     IA_RETENCAO_DIAS: int = 90
 
     # --- Diagnóstico do robô no boot (app/core/automacao.py) --------------
