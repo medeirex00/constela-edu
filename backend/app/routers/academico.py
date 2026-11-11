@@ -503,13 +503,17 @@ def _posicao_exibida(db: Session, escola_id: int, ano: int, usuario: Usuario,
     o pacote ``/sincronizacao`` do app). Sem isso a aba dizia 1º e o perfil da
     mesma criança, para o mesmo professor, dizia 100º. Quem não está na lista
     (a Nota antiga de quem saiu da população, como a fase fora da premiação) fica
-    sem posição (``None``), como no ranking, que também não o mostra."""
+    sem posição (``None``), como no ranking, que também não o mostra.
+
+    Nas duas perspectivas, a criança SEM NENHUM DADO (nem Leitura nem Matemática
+    aferidas) fica sem posição e não entra na numeração: o Ranking Geral e o Top 10
+    não a listam (``_ranking(so_com_dado=True)``, DEC-19 — ausência não é zero)."""
     permitidas = permissoes.turmas_permitidas(db, escola_id, usuario)
-    if permitidas is None:
-        return nota.posicao if nota and no_ranking else None
-    if nota is None:
+    if nota is None or not (nota.aferido_leitura or nota.aferido_matematica):
         return None
-    lista = _ranking(db, escola_id, ano, turma_ids=permitidas)
+    if permitidas is None:
+        return nota.posicao if no_ranking else None
+    lista = _ranking(db, escola_id, ano, turma_ids=permitidas, so_com_dado=True)
     for posicao, item in enumerate(lista, start=1):
         if item.aluno_id == aluno_id:
             return posicao
