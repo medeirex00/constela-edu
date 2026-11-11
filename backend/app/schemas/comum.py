@@ -4,10 +4,19 @@ Mantidos em um módulo único nesta fase; ao crescer, dividir por domínio
 sem alterar os imports (o pacote reexporta tudo).
 """
 import math
+import re
 from datetime import date, datetime
 from typing import Annotated
 
-from pydantic import AfterValidator, BaseModel, ConfigDict, EmailStr, Field, field_validator
+from pydantic import (
+    AfterValidator,
+    BaseModel,
+    BeforeValidator,
+    ConfigDict,
+    EmailStr,
+    Field,
+    field_validator,
+)
 
 
 class ORMModel(BaseModel):
@@ -189,8 +198,24 @@ def _numero_chamada_valido(valor: int | None) -> int | None:
 NumeroChamada = Annotated[int | None, AfterValidator(_numero_chamada_valido)]
 
 
+# Caracteres de CONTROLE (C0 e DEL), com o espaço em volta. Invisíveis na tela,
+# chegam colados de PDF ou relatório (ex.: \x02) — e um só deles num nome derruba
+# a exportação Excel da escola inteira (o openpyxl recusa o caractere).
+_RE_CONTROLE = re.compile(r"\s*[\x00-\x1f\x7f]+\s*")
+
+
+def _nome_sem_controle(valor):
+    """Troca cada trecho com caractere de controle por UM espaço (e tira o das
+    pontas), ANTES de conferir o tamanho: o nome que se vê é o nome que fica.
+    Nome sem caractere de controle passa intacto."""
+    if isinstance(valor, str) and _RE_CONTROLE.search(valor):
+        return _RE_CONTROLE.sub(" ", valor).strip()
+    return valor
+
+
 class AlunoCreate(BaseModel):
-    nome: str = Field(min_length=2, max_length=200)
+    nome: Annotated[str, BeforeValidator(_nome_sem_controle)] = Field(
+        min_length=2, max_length=200)
     turma_id: int
     numero_chamada: NumeroChamada = None
     data_nascimento: date | None = None
@@ -202,7 +227,8 @@ class AlunoCreate(BaseModel):
 
 class AlunoUpdate(BaseModel):
     """Edição parcial do cadastro do aluno (só os campos enviados mudam)."""
-    nome: str | None = Field(default=None, min_length=2, max_length=200)
+    nome: Annotated[str | None, BeforeValidator(_nome_sem_controle)] = Field(
+        default=None, min_length=2, max_length=200)
     numero_chamada: NumeroChamada = None
     data_nascimento: date | None = None
     observacoes: str | None = Field(default=None, max_length=1000)
