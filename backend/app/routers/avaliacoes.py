@@ -105,7 +105,10 @@ def analisar(
     if len(conteudo) > _MAX_BYTES:
         raise HTTPException(status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
                             "Arquivo muito grande. Extraia/reduza a planilha antes de subir.")
-    return svc.analisar_planilha(conteudo, arquivo.filename or "")
+    try:
+        return svc.analisar_planilha(conteudo, arquivo.filename or "")
+    except svc.ImportacaoRecusada as exc:   # planilha recusada antes de abrir (inflada)
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
 
 
 @router.post("/importar")
