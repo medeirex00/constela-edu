@@ -19,10 +19,18 @@ Não revogam acesso.
 O status **não** é olhado nestes pontos:
 
 - `deps.escola_autorizada` e `deps.exigir_rede`;
-- o login.
+- o login;
+- a coleta das plataformas (Matific e Elefante Letrado): a agenda de sincronização
+  (`app/sync/service.py`, `enfileirar_agendados`), a auto-cura da agenda
+  (`garantir_agendas_diarias`, que dá a agenda diária das 03:00 a toda escola com
+  credencial salva e nenhuma agenda) e o "Sincronizar agora". Elas só olham a agenda,
+  a credencial e o plano da rede (módulo contratado).
 
 Por isso, quem já é usuário de uma escola ou rede inativa continua lendo e gravando os
-dados dela pelas rotas `/escolas/{id}/...` e `/redes/{id}/...`.
+dados dela pelas rotas `/escolas/{id}/...` e `/redes/{id}/...`. E a escola inativa
+continua sendo **coletada** nas plataformas se o agendador automático for religado
+no servidor (hoje ele está desligado de propósito): enquanto tiver credencial salva e
+agenda ativa, ou credencial salva e nenhuma agenda, que a auto-cura recria.
 
 O interruptor de acesso que **funciona** é o do usuário: `Usuario.status != "ativo"`
 leva a 401 em `get_usuario_atual`, inclusive para sessões já abertas.
@@ -65,6 +73,14 @@ Se **não**, o significado atual (listagem e vitrine) fica documentado aqui e no
 
 ## 4. Procedimento de fim de contrato até a decisão
 
-**Inativar os usuários** da escola ou da rede (`Usuario.status`). Esse interruptor já é
-aplicado a cada requisição. Inativar só a escola ou a rede **não** corta o acesso de
-quem já tem conta.
+1. **Desligar a coleta** de cada escola (na rede, de todas as escolas dela): na tela
+   **Sincronização**, em cada plataforma (Matific e Elefante Letrado), escolher a
+   frequência **Só quando eu pedir (manual)** e clicar **Salvar agendamento**; depois,
+   **Desconectar** (apaga a credencial da plataforma guardada no Constela). A agenda
+   desligada fica gravada e a auto-cura não a religa; sem credencial, a auto-cura também
+   não cria agenda nova. Inativar a escola ou a rede **não** para a coleta (§1). Faça
+   este passo antes dos outros: a escola inativa some do seletor de escola, e o usuário
+   inativo não entra mais.
+2. **Inativar os usuários** da escola ou da rede (`Usuario.status`). Esse interruptor
+   já é aplicado a cada requisição. Inativar só a escola ou a rede **não** corta o
+   acesso de quem já tem conta.
