@@ -164,7 +164,10 @@ type Acao =
   // linha), e o backend criava a ficha quando, sozinho, decidia criar. ``turmaNome``:
   // a turma do relatório, só como contexto da pendência (é a que a prévia leu).
   | { tipo: "revisao"; turmaNome: string | null }
-  | { tipo: "ignorar" };
+  // ``manual``: o gestor escolheu "Ignorar" (linha de teste, conta de professor…) —
+  // "Aplicar a todos" não o desfaz. Sem ele, é o "Ignorar" padrão (aluno novo sem
+  // turma, que ninguém escolheu).
+  | { tipo: "ignorar"; manual?: boolean };
 
 /** Motivos de revisão (``identidade_aluno.decidir``) em que a confirmação NUNCA cria
  *  a ficha, qualquer que seja a turma escolhida: o motor manda a linha para Revisões
@@ -721,7 +724,7 @@ export default function Importacoes() {
     setAcoes((atuais) =>
       atuais.map((acao, i) => {
         if (i !== gi) return acao;
-        if (valor === "ignorar") return { tipo: "ignorar" };
+        if (valor === "ignorar") return { tipo: "ignorar", manual: true };
         if (valor === "revisao") {
           return grupos[gi] && analise ? acaoRevisao(grupos[gi], analise) : acao;
         }
@@ -740,12 +743,15 @@ export default function Importacoes() {
    *  mesma ação — criar na turma escolhida ou na turma do relatório (nova). A
    *  linha que vai para a Revisão fica onde está: nela "Criar" não vale. Nem a da
    *  turma arquivada, ambígua ou de outra etapa recebe "a turma do relatório" — nela
-   *  o backend não cria. */
+   *  o backend não cria. Nem a que o gestor marcou "Ignorar": antes ela voltava para
+   *  "Criar" e virava ficha de criança. */
   function aplicarATodosOsNovos(acao: Acao) {
     setAcoes((atuais) =>
       atuais.map((atual, i) => {
         const g = grupos[i];
-        if (g && !g.todasComErro && atual.tipo !== "importar" && !vaiParaRevisao(g.correspondencia)
+        const ignoradaPeloGestor = atual.tipo === "ignorar" && atual.manual === true;
+        if (g && !g.todasComErro && atual.tipo !== "importar" && !ignoradaPeloGestor
+            && !vaiParaRevisao(g.correspondencia)
             && !(acao.tipo === "criar_nova" && turmaSemDestino(g.correspondencia))) {
           return acao;
         }

@@ -417,9 +417,12 @@ describe("Importacoes", () => {
       { target: { value: "2026-08-14" } });
     const destino = (nome: string) =>
       screen.getByRole("combobox", { name: `Destino de ${nome}` }) as HTMLSelectElement;
-    // O aluno novo começa em "Ignorar": o botão tem de mudá-lo (senão o teste não
-    // prova nada).
-    await u.selectOptions(destino("Crianca Ficticia Sem Ficha"), "ignorar");
+    // O aluno novo começa noutro destino de criação: o botão tem de mudá-lo (senão o
+    // teste não prova nada). Não "Ignorar": o "Ignorar" escolhido pelo gestor o botão
+    // preserva (IMPORTACAO-5) — antes este teste contava com ele sendo desfeito.
+    await u.selectOptions(destino("Crianca Ficticia Sem Ficha"),
+      novoDestino === "criar" ? "criar_nova" : "criar");
+    expect(destino("Crianca Ficticia Sem Ficha").value).not.toBe(novoDestino);
     expect(destino("Zefa Q").value).toBe("revisao");
 
     // "Aplicar a todos" (turma escolhida) só vale depois de escolher a turma: o seletor
