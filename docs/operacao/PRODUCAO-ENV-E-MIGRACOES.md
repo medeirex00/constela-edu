@@ -270,10 +270,10 @@ O que conferir:
    `aNaSilva123`). Uma conta global com a senha do próprio nome numa combinação dessas sai
    como `globais: 0` e recebe o 403 depois do deploy, sem volta garantida — a linha
    `LIMITE` da saída lembra disso. Por isso pergunte a cada administrador global se a senha
-   dele é o próprio nome ou @ + 123, em caixa nenhuma; se for, troque antes. Com `globais`
-   acima de 0: troque a senha dessa conta **antes** do deploy (o código atual ainda aceita a
-   senha derivada) e rode `--contagens` de novo até `globais: 0`. Depois do deploy a saída é
-   manual.
+   dele é o próprio nome ou @ + 123, em qualquer combinação de maiúsculas e minúsculas; se
+   for, troque antes. Com `globais` acima de 0: troque a senha dessa conta **antes** do
+   deploy (o código atual ainda aceita a senha derivada) e rode `--contagens` de novo até
+   `globais: 0`. Depois do deploy a saída é manual.
 2. **`ativas`** e **`já usadas`** dizem quantas contas, **no mínimo**, recebem o 403 no
    primeiro login depois do deploy (as já usadas são as de quem entra hoje com essa senha;
    a senha do nome em outra combinação de maiúsculas e minúsculas fica de fora da conta e
