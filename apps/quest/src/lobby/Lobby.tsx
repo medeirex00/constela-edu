@@ -49,6 +49,11 @@ export function Lobby() {
   const tFala = useRef(0);
   const botaoAvatarRef = useRef<HTMLButtonElement>(null);
   const gavetaRef = useRef<HTMLElement>(null);
+  // Toques rápidos em "Efeitos"/"Narração": um PATCH por vez, na ordem dos toques
+  // (mesmo padrão do vestiário). Em paralelo, a resposta que chegasse por último
+  // (não necessariamente a do último toque) ficava na tela — e no som e na
+  // narração — sem a troca seguinte; na fila, a última resposta já traz todas.
+  const filaPreferencias = useRef<Promise<void>>(Promise.resolve());
 
   const falar = useCallback((texto: string, dur = 4500) => {
     window.clearTimeout(tFala.current);
@@ -126,9 +131,14 @@ export function Lobby() {
     falar(`Planeta ${m.nome}! Escolha uma missão e partiu! 🚀`);
   }
 
-  async function alternarPreferencia(chave: "som" | "narracao") {
+  function alternarPreferencia(chave: "som" | "narracao") {
     if (!perfil) return;
     const valor = !(perfil.preferencias[chave] !== false);
+    filaPreferencias.current = filaPreferencias.current
+      .then(() => enviarPreferencia(chave, valor))
+      .catch(() => undefined);
+  }
+  async function enviarPreferencia(chave: "som" | "narracao", valor: boolean) {
     try {
       atualizarPerfil(await trocarPreferencias({ [chave]: valor }));
       tocar("clique");
