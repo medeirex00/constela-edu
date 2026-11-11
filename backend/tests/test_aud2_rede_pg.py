@@ -52,6 +52,14 @@ from tests.test_aud2_rede_indice_peso import (  # noqa: E402,F401
     test_indice_e_media_geral_da_rede_nao_pesam_as_criancas_da_fase as test_pg_indice_peso,
     test_panorama_global_pesa_redes_e_escolas_por_quem_concorre as test_pg_indice_global,
 )
+from tests.test_aud2_rede_peso_media_medida import (  # noqa: E402,F401
+    test_meta_da_media_geral_nao_e_medida_sem_nota_calculada as test_pg_peso_media_sem_nota,
+    test_panorama_global_e_meta_da_media_geral_pesam_quem_a_media_mede as test_pg_peso_media_global,
+    test_peso_da_media_e_o_dos_modulos_contratados as test_pg_peso_media_contrato,
+    test_quem_ainda_nao_tem_nota_calculada_nao_pesa_na_media_geral as test_pg_peso_media_pendente,
+    test_quem_so_tem_leitura_itemizada_pesa_na_media_geral as test_pg_peso_media_leitura,
+    test_quem_so_tem_o_matific_do_ano_passado_nao_pesa_na_media_geral as test_pg_peso_media_matific,
+)
 from tests.test_aud2_rede_percapita_exato import (  # noqa: E402,F401
     test_indice_e_regua_saem_do_per_capita_exato as test_pg_percapita_regua,
     test_panorama_global_compara_redes_pelo_per_capita_exato as test_pg_percapita_global,

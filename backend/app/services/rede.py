@@ -254,6 +254,15 @@ def _q_medias(ids: list[int], anos: dict[int, int], modelo, coluna, premiaveis: 
     "tem dado" do Matific é ter snapshot DENTRO do ano letivo ativo da escola
     (``_matific_no_ano_ativo``). Só notas CALCULADAS pelo motor vigente (nunca o
     default 0,0). A quarta coluna é o ``grupo_pequeno`` da Secretaria."""
+    colunas = [func.count(Nota.id), func.coalesce(func.sum(case((coluna > 0, 1), else_=0)), 0),
+               func.avg(coluna)]
+    return colunas, _q_notas_medidas(ids, premiaveis, _nota_tem_dado(modelo, anos), colunas)
+
+
+def _nota_tem_dado(modelo, anos: dict[int, int]):
+    """EXISTS: o aluno da Nota tem dado da plataforma de ``modelo`` — o corte de
+    "quem a média mede" de ``_q_medias``. Leitura ITEMIZADA também é dado do
+    Elefante; o Matific só vale DENTRO do ano letivo ativo da escola."""
     tem_dado = (select(modelo.id)
                 .where(modelo.escola_id == Nota.escola_id, modelo.aluno_id == Nota.aluno_id))
     if modelo is SnapshotMatific:
@@ -265,9 +274,16 @@ def _q_medias(ids: list[int], anos: dict[int, int], modelo, coluna, premiaveis: 
             .where(Leitura.escola_id == Nota.escola_id, Leitura.aluno_id == Nota.aluno_id)
             .exists()
         )
-    colunas = [func.count(Nota.id), func.coalesce(func.sum(case((coluna > 0, 1), else_=0)), 0),
-               func.avg(coluna)]
-    return colunas, (
+    return tem_dado
+
+
+def _q_notas_medidas(ids: list[int], premiaveis: list[int], tem_dado, colunas: list):
+    """``colunas`` por escola sobre as Notas que as médias MEDEM: do ano letivo ativo,
+    de aluno ativo matriculado no ano numa turma premiável, calculadas pelo motor
+    vigente (carimbo) e com ``tem_dado`` (``_nota_tem_dado``). A ÚNICA definição da
+    população das médias: a de cada plataforma (``_q_medias``) e o peso da média
+    geral (``_q_medidos_na_media_geral``) saem daqui."""
+    return (
         select(Nota.escola_id, *colunas)
         .join(Aluno, Aluno.id == Nota.aluno_id)
         .join(Escola, Escola.id == Nota.escola_id)
@@ -278,6 +294,23 @@ def _q_medias(ids: list[int], anos: dict[int, int], modelo, coluna, premiaveis: 
                tem_dado,
                _CARIMBO_INSTITUCIONAL.isnot(None))
         .group_by(Nota.escola_id))
+
+
+def _q_medidos_na_media_geral(ids: list[int], anos: dict[int, int], contratados,
+                              premiaveis: list[int]):
+    """(escola, alunos DISTINTOS que a ``media_geral`` da escola mede): quem está em
+    ALGUMA das médias por plataforma CONTRATADAS (``_q_medias``) — a Nota calculada de
+    quem concorre e tem dado do Elefante (retrato ou Leitura) OU do Matific do ano.
+    É o peso da escola na média geral da rede (``PESO_DA_MEDIA_GERAL``).
+
+    Não é a cobertura (``alunos_com_dados``, o numerador da adoção): ela conta
+    qualquer retrato, sem o corte do ano do Matific e sem olhar a Nota. Pesando por
+    ela, a criança que só tem o Matific do ano passado (ou ainda sem Nota calculada)
+    pesava sem ser medida, e a que só tem Leitura itemizada era medida sem pesar."""
+    modelos = _retratos_contratados(contratados)
+    tem_dado = or_(*[_nota_tem_dado(m, anos) for m in modelos]) if modelos else false()
+    medidos = func.count(func.distinct(Nota.aluno_id))
+    return medidos, _q_notas_medidas(ids, premiaveis, tem_dado, [medidos])
 
 
 def _medias_por_plataforma(db: Session, ids: list[int], modelo, coluna,
@@ -395,10 +428,10 @@ def _leituras_da_rede(db: Session, escolas: list[Escola], contratados: set[str],
     """Tudo o que os cartões das escolas leem do banco, em DUAS consultas (cada uma um
     ``UNION ALL`` de agregados que já eram consultas separadas, com o MESMO SQL de cada
     um): (A) turmas, alunos, professores, a lista de turmas (para as premiáveis) e quem
-    tem dado de alguma plataforma (com a turma, para separar quem concorre); (B), que
-    depende das turmas premiáveis, quem concorre, as médias por plataforma, os totais e
-    — no painel — as notas pendentes de recálculo. Antes eram 17 consultas; em produção
-    cada uma custa ~195 ms de ida e volta ao banco."""
+    tem dado de alguma plataforma; (B), que depende das turmas premiáveis, quem
+    concorre, as médias por plataforma, quem a média geral mede (o peso dela na rede),
+    os totais e — no painel — as notas pendentes de recálculo. Antes eram 17 consultas;
+    em produção cada uma custa ~195 ms de ida e volta ao banco."""
     ids = [e.id for e in escolas]
     anos = {e.id: e.ano_letivo_ativo for e in escolas}
     contagens = {
@@ -420,37 +453,29 @@ def _leituras_da_rede(db: Session, escolas: list[Escola], contratados: set[str],
                         lambda q: q.where(Professor.escola_id.in_(ids))
                         .group_by(Professor.escola_id)),
     }
-    larg_a = {_INT: 3, _TXT: 1}
+    larg_a = {_INT: 2, _TXT: 1}
     partes = [m(select(*_ramo(f, [(e, _INT), *c], larg_a)))
               for f, (e, c, m) in contagens.items()]
     partes.append(select(*_ramo("turma", [(Turma.escola_id, _INT), (Turma.id, _INT),
                                           (Turma.ano_escolar, _TXT)], larg_a))
                   .where(Turma.escola_id.in_(ids)))
     for modelo in _retratos_contratados(contratados):
-        # A turma da matrícula do ano vai junto: é por ela que se sabe quem CONCORRE.
         q = _q_com_dado(ids, modelo)
         partes.append(q.with_only_columns(*_ramo(
-            "dado", [(modelo.escola_id, _INT), (modelo.aluno_id, _INT),
-                     (Matricula.turma_id, _INT)], larg_a)))
+            "dado", [(modelo.escola_id, _INT), (modelo.aluno_id, _INT)], larg_a)))
     lido: dict = {"turmas": {}, "alunos": {}, "professores": {}, "pendentes": {}}
     turmas_e_rotulos, com_dado = [], {}
-    for fonte, a, b, turma_id, rotulo in _ler_ramos(db, partes, 8 * len(ids)):
+    for fonte, a, b, rotulo in _ler_ramos(db, partes, 8 * len(ids)):
         if fonte == "turma":
             turmas_e_rotulos.append((b, rotulo))
         elif fonte == "dado":
-            com_dado.setdefault(a, {})[b] = turma_id
+            com_dado.setdefault(a, set()).add(b)
         else:
             lido[fonte][a] = int(b or 0)
     # (as Fases não concorrem: a mesma regra de ``elegibilidade.turmas_premiaveis_da_rede``)
     premiaveis = [tid for tid, rotulo in turmas_e_rotulos
                   if elegibilidade.participa_de_premiacao(rotulo)]
     lido["com_dados"] = {e: len(alunos) for e, alunos in com_dado.items()}
-    # Quem CONCORRE (turma premiável) entre os que têm dado: o peso da média geral
-    # da rede (``_media_geral_das_comparadas``), que só mede as turmas premiáveis.
-    so_premiaveis = set(premiaveis)
-    lido["com_dados_premiaveis"] = {
-        e: sum(1 for turma in alunos.values() if turma in so_premiaveis)
-        for e, alunos in com_dado.items()}
 
     # (B) — depende das turmas premiáveis.
     larg_b = {_INT: 11, _NUM: 1}
@@ -472,6 +497,11 @@ def _leituras_da_rede(db: Session, escolas: list[Escola], contratados: set[str],
             (n, positivas, media), q = _q_medias(ids, anos, modelo, coluna, premiaveis)
             partes.append(q.with_only_columns(*_ramo(fonte, [
                 (Nota.escola_id, _INT), (n, _INT), (positivas, _INT), (media, _NUM)], larg_b)))
+    # Quem a ``media_geral`` da escola MEDE (está em alguma das médias acima): o peso
+    # dela na média geral da rede, no Panorama Global e na meta (``PESO_DA_MEDIA_GERAL``).
+    medidos, q = _q_medidos_na_media_geral(ids, anos, contratados, premiaveis)
+    partes.append(q.with_only_columns(*_ramo(
+        "med_ger", [(Nota.escola_id, _INT), (medidos, _INT)], larg_b)))
     totais = {"tot_mat": (SnapshotMatific, ["atividades", "estrelas"]),
               "tot_ele": (SnapshotElefante, ["livros_unicos", "tempo_leitura_min"])}
     for fonte, (modelo, campos) in totais.items():
@@ -484,10 +514,12 @@ def _leituras_da_rede(db: Session, escolas: list[Escola], contratados: set[str],
         q = _q_pendentes(ids, premiaveis)
         partes.append(q.with_only_columns(*_ramo(
             "pendentes", [(Nota.escola_id, _INT), (func.count(Nota.id), _INT)], larg_b)))
-    linhas_b: dict[str, list] = {f: [] for f in ("alunos_p", *medias, *totais, "pendentes")}
-    for fonte, *resto in _ler_ramos(db, partes, 6 * len(premiaveis) + 9 * len(ids)):
+    linhas_b: dict[str, list] = {f: [] for f in ("alunos_p", *medias, "med_ger", *totais,
+                                                 "pendentes")}
+    for fonte, *resto in _ler_ramos(db, partes, 7 * len(premiaveis) + 11 * len(ids)):
         linhas_b[fonte].append(resto)
     lido["alunos_premiaveis"] = {r[0]: int(r[1] or 0) for r in linhas_b["alunos_p"]}
+    lido["medidos_na_media_geral"] = {r[0]: int(r[1] or 0) for r in linhas_b["med_ger"]}
     lido["pendentes"] = {r[0]: int(r[1] or 0) for r in linhas_b["pendentes"]}
     for fonte in medias:
         # (alunos com dado, média, quantos com a nota > 0) — o formato de sempre.
@@ -540,7 +572,7 @@ def _cartoes_da_rede(db: Session, rede_id: int, *, com_contribuintes: bool = Fal
     # cada aluno (todos e só quem concorre — o numerador do per capita).
     med_ele, med_mat = lido.get("med_ele", {}), lido.get("med_mat", {})
     com_dados_por_escola = lido["com_dados"]
-    com_dados_premiaveis = lido["com_dados_premiaveis"]
+    medidos_na_media_geral = lido["medidos_na_media_geral"]
     mat, mat_p = lido["tot_mat"], lido["tot_mat_p"]
     ele, ele_p = lido["tot_ele"], lido["tot_ele_p"]
 
@@ -595,9 +627,11 @@ def _cartoes_da_rede(db: Session, rede_id: int, *, com_contribuintes: bool = Fal
             # ENGAJAMENTO / COBERTURA — quantos usam (conceito SEPARADO do acima).
             "alunos_com_dados": com_dados,
             "adocao": adocao,
-            # Os mesmos, só entre quem CONCORRE (1º–5º ano): o peso da escola na
-            # média geral da rede, que só mede as turmas premiáveis.
-            "alunos_com_dados_premiaveis": int(com_dados_premiaveis.get(escola.id, 0)),
+            # Quem a `media_geral` acima MEDE: quem concorre (1º–5º ano) e está em
+            # alguma das médias por plataforma (``_q_medidos_na_media_geral``). É o
+            # peso da escola na média geral da rede — não a cobertura, que conta
+            # também as Fases, o Matific de outro ano e quem ainda não tem Nota.
+            "alunos_com_dados_premiaveis": int(medidos_na_media_geral.get(escola.id, 0)),
             # Totais brutos das plataformas (para as seções Elefante/Matific da rede).
             "livros": livros,
             "tempo_leitura_min": tempo_min,
@@ -841,8 +875,10 @@ def tem_dado_de_quem_concorre(cartao: dict) -> bool:
 # da métrica). O índice 0–1000 é per capita POR MATRÍCULA de quem concorre (livros e
 # estrelas ÷ ``alunos_premiaveis``), então o índice da rede ponderado por ele é o per
 # capita da rede inteira na régua da melhor escola. A média geral 0–100 é desempenho
-# de quem TEM dado, só nas turmas premiáveis. Nenhum dos dois é a cobertura
-# (``alunos_com_dados``), que conta também as crianças das Fases.
+# de quem ela MEDE: a Nota calculada de quem concorre e está em alguma das médias por
+# plataforma (``_q_medidos_na_media_geral``). Nenhum dos dois é a cobertura
+# (``alunos_com_dados``), que conta também as crianças das Fases, o retrato do Matific
+# de outro ano e quem ainda não tem Nota calculada.
 PESO_DO_INDICE = "alunos_premiaveis"
 PESO_DA_MEDIA_GERAL = "alunos_com_dados_premiaveis"
 
@@ -880,11 +916,14 @@ def _media_geral_das_comparadas(cartoes: list[dict]) -> float:
     usada pelo painel da rede (``dashboard_rede``), pelo cartão de cada rede no
     Panorama Global e pelo total global (``dashboard_global``).
 
-    Pondera por ``alunos_com_dados_premiaveis`` (``PESO_DA_MEDIA_GERAL``): quem
-    CONCORRE (1º–5º ano) e tem dado de alguma plataforma, o denominador dela — as
-    médias da escola só olham as turmas premiáveis. Com ``alunos_com_dados``
-    (cobertura, que conta também as Fases), a escola com mais crianças da
-    Educação Infantil usando a plataforma puxava a média da rede para o lado dela.
+    Pondera por ``alunos_com_dados_premiaveis`` (``PESO_DA_MEDIA_GERAL``): quem a
+    ``media_geral`` da escola MEDE, o denominador dela — a Nota calculada de quem
+    CONCORRE (1º–5º ano) e está em alguma das médias por plataforma, com os mesmos
+    cortes delas (``_q_medidos_na_media_geral``: Leitura itemizada conta, o Matific
+    só do ano letivo ativo). Com ``alunos_com_dados`` (cobertura, que conta também as
+    Fases), a escola com mais crianças da Educação Infantil usando a plataforma puxava
+    a média da rede para o lado dela; contado sobre a cobertura de quem concorre, o
+    peso ainda levava a criança que só tem o Matific do ano passado.
 
     E só sobre as escolas COMPARADAS (``tem_dado_de_quem_concorre``): a escola em
     que só a Educação Infantil usa a plataforma tem ``media_geral`` 0,0 por

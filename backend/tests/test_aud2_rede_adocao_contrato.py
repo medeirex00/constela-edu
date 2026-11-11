@@ -74,7 +74,9 @@ def test_adocao_do_cartao_e_dos_totais_so_conta_o_modulo_contratado(db):
     # Alfa: 3 de 10 com dado da Leitura (antes: 10 de 10, contando o Matific fora do plano).
     assert (a["alunos_com_dados"], a["adocao"]) == (3, 30.0)
     assert a["adocao"] == a["adocao_elefante"]
-    assert a["alunos_com_dados_premiaveis"] == 3
+    # O peso da média geral é quem ela MEDE (REV2-REDE-1): neste mundo ninguém tem Nota
+    # calculada, então a média de Alfa (0,0) é ausência e não pesa — não as 3 com dado.
+    assert (a["media_geral"], a["alunos_com_dados_premiaveis"]) == (0.0, 0)
     assert (b["alunos_com_dados"], b["adocao"]) == (5, 50.0)
     # "Com dado de alguma plataforma" da rede: 8 de 20 (antes: 15 de 20 = 75%).
     assert (painel["totais"]["alunos_com_dados"], painel["totais"]["adocao"]) == (8, 40.0)
