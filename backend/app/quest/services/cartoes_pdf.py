@@ -197,9 +197,10 @@ def _pagina_professor(pdf, escola_nome: str, turma_nome: str, cor: str,
         f"1. Abra {_endereco_app()} nos tablets (ou aponte a camera para o QR do cartao).",
         "2. Cada crianca digita o proprio codigo e confirma 'Sou eu!'. Na primeira vez,",
         "   ela escolhe como quer ser chamada e a cor do traje do astronauta.",
-        # Regenerar troca código E QR (o cartão traz os dois): é o que revoga.
+        # A ação do menu do aluno no painel da turma (TurmaDetalhe.tsx) regenera o
+        # cartão individual: troca código E QR (o cartão traz os dois), o que revoga.
         "3. Esqueceu o cartao? Consulte o codigo nesta folha. Perdeu ou caiu em maos erradas?",
-        "   Gere o cartao dela com 'regenerar': codigo e QR novos; os antigos param de entrar.",
+        "   Use 'Novo cartao do Quest' no menu do aluno, na turma: codigo e QR novos; os antigos param de entrar.",
     ]
     altura_roteiro = 4 + 7 + len(passos) * _ALTURA_LINHA_ROTEIRO
     if pdf.get_y() + altura_roteiro > _LIMITE_INFERIOR:

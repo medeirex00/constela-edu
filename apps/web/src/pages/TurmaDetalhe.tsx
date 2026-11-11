@@ -2,9 +2,9 @@
  * Painel administrativo da turma: gestão completa dos alunos.
  *
  * Lista os alunos da turma com busca, ordenação e seleção múltipla. Cada
- * aluno tem um menu de ações (Visualizar, Editar, Transferir, Arquivar,
- * Excluir) e há uma barra de ações em massa. A exclusão comum é lógica
- * (reversível); a exclusão PERMANENTE apaga o aluno e todos os dados
+ * aluno tem um menu de ações (Visualizar, Editar, Transferir, Novo cartão do
+ * Quest, Arquivar, Excluir) e há uma barra de ações em massa. A exclusão comum
+ * é lógica (reversível); a exclusão PERMANENTE apaga o aluno e todos os dados
  * vinculados e exige uma confirmação extra. Após cada ação, as contagens,
  * o ranking e as estatísticas se atualizam sozinhos (sem recarregar a página).
  *
@@ -32,7 +32,7 @@ import {
   Users,
   X,
 } from "lucide-react";
-import { baixarCartoesDaTurma } from "@constela/quest-core";
+import { baixarCartaoDoAluno, baixarCartoesDaTurma } from "@constela/quest-core";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 
@@ -108,7 +108,20 @@ type Acao =
   | { tipo: "editar"; alvo: AlunoGestao }
   | { tipo: "transferir"; ids: number[]; rotulo: string }
   | { tipo: "excluir"; ids: number[]; rotulo: string }
-  | { tipo: "permanente"; ids: number[]; rotulo: string };
+  | { tipo: "permanente"; ids: number[]; rotulo: string }
+  | { tipo: "cartao_quest"; alvo: AlunoGestao };
+
+/** Entrega um PDF baixado ao navegador como download. */
+function salvarArquivo(blob: Blob, nomeArquivo: string) {
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = nomeArquivo;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
+}
 
 /** Menu de ações (kebab ⋮) de um aluno. */
 function MenuAcoes({ aluno, aoEscolher, podeApagarAlunos, podeTransferir }: {
@@ -134,6 +147,11 @@ function MenuAcoes({ aluno, aoEscolher, podeApagarAlunos, podeTransferir }: {
             {podeTransferir && (
               <ItemMenu icone={<ArrowRightLeft size={15} />} rotulo="Transferir de turma" onClick={escolher("transferir")} />
             )}
+            {/* Cartão perdido ou em mãos erradas: código e QR novos, o antigo para de
+                entrar (a folha "só do professor" manda aqui). Ficha inativa: só revoga. */}
+            <ItemMenu icone={<Rocket size={15} />}
+                      rotulo={inativo ? "Revogar cartão do Quest" : "Novo cartão do Quest"}
+                      onClick={escolher("cartao_quest")} />
             {inativo ? (
               <ItemMenu icone={<RotateCcw size={15} />} rotulo="Reativar" onClick={escolher("reativar")} />
             ) : (
@@ -306,17 +324,40 @@ export default function TurmaDetalhe() {
     setOcupado(true);
     try {
       const { blob, nomeArquivo } = await baixarCartoesDaTurma(escolaId, Number(id));
-      const url = URL.createObjectURL(blob);
-      const link = document.createElement("a");
-      link.href = url;
-      link.download = nomeArquivo;
-      document.body.appendChild(link);
-      link.click();
-      link.remove();
-      URL.revokeObjectURL(url);
+      salvarArquivo(blob, nomeArquivo);
       avisar("ok", "Cartões do Quest gerados! Imprima, recorte e entregue aos alunos.");
     } catch (e) {
       avisar("erro", e instanceof ApiError ? e.message : "Não foi possível gerar os cartões.");
+    } finally {
+      setOcupado(false);
+    }
+  }
+
+  /** Cartão novo de UM aluno (`regenerar=true`): código e QR novos, o cartão
+   * antigo e as sessões abertas com ele param de entrar; os colegas seguem com os
+   * deles. Ficha inativa: a API só revoga, sem cartão novo (204, sem PDF), e
+   * recusa (422) quando ela nunca teve cartão. */
+  async function gerarCartaoNovoQuest(aluno: AlunoGestao) {
+    if (!escolaId) return;
+    setOcupado(true);
+    try {
+      const { blob, nomeArquivo } = await baixarCartaoDoAluno(escolaId, aluno.id, true);
+      if (blob.size === 0) {
+        avisar("ok", `Cartão do Quest de ${aluno.nome} revogado: o código e o QR antigos não ` +
+          "entram mais. Aluno inativo não recebe cartão novo.");
+      } else {
+        salvarArquivo(blob, nomeArquivo);
+        avisar("ok", `Cartão novo de ${aluno.nome} gerado: o antigo não entra mais. ` +
+          "Imprima e entregue o novo.");
+      }
+      setAcao(null);
+    } catch (e) {
+      if (e instanceof ApiError && e.status === 422) {
+        avisar("erro", `${aluno.nome} não tem cartão do Quest para revogar.`);
+      } else {
+        avisar("erro", e instanceof ApiError ? e.message : "Não foi possível gerar o cartão novo.");
+      }
+      setAcao(null);
     } finally {
       setOcupado(false);
     }
@@ -329,6 +370,7 @@ export default function TurmaDetalhe() {
     if (escolha === "excluir") return setAcao({ tipo: "excluir", ids: [aluno.id], rotulo: aluno.nome });
     if (escolha === "permanente" && podeApagarAlunos)
       return setAcao({ tipo: "permanente", ids: [aluno.id], rotulo: aluno.nome });
+    if (escolha === "cartao_quest") return setAcao({ tipo: "cartao_quest", alvo: aluno });
     // arquivar / reativar são reversíveis → aplica direto
     if (escolha === "arquivar" || escolha === "reativar" || escolha === "marcar_transferido")
       aplicarAcao(escolha, [aluno.id]);
@@ -720,6 +762,15 @@ export default function TurmaDetalhe() {
         </Modal>
       )}
 
+      {acao?.tipo === "cartao_quest" && (
+        <ModalCartaoQuest
+          aluno={acao.alvo}
+          ocupado={ocupado}
+          aoFechar={() => setAcao(null)}
+          aoConfirmar={() => gerarCartaoNovoQuest(acao.alvo)}
+        />
+      )}
+
       {acao?.tipo === "permanente" && podeApagarAlunos && (
         <ModalPermanente
           rotulo={acao.rotulo}
@@ -790,6 +841,41 @@ function ModalTransferir({ rotulo, turmas, ocupado, aoFechar, aoConfirmar }: {
         <Botao variante="secundario" onClick={aoFechar} disabled={ocupado}>Cancelar</Botao>
         <Botao disabled={ocupado || !turmaId} onClick={() => turmaId && aoConfirmar(turmaId)}>
           {ocupado ? "Transferindo..." : "Transferir"}
+        </Botao>
+      </div>
+    </Modal>
+  );
+}
+
+/** Confirmação do cartão novo do Quest de um aluno: o cartão antigo para de entrar
+ * (código e QR trocados). Ficha inativa: só revoga, sem cartão novo. */
+function ModalCartaoQuest({ aluno, ocupado, aoFechar, aoConfirmar }: {
+  aluno: AlunoGestao;
+  ocupado: boolean;
+  aoFechar: () => void;
+  aoConfirmar: () => void;
+}) {
+  const inativo = aluno.status !== "ativo";
+  return (
+    <Modal titulo={inativo ? "Revogar cartão do Quest" : "Novo cartão do Quest"} aberto aoFechar={aoFechar}>
+      {inativo ? (
+        <p className="text-sm text-zinc-600 dark:text-zinc-300">
+          Revogar o cartão do Quest de <strong>{aluno.nome}</strong>? O código e o QR antigos
+          param de entrar e quem estiver jogando com eles sai do jogo. Como o aluno não está
+          ativo, não sai cartão novo agora: se ele voltar, o cartão novo sai em “Cartões do Quest”.
+        </p>
+      ) : (
+        <p className="text-sm text-zinc-600 dark:text-zinc-300">
+          Gerar um cartão novo do Quest para <strong>{aluno.nome}</strong>? O código e o QR
+          mudam: o cartão antigo para de entrar e quem estiver jogando com ele sai do jogo. Os
+          colegas da turma continuam com os cartões deles. O PDF do cartão novo é baixado para
+          você imprimir.
+        </p>
+      )}
+      <div className="mt-6 flex justify-end gap-2.5">
+        <Botao variante="secundario" onClick={aoFechar} disabled={ocupado}>Cancelar</Botao>
+        <Botao disabled={ocupado} onClick={aoConfirmar}>
+          {ocupado ? "Gerando..." : inativo ? "Revogar cartão" : "Gerar cartão novo"}
         </Botao>
       </div>
     </Modal>
