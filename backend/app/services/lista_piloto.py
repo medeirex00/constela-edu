@@ -106,6 +106,10 @@ class TurmaMatriculas:
 class ListaPilotoAnalise:
     escola_detectada: str = ""
     ano_letivo: int | None = None
+    # De onde veio ``ano_letivo``: "planilha" (a célula "Lista Piloto: 2027") ou
+    # "arquivo" (o ano no nome do arquivo, a reserva quando a célula falta). A rota o
+    # usa para dizer à escola onde corrigir o ano de uma lista de outro ano.
+    ano_letivo_origem: str | None = None
     turmas: list[TurmaMatriculas] = field(default_factory=list)
     avisos: list[str] = field(default_factory=list)
 
@@ -450,6 +454,7 @@ def analisar_matriculas(conteudo: bytes, nome_arquivo: str = "") -> ListaPilotoA
                 # levantava — sem try aqui, a prévia inteira dava 500.
                 if v.strip().isdecimal():
                     analise.ano_letivo = int(v.strip())
+                    analise.ano_letivo_origem = "planilha"
         turma = _extrair_turma(nome_aba, topo)
         # Aba AUXILIAR (ex.: "COMPARAR COM INEP", "DESENHOS", "Etiqueta"): tem
         # uma coluna "Nome", mas NENHUM metadado de turma (turno/professor/SED)
@@ -537,8 +542,9 @@ def analisar_matriculas(conteudo: bytes, nome_arquivo: str = "") -> ListaPilotoA
                 f"“{nome0}” aparece em mais de uma turma ({turmas_str}) sem RA — "
                 "confira se é a mesma pessoa (será cadastrado(a) em cada turma).")
 
-    if analise.ano_letivo is None:
+    if analise.ano_letivo is None and ano_arquivo is not None:
         analise.ano_letivo = ano_arquivo
+        analise.ano_letivo_origem = "arquivo"
     if not analise.turmas:
         analise.avisos.append(
             "Nenhuma turma reconhecida. Confira se a planilha tem uma aba por "
@@ -709,5 +715,8 @@ def _data_iso(bruto: str) -> str | None:
 
 
 def _ano_do_texto(texto: str) -> int | None:
-    achado = re.search(r"20\d{2}", texto or "")
+    """O ano ("2027") escrito no nome do arquivo. Só um número de QUATRO dígitos
+    sozinho: o nº da classe (SED) no nome — "Lista 300320221.xlsx" — contém "2022" e
+    não é ano nenhum (a confirmação recusa a lista de outro ano)."""
+    achado = re.search(r"(?<!\d)20\d{2}(?!\d)", texto or "")
     return int(achado.group()) if achado else None

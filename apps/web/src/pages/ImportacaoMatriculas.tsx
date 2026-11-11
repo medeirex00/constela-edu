@@ -57,6 +57,11 @@ interface MatriculasAnalise {
   turmas_existentes: number;
   turmas: MatriculaTurma[];
   avisos: string[];
+  // A lista é de OUTRO ano letivo que o ativo da escola: o backend recusa a gravação
+  // (409) e a tela não deixa abrir a confirmação. ``aviso_ano`` explica e diz o que
+  // fazer; sem o ano na planilha, ele só pede para conferir (a gravação segue).
+  ano_divergente?: boolean;
+  aviso_ano?: string | null;
 }
 interface MatriculasResultado {
   mensagem: string;
@@ -190,6 +195,8 @@ export default function ImportacaoMatriculas({ escolaId, aoConcluir, aoAvancar }
   // Linhas que a confirmação não cadastra nem altera (correspondência não segura com
   // um aluno já cadastrado): antes o modal as somava em "novo(s) matriculado(s)".
   const emRevisao = analise?.alunos_em_revisao ?? 0;
+  // Lista de outro ano letivo: gravar reescreveria as turmas e matrículas do ano ativo.
+  const anoDivergente = Boolean(analise?.ano_divergente);
 
   return (
     <div className="space-y-5">
@@ -308,6 +315,21 @@ export default function ImportacaoMatriculas({ escolaId, aoConcluir, aoAvancar }
             </div>
           </div>
 
+          {/* O ANO da lista, antes de tudo: a de outro ano não pode ser gravada (aviso
+              de erro, anunciado); sem o ano na planilha, um lembrete para conferir. */}
+          {analise.aviso_ano && (
+            <div className="px-6 pb-4">
+              {anoDivergente ? (
+                <Mensagem tipo="erro">{analise.aviso_ano}</Mensagem>
+              ) : (
+                <p className="flex items-start gap-2 rounded-2xl border border-ouro-200 bg-ouro-50 px-4 py-3 text-xs text-zinc-800 dark:border-ouro-400/25 dark:bg-ouro-400/10 dark:text-zinc-100">
+                  <AlertTriangle size={14} aria-hidden className="mt-0.5 shrink-0 text-ouro-700 dark:text-ouro-300" />
+                  <span>{analise.aviso_ano}</span>
+                </p>
+              )}
+            </div>
+          )}
+
           {/* auto-fit: o componente também vive no Drawer estreito de Integrações e no
               assistente — as colunas seguem a largura do cartão, não a da tela. */}
           <div className="grid grid-cols-[repeat(auto-fit,minmax(10.5rem,1fr))] gap-3 px-6 pb-4">
@@ -369,7 +391,7 @@ export default function ImportacaoMatriculas({ escolaId, aoConcluir, aoAvancar }
           {erro && <div className="px-6 pt-4"><Mensagem tipo="erro">{erro}</Mensagem></div>}
           <div className="mt-2 flex flex-wrap justify-end gap-2.5 border-t border-zinc-100 bg-zinc-50/60 px-6 py-4 dark:border-zinc-800 dark:bg-zinc-800/30">
             <Botao variante="secundario" onClick={recomecar} disabled={ocupado}>Escolher outro arquivo</Botao>
-            <Botao onClick={() => setConfirmando(true)} disabled={ocupado || analise.turmas.length === 0}>
+            <Botao onClick={() => setConfirmando(true)} disabled={ocupado || analise.turmas.length === 0 || anoDivergente}>
               {ocupado ? "Importando..." : `Criar turmas e matricular ${analise.total_alunos} aluno(s)`}
             </Botao>
           </div>

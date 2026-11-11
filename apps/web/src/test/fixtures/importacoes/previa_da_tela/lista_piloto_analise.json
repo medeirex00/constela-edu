@@ -35,5 +35,7 @@
       ]
     }
   ],
-  "avisos": []
+  "avisos": [],
+  "ano_divergente": false,
+  "aviso_ano": null
 }

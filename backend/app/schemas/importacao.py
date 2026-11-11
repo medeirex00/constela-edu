@@ -280,6 +280,11 @@ class MatriculasAnaliseOut(BaseModel):
     turmas_existentes: int = 0
     turmas: list[MatriculaTurmaOut]
     avisos: list[str] = []
+    # A lista é de OUTRO ano letivo que o ativo da escola (``ano_letivo`` ≠ ano ativo):
+    # a confirmação recusa (409) e a tela não deixa gravar. ``aviso_ano`` diz por quê
+    # e o que fazer; sem o ano na planilha, só pede para conferir (não bloqueia).
+    ano_divergente: bool = False
+    aviso_ano: str | None = None
 
 
 class MatriculasResultadoOut(BaseModel):

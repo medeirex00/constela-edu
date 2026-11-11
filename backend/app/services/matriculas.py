@@ -554,6 +554,54 @@ def aviso_turma_arquivada(turma: str, linhas: int, *, previa: bool = False) -> s
             "use “Reativar” na linha dela) e envie a planilha de novo.")
 
 
+def ano_da_lista_diverge(ano_lista: int | None, ano_escola: int) -> bool:
+    """A Lista Piloto é de OUTRO ano letivo que o ativo da escola? Sem o ano (nem na
+    planilha nem no nome do arquivo) não dá para saber: não diverge."""
+    return ano_lista is not None and ano_lista != ano_escola
+
+
+def aviso_ano_da_lista(ano_lista: int | None, origem: str | None, ano_escola: int, *,
+                       previa: bool) -> str | None:
+    """O aviso do ANO da Lista Piloto, ou ``None`` quando é o ano da escola.
+
+    A confirmação aplica a lista ao ano letivo ATIVO da escola: a de 2027 enviada com a
+    escola ainda em 2026 moveria as matrículas de 2026 para as turmas do ano seguinte,
+    marcaria os formandos "fora da lista piloto" e recalcularia as Notas de 2026 — e a
+    matrícula não guarda histórico para desfazer. Por isso a lista de outro ano é
+    recusada (a confirmação devolve este texto com 409; ``previa=True`` é o da prévia).
+    ``origem`` diz onde corrigir o ano, se ele é que está errado: "planilha" (a célula
+    "Lista Piloto:") ou "arquivo" (o nome do arquivo, quando a célula falta).
+
+    Sem o ano, a prévia pede para conferir (a confirmação segue, como sempre seguiu)."""
+    if ano_lista is None:
+        if not previa:
+            return None
+        return (f"A planilha não diz de que ano é esta Lista Piloto: ao gravar, ela vale "
+                f"para o ano letivo {ano_escola} da escola. Confira se é a lista de "
+                f"{ano_escola} antes de gravar.")
+    if not ano_da_lista_diverge(ano_lista, ano_escola):
+        return None
+    if origem == "arquivo":
+        de_onde = (f"O nome do arquivo indica a Lista Piloto de {ano_lista} (a planilha "
+                   "não traz o ano)")
+        onde_corrigir = "corrija o ano no nome do arquivo"
+    else:
+        de_onde = f"Esta é a Lista Piloto de {ano_lista}"
+        onde_corrigir = "corrija o ano escrito no topo da planilha (“Lista Piloto:”)"
+    if ano_lista > ano_escola:
+        situacao = f"e a escola ainda está no ano letivo {ano_escola}"
+        caminho = (f"Peça ao administrador global para trocar o ano letivo ativo da escola "
+                   f"para {ano_lista} e envie a planilha de novo.")
+    else:
+        situacao = f"e a escola já está no ano letivo {ano_escola}"
+        caminho = (f"Envie a Lista Piloto de {ano_escola}; se o ano letivo da escola é que "
+                   "está errado, peça ao administrador global para corrigi-lo.")
+    efeito = "Ela não pode ser gravada" if previa else "Nada foi gravado"
+    return (f"{de_onde}, {situacao}. {efeito}: gravá-la mudaria as turmas, as matrículas "
+            f"e o ranking de {ano_escola}. {caminho} Se a lista é mesmo de {ano_escola}, "
+            f"{onde_corrigir} e envie de novo.")
+
+
 def aviso_revisao(nome_linha: str, turma: str, nomes_candidatos: str) -> str:
     return (f"“{nome_linha}” (turma {turma}) parece ser o mesmo aluno de: "
             f"{nomes_candidatos} — mas a correspondência NÃO é segura. Nada foi "

@@ -3750,6 +3750,11 @@ def analisar_matriculas(
         turmas_existentes=sum(1 for t in turmas if t.ja_existe),
         turmas=turmas,
         avisos=avisos,
+        # Lista de OUTRO ano letivo: a confirmação a recusa (``confirmar_matriculas``);
+        # a prévia já avisa e a tela não deixa gravar. Sem o ano, pede para conferir.
+        ano_divergente=matriculas.ano_da_lista_diverge(analise.ano_letivo, ano),
+        aviso_ano=matriculas.aviso_ano_da_lista(
+            analise.ano_letivo, analise.ano_letivo_origem, ano, previa=True),
     )
 
 
@@ -4289,6 +4294,13 @@ def confirmar_matriculas(
     if escola is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Escola não encontrada.")
     ano = escola.ano_letivo_ativo
+    if matriculas.ano_da_lista_diverge(analise.ano_letivo, ano):
+        # A lista de OUTRO ano letivo não é aplicada ao ano ativo: moveria as
+        # matrículas para as turmas do outro ano, criaria as turmas dele neste,
+        # marcaria quem não está nela "fora da lista piloto" e recalcularia as Notas —
+        # sem volta (a matrícula não guarda histórico). Recusa antes de tocar no banco.
+        raise HTTPException(status.HTTP_409_CONFLICT, matriculas.aviso_ano_da_lista(
+            analise.ano_letivo, analise.ano_letivo_origem, ano, previa=False))
     avisos = list(analise.avisos)
 
     # Serializa importações concorrentes desta escola ANTES de ler o estado: o
