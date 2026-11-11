@@ -102,6 +102,10 @@ def _num(valor, tipo):
     return numero
 
 TAMANHO_MAXIMO = 10 * 1024 * 1024  # 10 MB
+# Teto de linhas do relatório em TEXTO (colado ou .txt/.csv): o parse custa ~1,5 ms
+# por linha, e os 10 MB deixavam ~200 mil linhas (minutos de uma thread presa). Um
+# relatório de turma tem dezenas de linhas; o de leituras da escola, milhares.
+LINHAS_MAXIMAS_TEXTO = 20_000
 IDADE_MAXIMA_TEMP_S = 24 * 3600     # PDFs de prévia não confirmados expiram em 24h
 _TOKEN_VALIDO = re.compile(r"^[0-9a-f]{32}\.(pdf|xlsx)$")
 
@@ -535,6 +539,10 @@ def analisar(
     # e de casar nomes (nada da prévia fica no disco nem no banco).
     modulos = svc_modulos.modulos_da_escola(db, db.get(Escola, escola_id))
     svc_modulos.exigir_plataforma(modulos, plataforma)
+    # Nada foi gravado: encerra a transação que as consultas acima abriram e devolve a
+    # conexão ao pool ANTES do parse (segundos, num arquivo grande) — as consultas do
+    # casamento de nomes, depois dele, abrem outra.
+    db.rollback()
 
     # Rejeita corpos gigantes pelo Content-Length antes de ler o arquivo.
     declarado = request.headers.get("content-length")
@@ -608,12 +616,12 @@ def analisar(
             tipo = "texto"
             payload_mat = _payload_matific_placar(texto)
             analise = (svc.analisar_matific_api(payload_mat) if payload_mat is not None
-                       else svc.analisar_texto(texto, plataforma))
+                       else _analisar_texto_com_teto(texto, plataforma))
     elif texto and texto.strip():
         tipo = "texto"
         payload_mat = _payload_matific_placar(texto)
         analise = (svc.analisar_matific_api(payload_mat) if payload_mat is not None
-                   else svc.analisar_texto(texto, plataforma))
+                   else _analisar_texto_com_teto(texto, plataforma))
     else:
         raise HTTPException(status.HTTP_400_BAD_REQUEST,
                             "Envie um arquivo PDF ou cole o texto do relatório.")
@@ -665,6 +673,17 @@ def analisar(
             for l in analise.linhas
         ],
     )
+
+
+def _analisar_texto_com_teto(texto: str, plataforma: str | None):
+    """``svc.analisar_texto`` com o teto de linhas (``LINHAS_MAXIMAS_TEXTO``), contadas
+    como o parser conta (as não vazias): acima dele, 413 com o que fazer."""
+    if sum(1 for linha in texto.splitlines() if linha.strip()) > LINHAS_MAXIMAS_TEXTO:
+        raise HTTPException(
+            status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            f"O relatório tem mais de {LINHAS_MAXIMAS_TEXTO:,} linhas".replace(",", ".")
+            + ". Envie em partes (por exemplo, uma turma por vez).")
+    return svc.analisar_texto(texto, plataforma)
 
 
 # --- Etapa 2: confirmação -----------------------------------------------------

@@ -1207,7 +1207,7 @@ def casar_nomes(db: Session, escola_id: int, linhas: list[LinhaImportacao], *,
     ctx = ida.carregar_contexto(db, escola_id)
     ida.marcar_ids_em_conflito(ctx, linhas, plataforma)   # a mesma marca do /confirmar
     ida.marcar_ids_de_outra_escola(db, ctx, linhas, plataforma)   # idem
-    ativos = [a for a in ctx.alunos.values() if a.status == "ativo"]
+    parecidos = _ParecidosNaEscola(a for a in ctx.alunos.values() if a.status == "ativo")
     idents = [ida.linha_de_dados(
         linha.nome, linha.dados or {}, plataforma=plataforma,
         turma_nome=str((linha.dados or {}).get("turma_relatorio") or turma_padrao or ""))
@@ -1222,7 +1222,53 @@ def casar_nomes(db: Session, escola_id: int, linhas: list[LinhaImportacao], *,
         if longo:
             linha.erros.append(f"{longo[:1].upper()}{longo[1:]} — confira o relatório.")
         linha.correspondencia = _correspondencia(
-            ctx, ida.decidir(ctx, ident), linha.nome, ativos, ident)
+            ctx, ida.decidir(ctx, ident), linha.nome, parecidos, ident)
+
+
+class _ParecidosNaEscola:
+    """Os alunos ATIVOS da escola prontos para a busca dos nomes parecidos da linha
+    que criaria ficha (``_correspondencia``): os mesmos que ``_similaridade`` dá
+    (a maior das duas ``ratio``, direta e com os tokens em ordem), no mesmo corte
+    (``LIMIAR_ALTERNATIVA``, os 5 melhores) e na mesma ordem — só mais barato.
+
+    Antes, CADA linha calculava as duas ``ratio`` contra TODOS os ativos: o relatório
+    de leituras repete o nome numa linha por livro e pagava a varredura inteira em
+    cada uma (O(linhas × alunos); 600 linhas de 30 crianças ≈ 1 min). Agora:
+      * a chave de cada ativo e o ``SequenceMatcher`` com ela no lado ``b`` (onde
+        fica o índice que o difflib monta) saem uma vez só;
+      * a busca é memorizada por nome (a chave normalizada);
+      * ``real_quick_ratio`` e ``quick_ratio`` — tetos do ``ratio``, pela própria
+        documentação do difflib — descartam sem calcular o ``ratio`` quem não chega
+        ao limiar: o resultado é EXATAMENTE o da regra completa."""
+
+    def __init__(self, ativos) -> None:
+        self._itens = []
+        for aluno in ativos:
+            chave = chave_nome(aluno.nome)
+            direta = SequenceMatcher(None, "", chave)
+            por_tokens = SequenceMatcher(None, "", " ".join(sorted(chave.split())))
+            self._itens.append((aluno, direta, por_tokens))
+        self._memo: dict[str, list[tuple]] = {}
+
+    def de(self, nome: str) -> list[tuple]:
+        """(aluno, nota) dos até 5 ativos com nota >= ``LIMIAR_ALTERNATIVA``, da maior
+        nota para a menor (o id desempata)."""
+        alvo = chave_nome(nome)
+        achados = self._memo.get(alvo)
+        if achados is None:
+            alvo_tokens = " ".join(sorted(alvo.split()))
+            achados = []
+            for aluno, direta, por_tokens in self._itens:
+                direta.set_seq1(alvo)
+                por_tokens.set_seq1(alvo_tokens)
+                notas = [sm.ratio() for sm in (direta, por_tokens)
+                         if sm.real_quick_ratio() >= LIMIAR_ALTERNATIVA
+                         and sm.quick_ratio() >= LIMIAR_ALTERNATIVA]
+                if notas and max(notas) >= LIMIAR_ALTERNATIVA:
+                    achados.append((aluno, max(notas)))
+            achados.sort(key=lambda par: (-par[1], par[0].id))
+            achados = self._memo[alvo] = achados[:5]
+        return achados
 
 
 def _alternativas(ctx, ids, nome: str) -> list[dict]:
@@ -1250,7 +1296,8 @@ def _turma_da_ficha_nova(ctx, decisao, ident) -> dict:
     return {"turma_id": None, "turma_nome": None, "turma_nova": nova or None}
 
 
-def _correspondencia(ctx, decisao, nome: str, ativos, ident=None) -> dict:
+def _correspondencia(ctx, decisao, nome: str, parecidos: "_ParecidosNaEscola",
+                     ident=None) -> dict:
     from app.services import identidade_aluno as ida
 
     alternativas = _alternativas(ctx, decisao.candidatos, nome)
@@ -1269,14 +1316,10 @@ def _correspondencia(ctx, decisao, nome: str, ativos, ident=None) -> dict:
                 "alternativas": alternativas}
     # CRIAR: nenhum candidato plausível. Nomes só PARECIDOS continuam oferecidos
     # (o gestor pode escolher um explicitamente), mas nada é pré-selecionado.
-    alvo = chave_nome(nome)
-    parecidos = sorted(
-        ((a, _similaridade(alvo, chave_nome(a.nome))) for a in ativos),
-        key=lambda par: (-par[1], par[0].id))
     difusas = [{"aluno_id": a.id, "nome": a.nome,
                 "turma": (ctx.turma_do_aluno(a.id).nome if ctx.turma_do_aluno(a.id) else ""),
                 "status": a.status, "similaridade": round(nota * 100, 1)}
-               for a, nota in parecidos[:5] if nota >= LIMIAR_ALTERNATIVA]
+               for a, nota in parecidos.de(nome)]
     return {"status": "bloqueado" if decisao.vetados else "nao_encontrado",
             "motivo": "conflito" if decisao.vetados else "novo",
             "alternativas": difusas,
