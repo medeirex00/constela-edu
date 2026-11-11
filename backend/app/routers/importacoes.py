@@ -4,6 +4,7 @@ Fluxo em duas etapas: `analisar` devolve a prévia (nada é gravado) e
 `confirmar` grava somente as linhas aprovadas pelo usuário, registrando
 tudo em `importacoes` e guardando o arquivo original em /uploads (§15).
 """
+import itertools
 import json
 import logging
 import re
@@ -3746,33 +3747,29 @@ def analisar_matriculas(
 
 def _simular_lista_piloto(db: Session, escola_id: int, ano: int, usuario: Usuario,
                           analise) -> "_Resultado":
-    """PRÉVIA = CONFIRMAÇÃO na Lista Piloto: roda as etapas da confirmação (turmas
-    que faltam, a porta única de identidade ``matriculas.resolver_linha`` com as
-    disputas do lote, e a matrícula, linha a linha, cada uma vendo as anteriores) e
-    DESFAZ tudo com rollback — dela só sai a contagem (criados, atualizados, em
-    revisão). Simular as etapas em vez de chamá-las seria um segundo motor, que
-    voltaria a divergir da confirmação. As contas de professor não são criadas (não
-    mudam a identidade de ninguém). Quem chama não grava nada na mesma transação: o
-    rollback desfaz a sessão inteira — a prévia não tem o que commitar.
+    """PRÉVIA = CONFIRMAÇÃO na Lista Piloto, SÓ LENDO: passa pelas MESMAS etapas e
+    decisões da confirmação (turmas que faltam, a porta única de identidade
+    ``matriculas.resolver_linha`` com as disputas do lote, linha a linha, cada uma
+    vendo as anteriores) com ``simular=True`` — dela só sai a contagem (criados,
+    atualizados, em revisão). Um segundo motor "leve" voltaria a divergir da
+    confirmação; rodar a confirmação de verdade e desfazer escrevia no banco a
+    cada criança, consumia as sequências e prendia as travas da turma e das fichas
+    (a prévia esperava quem estivesse gravando a mesma turma, e vice-versa).
 
-    Tudo dentro de um SAVEPOINT próprio, desfeito no fim: os savepoints internos
-    (``_inserir_turma``) ficam aninhados nele e o RELEASE deles nunca encerra a
-    transação (no SQLite, liberar o savepoint mais externo equivale a COMMIT)."""
+    Na simulação, a turma nova e a ficha nova são objetos FORA da sessão (id
+    negativo), a ficha existente que a linha alteraria é copiada para fora da
+    sessão antes de alterar, e nada de matrícula, conta de professor ou auditoria:
+    só as consultas de ``_carregar_estado`` e ``_resolver_turmas``, que não crescem
+    com o tamanho da lista."""
     if not analise.turmas:
         return _Resultado()
-    simulacao = db.begin_nested()
-    try:
-        estado = _carregar_estado(db, escola_id, ano)
-        resolvidas, _criadas, _profs = _resolver_turmas(
-            db, escola_id, ano, analise.turmas, criar_professores=False)
-        linhas = [(resolvidas[i], parsed)
-                  for i, t in enumerate(analise.turmas) if resolvidas[i] is not None
-                  for parsed in t.alunos]
-        return _persistir_linhas(db, escola_id, ano, usuario, linhas, estado)
-    finally:
-        if simulacao.is_active:
-            simulacao.rollback()
-        db.rollback()
+    estado = _carregar_estado(db, escola_id, ano)
+    resolvidas, _criadas, _profs = _resolver_turmas(
+        db, escola_id, ano, analise.turmas, simular=True)
+    linhas = [(resolvidas[i], parsed)
+              for i, t in enumerate(analise.turmas) if resolvidas[i] is not None
+              for parsed in t.alunos]
+    return _persistir_linhas(db, escola_id, ano, usuario, linhas, estado, simular=True)
 
 
 # --- Importação da planilha de matrículas (Lista Piloto) --------------------
@@ -3847,7 +3844,7 @@ def _carregar_estado(db: Session, escola_id: int, ano: int) -> _EstadoEscola:
 
 def _resolver_turmas(db: Session, escola_id: int, ano: int, turmas_analise,
                      avisos: list[str] | None = None, *,
-                     criar_professores: bool = True,
+                     simular: bool = False,
                      ) -> tuple[list[Turma | None], int, int]:
     """Cria as turmas que faltam (chave insensível a º/acento/caixa) e devolve,
     na ordem da análise, a Turma resolvida de cada uma + quantas turmas foram
@@ -3856,7 +3853,12 @@ def _resolver_turmas(db: Session, escola_id: int, ano: int, turmas_analise,
     A turma NOVA que não cabe nas colunas (``lista_piloto.conferir_turma_nova``:
     nome longo demais, ou série que não dá para cortar sem mudar a leitura) não
     é criada: sai ``None`` na posição dela e o motivo vai para ``avisos`` — no
-    PostgreSQL ela derrubava o arquivo inteiro com 500."""
+    PostgreSQL ela derrubava o arquivo inteiro com 500.
+
+    ``simular=True`` (a prévia, ``_simular_lista_piloto``): a mesma resolução, só
+    lendo — a turma que falta é uma ``Turma`` FORA da sessão, com id negativo; nada
+    de completar o código externo nem de criar conta de professor."""
+    ids_simulados = itertools.count(-1, -1)
     turmas_por_nome: dict[str, Turma] = {}
     # Duas turmas com a mesma chave (uma arquivada, outra ativa): vale a ATIVA —
     # a arquivada não recebe matrícula nova (ver ``_persistir_linhas``).
@@ -3877,16 +3879,22 @@ def _resolver_turmas(db: Session, escola_id: int, ano: int, turmas_analise,
             if serie is None:
                 resolvidas.append(None)       # não cabe: a aba fica de fora
                 continue
-            turma, criada = _inserir_turma(
-                db, escola_id, ano, t.nome, serie, turno=t.turno,
-                observacoes=(f"Nº da classe (SED): {t.sed}" if t.sed else None),
-                codigo_externo=(t.sed or None))
+            if simular:
+                turma, criada = Turma(
+                    id=next(ids_simulados), escola_id=escola_id, nome=t.nome,
+                    ano_letivo=ano, ano_escolar=serie, turno=t.turno,
+                    codigo_externo=(t.sed or None), status="ativa"), True
+            else:
+                turma, criada = _inserir_turma(
+                    db, escola_id, ano, t.nome, serie, turno=t.turno,
+                    observacoes=(f"Nº da classe (SED): {t.sed}" if t.sed else None),
+                    codigo_externo=(t.sed or None))
             turmas_por_nome[chave] = turma
             if criada:
                 criadas += 1
-        elif t.sed and not turma.codigo_externo:
+        elif t.sed and not turma.codigo_externo and not simular:
             turma.codigo_externo = t.sed          # completa o código em reimports
-        if not criar_professores:                 # prévia (``_simular_lista_piloto``)
+        if simular:                               # prévia (``_simular_lista_piloto``)
             resolvidas.append(turma)
             continue
         # Cria a conta de login de cada professor da turma (idempotente) e
@@ -3935,7 +3943,8 @@ class _Resultado:
 
 def _reter_reativacao_conta_de_outra_escola(
         db: Session, escola_id: int, usuario: Usuario, res: _Resultado, existente: Aluno,
-        turma: Turma, conflitos: list["identidade_efetiva.ContaDeOutraEscola"]) -> None:
+        turma: Turma, conflitos: list["identidade_efetiva.ContaDeOutraEscola"], *,
+        auditar: bool = True) -> None:
     """D10 pela ficha, no caminho AUTOMÁTICO (Lista Piloto). A linha reconheceu
     pelo RA uma ficha EXCLUÍDA e a reativaria, mas a conta da plataforma dessa
     ficha hoje é a identidade efetiva de um aluno de OUTRA escola
@@ -3960,14 +3969,15 @@ def _reter_reativacao_conta_de_outra_escola(
 
     A ficha entra em ``vistos`` (está na lista; a reconciliação não mexe em
     excluída de qualquer forma) e o aviso/auditoria saem uma vez por ficha, mesmo
-    que ela apareça em mais de uma turma."""
+    que ela apareça em mais de uma turma. ``auditar=False``: a prévia (nada é
+    gravado, nem a auditoria)."""
     res.vistos.add(existente.id)
     if existente.id in res.retidas_conta_de_outra_escola:
         return
     res.retidas_conta_de_outra_escola.add(existente.id)
     res.avisos.append(matriculas.aviso_reativacao_retida_conta_de_outra_escola(
         existente.nome, turma.nome))
-    for c in conflitos:
+    for c in (conflitos if auditar else ()):
         registrar(db, "aluno.reativacao_retida_conta_de_outra_escola",
                   escola_id=escola_id, usuario_id=usuario.id, entidade="aluno",
                   entidade_id=existente.id,
@@ -3978,9 +3988,22 @@ def _reter_reativacao_conta_de_outra_escola(
                             "origem": "importacao_matriculas"})
 
 
+def _ficha_simulada(aluno: Aluno) -> Aluno:
+    """Cópia da ficha FORA da sessão, para a prévia (``_persistir_linhas`` com
+    ``simular=True``) aplicar nela as mesmas alterações da confirmação (nome,
+    status, ficha, nascimento, nº de chamada) e as linhas seguintes as enxergarem
+    pelo índice — sem marcar a ficha real como alterada, que a consulta seguinte
+    (autoflush) gravaria. Os campos são os que a persistência e o motor
+    (``_identidade_do_aluno``) leem."""
+    return Aluno(id=aluno.id, escola_id=aluno.escola_id, nome=aluno.nome,
+                 status=aluno.status, numero_chamada=aluno.numero_chamada,
+                 data_nascimento=aluno.data_nascimento, ficha=dict(aluno.ficha or {}),
+                 da_lista_piloto=aluno.da_lista_piloto)
+
+
 def _persistir_linhas(db: Session, escola_id: int, ano: int, usuario: Usuario,
                       linhas: list[tuple[Turma, object]],
-                      estado: _EstadoEscola) -> _Resultado:
+                      estado: _EstadoEscola, *, simular: bool = False) -> _Resultado:
     """Grava na ORDEM do arquivo (preserva a 1ª ocorrência de cada aluno).
 
     IDENTIDADE é decidida pela PORTA ÚNICA (``matriculas.resolver_linha`` →
@@ -3997,9 +4020,22 @@ def _persistir_linhas(db: Session, escola_id: int, ano: int, usuario: Usuario,
     ficha EXCLUÍDA (o RA a reconhece) cuja conta da plataforma hoje é a
     identidade efetiva de um aluno de OUTRA escola NÃO reativa nada — vale para
     qualquer usuário, inclusive o Admin Global, porque a planilha não é uma
-    decisão sobre a conta. Ver ``_reter_reativacao_conta_de_outra_escola``."""
+    decisão sobre a conta. Ver ``_reter_reativacao_conta_de_outra_escola``.
+
+    ``simular=True`` — a PRÉVIA (``_simular_lista_piloto``): as MESMAS decisões e a
+    mesma contagem, sem escrever nada. A ficha nova é um ``Aluno`` FORA da sessão
+    (id negativo); a ficha existente que a linha alteraria é trocada, no estado, por
+    uma cópia fora da sessão (``_ficha_simulada``) na primeira vez que é tocada; e
+    matrícula, auditoria e ``flush`` não acontecem."""
     res = _Resultado()
     ja_alocado: set[int] = set()
+    ids_simulados = itertools.count(-1, -1)
+    simuladas: set[int] = set()      # fichas já trocadas pela cópia fora da sessão
+
+    def auditar(acao: str, **campos) -> None:
+        if not simular:
+            registrar(db, acao, **campos)
+
     planas = [_linha_matricula(turma, parsed) for turma, parsed in linhas]
     # Unicidade 1:1 do LOTE: um cadastro abreviado que serve a DUAS linhas não
     # pode ser entregue à primeira do arquivo (seria um chute que gruda os dados
@@ -4021,13 +4057,13 @@ def _persistir_linhas(db: Session, escola_id: int, ano: int, usuario: Usuario,
                 estado.alunos_por_id[i].nome for i in decisao.candidatos
                 if i in estado.alunos_por_id)) or "cadastro já existente"
             res.avisos.append(matriculas.aviso_revisao(parsed.nome, turma.nome, nomes))
-            registrar(db, "aluno.revisao_necessaria", escola_id=escola_id,
-                      usuario_id=usuario.id, entidade="aluno",
-                      entidade_id=decisao.aluno_id,
-                      detalhes={"origem": parsed.nome, "turma": turma.nome,
-                                "decisao": "REVIEW_REQUIRED", "motivo": decisao.motivo,
-                                "candidatos": list(decisao.candidatos),
-                                "fonte": "importacao_matriculas"})
+            auditar("aluno.revisao_necessaria", escola_id=escola_id,
+                    usuario_id=usuario.id, entidade="aluno",
+                    entidade_id=decisao.aluno_id,
+                    detalhes={"origem": parsed.nome, "turma": turma.nome,
+                              "decisao": "REVIEW_REQUIRED", "motivo": decisao.motivo,
+                              "candidatos": list(decisao.candidatos),
+                              "fonte": "importacao_matriculas"})
             continue
 
         if not ida.turma_ativa(turma):
@@ -4050,19 +4086,25 @@ def _persistir_linhas(db: Session, escola_id: int, ano: int, usuario: Usuario,
                           numero_chamada=parsed.numero_chamada,
                           data_nascimento=nasc, ficha=dict(parsed.ficha),
                           da_lista_piloto=True)
-            db.add(aluno)
-            # Só a ficha, para o id (o índice do motor o usa nas linhas seguintes):
-            # a matrícula e a auditoria pendentes vão juntas no fim, agrupadas — o
-            # flush completo aqui as mandava uma a uma, por criança.
-            db.flush([aluno])
-            db.add(Matricula(escola_id=escola_id, aluno_id=aluno.id,
-                             turma_id=turma.id, ano_letivo=ano))
+            if simular:
+                # Fora da sessão, com id negativo: o índice do motor a enxerga nas
+                # linhas seguintes, e nada vai ao banco.
+                aluno.id = next(ids_simulados)
+                simuladas.add(aluno.id)
+            else:
+                db.add(aluno)
+                # Só a ficha, para o id (o índice do motor o usa nas linhas
+                # seguintes): a matrícula e a auditoria pendentes vão juntas no fim,
+                # agrupadas — o flush completo aqui as mandava uma a uma, por criança.
+                db.flush([aluno])
+                db.add(Matricula(escola_id=escola_id, aluno_id=aluno.id,
+                                 turma_id=turma.id, ano_letivo=ano))
             res.criados += 1
-            registrar(db, "aluno.criado_auto", escola_id=escola_id,
-                      usuario_id=usuario.id, entidade="aluno", entidade_id=aluno.id,
-                      detalhes={"origem": parsed.nome, "turma": turma.nome,
-                                "decisao": "NEW_STUDENT", "motivo": decisao.motivo,
-                                "fonte": "importacao_matriculas"})
+            auditar("aluno.criado_auto", escola_id=escola_id,
+                    usuario_id=usuario.id, entidade="aluno", entidade_id=aluno.id,
+                    detalhes={"origem": parsed.nome, "turma": turma.nome,
+                              "decisao": "NEW_STUDENT", "motivo": decisao.motivo,
+                              "fonte": "importacao_matriculas"})
             estado.matricula_ano[aluno.id] = None
             ja_alocado.add(aluno.id)
             res.vistos.add(aluno.id)
@@ -4071,6 +4113,12 @@ def _persistir_linhas(db: Session, escola_id: int, ano: int, usuario: Usuario,
             continue
 
         existente = estado.alunos_por_id[decisao.aluno_id]   # REUSAR
+        if simular and existente.id not in simuladas:
+            # A prévia altera a CÓPIA (as linhas seguintes a veem pelo índice); a
+            # ficha real fica intocada.
+            existente = _ficha_simulada(existente)
+            estado.alunos_por_id[existente.id] = existente
+            simuladas.add(existente.id)
         estado.ctx.reivindicados.add(existente.id)
         if (existente.status == identidade_efetiva.EXCLUIDO
                 and elegibilidade.participa_de_premiacao(turma.ano_escolar)):
@@ -4080,7 +4128,8 @@ def _persistir_linhas(db: Session, escola_id: int, ano: int, usuario: Usuario,
                 db, escola_id, [existente], "ativo")
             if conflitos:
                 _reter_reativacao_conta_de_outra_escola(
-                    db, escola_id, usuario, res, existente, turma, conflitos)
+                    db, escola_id, usuario, res, existente, turma, conflitos,
+                    auditar=not simular)
                 continue
         nome_antigo = existente.nome
         # O Excel é a fonte da verdade do nome — exceto para ENCURTAR: uma linha
@@ -4100,14 +4149,14 @@ def _persistir_linhas(db: Session, escola_id: int, ano: int, usuario: Usuario,
             # para conferir depois que a tela foi fechada.
             res.avisos.append(matriculas.aviso_nascimento_divergente(
                 existente.nome, turma.nome, existente.data_nascimento, nasc))
-            registrar(db, "aluno.nascimento_divergente", escola_id=escola_id,
-                      usuario_id=usuario.id, entidade="aluno",
-                      entidade_id=existente.id,
-                      detalhes={"nome": existente.nome, "turma": turma.nome,
-                                "na_ficha": str(existente.data_nascimento),
-                                "na_planilha": str(nasc),
-                                "acao": "preservado o da ficha; nada foi alterado",
-                                "origem": "importacao_matriculas"})
+            auditar("aluno.nascimento_divergente", escola_id=escola_id,
+                    usuario_id=usuario.id, entidade="aluno",
+                    entidade_id=existente.id,
+                    detalhes={"nome": existente.nome, "turma": turma.nome,
+                              "na_ficha": str(existente.data_nascimento),
+                              "na_planilha": str(nasc),
+                              "acao": "preservado o da ficha; nada foi alterado",
+                              "origem": "importacao_matriculas"})
         if parsed.ficha:
             existente.ficha = {**(existente.ficha or {}), **parsed.ficha}
         if existente.status == "transferido":
@@ -4140,10 +4189,11 @@ def _persistir_linhas(db: Session, escola_id: int, ano: int, usuario: Usuario,
                 existente.numero_chamada = parsed.numero_chamada
             mat = estado.matricula_ano.get(existente.id)
             if mat is None and existente.id not in estado.matricula_ano:
-                db.add(Matricula(escola_id=escola_id, aluno_id=existente.id,
-                                 turma_id=turma.id, ano_letivo=ano))
+                if not simular:
+                    db.add(Matricula(escola_id=escola_id, aluno_id=existente.id,
+                                     turma_id=turma.id, ano_letivo=ano))
                 estado.matricula_ano[existente.id] = None
-            elif mat is not None and mat.turma_id != turma.id:
+            elif mat is not None and mat.turma_id != turma.id and not simular:
                 mat.turma_id = turma.id   # a planilha é a fonte da verdade
             ja_alocado.add(existente.id)
             # Auditoria: todo vínculo que TROCA a identidade fica rastreável.
@@ -4151,15 +4201,15 @@ def _persistir_linhas(db: Session, escola_id: int, ano: int, usuario: Usuario,
             # recusada por encurtar) — o log nunca anuncia uma troca que não houve.
             if _norm(nome_antigo) != _norm(existente.nome):
                 res.vinculados += 1
-                registrar(db, "aluno.identidade_vinculada", escola_id=escola_id,
-                          usuario_id=usuario.id, entidade="aluno",
-                          entidade_id=existente.id,
-                          detalhes={"nome_antigo": nome_antigo,
-                                    "nome_novo": existente.nome,
-                                    "origem_linha": parsed.nome,
-                                    "ra": linha.ra or None,
-                                    "motivo": decisao.motivo,
-                                    "origem": "importacao_matriculas"})
+                auditar("aluno.identidade_vinculada", escola_id=escola_id,
+                        usuario_id=usuario.id, entidade="aluno",
+                        entidade_id=existente.id,
+                        detalhes={"nome_antigo": nome_antigo,
+                                  "nome_novo": existente.nome,
+                                  "origem_linha": parsed.nome,
+                                  "ra": linha.ra or None,
+                                  "motivo": decisao.motivo,
+                                  "origem": "importacao_matriculas"})
             # Conta o aluno DISTINTO uma vez (não a cada turma em que aparece).
             res.atualizados += 1
             estado.registrar(existente, linha.chave_sala)
@@ -4167,10 +4217,10 @@ def _persistir_linhas(db: Session, escola_id: int, ano: int, usuario: Usuario,
             estado.registrar(existente)    # 2ª turma: identidade sim, sala não
     for turma, n in res.em_turma_arquivada.values():
         res.avisos.append(matriculas.aviso_turma_arquivada(turma.nome, n))
-        registrar(db, "matriculas.turma_arquivada_ignorada", escola_id=escola_id,
-                  usuario_id=usuario.id, entidade="turma", entidade_id=turma.id,
-                  detalhes={"turma": turma.nome, "linhas_nao_aplicadas": n,
-                            "origem": "importacao_matriculas"})
+        auditar("matriculas.turma_arquivada_ignorada", escola_id=escola_id,
+                usuario_id=usuario.id, entidade="turma", entidade_id=turma.id,
+                detalhes={"turma": turma.nome, "linhas_nao_aplicadas": n,
+                          "origem": "importacao_matriculas"})
     return res
 
 

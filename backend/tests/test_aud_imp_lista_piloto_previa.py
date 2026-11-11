@@ -5,9 +5,9 @@ casamento LEVE próprio (RA, ou nome idêntico + mesma sala), e a confirmação 
 motor único (``matriculas.resolver_linha``), que reconhece nome completo × abreviado,
 mudança de sala e grafia — ou manda para revisão. O modal "Gravar a Lista Piloto?"
 prometia "2 aluno(s) novo(s) matriculado(s)" e a confirmação cadastrava 0 e mandava
-2 para revisão. Agora a prévia roda a MESMA confirmação e a desfaz: novos, a
-atualizar e em revisão são os números que a confirmação vai dar — e nada fica
-gravado pela prévia. Dados fictícios.
+2 para revisão. Agora a prévia passa pelas MESMAS decisões da confirmação, só
+lendo (REV-IMP-2): novos, a atualizar e em revisão são os números que a confirmação
+vai dar — e nada fica gravado pela prévia. Dados fictícios.
 """
 from sqlalchemy import func, select
 

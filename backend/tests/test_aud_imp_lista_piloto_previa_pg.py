@@ -1,9 +1,9 @@
 """A prévia da Lista Piloto num PostgreSQL REAL — local e descartável
-(``TEST_DATABASE_URL_PG``; o nome do banco precisa conter 'test'). A prévia roda a
-confirmação dentro de um SAVEPOINT e a desfaz (``_simular_lista_piloto``): aqui, no
-banco de produção, os mesmos testes provam que os números são os da confirmação e
-que nada fica gravado — nem a turma nova criada na simulação. Sobrescreve a fixture
-``db`` só neste módulo."""
+(``TEST_DATABASE_URL_PG``; o nome do banco precisa conter 'test'). A prévia passa
+pelas mesmas decisões da confirmação só lendo (``_simular_lista_piloto``, REV-IMP-2):
+aqui, no banco de produção, os mesmos testes provam que os números são os da
+confirmação e que nada fica gravado — nem a turma nova da simulação. Sobrescreve a
+fixture ``db`` só neste módulo."""
 import os
 
 import pytest
