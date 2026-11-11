@@ -821,9 +821,15 @@ describe("Revisões de identidade — aviso de duas contas na mesma ficha", () =
   it("explica a consequência, o que confirmar e que volume não é prova", async () => {
     const u = userEvent.setup();
     filaMock([duasContas()]);
+    // A ficha JÁ tem outra conta em uso — só então o aviso vale (sem conta nenhuma, o
+    // mesmo motivo nasce da outra conta no relatório ou numa pendência).
+    responder("GET", "/escolas/1/importacoes/identidades/matific/aluno/31", [
+      { id: 1, id_externo: "conta-da-ficha", status: "efetiva", created_at: "2026-04-01T10:00:00",
+        aposentada_em: null, aposentada_por: null, motivo_aposentadoria: null },
+    ]);
     renderComApp(<RevisoesIdentidade />, { rota: "/revisoes-identidade" });
     const dialogo = await abrirDetalhe(u);
-    const aviso = within(dialogo).getByRole("note", {
+    const aviso = await within(dialogo).findByRole("note", {
       name: "Atenção: duas contas da mesma plataforma",
     });
 

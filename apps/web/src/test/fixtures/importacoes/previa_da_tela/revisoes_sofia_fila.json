@@ -1,0 +1,124 @@
+[
+  {
+    "id": 1,
+    "plataforma": "matific",
+    "formato": "resumo",
+    "id_externo": "uuid-ficticio-s1",
+    "nome_recebido": "Sofia Almeida Duarte",
+    "turma_informada": "3º Ano A",
+    "turma_id": 1,
+    "motivo": "outra_identidade_na_plataforma",
+    "motivo_texto": "outra conta nesta plataforma também leva a este aluno (já vinculada à ficha, neste relatório ou numa pendência em Revisões de identidade): não dá para saber qual delas é a criança",
+    "candidatos": [
+      {
+        "aluno_id": 3,
+        "nome": "Sofia Almeida Duarte",
+        "status": "ativo",
+        "turma": "3º Ano A"
+      }
+    ],
+    "linhas": [
+      {
+        "turma_relatorio": "3º Ano A",
+        "matific_uuid": "uuid-ficticio-s1",
+        "atividades": 3,
+        "estrelas": 9,
+        "pontuacao_media": 3.0
+      }
+    ],
+    "contexto": {
+      "tipo": "texto",
+      "data_referencia": "2026-08-14T12:00:00",
+      "data_informada": true,
+      "periodo_inicio": "",
+      "periodo_fim": ""
+    },
+    "origem": "importacao",
+    "importacao_id": 2,
+    "ocorrencias": 2,
+    "status": "pendente",
+    "aluno_escolhido_id": null,
+    "resolvida_por_id": null,
+    "resolvida_em": null,
+    "resolucao": null,
+    "created_at": "2026-08-14T12:00:00",
+    "atualizada_em": "2026-08-14T12:00:00",
+    "triagem": {
+      "classificacao": "decisao_humana",
+      "motivo": "multi_identidade_mesmo_aluno",
+      "motivo_texto": "outra conta desta plataforma também leva a esta ficha (já vinculada a ela ou numa pendência aberta) — pode ser conta duplicada ou outra criança",
+      "aluno_id": 3,
+      "evidencias": [
+        "Candidato único registrado: Sofia Almeida Duarte (3º Ano A)"
+      ],
+      "conflitos": [
+        "Outra pendência aberta liga a ficha de Sofia Almeida Duarte (3º Ano A) a uma conta Matific diferente, ainda sem vínculo"
+      ],
+      "retrato_superado": null,
+      "irmas": []
+    },
+    "nome_ficha_nova": "Sofia Almeida Duarte",
+    "nome_ficha_nova_por_turma": {}
+  },
+  {
+    "id": 2,
+    "plataforma": "matific",
+    "formato": "resumo",
+    "id_externo": "uuid-ficticio-s2",
+    "nome_recebido": "Sofia Almeida Duarte",
+    "turma_informada": "3º Ano A",
+    "turma_id": 1,
+    "motivo": "outra_identidade_na_plataforma",
+    "motivo_texto": "outra conta nesta plataforma também leva a este aluno (já vinculada à ficha, neste relatório ou numa pendência em Revisões de identidade): não dá para saber qual delas é a criança",
+    "candidatos": [
+      {
+        "aluno_id": 3,
+        "nome": "Sofia Almeida Duarte",
+        "status": "ativo",
+        "turma": "3º Ano A"
+      }
+    ],
+    "linhas": [
+      {
+        "turma_relatorio": "3º Ano A",
+        "matific_uuid": "uuid-ficticio-s2",
+        "atividades": 2,
+        "estrelas": 8,
+        "pontuacao_media": 4.0
+      }
+    ],
+    "contexto": {
+      "tipo": "texto",
+      "data_referencia": "2026-08-14T12:00:00",
+      "data_informada": true,
+      "periodo_inicio": "",
+      "periodo_fim": ""
+    },
+    "origem": "importacao",
+    "importacao_id": 1,
+    "ocorrencias": 1,
+    "status": "pendente",
+    "aluno_escolhido_id": null,
+    "resolvida_por_id": null,
+    "resolvida_em": null,
+    "resolucao": null,
+    "created_at": "2026-08-14T12:00:00",
+    "atualizada_em": "2026-08-14T12:00:00",
+    "triagem": {
+      "classificacao": "decisao_humana",
+      "motivo": "multi_identidade_mesmo_aluno",
+      "motivo_texto": "outra conta desta plataforma também leva a esta ficha (já vinculada a ela ou numa pendência aberta) — pode ser conta duplicada ou outra criança",
+      "aluno_id": 3,
+      "evidencias": [
+        "Candidato único registrado: Sofia Almeida Duarte (3º Ano A)"
+      ],
+      "conflitos": [
+        "Outra pendência aberta liga a ficha de Sofia Almeida Duarte (3º Ano A) a uma conta Matific diferente, ainda sem vínculo"
+      ],
+      "retrato_superado": null,
+      "irmas": []
+    },
+    "nome_ficha_nova": "Sofia Almeida Duarte",
+    "nome_ficha_nova_por_turma": {}
+  }
+]

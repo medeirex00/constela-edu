@@ -1,0 +1,106 @@
+[
+  {
+    "id": 1,
+    "plataforma": "matific",
+    "formato": "resumo",
+    "id_externo": "uuid-ficticio-dup-fila",
+    "nome_recebido": "Crianca Ficticia Um",
+    "turma_informada": "3º Ano A",
+    "turma_id": 1,
+    "motivo": "id_externo_duplicado",
+    "motivo_texto": "o mesmo identificador da plataforma veio em mais de uma linha do relatório, com nomes ou números diferentes (ou já há uma pendência assim aberta para ele) — não dá para saber de qual criança são os números",
+    "candidatos": [],
+    "linhas": [
+      {
+        "turma_relatorio": "3º Ano A",
+        "matific_uuid": "uuid-ficticio-dup-fila",
+        "atividades": 3,
+        "estrelas": 9,
+        "pontuacao_media": 3.0
+      }
+    ],
+    "contexto": {
+      "tipo": "texto",
+      "data_referencia": "2026-08-14T12:00:00",
+      "data_informada": true,
+      "periodo_inicio": "",
+      "periodo_fim": ""
+    },
+    "origem": "importacao",
+    "importacao_id": 2,
+    "ocorrencias": 2,
+    "status": "pendente",
+    "aluno_escolhido_id": null,
+    "resolvida_por_id": null,
+    "resolvida_em": null,
+    "resolucao": null,
+    "created_at": "2026-08-14T12:00:00",
+    "atualizada_em": "2026-08-14T12:00:00",
+    "triagem": {
+      "classificacao": "decisao_humana",
+      "motivo": "id_externo_duplicado_no_relatorio",
+      "motivo_texto": "o mesmo identificador da plataforma veio em mais de uma linha do relatório com nomes diferentes — a conta não prova de quem são estes números",
+      "aluno_id": null,
+      "evidencias": [],
+      "conflitos": [
+        "O identificador da plataforma veio repetido no relatório, com outro nome"
+      ],
+      "retrato_superado": null,
+      "irmas": []
+    },
+    "nome_ficha_nova": "Crianca Ficticia Um",
+    "nome_ficha_nova_por_turma": {}
+  },
+  {
+    "id": 2,
+    "plataforma": "matific",
+    "formato": "resumo",
+    "id_externo": "uuid-ficticio-dup-fila",
+    "nome_recebido": "Crianca Ficticia Dois",
+    "turma_informada": "3º Ano A",
+    "turma_id": 1,
+    "motivo": "id_externo_duplicado",
+    "motivo_texto": "o mesmo identificador da plataforma veio em mais de uma linha do relatório, com nomes ou números diferentes (ou já há uma pendência assim aberta para ele) — não dá para saber de qual criança são os números",
+    "candidatos": [],
+    "linhas": [
+      {
+        "turma_relatorio": "3º Ano A",
+        "matific_uuid": "uuid-ficticio-dup-fila",
+        "atividades": 2,
+        "estrelas": 8,
+        "pontuacao_media": 4.0
+      }
+    ],
+    "contexto": {
+      "tipo": "texto",
+      "data_referencia": "2026-08-14T12:00:00",
+      "data_informada": true,
+      "periodo_inicio": "",
+      "periodo_fim": ""
+    },
+    "origem": "importacao",
+    "importacao_id": 1,
+    "ocorrencias": 1,
+    "status": "pendente",
+    "aluno_escolhido_id": null,
+    "resolvida_por_id": null,
+    "resolvida_em": null,
+    "resolucao": null,
+    "created_at": "2026-08-14T12:00:00",
+    "atualizada_em": "2026-08-14T12:00:00",
+    "triagem": {
+      "classificacao": "decisao_humana",
+      "motivo": "id_externo_duplicado_no_relatorio",
+      "motivo_texto": "o mesmo identificador da plataforma veio em mais de uma linha do relatório com nomes diferentes — a conta não prova de quem são estes números",
+      "aluno_id": null,
+      "evidencias": [],
+      "conflitos": [
+        "O identificador da plataforma veio repetido no relatório, com outro nome"
+      ],
+      "retrato_superado": null,
+      "irmas": []
+    },
+    "nome_ficha_nova": "Crianca Ficticia Dois",
+    "nome_ficha_nova_por_turma": {}
+  }
+]

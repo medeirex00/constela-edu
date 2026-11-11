@@ -56,7 +56,7 @@ import {
   estiloInput,
 } from "../components/ui";
 import { useApp } from "../context/AppContext";
-import { useApi } from "../hooks/useApi";
+import { useApi, type ResultadoUseApi } from "../hooks/useApi";
 import { useMutation } from "../hooks/useMutation";
 import { ApiError, api } from "../lib/api";
 import { dataHora, numero } from "../lib/formato";
@@ -190,7 +190,9 @@ const ROTULO_MOTIVO: Record<string, string> = {
   identidade_de_ficha_inativa: "Conta de ficha inativa",
   ficha_inativa: "Ficha inativa",
   identidade_de_outro_aluno: "Conta de outro aluno",
-  outra_identidade_na_plataforma: "Duas contas na mesma ficha",
+  // Três caminhos (a ficha já tem outra conta; outra conta do mesmo relatório ou de
+  // uma pendência leva a ela): nos dois últimos a ficha pode não ter conta nenhuma.
+  outra_identidade_na_plataforma: "Outra conta leva ao mesmo aluno",
   contas_repetidas_no_relatorio: "Duas contas, nenhuma ficha",
   ra_repetido: "RA repetido",
   turma_ambigua: "Turma ambígua",
@@ -198,7 +200,9 @@ const ROTULO_MOTIVO: Record<string, string> = {
   sem_turma: "Sem turma",
   criacao_bloqueada_por_politica: "Criação bloqueada pela política",
   nome_incompleto: "Nome abreviado",
-  id_externo_duplicado: "Conta repetida no relatório",
+  // A disputa pode vir de um relatório anterior que ainda espera aqui, com a conta
+  // numa linha só: "no relatório" seria falso.
+  id_externo_duplicado: "Conta com nomes ou números diferentes",
   turma_arquivada: "Turma arquivada",
   turma_fora_do_ano_letivo: "Turma de outro ano",
   turma_de_outra_etapa: "Turma de outra etapa",
@@ -243,7 +247,7 @@ const ORIENTACAO: Record<string, string> = {
   identidade_de_outro_aluno:
     "A conta da plataforma já está ligada a outro aluno. Vincular a outra ficha transfere a conta.",
   outra_identidade_na_plataforma:
-    "O aluno encontrado já tem outra conta nesta plataforma — vinculada, ou chegando no mesmo relatório. Confirme se é a mesma criança antes de vincular.",
+    "Outra conta da plataforma também leva a este aluno: já vinculada à ficha, vinda no mesmo relatório ou esperando em outra pendência desta lista. Confira na plataforma qual conta é desta criança antes de vincular.",
   contas_repetidas_no_relatorio:
     "Duas contas da plataforma vieram com o mesmo nome e nenhuma ficha corresponde. Confira na plataforma: se são duas crianças, crie uma ficha para cada; se é a mesma criança com duas contas, crie a ficha numa das pendências e vincule a outra a ela.",
   ra_repetido: "O RA recebido aponta para mais de um aluno. Escolha qual é o dono destes dados.",
@@ -264,7 +268,7 @@ const ORIENTACAO: Record<string, string> = {
   nome_incompleto:
     "A plataforma mandou só o nome abreviado. Se reconhece a criança, vincule à ficha dela: a conta fica vinculada e as próximas coletas entram sozinhas. Não crie ficha com o nome abreviado — confira o nome completo na plataforma antes.",
   id_externo_duplicado:
-    "A mesma conta da plataforma veio em mais de uma linha, com nomes ou números diferentes. Confira na plataforma de quem é a conta e vincule à ficha certa; se os números das linhas divergem, só o vínculo é gravado agora, e os números entram numa próxima coleta em que a conta venha numa linha só.",
+    "A mesma conta da plataforma veio com nomes ou números diferentes — neste relatório ou num anterior que ainda espera aqui. Confira na plataforma de quem é a conta e vincule à ficha certa; se os números guardados divergem, só o vínculo é gravado agora, e os números entram numa próxima coleta em que a conta venha numa linha só.",
   turma_arquivada:
     "A turma do relatório está arquivada. Se ela deve receber alunos, reative-a em Turmas: ligue “Mostrar arquivadas e de outros anos” e use “Reativar” na linha dela; se a criança já tem ficha em outra turma, vincule.",
   turma_fora_do_ano_letivo:
@@ -724,17 +728,19 @@ export interface IdentidadeDoAluno {
  * plataforma, e confundir as duas coisas é o erro que faz alguém achar que
  * "resolveu" a conta duplicada quando ela continua lá. */
 function ContasDaPlataforma({
-  escolaId, plataforma, alunoId, alunoNome, podeDecidir, aoDecidir,
+  escolaId, plataforma, alunoId, alunoNome, contas, podeDecidir, aoDecidir,
 }: {
   escolaId: number | null;
   plataforma: string;
   alunoId: number;
   alunoNome: string;
+  /** As contas do aluno nesta plataforma (``/identidades/{plataforma}/aluno/{id}``),
+   *  consultadas uma vez pelo detalhe — o aviso de duas contas também as usa. */
+  contas: ResultadoUseApi<IdentidadeDoAluno[]>;
   podeDecidir: boolean;
   aoDecidir: () => void;
 }) {
   const base = escolaId ? `/escolas/${escolaId}/importacoes/identidades/${plataforma}` : null;
-  const contas = useApi<IdentidadeDoAluno[]>(base ? `${base}/aluno/${alunoId}` : null);
   const [escolhida, setEscolhida] = useState<string | null>(null);
   const [motivo, setMotivo] = useState("");
   const rotulo = NOME_PLATAFORMA[plataforma] ?? plataforma;
@@ -845,7 +851,11 @@ function ContasDaPlataforma({
  * contas vai alimentar a ficha. A sincronização aplica UMA por vez, então a
  * conta que não for vinculada deixa de aparecer no retrato do aluno — e o
  * gestor precisa saber disso ANTES de clicar, não depois. Nada é bloqueado: a
- * decisão continua sendo dele. */
+ * decisão continua sendo dele.
+ *
+ * Só aparece quando a ficha TEM outra conta (``fichaJaTemOutraConta``): o motivo
+ * "outra conta leva ao mesmo aluno" também nasce com a outra conta no mesmo
+ * relatório ou numa pendência, e a ficha sem conta nenhuma. */
 function AvisoDuasContas({ plataforma }: { plataforma: string }) {
   return (
     <div
@@ -978,6 +988,15 @@ function DetalheRevisao({
     ? rev.candidatos.find((c) => c.aluno_id === rev.aluno_escolhido_id)
       ?? { aluno_id: rev.aluno_escolhido_id, nome: "este aluno", status: "", turma: null }
     : (rev.candidatos.length === 1 ? rev.candidatos[0] : null);
+  // As contas dessa ficha nesta plataforma: o bloco "Contas do aluno" e o aviso de duas
+  // contas. O aviso só vale quando a ficha JÁ tem outra conta em uso — antes ele
+  // aparecia em todo "outra conta leva ao mesmo aluno", e a ficha podia não ter conta
+  // nenhuma (a outra estava no mesmo relatório ou numa pendência).
+  const contasAlvo = useApi<IdentidadeDoAluno[]>(alvoContas
+    ? `/escolas/${escolaId}/importacoes/identidades/${rev.plataforma}/aluno/${alvoContas.aluno_id}`
+    : null);
+  const fichaJaTemOutraConta = (contasAlvo.dados ?? []).some(
+    (c) => c.status !== "aposentada" && c.id_externo !== rev.id_externo);
 
   return (
     <div ref={refRaiz} tabIndex={-1} className="space-y-6 outline-none">
@@ -1011,7 +1030,7 @@ function DetalheRevisao({
             <p className="font-medium">Motivo: {rev.motivo_texto || rev.motivo}</p>
             {orientacao && pendente && <p className="mt-1 text-xs">{orientacao}</p>}
           </div>
-          {rev.motivo === "outra_identidade_na_plataforma" && pendente && (
+          {rev.motivo === "outra_identidade_na_plataforma" && pendente && fichaJaTemOutraConta && (
             <AvisoDuasContas plataforma={NOME_PLATAFORMA[rev.plataforma] ?? rev.plataforma} />
           )}
         </Card>
@@ -1106,6 +1125,7 @@ function DetalheRevisao({
           plataforma={rev.plataforma}
           alunoId={alvoContas.aluno_id}
           alunoNome={alvoContas.nome}
+          contas={contasAlvo}
           podeDecidir={pendente}
           aoDecidir={() => aoDesatualizar(
             "Conta principal definida. A fila foi atualizada com a situação atual.")}
