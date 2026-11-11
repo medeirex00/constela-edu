@@ -5,7 +5,7 @@
  * sequência cinematográfica). Os thumbnails são chips 2D (o preview 3D é o
  * herói — só um contexto WebGL por tela).
  */
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { ApiError } from "@constela/core";
 import { escolherNome, trocarAvatar } from "@constela/quest-core";
@@ -79,6 +79,11 @@ export function Vestiario() {
   const [salvando, setSalvando] = useState(false);
   const [erro, setErro] = useState("");
   const [invocandoSkate, setInvocandoSkate] = useState(false);
+  // Toques rápidos: um PATCH por vez, na ordem dos toques. Em paralelo, a resposta
+  // que chegasse por último (não necessariamente a do último toque) ficava na
+  // tela sem a troca seguinte e o item "voltava"; na fila, a última resposta
+  // aplicada já traz todas as trocas.
+  const fila = useRef<Promise<void>>(Promise.resolve());
 
   useEffect(() => { setApelido(perfil?.nome ?? ""); }, [perfil?.nome]);
 
@@ -87,7 +92,10 @@ export function Vestiario() {
   const aba = ABAS.find((a) => a.id === abaId)!;
   const eq = (slot: string) => (avatar[slot] as string) ?? PADRAO[slot];
 
-  async function definir(slot: string, valor: string) {
+  function definir(slot: string, valor: string) {
+    fila.current = fila.current.then(() => enviarTroca(slot, valor)).catch(() => undefined);
+  }
+  async function enviarTroca(slot: string, valor: string) {
     setErro("");
     try {
       atualizarPerfil(await trocarAvatar({ [slot]: valor }));
@@ -103,8 +111,8 @@ export function Vestiario() {
     tocar("sucesso");
     if (slot === "veiculo" && valor === "skate") { setInvocandoSkate(true); narrar("Skate voador!"); }
   }
-  function equipar(slot: string, valor: string) { if (eq(slot) !== valor) void definir(slot, valor); }
-  function alternar(slot: string, valor: string) { void definir(slot, eq(slot) === valor ? "nenhum" : valor); }
+  function equipar(slot: string, valor: string) { if (eq(slot) !== valor) definir(slot, valor); }
+  function alternar(slot: string, valor: string) { definir(slot, eq(slot) === valor ? "nenhum" : valor); }
 
   async function salvarApelido() {
     const novo = apelido.trim();
