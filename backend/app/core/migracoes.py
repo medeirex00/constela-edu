@@ -201,6 +201,17 @@ def _tomar_a_vez(conexao: Connection) -> None:
         f"SET LOCAL lock_timeout = '{_intervalo(settings.MIGRACAO_LOCK_TIMEOUT)}'")
 
 
+def _banco_pre_alembic(conexao: Connection) -> bool:
+    """Banco de uma instalação anterior ao Alembic: tem a tabela âncora, mas não a de versão.
+
+    Lido na conexão que JÁ tomou a vez (``_tomar_a_vez``). Lido antes dela, dois migradores
+    num banco desses decidiam os dois "carimbar a base": o 2º esperava o 1º subir até as
+    heads e então carimbava a 0001 por cima delas e rodava a 0002 de novo (DuplicateTable,
+    boot do 2º processo caído)."""
+    inspetor = inspect(conexao)
+    return inspetor.has_table(_TABELA_ANCORA) and not inspetor.has_table(_TABELA_VERSAO)
+
+
 def _mensagem_adiante(estado: EstadoSchema) -> str:
     return (f"O banco está em {list(estado.desconhecidas)}, revisão que este código não "
             f"conhece (heads do código: {list(estado.codigo)}): o código é MAIS ANTIGO que "
@@ -215,8 +226,6 @@ def aplicar_migracoes(engine: Engine) -> EstadoSchema:
     Recusa (``SchemaAdianteDoCodigo``) tocar num banco ADIANTE do código, a não ser
     que as revisões desconhecidas estejam em ``SCHEMA_ADIANTE_ACEITO`` (aí é no-op).
     Devolve o estado do schema ao fim."""
-    tabelas = set(inspect(engine).get_table_names())
-    pre_alembic = _TABELA_ANCORA in tabelas and _TABELA_VERSAO not in tabelas
     sqlite = engine.dialect.name == "sqlite"
 
     cfg = _config_da_aplicacao()
@@ -241,7 +250,7 @@ def aplicar_migracoes(engine: Engine) -> EstadoSchema:
                 depois = antes
             else:
                 cfg.attributes["connection"] = conexao
-                if pre_alembic:
+                if _banco_pre_alembic(conexao):
                     command.stamp(cfg, _REVISAO_BASE)
                 command.upgrade(cfg, "heads")
                 conexao.commit()
