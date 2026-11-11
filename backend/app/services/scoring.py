@@ -114,6 +114,11 @@ def pontos_dif_com_bonus(db: Session, escola_id: int, matriculas,
                          {"ativo": False, "pontos_por_livro": 0.0})
     if not extra.get("ativo") or float(extra.get("pontos_por_livro", 0) or 0) <= 0:
         return dict(pontos_dif), {}
+    if "elefante" in plataformas_fora_do_contrato(db, db.get(Escola, escola_id)):
+        # Leitura fora do plano: o motor nem lê o Elefante (`_carregar_contexto`);
+        # o bônus por livro lido na escola não pode trazê-lo de volta pela porta
+        # dos fundos (nota de Leitura > 0 numa rede que não a contratou).
+        return dict(pontos_dif), {}
     turno_por_aluno = {m.aluno_id: t.turno for m, t in matriculas}
     bonus_por_aluno = _bonus_leitura_na_escola(
         db, escola_id, turno_por_aluno, float(extra["pontos_por_livro"]))
@@ -1141,10 +1146,22 @@ def _carregar_contexto(db: Session, escola_id: int):
     # quem só tem coleta de ano anterior NÃO é aferido em Matemática (ausência no
     # ano, não zero). O Elefante NÃO recebe este corte: o contador dele é
     # vitalício (livros lidos não "zeram" na virada do ano).
-    matific = {aid: s for aid, s in snapshots_matific_do_ano(db, escola_id, ano).items()
-               if aid in ids_pontuados}
-    elefante = {aid: s for aid, s in _snapshots_atuais(db, escola_id, SnapshotElefante).items()
-                if aid in ids_pontuados}
+    #
+    # CONTRATO DE MÓDULOS: a plataforma de um módulo que a rede NÃO contratou
+    # não existe para a escola — nem como dado de entrada. Um retrato antigo
+    # dela (o contrato mudou no meio do ano, ou a escola veio de uma rede com os
+    # dois módulos) não pode gravar nota, atividades ou livros na Nota: a ordem
+    # legada (`Nota.posicao` — Ranking Geral, Top 10, telão, cartaz, certificado
+    # "Geral") desempata por `nota_elefante → nota_matific → livros → atividades`
+    # e o produto que a rede não assinou decidiria quem sai em 1º. Cortar aqui,
+    # na entrada, vale para o motor E para o simulador (`contexto_normalizacao`).
+    fora = plataformas_fora_do_contrato(db, escola)
+    matific = {} if "matific" in fora else {
+        aid: s for aid, s in snapshots_matific_do_ano(db, escola_id, ano).items()
+        if aid in ids_pontuados}
+    elefante = {} if "elefante" in fora else {
+        aid: s for aid, s in _snapshots_atuais(db, escola_id, SnapshotElefante).items()
+        if aid in ids_pontuados}
 
     # DIFICULDADE pela FONTE ÚNICA (services/dificuldade_livro): v1 global por
     # livro (A3 × ajuste intrínseco × série) — ou a régua legada por faixa quando
@@ -1158,7 +1175,10 @@ def _carregar_contexto(db: Session, escola_id: int):
     # itemização (nunca a soma — a mesma leitura não conta duas vezes); quem só
     # tem leituras também vira insumo (ausência de snapshot não é nota zero);
     # quem não tem nada fica fora (ausência de dado). Nunca é o objeto ORM.
-    leituras = _dl.leituras_por_aluno(db, escola_id, ids_pontuados)
+    # (Leitura fora do plano: nem as leituras itemizadas entram — sem elas a
+    # dificuldade de todo mundo é 0 e nenhum insumo do Elefante nasce.)
+    leituras = ({} if "elefante" in fora
+                else _dl.leituras_por_aluno(db, escola_id, ids_pontuados))
     elefante = _dl.insumos_elefante(elefante, leituras, ids_pontuados)
     pontos_dif: dict[int, float] = {}
     for matricula, turma in matriculas:
@@ -1233,6 +1253,16 @@ def dimensoes_contratadas(db: Session, escola) -> list[str]:
 
     contratados = svc_modulos.modulos_da_escola(db, escola)
     return [dim for dim in DIMENSOES if dim in contratados] or list(DIMENSOES)
+
+
+def plataformas_fora_do_contrato(db: Session, escola) -> set[str]:
+    """Plataformas (``"matific"``/``"elefante"``) das dimensões que a rede da
+    escola NÃO contratou — o que o motor trata como inexistente desde a entrada
+    (``_carregar_contexto``). Mesma cascata e mesma degradação segura de
+    ``dimensoes_contratadas``: contrato sem nenhum módulo → nada fica de fora."""
+    contratadas = dimensoes_contratadas(db, escola)
+    return {plataforma for dimensao, plataforma in DIMENSOES.items()
+            if dimensao not in contratadas}
 
 
 def _ordenar_por_dimensao(db: Session, escola_id: int, escola,
@@ -1610,10 +1640,12 @@ def recalcular_escola(db: Session, escola_id: int, *, commit: bool = True) -> in
     # contexto interno da escola.
     if personalizado:
         # A régua da REDE é a v1 global: precisa das leituras itemizadas (uma query).
+        # Leitura fora do plano: sem leituras (o mesmo corte de `_carregar_contexto`).
         ids_pontuados = {m.aluno_id for m, _t in matriculas}
+        leituras_inst = ({} if "elefante" in plataformas_fora_do_contrato(db, escola)
+                         else _dl.leituras_por_aluno(db, escola_id, ids_pontuados))
         notas_inst = _notas_institucionais(
-            matriculas, matific, elefante,
-            leituras_por_aluno=_dl.leituras_por_aluno(db, escola_id, ids_pontuados))
+            matriculas, matific, elefante, leituras_por_aluno=leituras_inst)
     else:
         notas_inst = {r.aluno.id: (r.nota_matific, r.nota_elefante)
                       for r in resultados}

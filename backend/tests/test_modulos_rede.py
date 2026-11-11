@@ -298,7 +298,12 @@ def test_recalculo_ciclo_completo_desligar_e_religar(db):
     for aluno_id, (geral, ele, mat) in so_leitura.items():
         assert geral == pytest.approx(ele, abs=0.01)      # Geral = Leitura
         assert ele == pytest.approx(com_dois[aluno_id][1], abs=0.01)  # a de leitura não muda
-        assert mat == com_dois[aluno_id][2]  # o DADO do Matific continua lá (reversível)
+        # A NOTA do Matific não fica gravada com valor real — ela desempatava a
+        # ordem legada (G_MODULOS-2). O DADO continua lá, e o passo 8 prova que
+        # religar devolve tudo (reversível).
+        assert mat == 0.0
+    assert db.query(SnapshotMatific).filter(
+        SnapshotMatific.escola_id == esc.id).count() == len(com_dois)
 
     # 6 e 7 — religa; o PUT recalcula de novo.
     r = root.put(f"/api/v1/redes/{rede.id}/modulos", json={"matematica": True})
@@ -415,7 +420,10 @@ def test_vincular_a_escola_a_rede_sem_matematica_recalcula_a_nota(db):
     assert rec["falhas"] == [] and rec["alunos"] == len(com_dois)
     for aluno_id, (geral, ele, mat) in _notas_gravadas(db, esc.id).items():
         assert geral == pytest.approx(ele, abs=0.01)          # Geral = Leitura
-        assert mat == com_dois[aluno_id][2]   # o DADO do Matific continua (reversível)
+        assert mat == 0.0   # a nota fora do plano não fica gravada (G_MODULOS-2)
+    # O DADO do Matific continua no banco (reversível).
+    assert db.query(SnapshotMatific).filter(
+        SnapshotMatific.escola_id == esc.id).count() == len(com_dois)
     nota = db.query(Nota).filter(Nota.escola_id == esc.id).first()
     assert nota.aferido_matematica is False
     assert nota.detalhes["dimensoes"]["matematica"]["contratada"] is False
