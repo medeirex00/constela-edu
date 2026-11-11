@@ -43,6 +43,7 @@ import { Card, Chip, Erro, PageHeader, Vazio } from "../components/ui";
 import { useApp } from "../context/AppContext";
 import { useApi } from "../hooks/useApi";
 import { useJanela } from "../hooks/useJanela";
+import { usePerfil } from "../hooks/usePerfil";
 import { useCalendarioBimestres } from "../lib/calendarioBimestres";
 import { nomeArquivoCsv, type TabelaCsv } from "../lib/csvRanking";
 import { numero, tempoLeitura } from "../lib/formato";
@@ -64,6 +65,10 @@ export default function RankingLeitura({ embutido = false, alvoAcoes }: {
   alvoAcoes?: HTMLElement | null;
 } = {}) {
   const { escolaId, periodo, definirPeriodo, turno, definirTurno } = useApp();
+  // Quem só vê as próprias turmas (o professor: a mesma regra de
+  // `permissoes.turmas_permitidas` — nem global, nem admin/coordenação, nem Secretaria).
+  const { gestor, secretaria } = usePerfil();
+  const soSuasTurmas = !gestor && !secretaria;
   // Período TEMPORAL e TURNO vêm do contexto global (seguem o usuário entre as
   // abas). O Elefante traz o TOTAL acumulado por aluno; recortes por semana/mês
   // só têm dados quando há relatório individual datado.
@@ -92,11 +97,13 @@ export default function RankingLeitura({ embutido = false, alvoAcoes }: {
   const lista = useMemo(() => itens ?? [], [itens]);
   // De que ano são as crianças e as turmas da lista (todas as linhas dizem o mesmo):
   // num período de um ano já encerrado, as daquele ano; num que passa por dois anos,
-  // as de agora. A lista vazia não tem o que avisar.
+  // as de agora. A lista vazia não tem o que avisar. A turma escolhida e as turmas do
+  // professor são as de agora (só quem está nelas HOJE aparece): a frase diz isso, a
+  // mesma do Relatório por Período.
   const primeira = lista[0];
   const avisoAno = primeira?.populacao && primeira.ano_letivo != null
     ? avisoPopulacao({ ano_letivo: primeira.ano_letivo, origem: primeira.populacao },
-                     alvo.turma_id ? "turma" : undefined)
+                     alvo.turma_id ? "turma" : soSuasTurmas ? "suas_turmas" : undefined)
     : null;
   // Janelamento: em escolas grandes só as primeiras linhas entram no DOM.
   const { visiveis, restantes, mostrarMais } = useJanela(lista);

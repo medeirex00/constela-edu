@@ -24,6 +24,11 @@ const DE_SEMPRE = { ano_letivo: 2027, origem: "ano_ativo", ano_letivo_ativo: 202
 
 const AVISO_ANO_FECHADO = "Período do ano letivo de 2026, que já terminou: entram as crianças "
   + "matriculadas em 2026, com a turma e a série daquele ano.";
+// A professora vê só as crianças que estão HOJE nas turmas dela (REV3-PERIODO-2): a tela
+// diz isso, como o Relatório por Período já dizia.
+const AVISO_SUAS_TURMAS = "Suas turmas são as de agora: aparecem as crianças delas, com a turma "
+  + "que tinham em 2026.";
+const PROFESSORA = usuarioFake({ cargo: "professor", nome: "Professora Ficticia" });
 const AVISO_ATRAVESSA = "O período passa por mais de um ano letivo: entram as crianças matriculadas "
   + "em 2027, o ano letivo atual da escola, com a turma de agora. Quem não tem matrícula em 2027 "
   + "não aparece.";
@@ -45,11 +50,11 @@ function premiacoes(populacao: Record<string, unknown>) {
   };
 }
 
-function montarPremiacoes(populacao: Record<string, unknown>) {
+function montarPremiacoes(populacao: Record<string, unknown>, usuario?: ReturnType<typeof usuarioFake>) {
   responder("GET", "/escolas/1/turmas", [turmaFake({ id: 1, nome: "5º Ano A", turno: "manha" })]);
   responder("GET", "/escolas/1/premiacoes", premiacoes(populacao));
   responder("GET", "/escolas/1/ranking-evolucao", []);
-  renderComApp(<Premiacoes />);
+  renderComApp(<Premiacoes />, { usuario });
 }
 
 describe("Premiações de um período de ano letivo encerrado", () => {
@@ -57,6 +62,14 @@ describe("Premiações de um período de ano letivo encerrado", () => {
     montarPremiacoes(DO_ANO_FECHADO);
     expect(await screen.findByText("Dora Ficticia Melo")).toBeInTheDocument();
     expect(texto()).toContain(AVISO_ANO_FECHADO);
+    // A coordenação vê a escola inteira: nada de "suas turmas".
+    expect(texto()).not.toContain("Suas turmas");
+  });
+
+  it("para a professora, diz também que as turmas dela são as de agora", async () => {
+    montarPremiacoes(DO_ANO_FECHADO, PROFESSORA);
+    expect(await screen.findByText("Dora Ficticia Melo")).toBeInTheDocument();
+    expect(texto()).toContain(`${AVISO_ANO_FECHADO} ${AVISO_SUAS_TURMAS}`);
   });
 
   it("período que passa por dois anos: avisa que valem as crianças de agora", async () => {
@@ -85,10 +98,10 @@ function leitores(ano_letivo: number, populacao: string) {
   ];
 }
 
-function montarRanking(itens: unknown[]) {
+function montarRanking(itens: unknown[], usuario?: ReturnType<typeof usuarioFake>) {
   responder("GET", "/escolas/1/turmas", [turmaFake({ id: 1, nome: "5º Ano A", turno: "manha" })]);
   responder("GET", "/escolas/1/ranking/leitura", itens);
-  renderComApp(<RankingLeitura />, { rota: "/ranking-leitura" });
+  renderComApp(<RankingLeitura />, { rota: "/ranking-leitura", usuario });
 }
 
 describe("Ranking de Leitura de um período de ano letivo encerrado", () => {
@@ -96,6 +109,13 @@ describe("Ranking de Leitura de um período de ano letivo encerrado", () => {
     montarRanking(leitores(2026, "ano_do_periodo"));
     expect(await screen.findByRole("link", { name: /Dora Ficticia Melo/ })).toBeInTheDocument();
     expect(texto()).toContain(AVISO_ANO_FECHADO);
+    expect(texto()).not.toContain("Suas turmas");
+  });
+
+  it("para a professora, diz também que as turmas dela são as de agora", async () => {
+    montarRanking(leitores(2026, "ano_do_periodo"), PROFESSORA);
+    expect(await screen.findByRole("link", { name: /Dora Ficticia Melo/ })).toBeInTheDocument();
+    expect(texto()).toContain(`${AVISO_ANO_FECHADO} ${AVISO_SUAS_TURMAS}`);
   });
 
   it("período que passa por dois anos: avisa", async () => {

@@ -855,8 +855,11 @@ export default function Premiacoes() {
   const modulos = useModulos();
   // Certificados: a rota já barra a Secretaria (RotaSemSecretaria); o botão some
   // também aqui, para nenhum caminho oferecer o que o backend recusa.
-  const { secretaria } = usePerfil();
+  const { secretaria, gestor } = usePerfil();
   const podeEmitir = !secretaria && escolaId != null;
+  // Quem só vê as próprias turmas (o professor: a mesma regra de
+  // `permissoes.turmas_permitidas` — nem global, nem admin/coordenação, nem Secretaria).
+  const soSuasTurmas = !gestor && !secretaria;
   const [turmaId, setTurmaId] = useState("");
   // Premiação cujo ranking completo está aberto (null = só os cartões).
   const [rankingAberto, setRankingAberto] = useState<CategoriaPremiacao | null>(null);
@@ -909,8 +912,11 @@ export default function Premiacoes() {
   const regua = dados?.regua_matematica;
   const avisoJanela = dados ? janelaDivergente(dados) : null;
   // De que ano são as crianças e as turmas dos pódios: num período de um ano já
-  // encerrado, as daquele ano; num período que passa por dois anos, as de agora.
-  const avisoAno = avisoPopulacao(dados?.populacao, turmaId ? "turma" : undefined);
+  // encerrado, as daquele ano; num período que passa por dois anos, as de agora. A
+  // turma escolhida e as turmas do professor são as de agora (só quem está nelas HOJE
+  // aparece): a frase diz isso, a mesma do Relatório por Período.
+  const avisoAno = avisoPopulacao(dados?.populacao,
+                                  turmaId ? "turma" : soSuasTurmas ? "suas_turmas" : undefined);
 
   // Chip do cabeçalho: só quando o período escolhido É o bimestre em curso
   // ("Este bimestre" ou o número dele), pelo calendário oficial (o do backend), e o
