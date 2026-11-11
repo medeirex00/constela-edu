@@ -236,8 +236,9 @@ interface LoteContexto {
   progresso: { atual: number; total: number };
   tempoMs: number;
   turmas: Turma[];
-  /** O GET das turmas da escola falhou (a mensagem): sem elas, o aluno novo fica sem
-   *  turma e o "Corrigir" não lista turmas — a conferência avisa e deixa tentar de novo. */
+  /** O GET das turmas da escola falhou (a mensagem): sem elas, o "Corrigir" não lista
+   *  turmas (o aluno novo segue com a turma da prévia, ``correspondencia.turma_id``) —
+   *  a conferência avisa e deixa tentar de novo. */
   erroTurmas: string | null;
   recarregandoTurmas: boolean;
   /** Rebusca as turmas e refaz o destino dos arquivos que ninguém corrigiu à mão. */

@@ -5,14 +5,24 @@
  * "falhou" e o relatório final mostrava, como motivo, o texto da ANÁLISE ("Aluno novo —
  * será criado nesta turma."). E o ``catch`` do GET /turmas deixava a lista vazia em
  * silêncio: a conferência dizia "Aluno não encontrado" e o "Corrigir" abria sem turmas.
- * Dados fictícios.
+ *
+ * REV-IMPWEB-3: o aviso da falha das turmas dizia que "os arquivos de aluno novo ficam
+ * sem turma" — falso: o destino do aluno novo é a turma que a prévia do backend decidiu
+ * (``correspondencia.turma_id``), com ou sem a lista de turmas. O teste que o sustentava
+ * usava uma análise montada à mão com ``correspondencia: null``, que o /analisar nunca
+ * devolve. Os testes da falha das turmas usam agora a prévia REAL de um aluno novo
+ * (lote_turma_cadastrada_analise.json e lote_turmas.json, gravados por
+ * backend/tests/test_aud_impweb_turma_da_previa.py). Dados fictícios.
  */
 import { describe, expect, it } from "vitest";
 
 import { ImportacaoLoteProvider } from "../context/ImportacaoLoteContext";
 import type { Analise } from "../lib/types";
 import ImportacaoLote from "../pages/ImportacaoLote";
+import loteTurmaCadastrada from "./fixtures/importacoes/previa_da_tela/lote_turma_cadastrada_analise.json";
+import loteTurmas from "./fixtures/importacoes/previa_da_tela/lote_turmas.json";
 import {
+  api,
   fireEvent,
   renderComApp,
   responder,
@@ -20,6 +30,7 @@ import {
   screen,
   turmaFake,
   userEvent,
+  waitFor,
   within,
 } from "./utils";
 
@@ -98,29 +109,67 @@ describe("Importação em lote — a recusa do servidor chega ao relatório", ()
   });
 });
 
+/** A prévia REAL de um aluno novo cuja turma o backend decidiu ("3º Ano A", id 1). */
+const previaAlunoNovo = () => JSON.parse(JSON.stringify(loteTurmaCadastrada)) as Analise;
+const TURMA_DA_PREVIA = previaAlunoNovo().linhas[0].correspondencia!.turma_id!;
+const ERRO_TURMAS = "Erro interno. Tente novamente em instantes.";
+
+/** As turmas que o "Corrigir" oferece para escolher o aluno. */
+async function turmasDoCorrigir(u: ReturnType<typeof userEvent.setup>) {
+  await u.click(screen.getByRole("button", { name: /Corrigir/ }));
+  const painel = await screen.findByRole("dialog", { name: "Alterar aluno" });
+  const select = within(painel).getByRole("combobox", { name: "1. Selecione a turma" }) as HTMLSelectElement;
+  return Array.from(select.options).filter((o) => o.value).map((o) => o.textContent);
+}
+
 describe("Importação em lote — falha ao carregar as turmas", () => {
-  it("a conferência avisa, com o motivo, e 'Tentar de novo' rebusca as turmas e refaz os destinos", async () => {
-    responderErro("GET", URL_TURMAS, 500, "Erro interno. Tente novamente em instantes.");
-    responder("UPLOAD", URL_ANALISAR, analiseAlunoNovo());
+  it("o aviso diz o efeito real; o arquivo do aluno novo segue com a turma da prévia", async () => {
+    const corr = previaAlunoNovo().linhas[0].correspondencia!;
+    expect([corr.status, corr.turma_id, corr.turma_nome]).toEqual(["nao_encontrado", 1, "3º Ano A"]);
+    responderErro("GET", URL_TURMAS, 500, ERRO_TURMAS);
+    responder("UPLOAD", URL_ANALISAR, previaAlunoNovo());
+    responder("POST", URL_CONFIRMAR, { mensagem: "ok", importacao_id: 1, qtd_alunos: 1, qtd_erros: 0, avisos: [] });
+    responder("POST", URL_RECALCULAR, { mensagem: "ok", alunos: 0 });
     const u = await analisarUmArquivo();
 
     const aviso = screen.getByRole("alert");
     expect(aviso).toHaveTextContent("Não foi possível carregar as turmas da escola.");
-    expect(aviso).toHaveTextContent("Erro interno. Tente novamente em instantes.");
-    // Sem turmas, o arquivo fica sem destino (e o aviso diz por quê).
-    expect(screen.getByRole("button", { name: /Importar todos \(0\)/ })).toBeDisabled();
+    expect(within(aviso).getByText(/^Sem elas/).textContent).toBe(
+      `Sem elas, “Corrigir” não mostra as turmas para escolher o aluno. Detalhe: ${ERRO_TURMAS}`);
+    // O arquivo mantém a turma que a prévia decidiu e vai com ela.
+    expect(screen.getByText("· Turma: 3º Ano A")).toBeInTheDocument();
+    expect(screen.getByText("Aluno novo — será criado nesta turma.")).toBeInTheDocument();
+    await gravar(u);
+    const chamada = api.mock.calls.find(([caminho]) => caminho === URL_CONFIRMAR);
+    const corpo = JSON.parse(String((chamada?.[1] as RequestInit).body));
+    expect(corpo.linhas.map((l: { criar_em_turma_id: number | null }) => l.criar_em_turma_id))
+      .toEqual([TURMA_DA_PREVIA, TURMA_DA_PREVIA]);
+  });
 
-    responder("GET", URL_TURMAS, [turmaFake()]);
-    await u.click(within(aviso).getByRole("button", { name: "Tentar de novo" }));
+  it("'Tentar de novo' devolve as turmas ao 'Corrigir' e tira o aviso", async () => {
+    responderErro("GET", URL_TURMAS, 500, ERRO_TURMAS);
+    responder("UPLOAD", URL_ANALISAR, previaAlunoNovo());
+    responder("GET", "/escolas/1/alunos", { itens: [], total: 0, pagina: 1, por_pagina: 100 });
+    const u = await analisarUmArquivo();
 
-    expect(await screen.findByText("· Turma: 3º Ano A")).toBeInTheDocument();
-    expect(screen.queryByRole("alert")).toBeNull();
+    // Sem as turmas, o "Corrigir" não tem turma para escolher.
+    expect(await turmasDoCorrigir(u)).toEqual([]);
+    await u.keyboard("{Escape}");
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Alterar aluno" })).toBeNull());
+
+    responder("GET", URL_TURMAS, JSON.parse(JSON.stringify(loteTurmas)));
+    await u.click(within(screen.getByRole("alert")).getByRole("button", { name: "Tentar de novo" }));
+    await waitFor(() => expect(screen.queryByRole("alert")).toBeNull());
+
+    expect(await turmasDoCorrigir(u)).toEqual(["1º Ano B", "3º Ano A"]);
+    // O arquivo continua com a turma da prévia.
+    expect(screen.getByText("· Turma: 3º Ano A")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /Importar todos \(1\)/ })).toBeEnabled();
   });
 
   it("'Tentar de novo' que falha de novo mantém o aviso, com o motivo novo", async () => {
-    responderErro("GET", URL_TURMAS, 500, "Erro interno. Tente novamente em instantes.");
-    responder("UPLOAD", URL_ANALISAR, analiseAlunoNovo());
+    responderErro("GET", URL_TURMAS, 500, ERRO_TURMAS);
+    responder("UPLOAD", URL_ANALISAR, previaAlunoNovo());
     const u = await analisarUmArquivo();
 
     responderErro("GET", URL_TURMAS, 0, "Falha de conexão. Verifique a internet e tente de novo.");
@@ -130,8 +179,8 @@ describe("Importação em lote — falha ao carregar as turmas", () => {
   });
 
   it("com as turmas carregadas, não há aviso", async () => {
-    responder("GET", URL_TURMAS, [turmaFake()]);
-    responder("UPLOAD", URL_ANALISAR, analiseAlunoNovo());
+    responder("GET", URL_TURMAS, JSON.parse(JSON.stringify(loteTurmas)));
+    responder("UPLOAD", URL_ANALISAR, previaAlunoNovo());
     await analisarUmArquivo();
     expect(screen.queryByText(/Não foi possível carregar as turmas/)).toBeNull();
   });

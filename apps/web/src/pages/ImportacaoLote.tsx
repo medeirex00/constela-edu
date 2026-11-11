@@ -296,15 +296,16 @@ export default function ImportacaoLote({ aoConcluir }: { aoConcluir?: () => void
             {ignorados.length > 0 && <Badge>{ignorados.length} ignorado{ignorados.length === 1 ? "" : "s"}</Badge>}
           </div>
 
-          {/* As turmas da escola não carregaram: o aluno novo fica sem turma e o
-              "Corrigir" não as lista. Antes a falha era engolida em silêncio. */}
+          {/* As turmas da escola não carregaram: o "Corrigir" não as lista. O aluno novo
+              não perde a turma — ela vem da prévia (``correspondencia.turma_id``). Antes
+              a falha era engolida em silêncio. */}
           {fase === "conferencia" && erroTurmas && (
             <div className="px-6 pb-4">
               <div role="alert" className="rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-800 dark:border-rose-500/20 dark:bg-rose-500/10 dark:text-rose-200">
                 <p className="font-semibold">Não foi possível carregar as turmas da escola.</p>
                 <p className="mt-0.5">
-                  Sem elas, os arquivos de aluno novo ficam sem turma e “Corrigir” não mostra as
-                  turmas. Detalhe: {erroTurmas}
+                  Sem elas, “Corrigir” não mostra as turmas para escolher o aluno. Detalhe:{" "}
+                  {erroTurmas}
                 </p>
                 <Botao variante="secundario" tamanho="sm" className="mt-3" disabled={recarregandoTurmas}
                   onClick={() => { void recarregarTurmas(); }}>
