@@ -35,3 +35,28 @@ export function acharTurmaPorNome<T extends { id: number; nome: string }>(
   });
   return candidatas.length === 1 ? candidatas[0].id : null;
 }
+
+// ETAPA da sala — espelho de ``matriculas.etapa_da_sala`` e
+// ``elegibilidade.e_etapa_fora_da_premiacao`` (backend): palavra de etapa fora do
+// Fundamental, como palavra inteira, sobre o rótulo sem acento e em maiúsculas; um
+// "ANO" explícito ("1º Ano", "Ano 1", "primeiro") afirma o Fundamental e vence.
+const RE_ETAPA_FORA =
+  /\b(?:FASE|ETAPA|EMEI|INFANTIL|MATERNAL|BERCARIO|BERCARISTA|CRECHE|JARDIM|PRE|PREI|PREII|EJA|MINIGRUPO)\b/;
+// O "O" na classe: o NFKD decompõe "º" em "o", e o rótulo vai para maiúsculas.
+const RE_ANO_EXPLICITO =
+  /\b(?:\d\s*[º°O]?\s*ANO|ANO\s*\d|PRIMEIRO|SEGUNDO|TERCEIRO|QUARTO|QUINTO)\b/;
+
+function foraDoFundamental(rotulo: string): boolean {
+  const plano = rotulo.normalize("NFKD").replace(/\p{M}/gu, "").replace(/\s+/g, " ")
+    .trim().toUpperCase();
+  return !RE_ANO_EXPLICITO.test(plano) && RE_ETAPA_FORA.test(plano);
+}
+
+/** "fora_do_fundamental" (Fase, EMEI, Pré, Maternal, EJA…) ou "fundamental", lendo o
+ *  ``ano_escolar`` e o nome da turma: se qualquer um nomeia etapa fora do Fundamental,
+ *  a sala é tratada como tal (``matriculas.etapa_da_sala``). */
+export function etapaDaSala(nome: string, anoEscolar = ""): "fundamental" | "fora_do_fundamental" {
+  return [anoEscolar, nome].some((rotulo) => rotulo && foraDoFundamental(rotulo))
+    ? "fora_do_fundamental"
+    : "fundamental";
+}

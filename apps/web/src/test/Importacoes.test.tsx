@@ -534,19 +534,24 @@ describe("Importacoes", () => {
     expect(await screen.findByText(/2 alunos aguardam a decisão de um gestor/)).toBeInTheDocument();
   });
 
-  it("revisão de TURMA (a turma escolhida resolve) continua com 'Criar'", async () => {
+  // Revisão de TURMA (turma ambígua): o backend não escolhe a turma e manda a linha
+  // para a Revisão — a tela também, até o gestor escolher uma turma em "Criar aluno
+  // novo…" (que resolve). Antes este teste afirmava o "Criar" pré-escolhido, contado
+  // como importado, que o backend mandava para a Revisão (REVERIFICACAO-1).
+  it("revisão de TURMA (turma ambígua): fica na Revisão até o gestor escolher a turma", async () => {
     await previaComCorrespondencia({
       status: "revisar", aluno_id: null, aluno_nome: null, similaridade: null,
       motivo: "turma_ambigua", alternativas: [],
     });
     const destino = screen.getByRole("combobox", { name: /Destino de/ }) as HTMLSelectElement;
-    expect(destino.value).toBe("criar");
+    expect(destino.value).toBe("revisao");
+    expect(Array.from(destino.options).map((o) => o.value)).toContain("criar");
     expect(screen.getByText(/aluno\(s\) novo\(s\)/)).toBeInTheDocument();
     // O motivo diz o que é (não "Possível duplicata") e o que fazer.
     expect(screen.getByText("Mais de uma turma possível — escolha a turma")).toBeInTheDocument();
     expect(destino).toHaveAccessibleDescription(
       "Mais de uma turma possível — escolha a turma Mais de uma turma cadastrada corresponde à "
-      + "turma do relatório: confira a turma da ficha nova.");
+      + "turma do relatório: escolha a turma da ficha nova.");
   });
 
   // Cada motivo que o backend manda tem rótulo e explicação próprios — com a prévia

@@ -61,7 +61,7 @@ import {
   problemaDaDataDoRelatorio,
 } from "../lib/dataRelatorio";
 import { dataHora, numero } from "../lib/formato";
-import { acharTurmaPorNome, normalizar } from "../lib/nomes";
+import { acharTurmaPorNome, etapaDaSala, normalizar } from "../lib/nomes";
 import ImportacaoLote from "./ImportacaoLote";
 import type { Aluno, Analise, Importacao, LinhaAnalise, ResultadoImportacao, Turma } from "../lib/types";
 
@@ -277,7 +277,7 @@ const MOTIVO_REVISAO: Record<string, { rotulo: string; explicacao: string }> = {
   // Motivos de TURMA: a turma escolhida em "Criar aluno novo…" resolve.
   turma_ambigua: {
     rotulo: "Mais de uma turma possível",
-    explicacao: "Mais de uma turma cadastrada corresponde à turma do relatório: confira a turma da ficha nova.",
+    explicacao: "Mais de uma turma cadastrada corresponde à turma do relatório: escolha a turma da ficha nova.",
   },
   turma_arquivada: {
     rotulo: "Turma arquivada",
@@ -290,7 +290,7 @@ const MOTIVO_REVISAO: Record<string, { rotulo: string; explicacao: string }> = {
   turma_de_outra_etapa: {
     rotulo: "Turma de outra etapa",
     explicacao:
-      "A turma que corresponde à do relatório é de outra etapa (como Educação Infantil e Fundamental): escolha a turma certa.",
+      "A turma que corresponde à do relatório é de outra etapa (como Educação Infantil e Fundamental): escolha uma turma da mesma etapa. Se ela ainda não existe, cadastre-a em Turmas com um nome que diga a etapa, como “1º Ano A”.",
   },
   turma_nao_cadastrada: {
     rotulo: "Turma não cadastrada",
@@ -317,19 +317,38 @@ function vaiParaRevisao(c: LinhaAnalise["correspondencia"]): boolean {
   return c?.status === "revisar" && MOTIVOS_SO_REVISAO.has(c.motivo ?? "");
 }
 
-/** A turma do relatório existe, mas ARQUIVADA: o backend não cria o aluno nela (nem a
- *  recria) e manda a linha para Revisões de identidade. "Criar na turma do relatório"
- *  não vale; só uma turma ATIVA escolhida em "Criar aluno novo…" resolve — até lá, a
- *  linha fica na Revisão. */
-function turmaArquivada(c: LinhaAnalise["correspondencia"]): boolean {
-  return c?.status === "revisar" && c.motivo === "turma_arquivada";
+/** Motivos de TURMA em que a turma do relatório não recebe a ficha nova e o backend
+ *  não escolhe outra (``identidade_aluno._turma_para_criar``): ela está ARQUIVADA, há
+ *  MAIS DE UMA turma cadastrada para a sala, ou a da sala é de OUTRA ETAPA (Educação
+ *  Infantil × Fundamental). "Criar na turma do relatório" cairia de novo na Revisão;
+ *  só uma turma escolhida em "Criar aluno novo…" resolve — até lá, a linha fica na
+ *  Revisão. Antes só a arquivada era tratada assim, e a tela pré-escolhia uma turma
+ *  (ou "a turma do relatório", que "seria criada") e contava a linha como importada. */
+const MOTIVOS_TURMA_SEM_DESTINO = new Set(["turma_arquivada", "turma_ambigua", "turma_de_outra_etapa"]);
+
+function turmaSemDestino(c: LinhaAnalise["correspondencia"]): boolean {
+  return c?.status === "revisar" && MOTIVOS_TURMA_SEM_DESTINO.has(c.motivo ?? "");
 }
 
-/** As turmas do relatório que a escola tem arquivadas (normalizadas): não são "turma
- *  nova" — a confirmação não as cria. */
-function turmasArquivadasDoRelatorio(a: Analise): Set<string> {
-  return new Set(a.linhas.filter((linha) => turmaArquivada(linha.correspondencia))
+/** As turmas do relatório sem destino (normalizadas): não são "turma nova" — a
+ *  confirmação não as cria. */
+function turmasSemDestinoDoRelatorio(a: Analise): Set<string> {
+  return new Set(a.linhas.filter((linha) => turmaSemDestino(linha.correspondencia))
     .map((linha) => normalizar(String(linha.dados.turma_relatorio ?? a.turma_detectada ?? ""))));
+}
+
+/** "Criar aluno novo…" numa turma de OUTRA ETAPA que a turma do relatório: o backend
+ *  recusa a ficha mesmo com a turma escolhida e manda a linha para a Revisão
+ *  (``identidade_aluno.turma_de_outra_etapa``). A base é a mesma do backend: a turma
+ *  do relatório que vai NA LINHA (``dados.turma_relatorio``); sem ela, não há etapa a
+ *  comparar. */
+function criarEmOutraEtapa(acao: Acao | undefined, linha: LinhaAnalise | undefined,
+                           turmas: Turma[]): boolean {
+  if (acao?.tipo !== "criar" || acao.turmaId == null) return false;
+  const relatorio = String(linha?.dados?.turma_relatorio ?? "").trim();
+  const turma = turmas.find((t) => t.id === acao.turmaId);
+  return Boolean(relatorio && turma)
+    && etapaDaSala(relatorio) !== etapaDaSala(turma!.nome, turma!.ano_escolar ?? "");
 }
 
 /** A ficha escolhida para uma conta que já é de um aluno de OUTRA escola do Constela
@@ -346,12 +365,15 @@ function vinculoVaiParaRevisao(acao: Acao | undefined,
 /** O destino escolhido leva a linha para Revisões de identidade na confirmação:
  *  "Deixar para a Revisão" sempre; "Criar" (turma cadastrada ou a do relatório)
  *  quando a política da escola é "bloquear" — o backend não cria a ficha e abre a
- *  pendência ('criacao_bloqueada_por_politica'); e a ficha escolhida para a conta de
- *  um aluno de outra escola, se quem escolhe não é o Admin Global. */
+ *  pendência ('criacao_bloqueada_por_politica'); "Criar" numa turma de outra etapa
+ *  que a do relatório (``outraEtapa``, de ``criarEmOutraEtapa``); e a ficha escolhida
+ *  para a conta de um aluno de outra escola, se quem escolhe não é o Admin Global. */
 function vaiParaARevisao(acao: Acao | undefined, criacaoBloqueada: boolean,
-                         c?: LinhaAnalise["correspondencia"], global = false): boolean {
+                         c?: LinhaAnalise["correspondencia"], global = false,
+                         outraEtapa = false): boolean {
   if (acao?.tipo === "revisao") return true;
   if (vinculoVaiParaRevisao(acao, c, global)) return true;
+  if (outraEtapa) return true;
   return criacaoBloqueada && (acao?.tipo === "criar" || acao?.tipo === "criar_nova");
 }
 
@@ -567,9 +589,10 @@ export default function Importacoes() {
       const turmaId = acharTurmaPorNome(turmas, resposta.turma_detectada);
       setTurmaEmMassa(turmaId ?? turmas[0]?.id ?? null);
       // Turma detectada que NÃO existe no cadastro: será criada na confirmação. A que
-      // existe ARQUIVADA (a lista de turmas só traz as ativas) não é nova nem é criada.
-      const arquivada = turmasArquivadasDoRelatorio(resposta).has(normalizar(resposta.turma_detectada ?? ""));
-      setTurmaNova(resposta.turma_detectada && !turmaId && !arquivada ? resposta.turma_detectada : "");
+      // existe ARQUIVADA (a lista de turmas só traz as ativas), a ambígua e a de outra
+      // etapa não são novas nem são criadas.
+      const semDestino = turmasSemDestinoDoRelatorio(resposta).has(normalizar(resposta.turma_detectada ?? ""));
+      setTurmaNova(resposta.turma_detectada && !turmaId && !semDestino ? resposta.turma_detectada : "");
       const gruposIniciais = agrupar(resposta);
       setAcoes(
         gruposIniciais.map((g): Acao => {
@@ -585,9 +608,10 @@ export default function Importacoes() {
           // abreviado, duas contas com o mesmo nome, possível duplicata…): o
           // destino é a Revisão — nunca "Criar", que o backend ignoraria.
           if (vaiParaRevisao(c)) return acaoRevisao(g, resposta);
-          // Turma do relatório arquivada: nenhuma turma criável por padrão — a linha fica
-          // na Revisão (o que o backend faria) até o gestor escolher uma turma ativa.
-          if (turmaArquivada(c)) return acaoRevisao(g, resposta);
+          // Turma do relatório arquivada, ambígua ou de outra etapa: nenhuma turma
+          // criável por padrão — a linha fica na Revisão (o que o backend faria) até o
+          // gestor escolher uma turma em "Criar aluno novo…".
+          if (turmaSemDestino(c)) return acaoRevisao(g, resposta);
           // Aluno novo: cria na turma DO PRÓPRIO ALUNO — o relatório geral do
           // Matific tem alunos de várias turmas (turma_relatorio por linha);
           // se essa turma não casar, usa a turma global detectada.
@@ -712,13 +736,14 @@ export default function Importacoes() {
   /** "Aplicar a todos": todo aluno NOVO (sem vínculo com cadastro) recebe a
    *  mesma ação — criar na turma escolhida ou na turma do relatório (nova). A
    *  linha que vai para a Revisão fica onde está: nela "Criar" não vale. Nem a da
-   *  turma arquivada recebe "a turma do relatório" — nela o backend não cria. */
+   *  turma arquivada, ambígua ou de outra etapa recebe "a turma do relatório" — nela
+   *  o backend não cria. */
   function aplicarATodosOsNovos(acao: Acao) {
     setAcoes((atuais) =>
       atuais.map((atual, i) => {
         const g = grupos[i];
         if (g && !g.todasComErro && atual.tipo !== "importar" && !vaiParaRevisao(g.correspondencia)
-            && !(acao.tipo === "criar_nova" && turmaArquivada(g.correspondencia))) {
+            && !(acao.tipo === "criar_nova" && turmaSemDestino(g.correspondencia))) {
           return acao;
         }
         return atual;
@@ -853,8 +878,12 @@ export default function Importacoes() {
   // Revisões de identidade, como a de destino "revisao". O rodapé e a confirmação a
   // contam lá, não entre os importados nem entre os alunos novos.
   const criacaoBloqueada = Boolean(analise?.criacao_bloqueada_por_politica);
+  // "Criar" numa turma de outra etapa que a do relatório: o backend recusa (Revisão).
+  const emOutraEtapa = (g: Grupo, i: number) =>
+    criarEmOutraEtapa(acoes[i], analise?.linhas[g.indices[0]], turmas);
   const totalParaRevisao = grupos.filter(
-    (g, i) => !g.todasComErro && vaiParaARevisao(acoes[i], criacaoBloqueada, g.correspondencia, global),
+    (g, i) => !g.todasComErro
+      && vaiParaARevisao(acoes[i], criacaoBloqueada, g.correspondencia, global, emOutraEtapa(g, i)),
   ).length;
   const turmaAlvo = turmaEmMassa ?? turmas[0]?.id ?? null;
   // Data do relatório: obrigatória no total acumulado (sem "Intervalo de datas").
@@ -878,12 +907,13 @@ export default function Importacoes() {
       if (vinculoVaiParaRevisao(acao, g.correspondencia, global)) revisao += 1;
       else if (acao.tipo === "importar") vincular += 1;
       else if (acao.tipo === "revisao") revisao += 1;
+      else if (criarEmOutraEtapa(acao, analise?.linhas[g.indices[0]], turmas)) revisao += 1;
       else if (vaiParaARevisao(acao, criacaoBloqueada)) { revisao += 1; barradas += 1; }
       else if (acao.tipo === "criar") criar += 1;
       else criarNova += 1;
     });
     return { vincular, criar, criarNova, revisao, barradas, ignorar };
-  }, [grupos, acoes, criacaoBloqueada, global]);
+  }, [grupos, acoes, criacaoBloqueada, global, analise, turmas]);
 
   // Etapa do passo a passo (estado REAL do fluxo): 0 envio, 1 conferência, 2
   // confirmação (modal aberto), 3 = tudo feito (resultado na tela, sem prévia).
@@ -1137,6 +1167,7 @@ export default function Importacoes() {
                 <span className="text-zinc-800 dark:text-zinc-100">
                   <strong>{naoEncontrados.length}</strong> aluno(s) novo(s)
                   {analise.turma_detectada && acharTurmaPorNome(turmas, analise.turma_detectada)
+                   && !naoEncontrados.some((g) => turmaSemDestino(g.correspondencia))
                     ? " — já marcados para criar na turma do relatório."
                     : turmaNova
                       ? ` — a turma “${turmaNova}” será criada automaticamente ao importar.`
@@ -1277,9 +1308,10 @@ export default function Importacoes() {
                                   // A confirmação não cria ficha nesta linha: "Criar"
                                   // seria ignorado. Fica a Revisão (ou ignorar).
                                   <option value="revisao">Deixar para a Revisão</option>
-                                ) : turmaArquivada(correspondencia) ? (
-                                  // A turma do relatório está arquivada: o backend não cria
-                                  // nela. Fica a Revisão, ou uma turma ATIVA escolhida.
+                                ) : turmaSemDestino(correspondencia) ? (
+                                  // A turma do relatório está arquivada, é ambígua ou de
+                                  // outra etapa: o backend não cria nela. Fica a Revisão,
+                                  // ou uma turma escolhida.
                                   <>
                                     <option value="revisao">Deixar para a Revisão</option>
                                     <option value="criar">Criar aluno novo…</option>
@@ -1314,6 +1346,14 @@ export default function Importacoes() {
                                     <option key={turma.id} value={turma.id}>{turma.nome}</option>
                                   ))}
                                 </select>
+                              )}
+                              {criarEmOutraEtapa(acao, primeira, turmas) && (
+                                // O backend recusa a ficha nesta turma (outra etapa): o
+                                // rodapé já a conta em Revisões — aqui, o porquê.
+                                <p className="max-w-[18rem] text-xs text-ouro-700 dark:text-ouro-300">
+                                  Esta turma é de outra etapa que a turma do relatório: a ficha não
+                                  nasce nela — a linha vai para Revisões de identidade.
+                                </p>
                               )}
                             </div>
                           )}
