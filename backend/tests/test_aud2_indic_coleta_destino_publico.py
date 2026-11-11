@@ -211,3 +211,99 @@ def test_rebinding_recusado_na_conexao_nao_grava_o_ip_interno(db, monkeypatch, c
     assert f.ultimo_status == "erro" and "não-pública" in f.ultimo_erro
     assert "10.244.3.17" not in f.ultimo_erro, f.ultimo_erro
     assert "10.244.3.17" in caplog.text
+
+
+# --- REV2-INDIC-2: a mensagem única é verdadeira para tudo o que ela agrupa --------
+
+PORTA_TLS = 7123
+
+
+@pytest.mark.parametrize("erro,trecho", [
+    (httpx.ConnectError("[WinError 10061] Nenhuma conexão pôde ser feita (recusou)"), "recusou"),
+    (httpx.ConnectTimeout("timed out"), "não respondeu"),
+    (httpx.ReadTimeout("timed out"), "não respondeu"),
+    (httpx.ReadError("[WinError 10054] Foi forçado o cancelamento de uma conexão"), "interrompeu"),
+    (ConnectionResetError(10054, "reset"), "interrompeu"),
+    (httpx.ConnectError("[SSL: CERTIFICATE_VERIFY_FAILED] certificate verify failed: unable to "
+                        "get local issuer certificate (_ssl.c:1032)"), "certificado"),
+    (httpx.ConnectError("[SSL: TLSV1_ALERT_PROTOCOL_VERSION] tlsv1 alert protocol version "
+                        "(_ssl.c:1032)"), "HTTPS"),
+])
+def test_a_mensagem_unica_cobre_cada_falha_que_agrupa(db, erro, trecho):
+    f = _fonte(db)
+
+    def baixador(url):
+        raise erro
+
+    svc.coletar_fonte(db, f, baixador=baixador)
+    assert f.ultimo_erro == svc.ERRO_CONEXAO_FONTE and str(erro) not in f.ultimo_erro
+    assert trecho in svc.ERRO_CONEXAO_FONTE, (
+        f"a mensagem única dá ao admin uma causa que não cobre {type(erro).__name__}: "
+        f"{svc.ERRO_CONEXAO_FONTE!r}")
+    # A coluna é String(300): a mensagem é gravada sem corte.
+    assert len(svc.ERRO_CONEXAO_FONTE) <= 300
+
+
+def test_certificado_invalido_nao_vira_nao_respondeu(db, monkeypatch, tmp_path, caplog):
+    """Servidor TLS LOCAL que responde com certificado autoassinado (como um portal oficial
+    com a cadeia incompleta). Só neste teste a guarda aceita o IP local."""
+    import datetime as dt
+    import ssl
+
+    from cryptography import x509
+    from cryptography.hazmat.primitives import hashes, serialization
+    from cryptography.hazmat.primitives.asymmetric import ec
+    from cryptography.x509.oid import NameOID
+
+    host = "cert.sonda.invalid"
+    chave = ec.generate_private_key(ec.SECP256R1())
+    nome = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, host)])
+    cert = (x509.CertificateBuilder().subject_name(nome).issuer_name(nome)
+            .public_key(chave.public_key()).serial_number(1)
+            .not_valid_before(dt.datetime(2020, 1, 1)).not_valid_after(dt.datetime(2040, 1, 1))
+            .add_extension(x509.SubjectAlternativeName([x509.DNSName(host)]), critical=False)
+            .sign(chave, hashes.SHA256()))
+    (tmp_path / "c.pem").write_bytes(cert.public_bytes(serialization.Encoding.PEM))
+    (tmp_path / "k.pem").write_bytes(chave.private_bytes(
+        serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8,
+        serialization.NoEncryption()))
+    ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    ctx.load_cert_chain(tmp_path / "c.pem", tmp_path / "k.pem")
+    srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    srv.bind(("127.0.0.1", PORTA_TLS))
+    srv.listen(5)
+    srv.settimeout(5)
+    atendidas = []
+
+    def rodar():
+        try:
+            while True:
+                c, _ = srv.accept()
+                atendidas.append(1)
+                try:
+                    ctx.wrap_socket(c, server_side=True).close()
+                except (ssl.SSLError, OSError):
+                    c.close()
+        except OSError:
+            return
+
+    t = threading.Thread(target=rodar, daemon=True)
+    t.start()
+    monkeypatch.setattr(socket, "getaddrinfo", ResolvedorFalso({host: ["127.0.0.1"]}))
+    monkeypatch.setattr(svc, "_ip_publico", lambda ip: True)
+    f = _fonte(db)
+    f.url = f"https://{host}:{PORTA_TLS}/ideb.csv"
+    db.commit()
+    try:
+        with caplog.at_level(logging.WARNING, logger="app.services.avaliacoes"):
+            svc.coletar_fonte(db, f)
+    finally:
+        srv.close()
+        t.join(timeout=6)
+    assert atendidas, "o servidor local não foi alcançado: o teste não provou nada"
+    assert f.ultimo_erro == svc.ERRO_CONEXAO_FONTE          # a mensagem única (sem oráculo)
+    assert "certificado" in f.ultimo_erro, (
+        f"o servidor respondeu e o problema é o certificado, mas o painel diz: {f.ultimo_erro!r}")
+    assert "CERTIFICATE_VERIFY_FAILED" not in f.ultimo_erro
+    assert "CERTIFICATE_VERIFY_FAILED" in caplog.text        # o detalhe fica no log

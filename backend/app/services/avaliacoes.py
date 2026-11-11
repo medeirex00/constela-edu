@@ -811,9 +811,14 @@ _MAX_REDIRECTS = 5
 # Mensagem ÚNICA para qualquer falha de conexão com a fonte (recusa, queda, tempo
 # esgotado, TLS). O texto do erro de rede diferenciava porta aberta de porta fechada
 # no destino e, gravado em ``fonte.ultimo_erro`` (o painel mostra), servia para varrer
-# uma rede às cegas. O detalhe vai só para o log do servidor.
-ERRO_CONEXAO_FONTE = ("Falha de conexão com a fonte: o endereço não respondeu ou recusou a "
-                      "conexão. Confira o endereço e tente de novo mais tarde.")
+# uma rede às cegas. O detalhe vai só para o log do servidor. Por ser única, ela tem de
+# ser verdadeira para TUDO o que agrupa — inclusive o servidor que respondeu, mas cujo
+# certificado HTTPS não foi aceito (um portal com a cadeia incompleta, por exemplo).
+# Cabe na coluna (String(300)) sem corte.
+ERRO_CONEXAO_FONTE = ("Falha de conexão com a fonte: o endereço não respondeu, recusou ou "
+                      "interrompeu a conexão, ou a conexão segura (HTTPS) falhou, por exemplo "
+                      "por um certificado inválido. Confira o endereço e tente de novo mais "
+                      "tarde; o detalhe técnico fica no registro do servidor.")
 
 
 def _ip_publico(ip: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
