@@ -533,7 +533,18 @@ def exemplo_pontuacao_elefante(
     fator de tamanho, fator de série e o valor — pela regra desta escola, a
     mesma das premiações e dos rankings. Use UMA forma de escolher o livro:
     ``livro_id`` (acervo da escola), ``elefante_id`` (catálogo oficial) ou
-    ``nivel`` (+ ``titulo`` opcional)."""
+    ``nivel`` (+ ``titulo`` opcional).
+
+    ``livro_id`` fica com QUEM É DA ESCOLA: a Secretaria recebe 403 em qualquer id
+    (sem dizer se o livro existe), como no ``GET /livros`` (S_G_GRUPO-2). O acervo
+    nasce das leituras das crianças: numa escola em que só uma ou duas leram, varrer
+    ``livro_id`` daria título e nível de tudo o que elas leram. Por nível e pelo
+    catálogo oficial o exemplo segue aberto a ela."""
+    if livro_id is not None and permissoes.e_secretaria(usuario):
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN,
+            "O exemplo com um livro do acervo da escola fica com quem é da escola: o "
+            "acervo é o histórico de leitura das crianças. Escolha o livro pelo nível.")
     numero_serie = _serie_do_exemplo(serie)
     titulo = (titulo or "").strip() or None
     nivel_bruto = (nivel or "").strip()
