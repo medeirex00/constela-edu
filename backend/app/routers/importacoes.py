@@ -3910,8 +3910,9 @@ def analisar_matriculas(
     # × abreviado, mudança de sala, grafia) ou manda para revisão.
     simulado = _simular_lista_piloto(db, escola_id, ano, usuario, analise)
     # Quais linhas ficam para revisão (o motivo e o caminho de cada uma), não só
-    # quantas: os mesmos avisos que a confirmação dará, na redação de prévia.
-    avisos = avisos + simulado.avisos_revisao
+    # quantas: os mesmos avisos que a confirmação dará, na redação de prévia. E as
+    # fichas novas parecidas com uma ficha do ano anterior sem turma no ano.
+    avisos = avisos + simulado.avisos_revisao + simulado.avisos_conferir
 
     return MatriculasAnaliseOut(
         escola_detectada=analise.escola_detectada, ano_letivo=analise.ano_letivo,
@@ -4001,7 +4002,12 @@ def _carregar_estado(db: Session, escola_id: int, ano: int) -> _EstadoEscola:
         de quem era do 4º A em 2026;
       * nome → alunos da escola, para reconhecer MUDANÇA DE SALA. Quem só tem
         matrícula de ano anterior (ou nenhuma) é reconhecido por aqui (nome
-        idêntico, com prova de identidade) ou pelo RA — nunca pelo roster.
+        idêntico, com prova de identidade) ou pelo RA — nunca pelo roster;
+      * roster da SALA DO ANO ANTERIOR — quem não tem matrícula no ano ativo, pela
+        sala da matrícula mais recente de ano anterior: reaproveita só com
+        identificador forte; só pelo nome, a ficha nova nasce com o aviso da
+        parecida (``matriculas._sala_do_ano_anterior``) — quem repetiu ou passou de
+        ano com a ficha abreviada da coleta não ganha uma 2ª ficha calada.
     """
     # order_by garante escolha determinística de por_ra quando há RA repetido.
     alunos_todos = db.execute(
@@ -4021,13 +4027,17 @@ def _carregar_estado(db: Session, escola_id: int, ano: int) -> _EstadoEscola:
     chave_da_turma: dict[int, str] = {
         tid: _chave_turma(t.nome) for tid, t in turmas_da_escola.items()}
     # Turma da matrícula mais recente de cada aluno; a do ano ativo vale sobre as outras.
+    # E a sala da matrícula mais recente de ANO ANTERIOR (o roster do ano anterior).
     turma_recente: dict[int, Turma] = {}
-    for aid, tid in db.execute(
-        select(Matricula.aluno_id, Matricula.turma_id)
+    sala_anterior: dict[int, str] = {}
+    for aid, tid, ano_m in db.execute(
+        select(Matricula.aluno_id, Matricula.turma_id, Matricula.ano_letivo)
         .where(Matricula.escola_id == escola_id)
         .order_by(Matricula.ano_letivo, Matricula.id)).all():
         if tid in turmas_da_escola:
             turma_recente[aid] = turmas_da_escola[tid]
+            if ano_m < ano:
+                sala_anterior[aid] = chave_da_turma[tid]
     for aid, m in matricula_ano.items():
         if m is not None and m.turma_id in turmas_da_escola:
             turma_recente[aid] = turmas_da_escola[m.turma_id]
@@ -4046,6 +4056,8 @@ def _carregar_estado(db: Session, escola_id: int, ano: int) -> _EstadoEscola:
             ctx.registrar_ra(ident)     # só o RA identifica um excluído
             continue
         ctx.registrar(ident, sala_de.get(a.id))
+        if a.id not in sala_de and a.id in sala_anterior:
+            ctx.registrar_ano_anterior(ident, sala_anterior[a.id])
     return _EstadoEscola(alunos_por_id, matricula_ano, ctx, turma_recente)
 
 
@@ -4156,6 +4168,9 @@ class _Resultado:
     # Os avisos das linhas em REVISÃO (também em ``avisos``): a prévia mostra só
     # estes da simulação, na redação de prévia — quais nomes, não só quantos.
     avisos_revisao: list[str] = field(default_factory=list)
+    # Os avisos das fichas NOVAS que se parecem com uma ficha do ano anterior sem turma
+    # no ano (também em ``avisos``): a prévia também os mostra, na redação de prévia.
+    avisos_conferir: list[str] = field(default_factory=list)
     # Linhas NÃO aplicadas por estarem numa turma ARQUIVADA: turma_id → (turma, n).
     em_turma_arquivada: dict[int, tuple[Turma, int]] = field(default_factory=dict)
     # Fichas EXCLUÍDAS que a linha reativaria, mas cuja conta da plataforma hoje é
@@ -4331,11 +4346,25 @@ def _persistir_linhas(db: Session, escola_id: int, ano: int, usuario: Usuario,
                 db.add(Matricula(escola_id=escola_id, aluno_id=aluno.id,
                                  turma_id=turma.id, ano_letivo=ano))
             res.criados += 1
+            detalhes_criacao = {"origem": parsed.nome, "turma": turma.nome,
+                                "decisao": "NEW_STUDENT", "motivo": decisao.motivo,
+                                "fonte": "importacao_matriculas"}
+            parecidas = [f for f in (_ficha_candidata(estado, i, ano)
+                                     for i in decisao.parecidos_ano_anterior)
+                         if f is not None]
+            if parecidas:
+                # A ficha nova nasce (o nome sozinho não atravessa o ano), mas não
+                # calada: a ficha parecida do ano anterior pode ser a mesma criança
+                # (quem repetiu ou passou de ano), com a conta e o histórico.
+                aviso = matriculas.aviso_parecido_do_ano_anterior(
+                    parsed.nome, turma.nome, parecidas, previa=simular)
+                res.avisos.append(aviso)
+                res.avisos_conferir.append(aviso)
+                detalhes_criacao["parecidos_ano_anterior"] = list(
+                    decisao.parecidos_ano_anterior)
             auditar("aluno.criado_auto", escola_id=escola_id,
                     usuario_id=usuario.id, entidade="aluno", entidade_id=aluno.id,
-                    detalhes={"origem": parsed.nome, "turma": turma.nome,
-                              "decisao": "NEW_STUDENT", "motivo": decisao.motivo,
-                              "fonte": "importacao_matriculas"})
+                    detalhes=detalhes_criacao)
             estado.matricula_ano[aluno.id] = None
             estado.turma_recente[aluno.id] = turma
             ja_alocado.add(aluno.id)
