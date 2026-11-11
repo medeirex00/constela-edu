@@ -342,8 +342,9 @@ describe("GerarCertificados — bimestre impresso da lista", () => {
     expect(bimestreDoPeriodo("bimestre_anterior", hoje)).toBe(3);
     // Do 1º bimestre, o anterior é o 4º (do ano passado, como no backend).
     expect(bimestreDoPeriodo("bimestre_anterior", new Date(2026, 2, 10, 12, 0, 0))).toBe(4);
-    // Recesso de janeiro: fora do calendário, não afirma qual é o anterior.
-    expect(bimestreDoPeriodo("bimestre_anterior", new Date(2026, 0, 15, 12, 0, 0))).toBeUndefined();
+    // Recesso de janeiro: hoje sugere o 1º, então o anterior é o 4º do ano passado — o
+    // mesmo do backend (periodos._bimestre). Antes dava undefined e o lote abria no 1º.
+    expect(bimestreDoPeriodo("bimestre_anterior", new Date(2026, 0, 15, 12, 0, 0))).toBe(4);
     for (const preset of ["mes", "semana", "ano_letivo", "personalizado", "dia", "bimestre_5"]) {
       expect(bimestreDoPeriodo(preset, hoje)).toBeUndefined();
     }

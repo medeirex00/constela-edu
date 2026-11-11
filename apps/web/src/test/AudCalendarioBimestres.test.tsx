@@ -147,6 +147,61 @@ describe("modal de certificados em lote em 15/10/2027", () => {
   });
 });
 
+// REV-PER-1: o "Bimestre passado" do backend (services/periodos._bimestre) é o número que a
+// tela sugere para hoje MENOS UM (do 1º, o 4º do ano passado) — também no recesso. A web
+// usava o bimestre EM CURSO, que não existe no recesso: o lote do pódio de "Bimestre
+// passado" (Premiações, Ranking de Matemática) abria no bimestre de hoje, que no recesso é
+// o PRÓXIMO — dois à frente do pódio — com a dica "pelo calendário oficial".
+// Cada dia abaixo é um recesso do calendário de exemplo de 2027, e o número esperado é o
+// do backend com esse calendário: periodos.resolver("bimestre_anterior", dia).
+const RECESSOS_2027: Array<[string, Date, number]> = [
+  ["antes do 1º (janeiro): o 4º do ano passado", new Date(2027, 0, 20, 12), 4],
+  ["entre o 1º e o 2º", new Date(2027, 3, 24, 12), 1],
+  ["entre o 2º e o 3º (julho)", new Date(2027, 6, 15, 12), 2],
+  ["entre o 3º e o 4º", new Date(2027, 9, 2, 12), 3],
+  ["depois do fim do 4º (dezembro)", new Date(2027, 11, 20, 12), 3],
+];
+const DICA_DA_LISTA = "Abre no bimestre do período desta lista; vale o que você escolher.";
+
+describe("lote do pódio de 'Bimestre passado' no recesso, com o calendário de 2027 (REV-PER-1)", () => {
+  for (const [quando, dia, esperado] of RECESSOS_2027) {
+    it(`${quando}: abre no ${esperado}º, o mesmo bimestre do pódio`, async () => {
+      expect(bimestreEmCurso(dia, CAL_2027)).toBeNull(); // é mesmo recesso
+      expect(bimestreDoPeriodo("bimestre_anterior", dia, CAL_2027)).toBe(esperado);
+
+      relogioEm(dia);
+      responder("GET", ROTA_CAL, CAL_2027);
+      // O MESMO argumento que Premiacoes.tsx e RankingMatematica.tsx passam ao modal.
+      const inicial = bimestreDoPeriodo("bimestre_anterior", new Date(), CAL_2027);
+      renderComApp(
+        <>
+          <GerarCertificados
+            escolaId={1}
+            alunos={[{ aluno_id: 101, nome: "Ana Beatriz Souza", posicao: 1 }]}
+            modeloInicial="elefante"
+            contexto="Premiações · Bimestre passado"
+            bimestreInicial={inicial}
+            aberto
+            aoFechar={() => undefined}
+          />
+          <SessaoPronta />
+        </>,
+        { usuario: usuarioFake({ modulos: ["leitura", "matematica"] }) },
+      );
+      await screen.findByTestId("sessao-pronta");
+      const seletor = screen.getByLabelText("Bimestre impresso") as HTMLSelectElement;
+      await waitFor(() => expect(seletor.value).toBe(String(esperado)));
+      expect(screen.getByText(DICA_DA_LISTA)).toBeInTheDocument();
+      expect(screen.queryByText(DICA_OFICIAL)).toBeNull();
+    });
+  }
+
+  it("ano sem calendário conhecido continua sem número inventado", () => {
+    expect(bimestreDoPeriodo("bimestre_anterior", new Date(2027, 6, 15, 12))).toBeUndefined();
+    expect(bimestreDoPeriodo("bimestre_anterior", new Date(2027, 6, 15, 12), SEM_2027)).toBeUndefined();
+  });
+});
+
 function alunoFake(id: number, nome: string) {
   return { id, nome, foto_url: null, numero_chamada: null, status: "ativo", turma: "3º Ano A", ano_escolar: "3º Ano" };
 }

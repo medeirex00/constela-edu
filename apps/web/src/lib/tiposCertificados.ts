@@ -13,7 +13,7 @@
  * substituído pelo próximo colocado.
  */
 
-import { bimestreDeHoje, bimestreEmCurso, type CalendarioDoAno } from "./calendarioBimestres";
+import { bimestreDeHoje, type CalendarioDoAno } from "./calendarioBimestres";
 
 /** `null` = certificado Geral (de mérito, com nota e posição); as artes das plataformas são de desempenho, sem nota nem posição. */
 export type ModeloCertificado = "elefante" | "matific" | null;
@@ -26,8 +26,12 @@ export const MAX_CERTIFICADOS_LOTE = 50;
  * período global), espelhando `backend/app/services/periodos.py`:
  *   - "bimestre_N" → N (o 3º fechado, premiado em 31/10, abre no 3º, não no 4º);
  *   - "bimestre" (este bimestre) → o de hoje, pela mesma sugestão do backend;
- *   - "bimestre_anterior" → o anterior ao bimestre em curso (do 1º, volta ao 4º); fora
- *     do calendário oficial (recesso, ano sem calendário) não dá para afirmar → undefined.
+ *   - "bimestre_anterior" → o número de hoje menos um (do 1º, o 4º do ano passado), como
+ *     em `periodos._bimestre` — também no recesso: em julho, entre o 2º e o 3º, o de hoje é
+ *     o 3º e o anterior é o 2º, que acabou. Antes usava o bimestre EM CURSO, que não
+ *     existe no recesso: dava undefined e o modal abria no bimestre de hoje (o PRÓXIMO),
+ *     dois à frente do pódio. Ano sem calendário conhecido → undefined (a tela pede a
+ *     escolha).
  * Outro período (mês, ano letivo, personalizado...) → undefined: o modal abre no
  * bimestre de hoje. É só a sugestão inicial; o número impresso é o que a pessoa escolher.
  *
@@ -43,9 +47,9 @@ export function bimestreDoPeriodo(
   if (pedido) return Number(pedido[1]);
   if (preset === "bimestre") return bimestreDeHoje(hoje, calendario) ?? undefined;
   if (preset === "bimestre_anterior") {
-    const atual = bimestreEmCurso(hoje, calendario);
-    if (!atual) return undefined;
-    return atual.numero > 1 ? atual.numero - 1 : 4;
+    const atual = bimestreDeHoje(hoje, calendario);
+    if (atual == null) return undefined;
+    return atual > 1 ? atual - 1 : 4;
   }
   return undefined;
 }
