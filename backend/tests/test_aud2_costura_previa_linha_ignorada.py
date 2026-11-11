@@ -74,3 +74,44 @@ def test_o_schema_da_resposta_leva_o_status_e_o_motivo():
                                   "aluno_id": None, "aluno_nome": None, "similaridade": None,
                                   "alternativas": []})
     assert (saida.status, saida.motivo, saida.alternativas) == ("ignorado", "conta_esquecida", [])
+
+
+# REV2-COSTURA-2: a conta APOSENTADA não vira dado nem com a ficha escolhida à mão.
+# A prévia diz "será ignorada" e não oferece destino; o /resolver já recusa a
+# pendência dela (409); a confirmação com ``aluno_id`` aplicava os números da conta
+# aposentada à ficha escolhida (o passo da escolha explícita vinha antes do da aposentada).
+# Voltar a usar a conta é o caminho explícito: /identidades/{plataforma}/reativar.
+
+def _confirmar_na_ficha(cliente, eid, nome, conta, aluno_id):
+    r = cliente.post(f"{API}/escolas/{eid}/importacoes/confirmar", json={
+        "plataforma": "matific", "formato": "resumo", "tipo": "texto", "recalcular": False,
+        "linhas": [{"nome": nome, "aluno_id": aluno_id,
+                    "dados": {"matific_uuid": conta, "turma_relatorio": "3º Ano A",
+                              "atividades": 4, "estrelas": 9, "pontuacao_media": 70}}]})
+    assert r.status_code == 200, r.text
+    return r.json()
+
+
+def test_conta_aposentada_com_a_ficha_escolhida_tambem_e_ignorada(db, cliente, escola_completa):
+    from sqlalchemy import select
+
+    from app.models import SnapshotMatific
+    eid = escola_completa["escola"].id
+    dona, outra = escola_completa["alunos"][0], escola_completa["alunos"][1]
+    db.add(IdentidadeExterna(escola_id=eid, aluno_id=dona.id, plataforma="matific",
+                             id_externo=APOSENTADA, status="aposentada",
+                             aposentada_em=datetime.now(timezone.utc).replace(tzinfo=None),
+                             motivo_aposentadoria="conta duplicada (teste ficticio)"))
+    db.commit()
+
+    for escolhida in (dona, outra):        # a própria dona da conta e outra ficha
+        depois = _confirmar_na_ficha(cliente, eid, dona.nome, APOSENTADA, escolhida.id)
+        assert depois["qtd_alunos"] == 0, (escolhida.id, depois)
+        assert depois["linhas_descartadas"] == {"identidade_aposentada": 1}, depois
+    db.expire_all()
+    assert db.execute(select(SnapshotMatific).where(
+        SnapshotMatific.escola_id == eid)).first() is None, "o número da aposentada entrou"
+    vinculo = db.execute(select(IdentidadeExterna).where(
+        IdentidadeExterna.escola_id == eid,
+        IdentidadeExterna.id_externo == APOSENTADA)).scalars().one()
+    assert (vinculo.status, vinculo.aluno_id) == ("aposentada", dona.id)

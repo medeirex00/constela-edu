@@ -1394,10 +1394,26 @@ def _decidir(ctx: Contexto, linha: LinhaIdentidade) -> Decisao:
     if linha.id_externo and ctx.conta_esquecida(linha.plataforma, linha.id_externo):
         return Decisao(IGNORAR, motivo=MOTIVO_CONTA_ESQUECIDA, chave_sala=chave)
 
+    # 0a) Identidade APOSENTADA: a escola já decidiu que esta conta duplicada
+    # não representa mais a criança no Constela. A linha não vira dado nem volta
+    # para a fila — senão cada sincronização reabriria a mesma duplicidade que já
+    # foi decidida. Ela é IGNORADA, com aviso, e o histórico continua no banco.
+    # Também antes da escolha explícita (REV2-COSTURA-2): com a ficha escolhida à
+    # mão na prévia, os números da conta aposentada iam para essa ficha (a própria
+    # dona ou outra criança), embora a prévia diga "será ignorada" e o /resolver
+    # recuse a pendência dela. Só uma nova decisão humana (reativar a identidade,
+    # /identidades/{plataforma}/reativar) desfaz isso.
+    if linha.id_externo:
+        aposentada = ctx.aposentadas.get((linha.plataforma, linha.id_externo))
+        if aposentada is not None:
+            return Decisao(IGNORAR, aposentada, "identidade", "identidade_aposentada",
+                           (aposentada,), chave_sala=chave)
+
     # 0) Escolha EXPLÍCITA de um humano (prévia aceita, alternativa escolhida,
-    # revisão resolvida). Vale — salvo se a identidade externa da linha já for de
-    # OUTRO aluno: aí os dados não podem ir para o escolhido sem uma reatribuição
-    # explícita (feita na resolução da revisão), então vira revisão.
+    # revisão resolvida). Vale — salvo se a conta for esquecida ou aposentada (00 e
+    # 0a, acima) ou se a identidade externa da linha já for de OUTRO aluno: aí os
+    # dados não podem ir para o escolhido sem uma reatribuição explícita (feita na
+    # resolução da revisão), então vira revisão.
     if linha.aluno_id is not None:
         aluno = ctx.alunos.get(linha.aluno_id)
         if aluno is None:
@@ -1424,17 +1440,6 @@ def _decidir(ctx: Contexto, linha: LinhaIdentidade) -> Decisao:
                                (aluno.id,), chave_sala=chave)
         return Decisao(ASSOCIAR, aluno.id, "explicito", candidatos=(aluno.id,),
                        chave_sala=chave)
-
-    # 0b) Identidade APOSENTADA: a escola já decidiu que esta conta duplicada
-    # não representa mais a criança no Constela. A linha não vira dado nem volta
-    # para a fila — senão cada sincronização reabriria a mesma duplicidade que já
-    # foi decidida. Ela é IGNORADA, com aviso, e o histórico continua no banco.
-    # Só uma nova decisão humana (reativar a identidade) desfaz isso.
-    if linha.id_externo:
-        aposentada = ctx.aposentadas.get((linha.plataforma, linha.id_externo))
-        if aposentada is not None:
-            return Decisao(IGNORAR, aposentada, "identidade", "identidade_aposentada",
-                           (aposentada,), chave_sala=chave)
 
     # 0c) ID EXTERNO DUPLICADO (neste relatório — ``marcar_ids_em_conflito`` — ou
     # numa disputa ainda aberta na fila): a conta não prova de quem é ESTA linha

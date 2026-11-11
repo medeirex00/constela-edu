@@ -1363,7 +1363,8 @@ def _correspondencia(ctx, decisao, nome: str, parecidos: "_ParecidosNaEscola",
         # excluída): a prévia diz isso. Antes caía no ramo do CRIAR e a tela mostrava
         # "Novo aluno" — "a confirmação cria a ficha" —, mas a confirmação ignorava a
         # linha. Sem aluno nem alternativa: nenhuma escolha da tela a aplicaria
-        # (``identidade_aluno.decidir`` ignora antes da escolha explícita).
+        # (``identidade_aluno.decidir`` ignora a conta esquecida e a aposentada antes
+        # da escolha explícita — passos 00 e 0a).
         return {"status": "ignorado", "via": decisao.via, "motivo": decisao.motivo,
                 "aluno_id": None, "aluno_nome": None, "similaridade": None,
                 "alternativas": []}
