@@ -2752,6 +2752,53 @@ def confirmacao_da_sincronizacao(dados: ImportacaoConfirm, *,
     return marcado
 
 
+def _exigir_uma_linha_por_ficha_fixada(db: Session, escola_id: int,
+                                       dados: ImportacaoConfirm) -> None:
+    """DUAS LINHAS FIXADAS NA MESMA FICHA, com contas da plataforma diferentes ou com
+    números diferentes no retrato: 422 antes de gravar qualquer coisa.
+
+    A escolha explícita (``aluno_id``) sempre associa (``identidade_aluno.decidir``,
+    passo 0); o núcleo agrupa as linhas por aluno e grava só a ÚLTIMA do retrato
+    (``linhas_aluno[-1]``). Com a mesma ficha escolhida em duas linhas, o retrato
+    dependia da ordem do arquivo, sem aviso, e as duas contas iam para a ficha (as
+    coletas seguintes mandavam as duas para a Revisão). É a guarda que o /resolver já
+    tem (``linhas_divergentes_do_mesmo_id``), aqui na entrada: quem confirma escolhe
+    a linha que vale. A mesma linha repetida (mesma conta, mesmos números — a
+    criança em duas turmas do Placar) e as linhas de livro (leituras, que somam) de
+    uma conta só seguem normais. Só a escolha explícita entra: a sincronização não
+    fixa ficha, e a linha deixada para a Revisão não associa."""
+    por_aluno: dict[int, list] = {}
+    for linha in dados.linhas:
+        if linha.aluno_id is not None and not getattr(linha, "deixar_para_revisao", False):
+            por_aluno.setdefault(linha.aluno_id, []).append(linha)
+    suspeitos = {aid for aid, linhas in por_aluno.items() if len(linhas) > 1}
+    if not suspeitos:
+        return
+    em_conflito = []
+    for aid in sorted(suspeitos):
+        linhas = por_aluno[aid]
+        contas = {conta for ids in ida.contas_das_linhas(linhas, dados.plataforma).values()
+                  for conta in ids}
+        if len(contas) > 1 or ida.linhas_divergentes([l.dados or {} for l in linhas]):
+            em_conflito.append(aid)
+    if not em_conflito:
+        return
+    # Só fichas DESTA escola entram no texto (a de outra escola a linha ignora).
+    nomes = db.execute(select(Aluno.nome).where(
+        Aluno.escola_id == escola_id, Aluno.id.in_(em_conflito)).order_by(Aluno.nome)
+    ).scalars().all()
+    if not nomes:
+        return
+    raise HTTPException(
+        status.HTTP_422_UNPROCESSABLE_ENTITY,
+        "Mais de uma linha do relatório foi ligada ao mesmo aluno ("
+        + ", ".join(f"“{n}”" for n in nomes)
+        + "), com contas da plataforma ou números diferentes. Só uma linha pode ir "
+        "para cada aluno: a importação guardaria apenas a última e ligaria as duas "
+        "contas à mesma ficha. Ligue o aluno a uma linha só e deixe a outra para a "
+        "Revisão de identidade. Nada foi gravado.")
+
+
 @router.post("/confirmar", response_model=ImportacaoResultadoOut)
 def confirmar(
     dados: ImportacaoConfirm,
@@ -2769,6 +2816,7 @@ def confirmar(
     coisa (a mesma trava da prévia; a sincronização tem a dela no serviço)."""
     svc_modulos.exigir_plataforma(
         svc_modulos.modulos_da_escola(db, db.get(Escola, escola_id)), dados.plataforma)
+    _exigir_uma_linha_por_ficha_fixada(db, escola_id, dados)
     da_sync = isinstance(dados, _ConfirmacaoDaSincronizacao)
     nucleo = _confirmar_sem_commit(
         dados=dados, escola_id=escola_id, usuario=usuario, db=db,
