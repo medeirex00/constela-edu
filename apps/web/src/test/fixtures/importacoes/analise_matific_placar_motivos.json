@@ -46,7 +46,10 @@
             "status": "ativo",
             "similaridade": 100.0
           }
-        ]
+        ],
+        "turma_id": null,
+        "turma_nome": null,
+        "turma_nova": null
       }
     },
     {
@@ -76,7 +79,10 @@
             "status": "ativo",
             "similaridade": 97.4
           }
-        ]
+        ],
+        "turma_id": null,
+        "turma_nome": null,
+        "turma_nova": null
       }
     },
     {
@@ -113,7 +119,10 @@
             "status": "ativo",
             "similaridade": 83.9
           }
-        ]
+        ],
+        "turma_id": null,
+        "turma_nome": null,
+        "turma_nova": null
       }
     },
     {
@@ -143,7 +152,10 @@
             "status": "ativo",
             "similaridade": 100.0
           }
-        ]
+        ],
+        "turma_id": null,
+        "turma_nome": null,
+        "turma_nova": null
       }
     },
     {
@@ -173,7 +185,10 @@
             "status": "ativo",
             "similaridade": 75.0
           }
-        ]
+        ],
+        "turma_id": null,
+        "turma_nome": null,
+        "turma_nova": null
       }
     },
     {
@@ -203,7 +218,10 @@
             "status": "arquivado",
             "similaridade": 100.0
           }
-        ]
+        ],
+        "turma_id": null,
+        "turma_nome": null,
+        "turma_nova": null
       }
     },
     {
@@ -233,7 +251,10 @@
             "status": "arquivado",
             "similaridade": 100.0
           }
-        ]
+        ],
+        "turma_id": null,
+        "turma_nome": null,
+        "turma_nova": null
       }
     },
     {
@@ -263,7 +284,10 @@
             "status": "ativo",
             "similaridade": 100.0
           }
-        ]
+        ],
+        "turma_id": null,
+        "turma_nome": null,
+        "turma_nova": null
       }
     },
     {
@@ -285,7 +309,10 @@
         "similaridade": null,
         "motivo": "id_externo_duplicado",
         "via": "identidade",
-        "alternativas": []
+        "alternativas": [],
+        "turma_id": null,
+        "turma_nome": null,
+        "turma_nova": null
       }
     },
     {
@@ -307,7 +334,10 @@
         "similaridade": null,
         "motivo": "id_externo_duplicado",
         "via": "identidade",
-        "alternativas": []
+        "alternativas": [],
+        "turma_id": null,
+        "turma_nome": null,
+        "turma_nova": null
       }
     },
     {
@@ -329,7 +359,10 @@
         "similaridade": null,
         "motivo": "identidade_de_outra_escola",
         "via": "identidade",
-        "alternativas": []
+        "alternativas": [],
+        "turma_id": null,
+        "turma_nome": null,
+        "turma_nova": null
       }
     },
     {
@@ -352,7 +385,10 @@
         "similaridade": null,
         "motivo": "nome_incompleto",
         "via": "novo",
-        "alternativas": []
+        "alternativas": [],
+        "turma_id": null,
+        "turma_nome": null,
+        "turma_nova": null
       }
     },
     {
@@ -374,7 +410,10 @@
         "similaridade": null,
         "motivo": "contas_repetidas_no_relatorio",
         "via": "novo",
-        "alternativas": []
+        "alternativas": [],
+        "turma_id": null,
+        "turma_nome": null,
+        "turma_nova": null
       }
     },
     {
@@ -396,7 +435,10 @@
         "similaridade": null,
         "motivo": "contas_repetidas_no_relatorio",
         "via": "novo",
-        "alternativas": []
+        "alternativas": [],
+        "turma_id": null,
+        "turma_nome": null,
+        "turma_nova": null
       }
     },
     {
@@ -433,7 +475,10 @@
             "status": "ativo",
             "similaridade": 63.4
           }
-        ]
+        ],
+        "turma_id": 1,
+        "turma_nome": "3º Ano A",
+        "turma_nova": null
       }
     }
   ]

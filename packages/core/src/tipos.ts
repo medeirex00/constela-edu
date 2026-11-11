@@ -419,6 +419,18 @@ export interface Correspondencia {
   similaridade: number | null;
   motivo?: string;   // uuid|identificador|exato|abreviacao|parcial|variante|typo|conflito
   alternativas: { aluno_id: number; nome: string; turma?: string; similaridade: number }[];
+  /** ONDE A FICHA NOVA NASCE (status "nao_encontrado"/"bloqueado"), decidido pelo
+   *  backend — a tela não adivinha a turma pelo nome:
+   *  - `turma_id`/`turma_nome`: a turma cadastrada que recebe a ficha (a tela manda
+   *    `criar_em_turma_id` = `turma_id`);
+   *  - `turma_nova`: a sala do relatório não tem turma no cadastro; a confirmação
+   *    cria uma com este nome (a tela manda `criar_em_turma_nome` = a turma do
+   *    relatório como veio — `dados.turma_relatorio` ou `turma_detectada`);
+   *  - os três nulos: a linha não cria ficha (vínculo ou revisão) ou o relatório
+   *    não informa turma — a tela pede a turma. */
+  turma_id?: number | null;
+  turma_nome?: string | null;
+  turma_nova?: string | null;
 }
 
 export interface LinhaAnalise {

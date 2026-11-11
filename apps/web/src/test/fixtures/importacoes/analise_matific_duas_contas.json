@@ -46,7 +46,10 @@
             "status": "ativo",
             "similaridade": 100.0
           }
-        ]
+        ],
+        "turma_id": null,
+        "turma_nome": null,
+        "turma_nova": null
       }
     },
     {
@@ -68,7 +71,10 @@
         "similaridade": null,
         "motivo": "contas_repetidas_no_relatorio",
         "via": "novo",
-        "alternativas": []
+        "alternativas": [],
+        "turma_id": null,
+        "turma_nome": null,
+        "turma_nova": null
       }
     },
     {
@@ -90,7 +96,10 @@
         "similaridade": null,
         "motivo": "contas_repetidas_no_relatorio",
         "via": "novo",
-        "alternativas": []
+        "alternativas": [],
+        "turma_id": null,
+        "turma_nome": null,
+        "turma_nova": null
       }
     }
   ]

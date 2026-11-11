@@ -1170,7 +1170,7 @@ def casar_nomes(db: Session, escola_id: int, linhas: list[LinhaImportacao], *,
     ida.marcar_fichas_disputadas(ctx, idents)   # idem
     for linha, ident in zip(linhas, idents):
         linha.correspondencia = _correspondencia(
-            ctx, ida.decidir(ctx, ident), linha.nome, ativos)
+            ctx, ida.decidir(ctx, ident), linha.nome, ativos, ident)
 
 
 def _alternativas(ctx, ids, nome: str) -> list[dict]:
@@ -1182,7 +1182,23 @@ def _alternativas(ctx, ids, nome: str) -> list[dict]:
             for c in ida.descrever_candidatos(ctx, ids)]
 
 
-def _correspondencia(ctx, decisao, nome: str, ativos) -> dict:
+def _turma_da_ficha_nova(ctx, decisao, ident) -> dict:
+    """Onde a confirmação cria a ficha nova desta linha (CRIAR): a turma cadastrada
+    que a porta única decidiu; ou, quando a sala do relatório não tem turma no
+    cadastro, o nome da turma que a confirmação cria (``_turma_pelo_nome`` grava
+    ``nome_turma_exibicao`` da turma do relatório). Sem turma no relatório, nada —
+    quem confirma escolhe a turma."""
+    from app.services.matriculas import nome_turma_exibicao
+
+    turma = ctx.turmas.get(decisao.turma_id) if decisao.turma_id is not None else None
+    if turma is not None:
+        return {"turma_id": turma.id, "turma_nome": turma.nome, "turma_nova": None}
+    relatorio = (getattr(ident, "turma_nome", "") or "").strip()
+    nova = nome_turma_exibicao(relatorio) if decisao.chave_sala and relatorio else None
+    return {"turma_id": None, "turma_nome": None, "turma_nova": nova or None}
+
+
+def _correspondencia(ctx, decisao, nome: str, ativos, ident=None) -> dict:
     from app.services import identidade_aluno as ida
 
     alternativas = _alternativas(ctx, decisao.candidatos, nome)
@@ -1211,4 +1227,5 @@ def _correspondencia(ctx, decisao, nome: str, ativos) -> dict:
                for a, nota in parecidos[:5] if nota >= LIMIAR_ALTERNATIVA]
     return {"status": "bloqueado" if decisao.vetados else "nao_encontrado",
             "motivo": "conflito" if decisao.vetados else "novo",
-            "alternativas": difusas}
+            "alternativas": difusas,
+            **_turma_da_ficha_nova(ctx, decisao, ident)}

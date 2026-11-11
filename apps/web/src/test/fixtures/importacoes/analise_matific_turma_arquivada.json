@@ -38,7 +38,10 @@
         "similaridade": null,
         "motivo": "turma_arquivada",
         "via": "",
-        "alternativas": []
+        "alternativas": [],
+        "turma_id": null,
+        "turma_nome": null,
+        "turma_nova": null
       }
     }
   ]

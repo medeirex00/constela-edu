@@ -46,7 +46,10 @@
             "status": "ativo",
             "similaridade": 100.0
           }
-        ]
+        ],
+        "turma_id": null,
+        "turma_nome": null,
+        "turma_nova": null
       }
     }
   ]

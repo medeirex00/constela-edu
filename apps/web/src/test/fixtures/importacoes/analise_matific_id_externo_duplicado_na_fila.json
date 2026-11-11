@@ -38,7 +38,10 @@
         "similaridade": null,
         "motivo": "id_externo_duplicado",
         "via": "identidade",
-        "alternativas": []
+        "alternativas": [],
+        "turma_id": null,
+        "turma_nome": null,
+        "turma_nova": null
       }
     }
   ]

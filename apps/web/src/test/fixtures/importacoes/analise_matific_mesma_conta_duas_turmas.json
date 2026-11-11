@@ -38,7 +38,10 @@
         "similaridade": null,
         "motivo": "novo",
         "via": null,
-        "alternativas": []
+        "alternativas": [],
+        "turma_id": 1,
+        "turma_nome": "3º Ano A",
+        "turma_nova": null
       }
     },
     {
@@ -60,7 +63,10 @@
         "similaridade": null,
         "motivo": "novo",
         "via": null,
-        "alternativas": []
+        "alternativas": [],
+        "turma_id": 2,
+        "turma_nome": "4º Ano B",
+        "turma_nova": null
       }
     }
   ]

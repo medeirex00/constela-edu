@@ -44,7 +44,10 @@
             "status": "ativo",
             "similaridade": 100.0
           }
-        ]
+        ],
+        "turma_id": null,
+        "turma_nome": null,
+        "turma_nova": null
       }
     },
     {
@@ -64,7 +67,10 @@
         "similaridade": null,
         "motivo": "nome_incompleto",
         "via": "novo",
-        "alternativas": []
+        "alternativas": [],
+        "turma_id": null,
+        "turma_nome": null,
+        "turma_nova": null
       }
     },
     {
@@ -84,7 +90,10 @@
         "similaridade": null,
         "motivo": "novo",
         "via": null,
-        "alternativas": []
+        "alternativas": [],
+        "turma_id": null,
+        "turma_nome": null,
+        "turma_nova": null
       }
     }
   ]

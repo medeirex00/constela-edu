@@ -20,6 +20,20 @@ class CorrespondenciaOut(BaseModel):
     motivo: str | None = None
     via: str | None = None          # como casou (identidade|exato|ra|abreviacao|…)
     alternativas: list[dict] = []
+    # ONDE A FICHA NOVA NASCE (status "nao_encontrado"/"bloqueado") — a decisão da
+    # porta única (``identidade_aluno._turma_para_criar``), para a tela não
+    # adivinhar a turma pelo nome:
+    #   * ``turma_id``/``turma_nome``: a turma cadastrada que recebe a ficha — a tela
+    #     manda ``criar_em_turma_id`` = ``turma_id``;
+    #   * ``turma_nova``: a sala do relatório não tem turma no cadastro, e a
+    #     confirmação cria uma com este nome — a tela manda ``criar_em_turma_nome``
+    #     = a turma do RELATÓRIO como veio (``dados.turma_relatorio`` ou
+    #     ``turma_detectada``), não este nome curto (dele sai a etapa da turma);
+    #   * os três nulos: a linha não cria ficha (vínculo ou revisão) ou o relatório
+    #     não informa turma — aí a tela pede a turma.
+    turma_id: int | None = None
+    turma_nome: str | None = None
+    turma_nova: str | None = None
 
 
 class LinhaAnaliseOut(BaseModel):
