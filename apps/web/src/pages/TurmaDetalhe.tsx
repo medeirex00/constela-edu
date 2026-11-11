@@ -325,7 +325,7 @@ export default function TurmaDetalhe() {
     setOcupado(true);
     try {
       const { blob, nomeArquivo } = await baixarCartoesDaTurma(escolaId, Number(id));
-      salvarArquivo(blob, nomeArquivo);
+      if (blob) salvarArquivo(blob, nomeArquivo);
       avisar("ok", "Cartões do Quest gerados! Imprima, recorte e entregue aos alunos.");
     } catch (e) {
       avisar("erro", e instanceof ApiError ? e.message : "Não foi possível gerar os cartões.");
@@ -342,8 +342,8 @@ export default function TurmaDetalhe() {
     if (!escolaId) return;
     setOcupado(true);
     try {
-      const { blob, nomeArquivo } = await baixarCartaoDoAluno(escolaId, aluno.id, true);
-      if (blob.size === 0) {
+      const { blob, nomeArquivo, revogado } = await baixarCartaoDoAluno(escolaId, aluno.id, true);
+      if (revogado || !blob || blob.size === 0) {
         avisar("ok", `Cartão do Quest de ${aluno.nome} revogado: o código e o QR antigos não ` +
           "entram mais. Aluno inativo não recebe cartão novo.");
       } else {

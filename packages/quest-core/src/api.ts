@@ -50,16 +50,21 @@ async function publica<T>(caminho: string, corpo: unknown): Promise<T> {
     throw new ErroDeRede();
   }
   if (!resposta.ok) {
-    let detalhe = "Algo deu errado. Tente de novo!";
-    try {
-      const json = await resposta.json();
-      if (typeof json.detail === "string") detalhe = json.detail;
-    } catch {
-      /* corpo não-JSON */
-    }
-    throw new ApiError(resposta.status, detalhe);
+    throw new ApiError(resposta.status, await detalheDoErro(resposta, "Algo deu errado. Tente de novo!"));
   }
   return resposta.json() as Promise<T>;
+}
+
+/** A mensagem que a API mandou (`detail` em texto), ou `padrao` (corpo não-JSON, outro
+ *  formato). */
+async function detalheDoErro(resposta: Response, padrao: string): Promise<string> {
+  try {
+    const json = await resposta.json();
+    if (typeof json?.detail === "string" && json.detail.trim()) return json.detail;
+  } catch {
+    /* corpo não-JSON */
+  }
+  return padrao;
 }
 
 /** Etapa 1 do login: "É você?" */
@@ -201,7 +206,15 @@ export function acessosDaTurma(
   );
 }
 
-async function baixarPdf(caminho: string, nomePadrao: string) {
+/** O PDF de cartões do Quest. `revogado`: a API só revogou o cartão (204, ficha inativa:
+ *  sem cartão novo) e `blob` é `null` — a tela não depende do tamanho do arquivo. */
+export interface PdfDoQuest {
+  blob: Blob | null;
+  nomeArquivo: string;
+  revogado: boolean;
+}
+
+async function baixarPdf(caminho: string, nomePadrao: string): Promise<PdfDoQuest> {
   const token = await obterToken();
   let resposta: Response;
   try {
@@ -214,12 +227,15 @@ async function baixarPdf(caminho: string, nomePadrao: string) {
     throw new ErroDeRede();
   }
   if (!resposta.ok) {
-    throw new ApiError(resposta.status, "Não foi possível gerar o PDF.");
+    // A mensagem da API (ex.: módulo fora do plano, aluno de outra turma), não só a
+    // genérica — o professor precisa saber o porquê.
+    throw new ApiError(resposta.status, await detalheDoErro(resposta, "Não foi possível gerar o PDF."));
   }
+  if (resposta.status === 204) return { blob: null, nomeArquivo: nomePadrao, revogado: true };
   const disposicao = resposta.headers.get("Content-Disposition") ?? "";
   const nomeArquivo =
     /filename="?([^";]+)"?/.exec(disposicao)?.[1] ?? nomePadrao;
-  return { blob: await resposta.blob(), nomeArquivo };
+  return { blob: await resposta.blob(), nomeArquivo, revogado: false };
 }
 
 /** Gera as credenciais da turma e baixa o PDF dos cartões (+ página do
@@ -228,7 +244,7 @@ export function baixarCartoesDaTurma(
   escolaId: number,
   turmaId: number,
   regenerar = false,
-): Promise<{ blob: Blob; nomeArquivo: string }> {
+): Promise<PdfDoQuest> {
   return baixarPdf(
     `/escolas/${escolaId}/quest/turmas/${turmaId}/cartoes?regenerar=${regenerar}`,
     "cartoes-quest.pdf",
@@ -240,7 +256,7 @@ export function baixarCartaoDoAluno(
   escolaId: number,
   alunoId: number,
   regenerar = false,
-): Promise<{ blob: Blob; nomeArquivo: string }> {
+): Promise<PdfDoQuest> {
   return baixarPdf(
     `/escolas/${escolaId}/quest/alunos/${alunoId}/cartao?regenerar=${regenerar}`,
     "cartao-quest.pdf",

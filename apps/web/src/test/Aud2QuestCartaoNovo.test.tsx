@@ -77,6 +77,7 @@ test("o menu do aluno gera o cartão novo com regenerar=true, depois de confirma
   quest.baixarCartaoDoAluno.mockResolvedValue({
     blob: new Blob(["%PDF-1.4"], { type: "application/pdf" }),
     nomeArquivo: "cartao-quest-bruno-ficticio.pdf",
+    revogado: false,
   });
   abrir();
   await escolherNoMenu("Bruno Ficticio", "Novo cartão do Quest");
@@ -105,7 +106,7 @@ test("cancelar a confirmação não troca o cartão", async () => {
 });
 
 test("ficha inativa: a revogação sai sem cartão novo (204) e a tela diz isso", async () => {
-  quest.baixarCartaoDoAluno.mockResolvedValue({ blob: new Blob([]), nomeArquivo: "cartao-quest.pdf" });
+  quest.baixarCartaoDoAluno.mockResolvedValue({ blob: null, nomeArquivo: "cartao-quest.pdf", revogado: true });
   abrir();
   await escolherNoMenu("Carla Ficticia", "Revogar cartão do Quest");
   const dialogo = await screen.findByRole("dialog");
