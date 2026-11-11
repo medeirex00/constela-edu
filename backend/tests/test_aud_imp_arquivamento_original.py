@@ -83,3 +83,80 @@ def test_nome_do_cliente_sem_arquivo_cabe_na_coluna(cliente, db, escola_completa
     db.expire_all()
     imp = db.execute(select(Importacao)).scalars().one()
     assert len(imp.arquivo_original) <= 500
+
+
+def test_falha_no_meio_nao_deixa_o_original_orfao(cliente, db, escola_completa,
+                                                   tmp_path, monkeypatch):
+    """A importação que falha depois das recusas (aqui, um valor não numérico na 2ª
+    linha: 400 no meio da gravação) desfaz o banco — e o original continua em
+    /temporarios, não fica órfão em uploads/<plataforma>/ sem registro (com nomes de
+    crianças, fora do limpador e da exclusão). O reenvio com o mesmo token arquiva."""
+    uploads, token = _token(tmp_path, monkeypatch)
+    eid = escola_completa["escola"].id
+    ana, joao = escola_completa["alunos"][0], escola_completa["alunos"][1]
+    corpo = {
+        "plataforma": "matific", "formato": "resumo", "tipo": "pdf",
+        "arquivo_token": token, "arquivo_nome": "Placar Ficticio.pdf",
+        "data_referencia": "2026-08-14T12:00:00", "recalcular": False,
+        "linhas": [
+            {"nome": ana.nome, "aluno_id": ana.id, "dados": {"atividades": 5, "estrelas": 9}},
+            {"nome": joao.nome, "aluno_id": joao.id, "dados": {"atividades": "abc"}},
+        ]}
+    r = cliente.post(f"{API}/escolas/{eid}/importacoes/confirmar", json=corpo)
+    assert r.status_code == 400, r.text
+    db.expire_all()
+    assert db.execute(select(Importacao)).scalars().all() == []
+    orfaos = sorted(p.name for p in (uploads / "matific").glob("*")) if (
+        uploads / "matific").exists() else []
+    assert orfaos == [], f"original órfão em uploads/matific: {orfaos}"
+    assert (uploads / "temporarios" / token).exists()
+
+    corpo["linhas"][1]["dados"] = {"atividades": 3, "estrelas": 4}
+    r2 = cliente.post(f"{API}/escolas/{eid}/importacoes/confirmar", json=corpo)
+    assert r2.status_code == 200, r2.text
+    db.expire_all()
+    imp = db.execute(select(Importacao)).scalars().one()
+    final = imp.arquivo_original.rsplit("/", 1)[-1]
+    assert imp.arquivo_original.startswith("uploads/matific/")
+    assert (uploads / "matific" / final).exists()
+    assert not (uploads / "temporarios" / token).exists()
+
+
+def test_falha_no_commit_nao_deixa_o_original_orfao(cliente, db, escola_completa,
+                                                     tmp_path, monkeypatch):
+    """O arquivo só sai de /temporarios depois que a importação está gravada: um erro
+    no próprio commit (queda do banco, violação no fim da transação) também o deixa
+    onde estava."""
+    from fastapi.testclient import TestClient
+    from sqlalchemy.orm import Session
+
+    from app.main import app
+    from app.routers import importacoes as rota
+
+    uploads, token = _token(tmp_path, monkeypatch)
+    commit_original = Session.commit
+    nucleo_original = rota._confirmar_sem_commit
+    importacao_gravada = []
+
+    def nucleo_que_marca(**kw):
+        nucleo = nucleo_original(**kw)
+        importacao_gravada.append(nucleo.importacao_id)
+        return nucleo
+
+    def commit_que_cai(self):
+        # Só o commit da importação (depois de o núcleo gravar a Importacao).
+        if importacao_gravada:
+            self.rollback()
+            raise RuntimeError("banco caiu no commit (simulado)")
+        return commit_original(self)
+
+    monkeypatch.setattr(rota, "_confirmar_sem_commit", nucleo_que_marca)
+    monkeypatch.setattr(Session, "commit", commit_que_cai)
+    c = TestClient(app, raise_server_exceptions=False)
+    c.headers.update(cliente.headers)
+    r = _confirmar(c, escola_completa, token, "Placar Ficticio.pdf")
+    assert r.status_code == 500, r.text[:200]
+    orfaos = sorted(p.name for p in (uploads / "matific").glob("*")) if (
+        uploads / "matific").exists() else []
+    assert orfaos == [], f"original órfão em uploads/matific: {orfaos}"
+    assert (uploads / "temporarios" / token).exists()

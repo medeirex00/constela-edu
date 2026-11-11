@@ -2873,6 +2873,7 @@ def confirmar(
         sem_retrato_repetido=da_sync and dados._sem_retrato_repetido,
         questoes_herdadas=da_sync and dados._questoes_herdadas)
     db.commit()
+    _arquivar_depois_do_commit(db, nucleo)
 
     # No modo lote, o recálculo/push acontece UMA vez ao final (via /recalcular),
     # não a cada arquivo — economiza dezenas de recálculos numa turma inteira.
@@ -2952,6 +2953,9 @@ class _NucleoImportacao:
     ids_de_outra_escola: list[str] = field(default_factory=list)
     # Pendências 'criacao_bloqueada_por_politica' (ficha nova barrada pela política).
     criacao_bloqueada: int = 0
+    # O original a levar de /temporarios para a pasta definitiva DEPOIS do commit
+    # (``_arquivar_depois_do_commit``): (origem, destino, nome mandado pelo cliente).
+    original_a_arquivar: tuple[Path, Path, str | None] | None = None
 
 
 # Campos SEM os quais uma linha da SINCRONIZAÇÃO não vira retrato: o retrato
@@ -3000,6 +3004,13 @@ def _confirmar_sem_commit(
     eventos e a fila de revisão. Nada de ``db.commit()`` — quem chama decide
     quando fechar. Assim o ``/resolver`` aplica várias pendências irmãs e fecha
     tudo numa transação única: falhou no meio, nada fica.
+
+    O ORIGINAL também não sai de /temporarios aqui: o núcleo só o confere e devolve
+    em ``original_a_arquivar``; quem commita o move depois do commit
+    (``_arquivar_depois_do_commit``). Movido antes, uma falha no meio (valor
+    inválido, erro do banco, o próprio commit) desfazia o banco e deixava o relatório
+    — com nomes de crianças — fora de /temporarios e sem linha em ``importacoes``:
+    nem o limpador nem a exclusão de aluno o achavam.
 
     ``encerrar_revisoes``: linha ASSOCIADA encerra a revisão pendente da mesma
     identidade e do mesmo tipo de dado (``_encerrar_revisoes_respondidas``). O
@@ -3099,11 +3110,12 @@ def _confirmar_sem_commit(
     # Move o arquivo original de /temporarios para a pasta definitiva (§15).
     # arquivo_token e arquivo_nome vêm do cliente: ambos são saneados contra
     # path traversal antes de tocar o disco (nunca escapar de UPLOADS_DIR). O
-    # caminho é validado AQUI, mas o arquivo só é movido depois das recusas da
-    # importação (``mover_original``): recusada, o original fica em /temporarios e
-    # o mesmo token serve para confirmar de novo (ex.: com a data do relatório).
+    # caminho é validado AQUI, mas o arquivo só é movido depois do COMMIT
+    # (``original_a_arquivar``): recusada ou desfeita, a importação deixa o original
+    # em /temporarios e o mesmo token serve para confirmar de novo (ex.: com a data
+    # do relatório).
     arquivo_final = None
-    mover_original: tuple[Path, Path] | None = None
+    mover_original: tuple[Path, Path, str | None] | None = None
     if dados.arquivo_token:
         if not _TOKEN_VALIDO.match(dados.arquivo_token):
             raise HTTPException(status.HTTP_400_BAD_REQUEST,
@@ -3126,7 +3138,7 @@ def _confirmar_sem_commit(
             if not destino.is_relative_to(base_uploads):
                 raise HTTPException(status.HTTP_400_BAD_REQUEST,
                                     "Nome de arquivo inválido.")
-            mover_original = (origem, destino)
+            mover_original = (origem, destino, dados.arquivo_nome)
             arquivo_final = f"uploads/{dados.plataforma}/{nome}"
 
     importacao = Importacao(
@@ -3382,11 +3394,6 @@ def _confirmar_sem_commit(
                 "relatório, importe antes, com a mesma data, um relatório que traga esses "
                 "dados, ou confira a data informada. Nada foi gravado.")
 
-    if mover_original is not None and not _arquivar_original(*mover_original):
-        # Sem o arquivo arquivado, o registro guarda só o nome (como sem disco na
-        # prévia), e não um caminho que não existe.
-        importacao.arquivo_original = _registro_do_original(dados.arquivo_nome)
-
     # PERFORMANCE das leituras (Elefante): catálogo de livros, faixas de nível e
     # "já lidos" carregados UMA vez para o arquivo inteiro — antes eram relidos
     # por aluno (~190× numa escola de 10 turmas), o gargalo da sync de ~15 min.
@@ -3483,7 +3490,23 @@ def _confirmar_sem_commit(
         contas_em_revisao=len(contas_em_revisao),
         ids_de_outra_escola=ids_de_outra_escola,
         criacao_bloqueada=criacao_bloqueada,
+        original_a_arquivar=mover_original,
     )
+
+
+def _arquivar_depois_do_commit(db: Session, nucleo: _NucleoImportacao) -> None:
+    """Leva o original da importação JÁ COMMITADA para a pasta definitiva (§15).
+    Melhor esforço (``_arquivar_original``): sem o arquivo arquivado, o registro passa
+    a guardar só o nome mandado pelo cliente, e não um caminho que não existe."""
+    if nucleo.original_a_arquivar is None:
+        return
+    origem, destino, nome_enviado = nucleo.original_a_arquivar
+    if _arquivar_original(origem, destino):
+        return
+    importacao = db.get(Importacao, nucleo.importacao_id)
+    if importacao is not None:
+        importacao.arquivo_original = _registro_do_original(nome_enviado)
+        db.commit()
 
 
 @router.post("/recalcular", response_model=dict)
@@ -4689,6 +4712,7 @@ def resolver_revisao(
     # a cada chamada, e um erro na 2ª irmã deixaria a 1ª gravada para sempre.
     # Falhou em qualquer ponto -> ROLLBACK e tudo continua pendente.
     importacoes: list[int] = []
+    nucleos: list[_NucleoImportacao] = []
     herdadas: dict[int, int] = {}    # pendência -> retratos S9 que herdaram as questões
     for r in com_dados:
         conf = _confirmacao_da_revisao(r, aluno.id, recalcular=False)
@@ -4709,6 +4733,7 @@ def resolver_revisao(
                                        sem_retrato_repetido=sem_questoes,
                                        questoes_herdadas=sem_questoes)
         importacoes.append(nucleo.importacao_id)
+        nucleos.append(nucleo)
         avisos.extend(nucleo.avisos)
         if (r.plataforma == "elefante" and r.formato != "leituras"
                 and _guarda_questoes_medidas(db, r)):
@@ -4745,6 +4770,8 @@ def resolver_revisao(
                   usuario_id=usuario.id, entidade="aluno", entidade_id=aluno.id,
                   detalhes=detalhes)
     db.commit()                      # <- ÚNICO commit de todo o fluxo
+    for nucleo in nucleos:           # o original (se houver) só sai de /temporarios agora
+        _arquivar_depois_do_commit(db, nucleo)
 
     # DEPOIS do commit: cache do painel e push. Fora da transação de propósito —
     # avisar a escola sobre dado que ainda pode sofrer rollback seria mentira, e
