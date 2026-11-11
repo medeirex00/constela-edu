@@ -146,6 +146,9 @@ export default function RankingEvolucao({ embutido = false, alvoAcoes }: {
         // Evolução não tem arte própria: abre no Geral, e o modal deixa trocar.
         modeloInicial: null,
         contexto: `Ranking de Evolução · quem cresceu · ${rotuloPeriodo}${recorte ? ` · ${recorte}` : ""}`,
+        // A tabela mostra todos, com 0,0 de quem não cresceu: "Não há alunos nesta lista"
+        // seria falso ao lado dela (DEC-20).
+        semAlunos: "Ninguém cresceu no período: não há certificado de evolução a gerar.",
         // Evolução dentro de um bimestre: trocando para uma arte de plataforma, o
         // bimestre impresso abre nele, não no de hoje.
         bimestreInicial: bimestreDoPeriodo(periodo.preset, new Date(), calendario),

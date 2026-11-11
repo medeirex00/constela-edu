@@ -370,7 +370,7 @@ function CorpoGerarCertificados({
               )}
               {quantidadeValida && quantidade > alunos.length && (
                 <p className="mt-2 text-xs text-zinc-500 dark:text-zinc-400">
-                  A lista desta tela tem {plural(alunos.length, "aluno", "alunos")}: entram todos.
+                  A lista do lote tem {plural(alunos.length, "aluno", "alunos")}: entram todos.
                 </p>
               )}
             </fieldset>

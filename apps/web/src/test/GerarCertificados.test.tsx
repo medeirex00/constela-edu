@@ -166,7 +166,7 @@ describe("GerarCertificados — quem entra no lote", () => {
 
     await u.click(screen.getByRole("radio", { name: "Top 10" }));
     expect(nomesDoLote()).toEqual(LISTA.map((a) => a.nome));
-    expect(screen.getByText("A lista desta tela tem 7 alunos: entram todos.")).toBeInTheDocument();
+    expect(screen.getByText("A lista do lote tem 7 alunos: entram todos.")).toBeInTheDocument();
   });
 
   it("linha sem ficha (aluno_id nulo) fica de fora com aviso e ninguém entra no lugar", async () => {

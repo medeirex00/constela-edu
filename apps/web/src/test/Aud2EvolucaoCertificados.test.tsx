@@ -48,6 +48,10 @@ describe("Ranking de Evolução: lote de certificados", () => {
     lista(item(1, "Ana Beatriz Souza", 1, 0), item(2, "João Pedro Barbosa", 2, 0));
     renderComApp(<RankingEvolucao />);
     await screen.findByRole("table");
-    expect(screen.getByRole("button", { name: "Gerar certificados" })).toBeDisabled();
+    const botao = screen.getByRole("button", { name: "Gerar certificados" });
+    expect(botao).toBeDisabled();
+    // A dica não diz "Não há alunos nesta lista" com a tabela cheia ao lado (DEC-20).
+    expect(botao).toHaveAttribute(
+      "title", "Ninguém cresceu no período: não há certificado de evolução a gerar.");
   });
 });

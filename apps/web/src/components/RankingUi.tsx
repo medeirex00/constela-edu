@@ -447,6 +447,10 @@ export interface CertificadosDaTela {
   contexto: string;
   /** Bimestre da lista quando o período da aba é um bimestre (`bimestreDoPeriodo`). */
   bimestreInicial?: number;
+  /** A dica do botão desabilitado quando a lista do lote está vazia (padrão: "Não há
+   *  alunos nesta lista."). A aba cujo lote é só PARTE da tabela diz por quê — na
+   *  Evolução, o lote é só quem cresceu e a tabela ao lado mostra quem ficou em 0,0. */
+  semAlunos?: string;
 }
 
 /**
@@ -495,7 +499,8 @@ export function AcoesRanking({
           variante="ambar"
           onClick={() => setAberto(true)}
           disabled={!certificados || certificados.alunos.length === 0}
-          title={certificados && certificados.alunos.length === 0 ? "Não há alunos nesta lista." : undefined}
+          title={certificados && certificados.alunos.length === 0
+            ? (certificados.semAlunos ?? "Não há alunos nesta lista.") : undefined}
         >
           <Award size={16} aria-hidden /> Gerar certificados
         </Botao>
