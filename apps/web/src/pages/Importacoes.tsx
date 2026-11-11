@@ -149,7 +149,9 @@ function resumoDados(dados: Record<string, unknown>): string {
       }
       return `${rotulo}: ${valorDoDado(valor)}`;
     })
-    .join(" · ");
+    // Espaço INSEPARÁVEL antes do "·": a coluna estreita quebra depois dele, nunca
+    // antes — senão a linha seguinte começava com "·".
+    .join("\u00a0· ");
 }
 
 type Acao =

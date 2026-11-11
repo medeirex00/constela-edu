@@ -351,8 +351,8 @@ describe("Importacoes", () => {
     await screen.findByText("Prévia da importação");
     const dados = (nome: string) => (screen.getByRole("combobox", { name: `Destino de ${nome}` })
       .closest("tr") as HTMLTableRowElement).cells[1].textContent;
-    expect(dados("Ana Beatriz Souza")).toBe("Atividades: 42 · Média: 85,5 · Estrelas: 120");
-    expect(dados("Zefa Q")).toBe("Atividades: 10 · Média: 70 · Estrelas: 35");
+    expect(dados("Ana Beatriz Souza")).toBe("Atividades: 42\u00a0· Média: 85,5\u00a0· Estrelas: 120");
+    expect(dados("Zefa Q")).toBe("Atividades: 10\u00a0· Média: 70\u00a0· Estrelas: 35");
     expect(screen.queryByText(/85\.5/)).toBeNull();
   });
 
@@ -389,8 +389,8 @@ describe("Importacoes", () => {
     // O exemplo real traz mesmo esses campos (senão o teste não prova nada).
     const zefa = (analisePlacarMotivos as Analise).linhas.find((l) => l.nome === "Zefa Q");
     expect(zefa?.dados).toMatchObject({ matific_uuid: "uuid-ficticio-z", nome_incompleto: true });
-    expect(dados("Zefa Q")).toBe("Atividades: 2 · Estrelas: 9 · Média: 4,5");
-    expect(dados("Crianca Ficticia Repetida (conta 1 de 2)")).toBe("Atividades: 3 · Estrelas: 10 · Média: 3,33");
+    expect(dados("Zefa Q")).toBe("Atividades: 2\u00a0· Estrelas: 9\u00a0· Média: 4,5");
+    expect(dados("Crianca Ficticia Repetida (conta 1 de 2)")).toBe("Atividades: 3\u00a0· Estrelas: 10\u00a0· Média: 3,33");
     const tabela = screen.getByRole("table");
     expect(tabela).not.toHaveTextContent(/matific_uuid|uuid-ficticio|nome_incompleto|turma_ambigua/);
   });
