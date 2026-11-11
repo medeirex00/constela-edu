@@ -15,6 +15,7 @@ from app.core.rate_limit import (
     alerta_portao_login,
     chave_conta_ip,
     identidade_da_conta,
+    identidade_digitada,
     ip_do_cliente,
     liberar_conta,
     limitador_conta,
@@ -315,8 +316,11 @@ def _avaliar(form: OAuth2PasswordRequestForm, db: Session, entrada: str, ip: str
     # pelo @username soma no MESMO contador — dois identificadores não podem
     # dobrar o orçamento de força bruta contra a mesma vítima. A chave leva a
     # versão da sessão (``identidade_da_conta``): a senha substituída sobe a
-    # versão e libera o login em todos os processos da API.
-    identidade = identidade_da_conta(usuario) if usuario is not None else entrada
+    # versão e libera o login em todos os processos da API. Conta inexistente conta
+    # pelo texto digitado, noutro espaço de nomes (``identidade_digitada``): texto
+    # nenhum soma falhas na chave de uma conta, e o 429 não revela se ela existe.
+    identidade = (identidade_da_conta(usuario) if usuario is not None
+                  else identidade_digitada(entrada))
     # Para o LOG: o e-mail da conta, sem a versão; conta inexistente nunca grava
     # o texto cru (``_identificador_para_log``).
     identidade_log = (usuario.email if usuario is not None

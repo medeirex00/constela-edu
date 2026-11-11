@@ -336,7 +336,7 @@ def identidade_da_conta(usuario) -> str:
     ``limitador_login``: o e-mail e a versão da sessão (``token_version``), lida
     do banco no pedido. O /auth/login e a reautenticação
     (``admin._exigir_senha_atual``) usam esta mesma chave; conta inexistente
-    segue com o texto digitado.
+    conta pelo texto digitado (``identidade_digitada``).
 
     A versão é o que faz a troca de senha liberar o login em TODOS os processos
     da API: toda substituição da senha (link de redefinição, senha definida pelo
@@ -348,15 +348,25 @@ def identidade_da_conta(usuario) -> str:
     Secretaria) também zeram. A versão só sobe por ação do admin ou com a senha
     atual: errar a senha não muda a chave.
 
-    Quem digita esta chave como se fosse um login (``e-mail#versão``, conta
-    inexistente) só soma falhas nela: o mesmo travamento que errar a senha da
-    conta já causa (o trade-off do ``limitador_conta``)."""
-    return f"{usuario.email}#{usuario.token_version or 0}"
+    A chave da conta e a do texto digitado (``identidade_digitada``) vivem em
+    espaços de nomes separados (prefixos ``u:`` e ``t:``). Quando eram o mesmo
+    espaço, digitar ``<e-mail>#0`` como login (conta inexistente) somava falhas
+    na chave da conta real, e o 429 do login seguinte com o e-mail revelava que a
+    conta existia, e com qual versão (REG_SEGURANCA-2)."""
+    return f"u:{usuario.email}#{usuario.token_version or 0}"
+
+
+def identidade_digitada(entrada: str) -> str:
+    """Identidade de um login que NÃO achou conta: o texto digitado, num espaço
+    de nomes próprio (prefixo ``t:``). Nenhum texto digitado cai na chave de uma
+    conta que existe (``identidade_da_conta``, prefixo ``u:``), então o 429 dos
+    limitadores da conta não diz se ela existe."""
+    return f"t:{entrada}"
 
 
 def chave_conta_ip(identidade: str, ip: str) -> str:
-    """Chave do ``limitador_login``: a conta (``identidade_da_conta``, ou o texto
-    digitado quando a conta não existe) e o IP completo."""
+    """Chave do ``limitador_login``: a conta (``identidade_da_conta``, ou
+    ``identidade_digitada`` quando a conta não existe) e o IP completo."""
     return f"{identidade}|{ip}"
 
 
@@ -366,6 +376,6 @@ def liberar_conta(email: str) -> None:
     faz o login com a senha nova entrar, em todos os processos, é a versão nova
     na chave (``identidade_da_conta``). Os tetos de falha por IP e global (acima)
     não dependem da conta e ficam como estão."""
-    prefixo = f"{email}#"
+    prefixo = f"u:{email}#"
     limitador_conta.limpar_prefixo(prefixo)
     limitador_login.limpar_prefixo(prefixo)
