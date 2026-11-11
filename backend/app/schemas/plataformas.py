@@ -5,6 +5,7 @@ from typing import Annotated
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 from app.schemas.comum import ORMModel
+from app.services.matific_destaque import ESTRELAS_MAX_POR_ATIVIDADE
 
 # Contagem de livros num ajuste MANUAL: inteiro entre 0 e 10.000 (negativo → 422).
 ContagemLivros = Annotated[int, Field(ge=0, le=10000)]
@@ -53,6 +54,20 @@ class MatificEdicao(BaseModel):
     motivo: str
 
     _motivo = field_validator("motivo")(_motivo_obrigatorio)
+
+    @model_validator(mode="after")
+    def _estrelas_dentro_do_teto(self):
+        """No máximo ``ESTRELAS_MAX_POR_ATIVIDADE`` (5) estrelas por atividade — a
+        mesma regra de ``matific_destaque.limitar_estrelas``: uma correção não cria
+        estrela sem atividade. Sem esta barreira, um zero a mais digitado punha a
+        criança em 1º no Ranking de Matemática e subia a nota oficial."""
+        teto = int(ESTRELAS_MAX_POR_ATIVIDADE) * self.atividades
+        if self.estrelas > teto:
+            raise ValueError(
+                f"O Matific dá no máximo {int(ESTRELAS_MAX_POR_ATIVIDADE)} estrelas por "
+                f"atividade: com {self.atividades} atividade(s), são no máximo {teto} "
+                "estrelas. Confira os dois números.")
+        return self
 
 
 class ElefanteAlunoOut(BaseModel):

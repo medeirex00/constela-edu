@@ -35,6 +35,9 @@ const TD = `${classesTabela.td} max-sm:px-3`;
 /** Escala da média do Matific (a mesma do Placar da Escola) — o servidor recusa
  *  acima disso (`MatificEdicao.pontuacao_media`, ge=0 le=5). */
 const MEDIA_MAXIMA = 5;
+/** Teto de estrelas por atividade — a mesma regra das Premiações
+ *  (`matific_destaque.limitar_estrelas`); o servidor recusa acima disso (422). */
+const ESTRELAS_POR_ATIVIDADE = 5;
 /** Motivo do ajuste: obrigatório, como no Elefante (o servidor recusa com menos). */
 const MOTIVO_MINIMO = 5;
 const MSG_MOTIVO = `Informe o motivo do ajuste (pelo menos ${MOTIVO_MINIMO} caracteres) — ele fica no histórico de alterações.`;
@@ -99,6 +102,15 @@ function ModalEditarMatific({
     // dizer qual é a escala.
     if (mediaMudou && (form.pontuacao_media < 0 || form.pontuacao_media > MEDIA_MAXIMA)) {
       setErro(`A média do Matific vai de 0 a ${MEDIA_MAXIMA} (a mesma escala do Placar da Escola).`);
+      return;
+    }
+    const tetoEstrelas = ESTRELAS_POR_ATIVIDADE * form.atividades;
+    if (form.estrelas > tetoEstrelas) {
+      setErro(
+        `O Matific dá no máximo ${ESTRELAS_POR_ATIVIDADE} estrelas por atividade: com ` +
+          `${form.atividades} atividade${form.atividades === 1 ? "" : "s"}, são no máximo ` +
+          `${tetoEstrelas} estrelas. Confira os dois números.`,
+      );
       return;
     }
     const motivo = form.motivo.trim();
