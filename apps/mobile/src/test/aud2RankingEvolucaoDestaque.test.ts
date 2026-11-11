@@ -68,7 +68,7 @@ function montar() {
 
 const linhaGeral = (posicao: number, aluno_id: number, nome: string) => ({
   posicao, aluno_id, nome, turma: "3º A", ano_escolar: "3º ano",
-  nota_matific: 80, nota_elefante: 80, nota_geral: 80 - posicao,
+  nota_matific: 80, nota_elefante: 80,
   aferido_leitura: true, aferido_matematica: true,
 });
 const linhaEvolucao = (posicao: number, aluno_id: number, nome: string, nota_evolucao: number) => ({
