@@ -791,14 +791,21 @@ def _esta_travada(execucao: SincronizacaoExecucao) -> bool:
     return sinal is None or sinal < limite
 
 
-def _orfas_em_execucao(db: Session) -> list[SincronizacaoExecucao]:
-    """As execuções que ``_esta_travada`` reivindicaria, numa consulta só."""
-    limite = _agora() - timedelta(seconds=settings.SYNC_SEM_SINAL_S)
+def _orfas_em_execucao(db: Session, *, agora: datetime | None = None,
+                       sem_sinal_s: int | None = None) -> list[SincronizacaoExecucao]:
+    """As execuções que ``_esta_travada`` reivindicaria, numa consulta só (em ordem de
+    id). ``agora`` (UTC naive) e ``sem_sinal_s`` valem, por padrão, o relógio e
+    ``SYNC_SEM_SINAL_S``; o pré-requisito ``execucoes_presas`` do agendador passa os
+    que recebeu, para decidir pela MESMA regra do boot."""
+    if sem_sinal_s is None:
+        sem_sinal_s = settings.SYNC_SEM_SINAL_S
+    limite = (agora or _agora()) - timedelta(seconds=sem_sinal_s)
     linhas = db.execute(
         select(SincronizacaoExecucao, consulta_ultimo_log()).where(
             SincronizacaoExecucao.status == "executando",
             SincronizacaoExecucao.iniciada_em.isnot(None),
             SincronizacaoExecucao.iniciada_em < limite)
+        .order_by(SincronizacaoExecucao.id)
     ).all()
     return [ex for ex, ultimo_log in linhas
             if (sinal := sinal_de_vida(ex, ultimo_log)) is None or sinal < limite]

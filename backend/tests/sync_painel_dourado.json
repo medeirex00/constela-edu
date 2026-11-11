@@ -44,7 +44,7 @@
      {
       "critico": true,
       "id": "execucoes_presas",
-      "motivo": "Nenhuma execução 'executando' há mais de 45 min nem na fila sem sinal de vida há mais de 60 min.",
+      "motivo": "Nenhuma execução 'executando' sem sinal de vida há mais de 15 min nem na fila sem sinal de vida há mais de 60 min.",
       "ok": true
      },
      {
@@ -140,7 +140,7 @@
      {
       "critico": true,
       "id": "execucoes_presas",
-      "motivo": "Nenhuma execução 'executando' há mais de 45 min nem na fila sem sinal de vida há mais de 60 min.",
+      "motivo": "Nenhuma execução 'executando' sem sinal de vida há mais de 15 min nem na fila sem sinal de vida há mais de 60 min.",
       "ok": true
      },
      {
@@ -244,7 +244,7 @@
      {
       "critico": true,
       "id": "execucoes_presas",
-      "motivo": "2 execução(ões) presa(s): #57 escola 29/elefante 'executando' há 183 min, #58 escola 29/matific na fila sem sinal de vida há mais de 60 min. Libere-as (o boot finaliza as órfãs antigas; a manual é substituída por um novo 'Sincronizar agora') antes de ligar.",
+      "motivo": "2 execução(ões) presa(s): #57 escola 29/elefante 'executando' sem sinal de vida há mais de 15 min, #58 escola 29/matific na fila sem sinal de vida há mais de 60 min. Libere-as antes de ligar (a 'executando' sem sinal de vida é encerrada no boot ou por um novo 'Sincronizar agora'; a manual presa na fila é substituída por um novo 'Sincronizar agora').",
       "ok": false
      },
      {
@@ -346,7 +346,7 @@
      {
       "critico": true,
       "id": "execucoes_presas",
-      "motivo": "2 execução(ões) presa(s): #57 escola 29/elefante 'executando' há 183 min, #58 escola 29/matific na fila sem sinal de vida há mais de 60 min. Libere-as (o boot finaliza as órfãs antigas; a manual é substituída por um novo 'Sincronizar agora') antes de ligar.",
+      "motivo": "2 execução(ões) presa(s): #57 escola 29/elefante 'executando' sem sinal de vida há mais de 15 min, #58 escola 29/matific na fila sem sinal de vida há mais de 60 min. Libere-as antes de ligar (a 'executando' sem sinal de vida é encerrada no boot ou por um novo 'Sincronizar agora'; a manual presa na fila é substituída por um novo 'Sincronizar agora').",
       "ok": false
      },
      {
@@ -450,7 +450,7 @@
      {
       "critico": true,
       "id": "execucoes_presas",
-      "motivo": "2 execução(ões) presa(s): #57 escola 29/elefante 'executando' há 183 min, #58 escola 29/matific na fila sem sinal de vida há mais de 60 min. Libere-as (o boot finaliza as órfãs antigas; a manual é substituída por um novo 'Sincronizar agora') antes de ligar.",
+      "motivo": "2 execução(ões) presa(s): #57 escola 29/elefante 'executando' sem sinal de vida há mais de 15 min, #58 escola 29/matific na fila sem sinal de vida há mais de 60 min. Libere-as antes de ligar (a 'executando' sem sinal de vida é encerrada no boot ou por um novo 'Sincronizar agora'; a manual presa na fila é substituída por um novo 'Sincronizar agora').",
       "ok": false
      },
      {
@@ -552,7 +552,7 @@
      {
       "critico": true,
       "id": "execucoes_presas",
-      "motivo": "2 execução(ões) presa(s): #57 escola 29/elefante 'executando' há 183 min, #58 escola 29/matific na fila sem sinal de vida há mais de 60 min. Libere-as (o boot finaliza as órfãs antigas; a manual é substituída por um novo 'Sincronizar agora') antes de ligar.",
+      "motivo": "2 execução(ões) presa(s): #57 escola 29/elefante 'executando' sem sinal de vida há mais de 15 min, #58 escola 29/matific na fila sem sinal de vida há mais de 60 min. Libere-as antes de ligar (a 'executando' sem sinal de vida é encerrada no boot ou por um novo 'Sincronizar agora'; a manual presa na fila é substituída por um novo 'Sincronizar agora').",
       "ok": false
      },
      {
@@ -656,7 +656,7 @@
      {
       "critico": true,
       "id": "execucoes_presas",
-      "motivo": "2 execução(ões) presa(s): #57 escola 29/elefante 'executando' há 183 min, #58 escola 29/matific na fila sem sinal de vida há mais de 60 min. Libere-as (o boot finaliza as órfãs antigas; a manual é substituída por um novo 'Sincronizar agora') antes de ligar.",
+      "motivo": "2 execução(ões) presa(s): #57 escola 29/elefante 'executando' sem sinal de vida há mais de 15 min, #58 escola 29/matific na fila sem sinal de vida há mais de 60 min. Libere-as antes de ligar (a 'executando' sem sinal de vida é encerrada no boot ou por um novo 'Sincronizar agora'; a manual presa na fila é substituída por um novo 'Sincronizar agora').",
       "ok": false
      },
      {
@@ -758,7 +758,7 @@
      {
       "critico": true,
       "id": "execucoes_presas",
-      "motivo": "2 execução(ões) presa(s): #57 escola 29/elefante 'executando' há 183 min, #58 escola 29/matific na fila sem sinal de vida há mais de 60 min. Libere-as (o boot finaliza as órfãs antigas; a manual é substituída por um novo 'Sincronizar agora') antes de ligar.",
+      "motivo": "2 execução(ões) presa(s): #57 escola 29/elefante 'executando' sem sinal de vida há mais de 15 min, #58 escola 29/matific na fila sem sinal de vida há mais de 60 min. Libere-as antes de ligar (a 'executando' sem sinal de vida é encerrada no boot ou por um novo 'Sincronizar agora'; a manual presa na fila é substituída por um novo 'Sincronizar agora').",
       "ok": false
      },
      {
@@ -862,7 +862,7 @@
      {
       "critico": true,
       "id": "execucoes_presas",
-      "motivo": "2 execução(ões) presa(s): #57 escola 29/elefante 'executando' há 183 min, #58 escola 29/matific na fila sem sinal de vida há mais de 60 min. Libere-as (o boot finaliza as órfãs antigas; a manual é substituída por um novo 'Sincronizar agora') antes de ligar.",
+      "motivo": "2 execução(ões) presa(s): #57 escola 29/elefante 'executando' sem sinal de vida há mais de 15 min, #58 escola 29/matific na fila sem sinal de vida há mais de 60 min. Libere-as antes de ligar (a 'executando' sem sinal de vida é encerrada no boot ou por um novo 'Sincronizar agora'; a manual presa na fila é substituída por um novo 'Sincronizar agora').",
       "ok": false
      },
      {
@@ -964,7 +964,7 @@
      {
       "critico": true,
       "id": "execucoes_presas",
-      "motivo": "2 execução(ões) presa(s): #57 escola 29/elefante 'executando' há 183 min, #58 escola 29/matific na fila sem sinal de vida há mais de 60 min. Libere-as (o boot finaliza as órfãs antigas; a manual é substituída por um novo 'Sincronizar agora') antes de ligar.",
+      "motivo": "2 execução(ões) presa(s): #57 escola 29/elefante 'executando' sem sinal de vida há mais de 15 min, #58 escola 29/matific na fila sem sinal de vida há mais de 60 min. Libere-as antes de ligar (a 'executando' sem sinal de vida é encerrada no boot ou por um novo 'Sincronizar agora'; a manual presa na fila é substituída por um novo 'Sincronizar agora').",
       "ok": false
      },
      {
@@ -1068,7 +1068,7 @@
      {
       "critico": true,
       "id": "execucoes_presas",
-      "motivo": "2 execução(ões) presa(s): #57 escola 29/elefante 'executando' há 183 min, #58 escola 29/matific na fila sem sinal de vida há mais de 60 min. Libere-as (o boot finaliza as órfãs antigas; a manual é substituída por um novo 'Sincronizar agora') antes de ligar.",
+      "motivo": "2 execução(ões) presa(s): #57 escola 29/elefante 'executando' sem sinal de vida há mais de 15 min, #58 escola 29/matific na fila sem sinal de vida há mais de 60 min. Libere-as antes de ligar (a 'executando' sem sinal de vida é encerrada no boot ou por um novo 'Sincronizar agora'; a manual presa na fila é substituída por um novo 'Sincronizar agora').",
       "ok": false
      },
      {
@@ -1170,7 +1170,7 @@
      {
       "critico": true,
       "id": "execucoes_presas",
-      "motivo": "2 execução(ões) presa(s): #57 escola 29/elefante 'executando' há 183 min, #58 escola 29/matific na fila sem sinal de vida há mais de 60 min. Libere-as (o boot finaliza as órfãs antigas; a manual é substituída por um novo 'Sincronizar agora') antes de ligar.",
+      "motivo": "2 execução(ões) presa(s): #57 escola 29/elefante 'executando' sem sinal de vida há mais de 15 min, #58 escola 29/matific na fila sem sinal de vida há mais de 60 min. Libere-as antes de ligar (a 'executando' sem sinal de vida é encerrada no boot ou por um novo 'Sincronizar agora'; a manual presa na fila é substituída por um novo 'Sincronizar agora').",
       "ok": false
      },
      {

@@ -275,8 +275,9 @@ Religar (`SYNC_SCHEDULER_ENABLED=true`) só quando, medido no próprio sistema:
 1. **14 dias** consecutivos de coletas (manuais ou assistidas) com sucesso diário
    em **≥ 95%** dos pares escola × plataforma configurados;
 2. **0 execuções presas** no período: o pré-requisito `execucoes_presas`, que olha
-   "executando" além de 45 min (o teto da coleta, `SYNC_TETO_EXECUCAO_S`, menor que
-   `SYNC_TRAVADA_S` = 60 min) e "fila" sem sinal de vida além de 60 min;
+   "executando" sem sinal de vida (nenhum registro no log) há mais de 15 min
+   (`SYNC_SEM_SINAL_S`, a mesma regra do boot; a execução viva não conta, por mais
+   antiga que seja) e "fila" sem sinal de vida além de 60 min (`SYNC_TRAVADA_S`);
 3. nenhum alerta de falha aberto sem causa conhecida; `queda_matific` revisados;
 4. backup diário privado verde no período;
 5. decisão explícita do dono (custo/ janela de horário).
