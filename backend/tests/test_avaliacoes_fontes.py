@@ -82,7 +82,9 @@ def test_coletar_fonte_erro_de_download_vira_status_sem_quebrar(db):
 
     assert resumo["status"] == "erro"
     assert f.ultimo_status == "erro"
-    assert "ConnectionError" in f.ultimo_erro
+    # Falha de conexão: a mensagem única (o detalhe do erro de rede fica no log —
+    # G_INDICADORES-2: o texto cru diferenciava porta aberta de fechada).
+    assert f.ultimo_erro == svc.ERRO_CONEXAO_FONTE
     assert f.ultima_coleta is not None             # registrou a tentativa
     assert db.scalar(select(func.count(ResultadoAvaliacao.id))) == 0
 
@@ -225,7 +227,7 @@ def test_coletar_agora_erro_reporta_status_200(db, monkeypatch):
     r = c.post(f"/api/v1/avaliacoes/fontes/{fid}/coletar")
     assert r.status_code == 200                       # a rota não quebra…
     assert r.json()["ultimo_status"] == "erro"        # …o status conta a falha
-    assert "ConnectionError" in r.json()["ultimo_erro"]
+    assert r.json()["ultimo_erro"] == svc.ERRO_CONEXAO_FONTE   # sem o detalhe da rede
 
 
 def test_atualizar_pausa_e_desliga_agenda(db):

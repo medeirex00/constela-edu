@@ -20,6 +20,7 @@ from itertools import islice
 from typing import Callable, Iterator
 from urllib.parse import urlparse
 
+import httpcore
 import httpx
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
@@ -807,35 +808,105 @@ def _agora() -> datetime:
 
 _MAX_REDIRECTS = 5
 
+# Mensagem ÚNICA para qualquer falha de conexão com a fonte (recusa, queda, tempo
+# esgotado, TLS). O texto do erro de rede diferenciava porta aberta de porta fechada
+# no destino e, gravado em ``fonte.ultimo_erro`` (o painel mostra), servia para varrer
+# uma rede às cegas. O detalhe vai só para o log do servidor.
+ERRO_CONEXAO_FONTE = ("Falha de conexão com a fonte: o endereço não respondeu ou recusou a "
+                      "conexão. Confira o endereço e tente de novo mais tarde.")
 
-def _exigir_destino_publico(url: str) -> None:
-    """Anti-SSRF: só https e host que resolve para IP PÚBLICO (rejeita privado/
-    loopback/link-local/reservado/multicast — inclui 169.254.169.254 de metadata).
-    Aplicado ANTES de cada conexão, inclusive a cada redirect (revalida o salto)."""
+
+def _ip_publico(ip: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
+    """IP da internet PÚBLICA (``is_global``): recusa privado, loopback, link-local
+    (169.254.169.254, de metadados de nuvem), a faixa 100.64.0.0/10 (CGNAT, onde também
+    ficam metadados de nuvem, como 100.100.100.200: não é ``is_private``, mas também
+    não é global), reservado, multicast e não especificado. O IPv4 mapeado num IPv6
+    (``::ffff:a.b.c.d``) é conferido pelo IPv4."""
+    mapeado = getattr(ip, "ipv4_mapped", None)
+    if mapeado is not None and not _ip_publico(mapeado):
+        return False
+    return ip.is_global and not (ip.is_private or ip.is_loopback or ip.is_link_local
+                                 or ip.is_reserved or ip.is_multicast or ip.is_unspecified)
+
+
+def _resolver_publico(host: str, porta: int) -> list[str]:
+    """Resolve o host UMA vez e devolve os IPs dele, todos públicos (um só que não seja
+    público já recusa o host inteiro)."""
+    try:
+        infos = socket.getaddrinfo(host, porta, proto=socket.IPPROTO_TCP)
+    except socket.gaierror as exc:
+        raise ValueError(f"host não resolvido: {host}") from exc
+    ips: list[str] = []
+    for info in infos:
+        ip = ipaddress.ip_address(info[4][0])
+        if not _ip_publico(ip):
+            raise ValueError(f"host aponta para rede não-pública ({ip}): {host}")
+        if str(ip) not in ips:
+            ips.append(str(ip))
+    if not ips:
+        raise ValueError(f"host não resolvido: {host}")
+    return ips
+
+
+def _exigir_destino_publico(url: str) -> list[str]:
+    """Anti-SSRF: só https e host que resolve para IP PÚBLICO (``_ip_publico``).
+    Aplicado ANTES de cada requisição, inclusive a cada redirect (revalida o salto).
+    Devolve os IPs conferidos. Sozinha, a guarda não basta para quem conecta depois:
+    o cliente HTTP resolveria o nome de novo (DNS rebinding) — ``baixar_url`` conecta
+    pelo ``_TransporteSoIpPublico``, que confere e fixa o IP na própria conexão."""
     partes = urlparse(url)
     if partes.scheme != "https":
         raise ValueError(f"esquema não permitido (só https): {partes.scheme or 'vazio'}")
     host = partes.hostname
     if not host:
         raise ValueError("URL sem host")
-    try:
-        infos = socket.getaddrinfo(host, partes.port or 443, proto=socket.IPPROTO_TCP)
-    except socket.gaierror as exc:
-        raise ValueError(f"host não resolvido: {host}") from exc
-    for info in infos:
-        ip = ipaddress.ip_address(info[4][0])
-        if (ip.is_private or ip.is_loopback or ip.is_link_local
-                or ip.is_reserved or ip.is_multicast or ip.is_unspecified):
-            raise ValueError(f"host aponta para rede não-pública ({ip}): {host}")
+    return _resolver_publico(host, partes.port or 443)
+
+
+class _RedeSoIpPublico(httpcore.SyncBackend):
+    """Backend de rede do httpcore que abre o socket SÓ no IP conferido: o nome é
+    resolvido uma vez, na hora da conexão, cada IP passa por ``_ip_publico`` e a
+    conexão TCP vai ao IP conferido — não a uma 2ª resolução, que um DNS com TTL 0
+    poderia apontar para a rede interna. O TLS continua verificando o certificado pelo
+    NOME do endereço (o SNI e o cabeçalho Host são os do URL)."""
+
+    def connect_tcp(self, host, port, timeout=None, local_address=None, socket_options=None):
+        erro: Exception | None = None
+        for ip in _resolver_publico(host, port):
+            try:
+                return super().connect_tcp(ip, port, timeout=timeout,
+                                           local_address=local_address,
+                                           socket_options=socket_options)
+            except (httpcore.ConnectError, httpcore.ConnectTimeout) as exc:
+                erro = exc                       # tenta o próximo IP do host, como o socket
+        raise erro
+
+
+class _TransporteSoIpPublico(httpx.HTTPTransport):
+    """O transporte padrão do httpx (TLS verificado) com a conexão aberta pelo
+    ``_RedeSoIpPublico``. Passado ao cliente, ele também deixa de fora o proxy das
+    variáveis de ambiente: a conexão vai direto ao IP conferido."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        pool = getattr(self, "_pool", None)
+        if not hasattr(pool, "_network_backend"):
+            # Fecha em vez de abrir: sem o ponto de extensão, o IP não ficaria fixado.
+            raise RuntimeError("httpx/httpcore sem o backend de rede configurável: a coleta "
+                               "não conecta sem fixar o IP conferido pela guarda anti-SSRF.")
+        pool._network_backend = _RedeSoIpPublico()
 
 
 def baixar_url(url: str, *, timeout: float = 30.0) -> bytes:
     """Baixa o arquivo oficial (User-Agent de navegador — os portais oficiais
-    bloqueiam clientes 'crus'). Guarda anti-SSRF: só https para host público, e os
+    bloqueiam clientes 'crus'). Guarda anti-SSRF: só https para host público, os
     redirects são seguidos MANUALMENTE revalidando cada destino (o alvo final não
-    fica a cargo do upstream). LEVANTA em erro; o chamador registra o status."""
+    fica a cargo do upstream) e cada conexão abre no IP conferido
+    (``_TransporteSoIpPublico``: sem DNS rebinding). LEVANTA em erro; o chamador
+    registra o status."""
     cabecalhos = {"User-Agent": _UA_NAVEGADOR, "Accept": "*/*"}
-    with httpx.Client(timeout=timeout, follow_redirects=False, headers=cabecalhos) as cli:
+    with httpx.Client(timeout=timeout, follow_redirects=False, headers=cabecalhos,
+                      transport=_TransporteSoIpPublico()) as cli:
         for _ in range(_MAX_REDIRECTS + 1):
             _exigir_destino_publico(url)
             with cli.stream("GET", url) as r:
@@ -889,7 +960,14 @@ def coletar_fonte(db: Session, fonte: FonteAvaliacao,
         fonte.ultimo_status, fonte.ultimo_erro, fonte.ultimo_resumo = "ok", None, resumo
     except Exception as exc:  # noqa: BLE001 — nunca quebra: registra o erro
         fonte.ultimo_status = "erro"
-        fonte.ultimo_erro = f"{type(exc).__name__}: {exc}"[:300]
+        if isinstance(exc, (httpx.TransportError, OSError)):
+            # Falha de CONEXÃO: o painel recebe a mensagem única (o texto do erro de
+            # rede diria se a porta do destino existe); o detalhe fica no log.
+            logger.warning("Coleta da fonte de avaliação %s: falha de conexão (%s: %s)",
+                           fonte.id, type(exc).__name__, exc)
+            fonte.ultimo_erro = ERRO_CONEXAO_FONTE
+        else:
+            fonte.ultimo_erro = f"{type(exc).__name__}: {exc}"[:300]
         fonte.ultimo_resumo = {"erro": fonte.ultimo_erro}
     fonte.ultima_coleta = _agora()
     fonte.proxima_coleta = (_agora() + timedelta(days=30)) if fonte.cadencia == "mensal" else None
