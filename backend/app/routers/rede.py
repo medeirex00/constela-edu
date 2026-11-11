@@ -607,8 +607,12 @@ def definir_meta(
     db: Session = Depends(get_db),
 ):
     """Cadastra/atualiza uma meta da rede (upsert por métrica). Ação de quem tem a
-    rede (Secretaria) ou o admin global — como a vitrine pública."""
-    svc_rede.definir_meta(db, rede_id, dados.metrica, dados.alvo, dados.descricao)
+    rede (Secretaria) ou o admin global — como a vitrine pública. A meta de uma
+    plataforma cujo módulo a rede não contratou é recusada (400)."""
+    try:
+        svc_rede.definir_meta(db, rede_id, dados.metrica, dados.alvo, dados.descricao)
+    except svc_rede.MetaForaDoPlano as exc:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
     registrar(db, "rede.meta_definida", usuario_id=usuario.id, entidade="rede",
               entidade_id=rede_id, detalhes={"metrica": dados.metrica, "alvo": dados.alvo})
     db.commit()

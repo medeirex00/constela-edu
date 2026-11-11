@@ -806,12 +806,14 @@ function ComparativoRede({ escolas, aoAbrir, modulos }: {
 }
 
 /** O progresso no Panorama de UMA rede (modo "analise": só o admin global, na Visão
- *  Global). O convite manda ao Painel da Rede pelo caminho do menu dele. */
-function MetasRede({ redeId }: { redeId: number }) {
+ *  Global). O convite manda ao Painel da Rede pelo caminho do menu dele. `modulos`: os da
+ *  rede mostrada (a meta de uma plataforma fora do plano não aparece). */
+function MetasRede({ redeId, modulos }: { redeId: number; modulos: string[] }) {
   const leitura = useApi<MetaProgresso[]>(`/redes/${redeId}/metas`);
   return (
     <ProgressoMetas
       leitura={leitura}
+      modulos={modulos}
       titulo="Metas da rede"
       semMeta={<>
         Nenhuma meta definida ainda. Defina as metas da rede em <b>{CAMINHO_PAINEL_GLOBAL}</b>, no menu — o
@@ -1066,7 +1068,7 @@ function PainelRede({ redeId, modo }: { redeId: number; modo: "analise" | "secre
         </Card>
 
         {/* Metas da rede — progresso REAL (alvo cadastrado no painel /rede). */}
-        <MetasRede redeId={redeId} />
+        <MetasRede redeId={redeId} modulos={mods} />
       </div>
       </>
       )}
@@ -1077,7 +1079,7 @@ function PainelRede({ redeId, modo }: { redeId: number; modo: "analise" | "secre
       {avisoAnos}
       {/* Metas: o PROGRESSO (a conclusão, que antes só aparecia no Panorama antigo) ao
           lado do cadastro, com uma leitura só — salvar uma meta atualiza os dois. */}
-      <MetasDaRede redeId={redeId} />
+      <MetasDaRede redeId={redeId} modulos={mods} />
 
       {/* Vitrine e "Comparar as escolas" (só links) com a altura da linha. */}
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">

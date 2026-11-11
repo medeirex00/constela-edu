@@ -156,12 +156,14 @@ export interface DashboardRede {
     /** Índice 0–1000 da rede (média ponderada do índice das escolas). */
     pontuacao_geral: number | null;
     escolas_em_atencao: number;
+    // `null` também quando a rede não contratou o módulo da plataforma (o retrato antigo dela
+    // não é número da rede).
     livros: number | null;
     tempo_leitura_min: number | null;
     atividades: number | null;
     estrelas: number | null;
-    ativos_matific: number;
-    ativos_elefante: number;
+    ativos_matific: number | null;
+    ativos_elefante: number | null;
     livros_por_aluno: number | null;
     melhor_escola: { nome: string; pontuacao_geral: number | null; media_geral: number | null } | null;
     /** Só para a Secretaria: quantas escolas ficaram fora dos totais de cada matéria. */
@@ -375,6 +377,19 @@ const METRICAS_META_UI: { metrica: string; rotulo: string; modulo?: string }[] =
   { metrica: "atividades", rotulo: "Atividades Matific na rede", modulo: "matematica" },
 ];
 
+/** As metas que valem para a rede: sem as de uma plataforma cujo módulo ela não contratou
+ *  (`modulos`; sem eles, todas). O backend já as omite; aqui fica a mesma regra para a resposta
+ *  antiga (cache do PWA), que ainda trazia a meta gravada antes de o módulo sair do plano. */
+export function metasNoPlano<T extends { metrica: string }>(metas: T[] | null | undefined, modulos?: string[]): T[] | null {
+  if (!metas) return null;
+  if (!modulos) return metas;
+  const moduloDa = new Map(METRICAS_META_UI.map((o) => [o.metrica, o.modulo]));
+  return metas.filter((m) => {
+    const modulo = moduloDa.get(m.metrica);
+    return !modulo || modulos.includes(modulo);
+  });
+}
+
 /** A leitura das metas (`GET /redes/{id}/metas`). O progresso e o cadastro usam a MESMA
  *  leitura: salvar ou remover uma meta atualiza os dois cartões. */
 export type LeituraMetas = ResultadoUseApi<MetaProgresso[]>;
@@ -383,12 +398,15 @@ export type LeituraMetas = ResultadoUseApi<MetaProgresso[]>;
  *  (`semMeta` diz onde cadastrar, com o nome que quem lê vê na tela ou no menu).
  *  `notaDaMetrica` (opcional, por `metrica`): uma nota curta abaixo de cada meta — o Panorama a
  *  usa para dizer de quando é cada número (as metas não seguem todas o ano letivo); sem ela, o
- *  cartão fica como sempre (o Painel da Rede não passa nada). */
-export function ProgressoMetas({ leitura, titulo, semMeta, nivel = 2, notaDaMetrica }: {
+ *  cartão fica como sempre (o Painel da Rede não passa nada). `modulos` (opcional): só as metas
+ *  das plataformas contratadas (`metasNoPlano`). */
+export function ProgressoMetas({ leitura, titulo, semMeta, nivel = 2, notaDaMetrica, modulos }: {
   leitura: LeituraMetas; titulo: string; semMeta: ReactNode; nivel?: 2 | 3;
   notaDaMetrica?: Record<string, string>;
+  modulos?: string[];
 }) {
-  const { dados: metas, erro, carregando, recarregar } = leitura;
+  const { erro, carregando, recarregar } = leitura;
+  const metas = metasNoPlano(leitura.dados, modulos);
   // A meta sem dado medido não entra na conta (nem como "não atingida"): é dita à parte.
   const medidas = metas ? metas.filter((m) => m.medida !== false) : [];
   const atingidas = medidas.filter((m) => m.atingida).length;
@@ -518,6 +536,7 @@ export function MetasDaRede({ redeId, nivel = 2, tituloCadastro = "Metas da rede
         titulo="Progresso das metas"
         nivel={nivel}
         notaDaMetrica={notaDaMetrica}
+        modulos={modulos}
         semMeta={`Nenhuma meta definida ainda. Cadastre a primeira em “${tituloCadastro}”, nesta página — o progresso (dado real, sem número fictício) aparece aqui.`}
       />
       <GestaoMetas redeId={redeId} leitura={leitura} titulo={tituloCadastro} nivel={nivel} modulos={modulos} />
@@ -537,7 +556,8 @@ function GestaoMetas({ redeId, leitura, titulo, nivel, modulos }: {
     ? `em “Progresso das metas”, nesta página, e na ${INICIO_GLOBAL}, ao abrir esta rede`
     : "em “Progresso das metas”, nesta página";
   const opcoes = METRICAS_META_UI.filter((o) => !o.modulo || !modulos || modulos.includes(o.modulo));
-  const { dados: metas, erro, recarregar } = leitura;
+  const { erro, recarregar } = leitura;
+  const metas = metasNoPlano(leitura.dados, modulos);
   const [metrica, setMetrica] = useState(opcoes[0]?.metrica ?? "pontuacao_geral");
   const [alvo, setAlvo] = useState("");
   const [salvando, setSalvando] = useState(false);

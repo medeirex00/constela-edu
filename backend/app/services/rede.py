@@ -1186,6 +1186,7 @@ def dashboard_rede(db: Session, rede_id: int, *, secretaria: bool = False) -> di
         # `python -m scripts.recalcular_institucional --pendentes`.
         "recalculo_pendente": _recalculo_pendente(pendentes),
     }
+    _tirar_totais_fora_do_plano(resposta["totais"], contratados)
     if secretaria:
         _marcar_totais_da_secretaria(resposta["totais"], cartoes)
         # As escolas com alguma matéria escondida (o cartão de cada uma também
@@ -1206,6 +1207,30 @@ _TOTAIS_DA_MATERIA = {
                    ("atividades", "atividades", "ativos_matific"),
                    ("estrelas", "estrelas", "ativos_matific")),
 }
+
+
+# Os totais da REDE de cada módulo (a plataforma dele): saem NULOS quando a rede não
+# contratou o módulo (``_tirar_totais_fora_do_plano``).
+_TOTAIS_DO_MODULO = {
+    "leitura": ("media_elefante", "livros", "tempo_leitura_min", "livros_por_aluno",
+                "ativos_elefante"),
+    "matematica": ("media_matific", "atividades", "estrelas", "ativos_matific"),
+}
+
+
+def _tirar_totais_fora_do_plano(totais: dict, contratados: set[str]) -> None:
+    """Os totais da plataforma de um módulo que a rede NÃO contratou saem nulos (IN
+    PLACE): o retrato antigo do Matific de uma rede que deixou de contratar a
+    Matemática não é número da rede — nem "0", que pareceria medido. As médias,
+    o índice e a adoção já deixavam o módulo de fora; os totais brutos (livros,
+    atividades, estrelas, alunos com dado da plataforma) ainda o somavam, e a meta
+    de "Atividades Matific na rede" media o progresso com eles. Os cartões das
+    escolas continuam com os números de sempre (a tela já não mostra o módulo fora
+    do plano, e o cartão traz ``modulos``)."""
+    for modulo, chaves in _TOTAIS_DO_MODULO.items():
+        if modulo not in contratados:
+            for chave in chaves:
+                totais[chave] = None
 
 
 def _marcar_totais_da_secretaria(totais: dict, cartoes: list[dict]) -> None:
@@ -1485,6 +1510,24 @@ METRICAS_META: dict[str, dict] = {
 }
 
 
+# O MÓDULO de cada meta de plataforma: a meta de um módulo que a rede não contratou
+# não é aceita (``definir_meta``) nem mostrada (``metas_com_progresso``). As demais
+# (índice, adoção, média geral) valem em qualquer plano.
+MODULO_DA_META: dict[str, str] = {
+    "media_elefante": "leitura", "livros": "leitura",
+    "media_matific": "matematica", "atividades": "matematica",
+}
+
+
+class MetaForaDoPlano(ValueError):
+    """A meta é de uma plataforma cujo módulo a rede não contratou."""
+
+
+def _meta_no_plano(metrica: str, contratados) -> bool:
+    modulo = MODULO_DA_META.get(metrica)
+    return modulo is None or modulo in contratados
+
+
 def listar_metas(db: Session, rede_id: int) -> list[dict]:
     metas = db.execute(
         select(MetaRede).where(MetaRede.rede_id == rede_id).order_by(MetaRede.metrica)
@@ -1495,9 +1538,18 @@ def listar_metas(db: Session, rede_id: int) -> list[dict]:
 
 def definir_meta(db: Session, rede_id: int, metrica: str, alvo: float,
                  descricao: str | None = None) -> MetaRede:
-    """Upsert: UMA meta por (rede, métrica) — redefinir sobrescreve o alvo."""
+    """Upsert: UMA meta por (rede, métrica) — redefinir sobrescreve o alvo.
+
+    LEVANTA ``MetaForaDoPlano`` para a meta de uma plataforma cujo módulo a rede
+    não contratou (o cadastro da tela nem a oferece; por API direta ela era
+    gravada e o progresso saía do dado de um módulo fora do plano)."""
     if metrica not in METRICAS_META:
         raise ValueError("Métrica de meta inválida.")
+    if not _meta_no_plano(metrica, modulos.modulos_da_rede(db, rede_id)):
+        modulo = modulos.CATALOGO[MODULO_DA_META[metrica]]
+        raise MetaForaDoPlano(
+            f"A meta “{METRICAS_META[metrica]['rotulo']}” é do módulo de {modulo['nome']} "
+            f"({modulo['produto']}), que esta rede não contratou. Nada foi gravado.")
     meta = db.execute(select(MetaRede).where(
         MetaRede.rede_id == rede_id, MetaRede.metrica == metrica)).scalars().first()
     if meta is None:
@@ -1545,7 +1597,11 @@ def _meta_medida(metrica: str, cartoes: list[dict]) -> bool:
 def metas_com_progresso(db: Session, rede_id: int, dados: dict | None = None) -> list[dict]:
     """Metas cadastradas + progresso REAL: valor ATUAL da rede / alvo (limitado a
     100%) + quantas escolas COM dados já atingiram (só para métricas comparáveis
-    por escola). Sem meta cadastrada → lista vazia (a UI mostra o convite)."""
+    por escola). Sem meta cadastrada → lista vazia (a UI mostra o convite).
+
+    A meta de um módulo que a rede NÃO contratou (``MODULO_DA_META``) não sai: o
+    "atual" dela seria o dado de uma plataforma fora do plano. A linha continua
+    gravada — se o módulo voltar ao plano, a meta volta com o alvo de antes."""
     metas = db.execute(
         select(MetaRede).where(MetaRede.rede_id == rede_id).order_by(MetaRede.metrica)
     ).scalars().all()
@@ -1553,6 +1609,11 @@ def metas_com_progresso(db: Session, rede_id: int, dados: dict | None = None) ->
         return []
     if dados is None:
         dados = dashboard_rede(db, rede_id)
+    # Os módulos do MESMO painel (o ``dashboard_rede`` os traz); sem eles, os da rede.
+    contratados = set(dados.get("modulos") or modulos.modulos_da_rede(db, rede_id))
+    metas = [m for m in metas if _meta_no_plano(m.metrica, contratados)]
+    if not metas:
+        return []
     totais = dados["totais"]
     # "X de Y escolas atingiram" conta as MESMAS escolas que o ranking, a equidade
     # e o índice comparam (a marca ``comparada``): a escola em que só a Educação
