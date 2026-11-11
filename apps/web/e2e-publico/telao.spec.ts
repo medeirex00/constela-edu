@@ -458,6 +458,38 @@ test("celulares do contrato caem no modo celular do telão", () => {
   }
 });
 
+// A conta de "quantas linhas cabem" tem de valer em QUALQUER altura de TV, não só
+// nas do contrato: um erro de poucos px na reserva da linha "+ N" só aparece em
+// algumas alturas (no Mural, a reserva era de 30 px para uma linha de 20 px + vão
+// de 12 px: sobrava 2 px escondidos em 1366x715, 851, 950, 1073...). Varre as
+// alturas de 640 a 1100 px. Abaixo disso a lista mostra no mínimo 3 linhas (as 3
+// medalhas) mesmo sem caber — decisão de layout, fora desta varredura.
+test.describe("telão: o palco não esconde nada em nenhuma altura (1366 de largura)", () => {
+  test.use({ viewport: { width: 1366, height: 768 } });
+
+  for (const titulo of ["Ranking Geral", "Mural da Escola"]) {
+    test(`${titulo}: alturas de 640 a 1100 px`, async ({ page }) => {
+      await simularPainel(page);
+      await page.goto(URL_TELAO);
+      await expect(page.getByRole("heading", { level: 1 })).toBeVisible();
+      await page.evaluate(() => document.fonts.ready);
+      await page.getByRole("button", { name: `Ir para ${titulo}` }).click();
+      await expect(page.getByRole("heading", { level: 2 })).toHaveText(titulo);
+      const escondido: string[] = [];
+      for (let altura = 640; altura <= 1100; altura++) {
+        await page.setViewportSize({ width: 1366, height: altura });
+        await assentar(page);
+        const sobra = await page.evaluate(() => {
+          const palco = document.querySelector("main .painel-sem-barra") as HTMLElement;
+          return palco.scrollHeight - palco.clientHeight;
+        });
+        if (sobra > 1) escondido.push(`1366x${altura}: ${sobra} px`);
+      }
+      expect(escondido, `${titulo}: conteúdo escondido no palco`).toEqual([]);
+    });
+  }
+});
+
 test.describe("telão: foco visível no tema noite", () => {
   test.use({ viewport: { width: 1366, height: 768 } });
 

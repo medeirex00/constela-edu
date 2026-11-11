@@ -501,7 +501,7 @@ function SlideRanking({
   altura: number | null;
 }) {
   const listaRef = useRef<HTMLDivElement | null>(null);
-  // gap-2.5 = 10px; reserva ~30px para a linha "+ N alunos".
+  // gap-2.5 = 10px; reserva = vão (10px) + a linha "+ N alunos" (text-sm, 20px).
   const visiveis = useLinhasQueCabem(listaRef, altura, itens.length, 10, 30);
   if (itens.length === 0) {
     return <p className="py-16 text-center text-xl text-white/70">Ainda sem dados para exibir.</p>;
@@ -538,8 +538,10 @@ function SlideRanking({
 
 function SlideMural({ mural, altura }: { mural: DadosPainel["mural"]; altura: number | null }) {
   const listaRef = useRef<HTMLUListElement | null>(null);
-  // gap-3 = 12px; reserva ~30px para a linha "+ N novidades".
-  const visiveis = useLinhasQueCabem(listaRef, altura, mural.length, 12, 30);
+  // gap-3 = 12px; reserva = vão (12px) + a linha "+ N novidades" (text-sm, 20px).
+  // Era 30 (a conta do ranking, cujo vão é 10px): em algumas alturas a linha "+ N"
+  // ficava 2px escondida na rolagem invisível do palco.
+  const visiveis = useLinhasQueCabem(listaRef, altura, mural.length, 12, 32);
   if (mural.length === 0) {
     return <p className="py-16 text-center text-xl text-white/70">Nada no mural ainda.</p>;
   }
