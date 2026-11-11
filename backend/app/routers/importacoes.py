@@ -4065,13 +4065,15 @@ def _persistir_linhas(db: Session, escola_id: int, ano: int, usuario: Usuario,
             # NÃO cria e NÃO altera: correspondência insegura/ambígua. Os candidatos
             # entram em `vistos` para a reconciliação não marcá-los "fora da lista"
             # (a linha diz que alguém DAQUELE grupo está na lista — só não se sabe
-            # quem), e o gestor decide em Alunos › Fundir duplicatas.
+            # quem), e o gestor decide pelo caminho que o aviso do MOTIVO indica
+            # (Fundir duplicatas; na mudança de sala sem prova, a própria ficha).
             res.em_revisao += 1
             res.vistos.update(decisao.candidatos)
             nomes = ", ".join(sorted(
                 estado.alunos_por_id[i].nome for i in decisao.candidatos
                 if i in estado.alunos_por_id)) or "cadastro já existente"
-            res.avisos.append(matriculas.aviso_revisao(parsed.nome, turma.nome, nomes))
+            res.avisos.append(matriculas.aviso_revisao(parsed.nome, turma.nome, nomes,
+                                                       decisao.motivo))
             auditar("aluno.revisao_necessaria", escola_id=escola_id,
                     usuario_id=usuario.id, entidade="aluno",
                     entidade_id=decisao.aluno_id,

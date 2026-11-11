@@ -602,7 +602,30 @@ def aviso_ano_da_lista(ano_lista: int | None, origem: str | None, ano_escola: in
             f"{onde_corrigir} e envie de novo.")
 
 
-def aviso_revisao(nome_linha: str, turma: str, nomes_candidatos: str) -> str:
+def aviso_revisao(nome_linha: str, turma: str, nomes_candidatos: str,
+                  motivo: str = "") -> str:
+    """O aviso da linha que foi para REVISÃO (nada criado nem alterado nela).
+
+    ``mudanca_de_sala_sem_prova`` (nome idêntico em outra sala, ou numa ficha sem turma
+    no ano, sem RA/nascimento que provem ser a mesma criança — o caso em massa da
+    virada, com as fichas criadas pela coleta) tem o seu caminho: não há duplicata
+    nenhuma, e "Fundir duplicatas" nem mostra quem está sem turma no ano ativo. O
+    caminho que funciona é a própria ficha (a pesquisa do topo a acha; Editar dados ›
+    Turma a matricula, e o próximo envio da planilha a reconhece pelo roster da sala).
+    Os outros motivos (nomes parecidos na mesma sala, disputa entre linhas) continuam
+    em "Fundir duplicatas"."""
+    if motivo == "mudanca_de_sala_sem_prova":
+        return (f"“{nome_linha}” (turma {turma}) tem o mesmo nome de um aluno já "
+                "cadastrado em outra turma ou sem turma neste ano letivo "
+                f"({nomes_candidatos}), mas nenhum dado dos dois registros (RA ou data "
+                "de nascimento) confirma que é a mesma criança. Nada foi criado nem "
+                "alterado nesta linha. Se for a mesma criança, procure o nome na "
+                "pesquisa do topo da página, abra a ficha e, nos três pontinhos › "
+                f"Editar dados, escolha a turma {turma}; no próximo envio desta "
+                "planilha, a ficha recebe os dados da linha. Se forem crianças "
+                "diferentes, registre a data de nascimento de cada uma (na ficha, em "
+                "Editar dados, e na planilha) e envie de novo: com datas diferentes, a "
+                "linha vira um cadastro novo.")
     return (f"“{nome_linha}” (turma {turma}) parece ser o mesmo aluno de: "
             f"{nomes_candidatos} — mas a correspondência NÃO é segura. Nada foi "
             "criado nem alterado nesta linha, para não abrir uma segunda ficha da "
