@@ -325,7 +325,8 @@ alerta_global_login = LimitadorTentativas(
 # algumas idas ao banco, a ~195 ms cada) e o uso real tem poucos ao mesmo tempo; com
 # 8, uma rajada anônima ocupa no máximo 8 das 40 threads e 8 das 30 conexões de cada
 # worker, e as sessões já abertas seguem sendo atendidas.
-portao_login = PortaoDeConcorrencia(vagas=8)
+# Padrão 8 (``EDU_LOGIN_SIMULTANEOS``), lido no boot como os tetos acima.
+portao_login = PortaoDeConcorrencia(vagas=settings.EDU_LOGIN_SIMULTANEOS)
 # No máximo UM aviso de "portão do login cheio" por minuto em cada processo.
 alerta_portao_login = LimitadorTentativas(max_tentativas=1, janela_s=60)
 

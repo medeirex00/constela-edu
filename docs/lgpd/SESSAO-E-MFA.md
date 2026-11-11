@@ -84,7 +84,8 @@ foi implementado, porque as duas mudanças alteram o login de todos os usuários
   presa só durante essa instrução; (2) a instrução desiste da linha presa por outra
   transação depois de 0,5 s (`lock_timeout`) e a falha fica só na memória do processo,
   com um aviso no log (`limites.contagem_sem_trava`); (3) cada processo deixa correr no
-  máximo **8 logins ao mesmo tempo**: quem chega com os 8 ocupados recebe na hora o 429
+  máximo **8 logins ao mesmo tempo** (`EDU_LOGIN_SIMULTANEOS`, ajustável em produção sem
+  mudar o código; mínimo 1): quem chega com os 8 ocupados recebe na hora o 429
   "Muitas pessoas estão entrando ao mesmo tempo. Aguarde alguns segundos e tente
   novamente.", sem nenhuma ida ao banco (aviso no log `login.simultaneos_no_teto`, no
   máximo um por minuto). Com isso a rajada usa no máximo 8 das 40 threads e 8 das 30

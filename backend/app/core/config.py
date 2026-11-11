@@ -224,6 +224,11 @@ class Settings(BaseSettings):
     EDU_LOGIN_TETO_IP_JANELA_S: int = Field(default=300, ge=60, le=3600)
     EDU_LOGIN_TETO_GLOBAL_FALHAS: int = Field(default=400, ge=1)
     EDU_LOGIN_TETO_GLOBAL_JANELA_S: int = Field(default=300, ge=60, le=3600)
+    # Logins do Edu correndo AO MESMO TEMPO em cada processo (o portão de
+    # app/core/rate_limit.py, ``portao_login``): acima disso, 429 na hora, sem tocar no
+    # banco. Lido no boot, como os tetos acima — a produção pode ajustá-lo sem mudar o
+    # código (ver docs/lgpd/SESSAO-E-MFA.md §1.1). Teto ≥ 1 (zero barraria todo login).
+    EDU_LOGIN_SIMULTANEOS: int = Field(default=8, ge=1)
 
     # Teto do corpo da requisição, conferido ANTES da autenticação (o FastAPI lê o
     # corpo antes das dependências). Ver app/core/limite_corpo.py. Formulário

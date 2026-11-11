@@ -109,3 +109,20 @@ def test_toda_saida_do_login_devolve_a_vaga(db, conta, monkeypatch):
 
 def test_portao_padrao_tem_oito_vagas_por_processo():
     assert rate_limit.portao_login.vagas == 8
+
+
+def test_as_vagas_do_portao_vem_da_configuracao(monkeypatch):
+    """G_CARGA-1 (configuração): as vagas do portão saem de ``EDU_LOGIN_SIMULTANEOS``
+    (padrão 8), lido no boot como os ``EDU_LOGIN_TETO_*`` — a produção ajusta sem mudar
+    o código. Zero barraria todo login: recusado na leitura da configuração."""
+    import pydantic
+
+    from app.core import config
+
+    assert config.Settings.model_fields["EDU_LOGIN_SIMULTANEOS"].default == 8
+    assert rate_limit.portao_login.vagas == config.settings.EDU_LOGIN_SIMULTANEOS
+    monkeypatch.setenv("EDU_LOGIN_SIMULTANEOS", "12")
+    assert config.Settings().EDU_LOGIN_SIMULTANEOS == 12
+    monkeypatch.setenv("EDU_LOGIN_SIMULTANEOS", "0")
+    with pytest.raises(pydantic.ValidationError):
+        config.Settings()
