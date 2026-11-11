@@ -2364,13 +2364,19 @@ class _AcervoEscola:
         """O título do livro é um dos homônimos do catálogo oficial?"""
         return dificuldade_livro.normalizar_titulo(livro.titulo) in self.ambiguos
 
-    def leitura_homonima_provada(self, livro: Livro, quando, tempo, existentes):
+    def leitura_homonima_provada(self, livro: Livro, quando, tempo, existentes, *,
+                                 aceitar_tempo_ausente: bool = False):
         """A leitura que a coleta traz para ``livro`` JÁ está gravada na OUTRA
         linha do mesmo título homônimo? É a regra PROVADA do saneamento
         (``livros_homonimos_saneamento.recusa_do_par``): uma linha ``legado`` e
         uma ``fonte``, mesmo segundo, mesmo tempo de leitura. Sem esta conferência
         a coleta recriava o par que o saneamento remove — a deduplicação de
         releitura compara só o ``livro_id``.
+
+        ``aceitar_tempo_ausente``: o tempo que NÃO VEIO num dos lados (ou nos dois)
+        não impede a prova — o mesmo segundo basta para não gravar de novo (o par
+        sem tempo é INDETERMINADO para o saneamento, que nunca o remove). Tempos
+        diferentes continuam sendo duas leituras.
 
         ``existentes``: ``(livro, leitura_id, data, tempo)`` das leituras do aluno
         em livros homônimos, lidas antes do lote. Devolve a que forma o par, ou
@@ -2389,7 +2395,8 @@ class _AcervoEscola:
             legado, fonte = ((gravada, nova) if outro.origem_nivel == "legado"
                              else (nova, gravada))
             if not livros_homonimos_saneamento.recusa_do_par(
-                    chave, legado, fonte, ambiguos=self.ambiguos):
+                    chave, legado, fonte, ambiguos=self.ambiguos,
+                    aceitar_tempo_ausente=aceitar_tempo_ausente):
                 return existente
         return None
 
@@ -2587,11 +2594,15 @@ class _AcervoEscola:
                       usuario_id=importacao.usuario_id, entidade="importacao",
                       entidade_id=importacao.id,
                       detalhes={"qtd": len(self.homonimas_evitadas),
+                                "qtd_tempo_ausente": sum(
+                                    1 for i in self.homonimas_evitadas
+                                    if i.get("tempo_ausente")),
                                 "regra": "mesmo aluno, mesmo título homônimo do "
                                          "catálogo, uma linha 'legado' e uma "
                                          "'fonte', instante idêntico ao segundo e "
-                                         "mesmo tempo de leitura: a leitura já "
-                                         "constava e não foi gravada de novo",
+                                         "mesmo tempo de leitura (ou o tempo ausente "
+                                         "num dos lados: tempo_ausente): a leitura "
+                                         "já constava e não foi gravada de novo",
                                 "itens": self.homonimas_evitadas[:500]})
         if self.vinculados:
             registrar(db, "livro.vinculado_catalogo", escola_id=self.escola_id,
@@ -2783,20 +2794,26 @@ def _importar_elefante_leituras(db, escola_id, importacao, aluno, linhas,
             # A MESMA leitura já está na outra linha do título homônimo (regra
             # PROVADA do saneamento): já constava. Vale para qualquer linha do
             # relatório — a releitura listada antes da leitura provada também sai.
+            # O tempo que NÃO VEIO (a plataforma não o mandou) não impede a prova: o
+            # mesmo segundo basta para não gravar de novo. O tempo ILEGÍVEL não é
+            # tempo ausente: sem prova, a linha segue o caminho de sempre.
+            tempo_legivel = True
             try:
                 tempo = _num(tempo_livro, int) if tempo_livro is not None else None
             except HTTPException:
-                tempo = None    # sem tempo legível não há prova: segue o caminho de sempre
-            existente = catalogo.leitura_homonima_provada(livro, quando, tempo,
-                                                          homonimas)
+                tempo, tempo_legivel = None, False
+            existente = catalogo.leitura_homonima_provada(
+                livro, quando, tempo, homonimas, aceitar_tempo_ausente=tempo_legivel)
             if existente is not None:
                 evitados.add(id(livro))
                 vistos.add(id(livro))
                 novas.pop(id(livro), None)
-                outro, leitura_id, _, _ = existente
+                outro, leitura_id, _, tempo_existente = existente
+                tempo_ausente = tempo is None or tempo_existente is None
                 catalogo.homonimas_evitadas.append({
                     "aluno_id": aluno.id, "titulo": titulo, "data": quando.isoformat(),
-                    "tempo_min": tempo, "leitura_existente_id": leitura_id,
+                    "tempo_min": tempo, "tempo_ausente": tempo_ausente,
+                    "leitura_existente_id": leitura_id,
                     "livro_existente_id": outro.id,
                     "livro_existente_origem": outro.origem_nivel,
                     "livro_existente_elefante_id": outro.elefante_id,
@@ -2805,8 +2822,11 @@ def _importar_elefante_leituras(db, escola_id, importacao, aluno, linhas,
                     "livro_da_coleta_elefante_id": livro.elefante_id})
                 avisos.append(
                     f"“{titulo}” já constava para {aluno.nome} no outro livro com o "
-                    "mesmo título (mesmo horário e mesmo tempo de leitura) — não foi "
-                    "contado de novo. Registrado na auditoria.")
+                    + ("mesmo título (mesmo horário; o tempo de leitura não veio num "
+                       "dos registros) — não foi contado de novo. Registrado na "
+                       "auditoria." if tempo_ausente else
+                       "mesmo título (mesmo horário e mesmo tempo de leitura) — não foi "
+                       "contado de novo. Registrado na auditoria."))
                 continue
         # Releitura no MESMO relatório (livro repetido): dedup em memória —
         # senão a UniqueConstraint derrubaria a importação (autoflush=False).

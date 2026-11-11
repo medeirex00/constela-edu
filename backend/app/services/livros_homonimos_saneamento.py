@@ -265,7 +265,8 @@ class LadoDoPar:
 
 
 def recusa_do_par(titulo_normalizado: str, legado: LadoDoPar, fonte: LadoDoPar,
-                  *, ambiguos: dict[str, dict[int, str]] | None = None) -> str:
+                  *, ambiguos: dict[str, dict[int, str]] | None = None,
+                  aceitar_tempo_ausente: bool = False) -> str:
     """A regra PROVADA como função pura: "" quando ``legado`` e ``fonte`` são a
     MESMA leitura gravada nas duas linhas do título homônimo (mesmo segundo,
     mesmo tempo, uma linha ``legado`` e uma ``fonte``); senão, o motivo.
@@ -273,11 +274,25 @@ def recusa_do_par(titulo_normalizado: str, legado: LadoDoPar, fonte: LadoDoPar,
     É a regra que ``validar`` aplica a cada par do saneamento — e a que a
     importação do Elefante usa para não gravar de novo uma leitura que já está
     na outra linha do título (o que recriaria o par que este serviço remove).
+
+    ``aceitar_tempo_ausente`` — SÓ para a importação, onde a ação é NÃO GRAVAR e
+    nada se apaga: com o tempo AUSENTE num dos lados (ou nos dois), o mesmo segundo
+    basta. A coleta grava ``tempo_livro_min=None`` quando a plataforma não manda o
+    tempo, e o par sem tempo é INDETERMINADO para o saneamento — que nunca o remove:
+    gravado de novo, ele ficava para sempre. Tempos DIFERENTES continuam sendo duas
+    leituras, e todas as outras condições (legado + fonte, título homônimo do
+    catálogo, ids oficiais, livros distintos) valem igual. O saneamento (remoção)
+    não muda: ``validar`` não passa este parâmetro.
     """
     ambiguos = ambiguos if ambiguos is not None else titulos_auditados()
     delta_s, delta_t = _deltas(legado.data, legado.tempo, fonte.data, fonte.tempo)
+    classificacao = _classificar(delta_s, delta_t)
+    if aceitar_tempo_ausente and delta_s == 0 and delta_t is None:
+        # Mesmo segundo e o tempo de um dos lados (ou dos dois) não veio: para não
+        # gravar de novo, é a mesma leitura (as demais condições seguem abaixo).
+        classificacao, delta_t = PROVADA, 0
     return _recusa_da_regra(
-        classificacao=_classificar(delta_s, delta_t), delta_segundos=delta_s,
+        classificacao=classificacao, delta_segundos=delta_s,
         delta_tempo=delta_t, titulo_normalizado=titulo_normalizado,
         legado_origem=legado.origem, fonte_origem=fonte.origem,
         legado_elefante_id=legado.elefante_id, fonte_elefante_id=fonte.elefante_id,

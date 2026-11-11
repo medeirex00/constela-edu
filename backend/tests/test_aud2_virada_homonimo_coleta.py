@@ -197,8 +197,10 @@ def test_coleta_repetida_continua_sem_duplicar(db, escola_completa, cliente):
     (INSTANTE + timedelta(hours=1), 5),     # outro instante: leu as duas obras
     (INSTANTE + timedelta(seconds=30), 5),  # "provável" não é provado
     (INSTANTE, 6),                          # mesmo segundo, tempo diferente
-    (INSTANTE, None),                       # sem tempo: não há como provar
-], ids=["outra_hora", "30s", "outro_tempo", "sem_tempo"])
+    # Sem tempo E em outro instante: nada prova a mesma leitura. (O caso "sem tempo no
+    # MESMO segundo" deixou de estar aqui: ver REV2-VIRADA-3, abaixo.)
+    (INSTANTE + timedelta(hours=1), None),
+], ids=["outra_hora", "30s", "outro_tempo", "sem_tempo_outra_hora"])
 def test_sem_a_prova_as_duas_leituras_ficam(db, escola_completa, cliente,
                                             quando, tempo):
     escola, ana, _ = _cena(db, escola_completa)
@@ -207,6 +209,106 @@ def test_sem_a_prova_as_duas_leituras_ficam(db, escola_completa, cliente,
 
     assert len(_leituras_de(db, ana.id)) == 2
     assert _avisos_homonimos(res) == []
+
+
+# ------------------------------------- REV2-VIRADA-3: o tempo que não veio
+# A API do Elefante grava tempo_livro_min=None quando totalTimeSpent falta ou é 0, e há
+# execuções da sincronização que perdem o tempo. Com o mesmo aluno, o mesmo título
+# homônimo, legado + fonte e o MESMO instante ao segundo, a falta do tempo num dos lados
+# (ou nos dois) fazia a leitura ser gravada de novo — e o saneamento classifica o par
+# como INDETERMINADO e nunca o remove: a duplicata ficava para sempre. Na IMPORTAÇÃO
+# (que só deixa de gravar; nada se apaga), o mesmo segundo basta quando o tempo falta.
+
+def _cena_com_tempo(db, escola_completa, tempo_legado):
+    escola = escola_completa["escola"]
+    ana = escola_completa["alunos"][0]
+    titulo, (eid_l, nivel_l), _ = CADE
+    legado = _livro(db, escola.id, titulo, nivel_l, "legado", eid_l)
+    db.add(Leitura(escola_id=escola.id, aluno_id=ana.id, livro_id=legado.id,
+                   data=INSTANTE, tempo_leitura_min=tempo_legado,
+                   nivel_codigo=legado.nivel_codigo))
+    db.add(EventoAluno(
+        escola_id=escola.id, aluno_id=ana.id, plataforma="elefante",
+        tipo_evento="leitura", ocorrido_em=INSTANTE, conteudo_titulo=legado.titulo,
+        livro_id=legado.id,
+        tempo_segundos=tempo_legado * 60 if tempo_legado is not None else None,
+        nivel_codigo=legado.nivel_codigo,
+        chave_natural=chave_evento("elefante", "leitura", ana.id, legado.titulo,
+                                   INSTANTE)))
+    db.commit()
+    return escola, ana, legado
+
+
+@pytest.mark.parametrize("tempo_legado,tempo_coleta", [
+    (None, None), (5, None), (None, 5)],
+    ids=["sem_tempo_nos_dois", "coleta_sem_tempo", "legado_sem_tempo"])
+def test_mesmo_segundo_sem_tempo_ja_constava(db, escola_completa, cliente,
+                                             tempo_legado, tempo_coleta):
+    """A sonda do revisor: a mesma leitura (mesmo segundo) não é gravada de novo no
+    homônimo quando o tempo falta num dos lados ou nos dois."""
+    escola, ana, legado = _cena_com_tempo(db, escola_completa, tempo_legado)
+    antes = _leituras_de(db, ana.id)
+
+    res = _coleta(cliente, escola.id, ana, _linha("Cadê?", "B", INSTANTE, tempo_coleta))
+
+    assert _leituras_de(db, ana.id) == antes, \
+        "mesma leitura (mesmo segundo) gravada de novo no homônimo"
+    avisos = _avisos_homonimos(res)
+    assert len(avisos) == 1, res.get("avisos")
+    assert "mesmo horário" in avisos[0] and "tempo de leitura não veio" in avisos[0]
+    # A auditoria marca o par evitado SEM o tempo.
+    logs = list(db.execute(select(LogAuditoria).where(
+        LogAuditoria.acao == ACAO, LogAuditoria.escola_id == escola.id)).scalars())
+    assert len(logs) == 1
+    item = logs[0].detalhes["itens"][0]
+    assert item["tempo_ausente"] is True
+    assert item["livro_existente_id"] == legado.id
+    assert logs[0].detalhes["qtd_tempo_ausente"] == 1
+    # O saneamento continua sem nada a remover.
+    assert san.dry_run(db, [escola.id], MOTIVO)["total_remocoes"] == 0
+
+
+def test_par_provado_com_tempo_nao_leva_a_marca_de_tempo_ausente(
+        db, escola_completa, cliente):
+    escola, ana, _ = _cena(db, escola_completa)
+    _coleta(cliente, escola.id, ana, _linha("Cadê?", "B", INSTANTE, 5))
+    log = db.execute(select(LogAuditoria).where(
+        LogAuditoria.acao == ACAO, LogAuditoria.escola_id == escola.id)).scalar_one()
+    assert log.detalhes["itens"][0]["tempo_ausente"] is False
+    assert log.detalhes["qtd_tempo_ausente"] == 0
+
+
+def test_tempo_ilegivel_nao_e_tempo_ausente(db, escola_completa, cliente):
+    """Tempo ILEGÍVEL não é tempo que faltou: não serve de prova (a linha segue o
+    caminho de sempre, que recusa o número ilegível)."""
+    escola, ana, _ = _cena_com_tempo(db, escola_completa, 5)
+    r = cliente.post(f"{API}/escolas/{escola.id}/importacoes/confirmar", json={
+        "plataforma": "elefante", "formato": "leituras", "tipo": "texto",
+        "linhas": [{"nome": ana.nome, "aluno_id": ana.id,
+                    "dados": _linha("Cadê?", "B", INSTANTE, "cinco")}]})
+    assert "já constava" not in r.text
+
+
+def test_regra_pura_com_tempo_ausente_so_quando_pedida():
+    ambiguos = san.titulos_auditados()
+    legado = san.LadoDoPar(1, "legado", 4799, INSTANTE, None)
+    fonte = san.LadoDoPar(2, "fonte", 2356, INSTANTE, 5)
+    # O saneamento (remoção) não muda: sem o tempo, INDETERMINADO.
+    assert san.INDETERMINADO in san.recusa_do_par("cade?", legado, fonte,
+                                                  ambiguos=ambiguos)
+    # A importação (não gravar) aceita o tempo ausente no mesmo segundo...
+    assert san.recusa_do_par("cade?", legado, fonte, ambiguos=ambiguos,
+                             aceitar_tempo_ausente=True) == ""
+    # ...mas não tempos diferentes, nem outro instante, nem fora do padrão auditado.
+    assert san.recusa_do_par("cade?", san.LadoDoPar(1, "legado", 4799, INSTANTE, 6),
+                             fonte, ambiguos=ambiguos, aceitar_tempo_ausente=True)
+    assert san.recusa_do_par(
+        "cade?", legado, san.LadoDoPar(2, "fonte", 2356, INSTANTE + timedelta(seconds=1),
+                                       None),
+        ambiguos=ambiguos, aceitar_tempo_ausente=True)
+    assert "origem" in san.recusa_do_par(
+        "cade?", san.LadoDoPar(1, "fonte", 4799, INSTANTE, None), fonte,
+        ambiguos=ambiguos, aceitar_tempo_ausente=True)
 
 
 def test_duas_linhas_fonte_nao_sao_o_par_auditado(db, escola_completa, cliente):
