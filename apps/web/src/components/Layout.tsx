@@ -69,7 +69,7 @@ import { useHeartbeat } from "../hooks/useHeartbeat";
 import { useOnboarding } from "../hooks/useOnboarding";
 import { usePerfil } from "../hooks/usePerfil";
 import { useAtalhosGlobais } from "../lib/atalhos";
-import { bimestreEmCurso } from "../lib/calendarioBimestres";
+import { bimestreEmCurso, useCalendarioBimestres, type CalendarioDoAno } from "../lib/calendarioBimestres";
 import { dataHora } from "../lib/formato";
 import { normalizar } from "../lib/nomes";
 import { podeAbrirRota } from "../lib/rotasGuardadas";
@@ -710,7 +710,7 @@ function usePrimeiroAcesso(): boolean {
 }
 
 /** Selo do item "Premiações": dias até o FIM do bimestre em curso, pelo calendário
- *  oficial (lib/calendarioBimestres, espelho do backend). Não existe data de
+ *  oficial (o do backend, via useCalendarioBimestres). Não existe data de
  *  premiação no sistema — o selo nunca diz "dias para a premiação". Fora do
  *  calendário (férias, ano sem calendário) não há selo. */
 interface SeloMenu {
@@ -720,8 +720,8 @@ interface SeloMenu {
   completo: string;
 }
 
-function seloDoBimestre(hoje: Date): SeloMenu | null {
-  const bimestre = bimestreEmCurso(hoje);
+function seloDoBimestre(hoje: Date, calendario: CalendarioDoAno | null): SeloMenu | null {
+  const bimestre = bimestreEmCurso(hoje, calendario);
   if (!bimestre) return null;
   const dias = bimestre.diasParaOFim;
   if (dias === 0) return { curto: "hoje", completo: `O ${bimestre.numero}º bimestre termina hoje` };
@@ -1268,7 +1268,9 @@ function Navegacao({ aoNavegar }: { aoNavegar?: () => void }) {
   const todos = grupos.flatMap((g) => g.itens);
   const ativo = contextoDaRota(grupos, pathname, search)?.grupo.chave ?? null;
   const ativoDe = (item: ItemNav) => itemAtivo(item, pathname, search, todos);
-  const selo = seloDoBimestre(new Date());
+  const { escolaId } = useApp();
+  const calendario = useCalendarioBimestres(escolaId);
+  const selo = seloDoBimestre(new Date(), calendario);
   // A Navegacao existe duas vezes (barra fixa e gaveta do celular): ids próprios.
   const idBase = useId();
   const refNav = useRef<HTMLElement | null>(null);
@@ -1512,7 +1514,9 @@ function NavegacaoRail() {
   const { modulos: modulosRail } = useModulos();
   const { pathname, search } = useLocation();
   const grupos = sidebarDoPerfil(perfil, modulosRail);
-  const selo = seloDoBimestre(new Date());
+  const { escolaId } = useApp();
+  const calendario = useCalendarioBimestres(escolaId);
+  const selo = seloDoBimestre(new Date(), calendario);
   // Primeiro acesso: o MESMO recorte do menu aberto — só "Comece aqui" (e, para o Admin
   // Global, os cadastros que não dependem da escola). Antes a barra recolhida ignorava o
   // primeiro acesso e mostrava o menu inteiro de uma escola ainda vazia.

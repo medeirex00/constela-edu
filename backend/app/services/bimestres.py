@@ -139,6 +139,22 @@ def ano_com_calendario(ano: int) -> bool:
     return calendario(ano) is not None
 
 
+def calendario_publico(ano: int) -> list[dict[str, int | str]] | None:
+    """O calendário do ano como a TELA o lê: ``[{numero, inicio, fim}]`` (datas
+    AAAA-MM-DD, inclusivas) ou ``None`` sem calendário oficial.
+
+    É a fonte da web (rota ``/configuracoes/calendario-bimestres``), que antes
+    tinha a própria cópia só com 2026: de 2027 em diante o certificado abria no
+    "1º bimestre" dizendo "pelo calendário oficial", mesmo com o ano cadastrado
+    em ``BIMESTRES_CALENDARIO``. Sem calendário, ``None`` — NUNCA o mapa por mês
+    de :func:`por_mes_legado`, que a tela não pode apresentar como oficial."""
+    cal = calendario(ano)
+    if cal is None:
+        return None
+    return [{"numero": numero, "inicio": cal[numero][0].isoformat(),
+             "fim": cal[numero][1].isoformat()} for numero in BIMESTRES]
+
+
 def aviso_sem_calendario(ano: int) -> str:
     """O texto para quem EXIBE datas de bimestre de um ano sem calendário."""
     return (f"Calendário oficial de {ano} não cadastrado: as datas do bimestre são "

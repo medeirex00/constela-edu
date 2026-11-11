@@ -44,7 +44,7 @@ from app.schemas import (
     ReferenciasOut,
     ReferenciasUpdate,
 )
-from app.services import (dificuldade_livro, elegibilidade, matific_destaque,
+from app.services import (bimestres, dificuldade_livro, elegibilidade, matific_destaque,
                           periodos, politica_sync, provisionamento, scoring)
 from app.services import premiacoes as svc_premiacoes
 from app.services.audit import registrar
@@ -133,6 +133,26 @@ def definir_perfil_scoring(
     db.commit()
     scoring.recalcular_escola(db, escola_id)
     return PerfilScoringOut(modo=modo)
+
+
+# --- Calendário oficial dos bimestres (somente leitura) -----------------------
+
+@router.get("/calendario-bimestres")
+def calendario_de_bimestres(
+    ano: int | None = Query(default=None, ge=2000, le=2100),
+    escola_id: int = Depends(escola_autorizada),
+):
+    """Os quatro bimestres oficiais do ano (padrão: o ano de hoje em Brasília),
+    da MESMA fonte que o backend usa para "este bimestre" e para o certificado
+    (``services/bimestres``: a constante de 2026 e ``BIMESTRES_CALENDARIO`` para
+    os anos novos). ``bimestres: null`` = o ano não tem calendário cadastrado.
+
+    É daqui que a web tira o bimestre que o certificado abre marcado, o selo
+    "Fim do bimestre" e o chip das Premiações — antes ela só conhecia 2026.
+    Leitura aberta a quem lê a escola (o professor também vê o menu e o
+    Ranking): são só datas do calendário da rede."""
+    ano = ano or hoje_br().year
+    return {"ano": ano, "bimestres": bimestres.calendario_publico(ano)}
 
 
 # --- Dificuldade por LIVRO (regra GLOBAL, somente leitura) ---------------------

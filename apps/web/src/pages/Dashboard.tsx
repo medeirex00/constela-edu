@@ -89,7 +89,7 @@ import { useApp } from "../context/AppContext";
 import { useApi, type ResultadoUseApi } from "../hooks/useApi";
 import { useModulos } from "../hooks/useModulos";
 import { usePerfil } from "../hooks/usePerfil";
-import { bimestreEmCurso } from "../lib/calendarioBimestres";
+import { bimestreEmCurso, useCalendarioBimestres } from "../lib/calendarioBimestres";
 import { dataHora, nota, numero, tempoLeitura } from "../lib/formato";
 import type { ModeloCertificado } from "../lib/tiposCertificados";
 import type {
@@ -876,7 +876,10 @@ function CartaoPremiacao({ escolaId }: { escolaId: number }) {
   const podio = (categoria?.podio ?? []).slice(0, 3);
   const indiceOculto = podio.some((item) => item.valor == null);
 
-  const bimestre = bimestreEmCurso(new Date());
+  // Calendário oficial do backend: em 2027 (fora da cópia de 2026 da web) a contagem
+  // vem do ano cadastrado lá, em vez de sumir.
+  const calendario = useCalendarioBimestres(escolaId);
+  const bimestre = bimestreEmCurso(new Date(), calendario);
   const contagem = bimestre == null
     ? null
     : bimestre.diasParaOFim === 0

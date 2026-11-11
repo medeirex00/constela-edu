@@ -97,7 +97,7 @@ import { useApp } from "../context/AppContext";
 import { useApi } from "../hooks/useApi";
 import { useModulos } from "../hooks/useModulos";
 import { usePerfil } from "../hooks/usePerfil";
-import { bimestreEmCurso } from "../lib/calendarioBimestres";
+import { bimestreEmCurso, useCalendarioBimestres } from "../lib/calendarioBimestres";
 import { nota as fmtNota, numero, tempoLeitura } from "../lib/formato";
 import { bimestreDoPeriodo } from "../lib/tiposCertificados";
 import type { AlunoParaCertificado, ModeloCertificado } from "../lib/tiposCertificados";
@@ -886,8 +886,9 @@ export default function Premiacoes() {
   const avisoJanela = dados ? janelaDivergente(dados) : null;
 
   // Chip do cabeçalho: só quando o período escolhido É o bimestre em curso
-  // ("Este bimestre" ou o número dele), pelo calendário oficial.
-  const bimestre = bimestreEmCurso(new Date());
+  // ("Este bimestre" ou o número dele), pelo calendário oficial (o do backend).
+  const calendario = useCalendarioBimestres(escolaId);
+  const bimestre = bimestreEmCurso(new Date(), calendario);
   const ehBimestreEmCurso = bimestre != null
     && (periodo.preset === "bimestre" || periodo.preset === `bimestre_${bimestre.numero}`);
 
@@ -1096,7 +1097,7 @@ export default function Premiacoes() {
         contexto={certificados?.contexto ?? ""}
         // Período de um bimestre (ex.: "3º bimestre" já fechado): o seletor do bimestre
         // impresso abre nele, não no bimestre de hoje.
-        bimestreInicial={bimestreDoPeriodo(periodo.preset)}
+        bimestreInicial={bimestreDoPeriodo(periodo.preset, new Date(), calendario)}
         aberto={certificados != null}
         aoFechar={() => setCertificados(null)}
       />

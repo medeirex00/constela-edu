@@ -23,8 +23,10 @@ describe("bimestre que o seletor abre marcado", () => {
     expect(bimestreDeHoje(new Date(2026, 9, 1))).toBe(3);
   });
 
-  it("não quebra em ano sem calendário cadastrado", () => {
-    expect([1, 2, 3, 4]).toContain(bimestreDeHoje(new Date(2027, 5, 10)));
+  it("ano sem calendário cadastrado não inventa bimestre (a tela pede a escolha)", () => {
+    // Antes devolvia 1 — e a tela mandava esse 1 ao backend como se fosse a escolha
+    // de alguém (auditoria PERIODOS-7/RELATORIOS-6; ver AudCalendarioBimestres.test).
+    expect(bimestreDeHoje(new Date(2027, 5, 10))).toBeNull();
   });
 });
 

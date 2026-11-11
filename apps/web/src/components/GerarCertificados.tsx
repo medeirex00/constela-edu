@@ -39,7 +39,7 @@ import { useModulos } from "../hooks/useModulos";
 import { useMutation } from "../hooks/useMutation";
 import { api, apiDownloadPost } from "../lib/api";
 import type { ApiError } from "../lib/api";
-import { bimestreDeHoje } from "../lib/calendarioBimestres";
+import { bimestreDeHoje, semCalendarioOficial, useCalendarioBimestres } from "../lib/calendarioBimestres";
 import { MAX_CERTIFICADOS_LOTE } from "../lib/tiposCertificados";
 import type {
   AlunoParaCertificado,
@@ -60,7 +60,8 @@ export interface GerarCertificadosProps {
   /** De onde vem a lista, ex.: "Ranking · Matemática · 4º bimestre". */
   contexto: string;
   /** Bimestre (1–4) da lista, quando o período da tela é um bimestre (ver
-   *  `bimestreDoPeriodo`). Sem ele, o seletor abre no bimestre de hoje. */
+   *  `bimestreDoPeriodo`). Sem ele, o seletor abre no bimestre de hoje pelo calendário
+   *  oficial (do backend) — ou sem número, pedindo a escolha, se o ano não tem calendário. */
   bimestreInicial?: number;
   aberto: boolean;
   aoFechar: () => void;
@@ -167,7 +168,15 @@ function CorpoGerarCertificados({
   // hoje — antes, em 31/10 o 3º saía impresso como 4º se ninguém mexesse no seletor.
   const doPeriodo = bimestreInicial != null && Number.isInteger(bimestreInicial)
     && bimestreInicial >= 1 && bimestreInicial <= 4;
-  const [bimestre, setBimestre] = useState(String(doPeriodo ? bimestreInicial : bimestreDeHoje(new Date())));
+  // Sem lista de um bimestre, abre no de hoje pelo calendário OFICIAL, que vem do
+  // backend. Ano sem calendário conhecido não tem "de hoje": o seletor abre vazio e a
+  // pessoa escolhe — antes abria no 1º (de 2027 em diante, o ano todo) e esse número ia
+  // impresso no certificado de quem não conferiu.
+  const calendario = useCalendarioBimestres(escolaId);
+  const hoje = new Date();
+  const sugerido = doPeriodo ? bimestreInicial : bimestreDeHoje(hoje, calendario);
+  const [bimestreEscolhido, setBimestre] = useState<string | null>(null);
+  const bimestre = bimestreEscolhido ?? (sugerido != null ? String(sugerido) : "");
   const [previa, setPrevia] = useState<{ chave: string; itens: ItemPreviaCertificado[] } | null>(null);
   const [sucesso, setSucesso] = useState<{ chave: string; quantos: number } | null>(null);
   const [erro, setErro] = useState<string | null>(null);
@@ -176,6 +185,8 @@ function CorpoGerarCertificados({
   // efeito: se a sessão ainda está carregando, useModulos assume os dois ligados).
   const disponivel = (m: ModeloCertificado) => m === null || (m === "elefante" ? leitura : matematica);
   const modelo: ModeloCertificado = disponivel(modeloEscolhido) ? modeloEscolhido : null;
+  // A arte da plataforma imprime o bimestre: sem ele escolhido, não há o que gerar.
+  const faltaBimestre = modelo !== null && bimestre === "";
   const chavesModelo: ChaveModelo[] = [
     ...(leitura ? (["elefante"] as const) : []),
     ...(matematica ? (["matific"] as const) : []),
@@ -260,7 +271,7 @@ function CorpoGerarCertificados({
   }
 
   async function aoGerar() {
-    if (!escolaId || aptos.length === 0) return;
+    if (!escolaId || aptos.length === 0 || faltaBimestre) return;
     setErro(null);
     setSucesso(null);
     const chave = chavePedido;
@@ -275,7 +286,7 @@ function CorpoGerarCertificados({
   }
 
   const podeVerificar = Boolean(escolaId) && idsLote.length > 0 && !trabalhando;
-  const podeGerar = Boolean(escolaId) && aptos.length > 0 && !trabalhando;
+  const podeGerar = Boolean(escolaId) && aptos.length > 0 && !trabalhando && !faltaBimestre;
   const rotuloGerar = gerar.enviando
     ? "Gerando PDF…"
     : previaAtual
@@ -401,6 +412,11 @@ function CorpoGerarCertificados({
                 disabled={modelo === null || trabalhando}
                 aria-describedby={ids.dicaBimestre}
               >
+                {bimestre === "" && (
+                  <option value="" disabled>
+                    Escolha o bimestre
+                  </option>
+                )}
                 {[1, 2, 3, 4].map((b) => (
                   <option key={b} value={b}>
                     {b}º bimestre
@@ -413,7 +429,11 @@ function CorpoGerarCertificados({
                 ? "O certificado Geral não imprime bimestre."
                 : doPeriodo
                   ? "Abre no bimestre do período desta lista; vale o que você escolher."
-                  : "Abre no bimestre de hoje pelo calendário oficial; vale o que você escolher."}
+                  : sugerido != null
+                    ? "Abre no bimestre de hoje pelo calendário oficial; vale o que você escolher."
+                    : semCalendarioOficial(hoje, calendario)
+                      ? `O calendário oficial de ${hoje.getFullYear()} não está cadastrado no sistema: escolha o bimestre que o certificado vai afirmar.`
+                      : "Escolha o bimestre que o certificado vai afirmar."}
             </p>
           </div>
 
