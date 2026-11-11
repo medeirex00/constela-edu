@@ -302,8 +302,10 @@ export default function BibliotecaConquistas() {
         <MolduraPilula icone={Library}>
           <select aria-label="Filtrar por plataforma" className={estiloSelectPilula} value={plataforma} onChange={(e) => setPlataforma(e.target.value)}>
             <option value="">Todas as plataformas</option>
-            <option value="elefante">Elefante Letrado</option>
-            <option value="matific">Matific</option>
+            {/* Módulo fora do plano da rede não aparece nem como filtro (o servidor
+                já não manda as conquistas dele). */}
+            {tem("leitura") && <option value="elefante">Elefante Letrado</option>}
+            {tem("matematica") && <option value="matific">Matific</option>}
             <option value="geral">Geral</option>
           </select>
         </MolduraPilula>

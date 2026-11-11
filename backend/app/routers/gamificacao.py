@@ -10,7 +10,7 @@ from app.core.database import get_db
 from app.core.deps import escola_autorizada, exigir_papeis, get_usuario_atual
 from app.models import Aluno, Configuracao, Escola, Usuario
 from app.services import gamificacao as svc
-from app.services import elegibilidade, permissoes
+from app.services import elegibilidade, modulos, permissoes
 from app.services.audit import registrar
 
 router = APIRouter(prefix="/escolas/{escola_id}/gamificacao", tags=["Gamificação"])
@@ -143,6 +143,10 @@ def obter_definicoes(
     db: Session = Depends(get_db),
     usuario: Usuario = Depends(exigir_papeis("admin", "coordenador")),
 ):
+    """A lista INTEIRA (o PUT grava a lista que volta: esconder aqui apagaria as
+    conquistas de um módulo desligado, que voltam se a rede o religar) e as
+    plataformas fora do plano da rede, para a tela não oferecê-las."""
+    fora = svc.plataformas_fora_do_plano(db, db.get(Escola, escola_id))
     return {
         "conquistas": svc.listar_conquistas(db, escola_id, incluir_inativas=True),
         "indicadores": {
@@ -150,6 +154,7 @@ def obter_definicoes(
                     "unidade": info["unidade"]}
             for chave, info in svc.INDICADORES.items()
         },
+        "plataformas_fora_do_plano": sorted(fora),
         "raridades": svc.NOMES_RARIDADE,
         "xp_sugerido": svc.XP_POR_RARIDADE,
     }
@@ -173,6 +178,26 @@ def salvar_definicoes(
                 status.HTTP_400_BAD_REQUEST,
                 f"Indicador desconhecido: {item.indicador!r}. Válidos: "
                 f"{', '.join(svc.INDICADORES)}.")
+
+    # CONTRATO: não dá para criar (nem mudar para) uma conquista de módulo fora do
+    # plano. As que já estavam gravadas, intactas, voltam no PUT e seguem
+    # guardadas (a tela as recebe do GET e as devolve sem mostrar).
+    fora = svc.plataformas_fora_do_plano(db, db.get(Escola, escola_id))
+    if fora:
+        gravadas = {c["codigo"]: (c["indicador"], c["plataforma"])
+                    for c in svc.listar_conquistas(db, escola_id, incluir_inativas=True)}
+        for item in dados.conquistas:
+            plataforma = item.plataforma or svc.INDICADORES[item.indicador]["plataforma"]
+            dependencias = svc.plataforma_da_conquista(
+                {"indicador": item.indicador, "plataforma": plataforma})
+            intacta = gravadas.get(item.codigo) == (item.indicador, plataforma)
+            if dependencias & fora and not intacta:
+                modulo = modulos.CATALOGO[modulos.PLATAFORMA_MODULO[
+                    sorted(dependencias & fora)[0]]]["nome"]
+                raise HTTPException(
+                    status.HTTP_400_BAD_REQUEST,
+                    f"“{item.nome.strip()}” usa um critério de {modulo}, que não faz "
+                    "parte do plano desta rede.")
 
     lista: list[dict] = []
     codigos: set[str] = set()
