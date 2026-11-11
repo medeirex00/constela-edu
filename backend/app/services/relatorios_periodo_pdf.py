@@ -192,6 +192,10 @@ def _quem(dados: dict) -> str:
             return str(turmas[0].get("turma") or "")
         if linhas:
             return str(linhas[0].get("turma") or "")
+        # Turma sem aluno ativo: o nome vem do banco (``gerar`` o põe no escopo); o id
+        # fica só para o resultado de antes do campo.
+        if escopo_d.get("turma_nome"):
+            return str(escopo_d["turma_nome"])
         return str(escopo_d["turma_id"]) if escopo_d.get("turma_id") else ""
     return ""
 

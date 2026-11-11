@@ -1129,6 +1129,16 @@ def gerar(db: Session, escola_id: int, *, preset: str,
                      aluno_id=aluno_id if escopo == "aluno" else None,
                      turma_ids=turma_ids)
 
+    # O NOME da turma do recorte, do banco: com a coorte vazia (turma nova, ou com todos
+    # transferidos) não há linha de resultado de onde tirá-lo, e o PDF — que circula
+    # sozinho — dizia só o id ("Turma: 2"). Nome de turma não é dado de criança. Só de
+    # turma desta escola: o pedido não empresta nome de turma alheia ao papel.
+    turma_nome = None
+    if escopo == "turma":
+        turma = db.get(Turma, turma_id)
+        if turma is not None and turma.escola_id == escola_id:
+            turma_nome = turma.nome
+
     saida: dict = {
         "escola": {"id": escola_id, "nome": escola.nome, "ano_letivo": ano},
         "periodo": {"preset": janela.preset, "rotulo": janela.rotulo,
@@ -1136,6 +1146,7 @@ def gerar(db: Session, escola_id: int, *, preset: str,
                     "fim": janela.fim.isoformat() if janela.fim else None,
                     "inclusivo": True},
         "escopo": {"tipo": escopo, "turma_id": turma_id, "aluno_id": aluno_id,
+                   "turma_nome": turma_nome,
                    "restrito_a_turmas": (sorted(turma_ids)
                                          if turma_ids is not None else None)},
         "plataformas": list(plats),

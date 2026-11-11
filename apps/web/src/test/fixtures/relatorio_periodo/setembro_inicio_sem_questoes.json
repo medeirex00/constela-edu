@@ -15,6 +15,7 @@
     "tipo": "escola",
     "turma_id": null,
     "aluno_id": null,
+    "turma_nome": null,
     "restrito_a_turmas": null
   },
   "plataformas": [
