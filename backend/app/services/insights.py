@@ -16,11 +16,12 @@ aprovado: percentil/mediana/auto-referência no lugar de máximo/média):
 """
 from __future__ import annotations
 
-from datetime import date, datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
+from app.core.tempo import para_br
 from app.models import (
     Aluno,
     Escola,
@@ -144,10 +145,17 @@ def indices_da_escola(db: Session, escola_id: int,
     # turma fraca não penaliza. Reusa o motor de evolução (que já normaliza as
     # plataformas numa nota) nas séries já carregadas; as duas janelas usam os
     # MESMOS parâmetros, então a razão semana/ritmo é consistente.
-    agora = datetime.now(timezone.utc).replace(tzinfo=None)
-    iso_hoje = agora.isocalendar()
-    inicio_semana = datetime.combine(
-        date.fromisocalendar(iso_hoje[0], iso_hoje[1], 1), datetime.min.time())
+    agora_utc = datetime.now(timezone.utc)
+    agora = agora_utc.replace(tzinfo=None)   # UTC naive: cobre retratos e leituras
+    # A SEMANA ATUAL é a de BRASÍLIA (segunda 00h, horário de parede), a mesma do
+    # preset "Esta semana" (`periodos.resolver` com `hoje_br`): `Leitura.data` é
+    # horário de parede de Brasília. Pela semana do relógio UTC, no domingo depois
+    # das 21h (BRT) o UTC já era segunda, a "semana atual" começava amanhã e a
+    # persistência de todos caía a 0. Como nas demais janelas por período, o
+    # retrato (UTC naive) é comparado com esse mesmo limite.
+    hoje = para_br(agora_utc).date()
+    inicio_semana = datetime.combine(hoje - timedelta(days=hoje.weekday()),
+                                     datetime.min.time())
     inicio_base = agora - timedelta(weeks=SEMANAS_BASE_PERSISTENCIA)
     cresc_semana = {
         i.aluno_id: i.nota_evolucao
