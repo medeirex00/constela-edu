@@ -28,7 +28,6 @@ from pydantic import PrivateAttr
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
-from starlette.concurrency import run_in_threadpool
 
 from app.core.config import settings
 from app.core.database import bloquear_escola_para_importacao, get_db
@@ -509,8 +508,16 @@ def _campos_herdados(plataforma: str, dados: dict) -> list[str]:
 
 # --- Etapa 1: prévia (PRD §51) ------------------------------------------------
 
+# As rotas de UPLOAD desta tela são ``def`` (síncronas) DE PROPÓSITO, como as de
+# avaliações: o FastAPI as roda numa thread do pool. Uma rota ``async def`` roda o
+# corpo na thread do event loop — e aqui, depois de ler o arquivo, vêm a Session
+# SÍNCRONA (consultas, a espera da trava da escola, o commit, o recálculo) e a CPU do
+# parse e do casamento de nomes: o worker inteiro parava de atender (até
+# /api/health/live) durante a prévia ou a Lista Piloto. Por isso o arquivo é lido pelo
+# objeto síncrono (``arquivo.file.read``), com o teto, e os parsers são chamados direto.
+
 @router.post("/analisar", response_model=AnaliseOut)
-async def analisar(
+def analisar(
     request: Request,
     escola_id: int = Depends(escola_autorizada),
     arquivo: UploadFile | None = File(default=None),
@@ -539,7 +546,7 @@ async def analisar(
     arquivo_nome = None
     guardar_como = None     # extensão do original a arquivar (depois do contrato)
     if arquivo is not None:
-        conteudo = await arquivo.read()
+        conteudo = arquivo.file.read(TAMANHO_MAXIMO + 1)  # o teto limita a RAM
         if len(conteudo) > TAMANHO_MAXIMO:
             raise HTTPException(status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
                                 "Arquivo acima de 10 MB.")
@@ -553,13 +560,10 @@ async def analisar(
         if eh_planilha:
             _limpar_temporarios_orfaos()
             try:
-                # Parsing CPU-bound (openpyxl) fora do event loop — não trava os
-                # demais requests durante a leitura da planilha. O teto do
-                # DESCOMPRIMIDO (bomba de descompressão: o limite de 10 MB acima é do
-                # arquivo COMPRIMIDO) e o orçamento de leitura ficam dentro do parser
-                # e chegam aqui como PlanilhaRecusada.
-                analise = await run_in_threadpool(
-                    planilhas.analisar_planilha,
+                # O teto do DESCOMPRIMIDO (bomba de descompressão: o limite de 10 MB
+                # acima é do arquivo COMPRIMIDO) e o orçamento de leitura ficam dentro
+                # do parser e chegam aqui como PlanilhaRecusada.
+                analise = planilhas.analisar_planilha(
                     conteudo, plataforma, nome_arquivo=arquivo_nome or "")
             except planilhas.PlanilhaRecusada as exc:
                 raise HTTPException(exc.status_http, str(exc)) from exc
@@ -580,14 +584,12 @@ async def analisar(
             _limpar_temporarios_orfaos()
             try:
                 # Perfis posicionais (formatos reais) com as 4 estratégias
-                # genéricas de texto como rede de segurança.
-                # Parsing CPU-bound (pdfplumber/pypdf) fora do event loop. O teto do
+                # genéricas de texto como rede de segurança. O teto do
                 # DESCOMPRIMIDO e das páginas (bomba de descompressão: o limite de 10 MB
                 # acima é do arquivo COMPRIMIDO) fica dentro do parser, antes do
                 # pdfplumber, e chega aqui como PdfRecusado (413/422).
-                analise = await run_in_threadpool(
-                    perfis_pdf.analisar_pdf, conteudo, plataforma,
-                    nome_arquivo=arquivo_nome or "")
+                analise = perfis_pdf.analisar_pdf(
+                    conteudo, plataforma, nome_arquivo=arquivo_nome or "")
             except perfis_pdf.PdfRecusado as exc:
                 raise HTTPException(exc.status_http, str(exc)) from exc
             except HTTPException:
@@ -606,12 +608,12 @@ async def analisar(
             tipo = "texto"
             payload_mat = _payload_matific_placar(texto)
             analise = (svc.analisar_matific_api(payload_mat) if payload_mat is not None
-                       else await run_in_threadpool(svc.analisar_texto, texto, plataforma))
+                       else svc.analisar_texto(texto, plataforma))
     elif texto and texto.strip():
         tipo = "texto"
         payload_mat = _payload_matific_placar(texto)
         analise = (svc.analisar_matific_api(payload_mat) if payload_mat is not None
-                   else await run_in_threadpool(svc.analisar_texto, texto, plataforma))
+                   else svc.analisar_texto(texto, plataforma))
     else:
         raise HTTPException(status.HTTP_400_BAD_REQUEST,
                             "Envie um arquivo PDF ou cole o texto do relatório.")
@@ -3542,11 +3544,13 @@ def recalcular_agora(
 
 # --- Planilha de matrículas da escola ("Lista Piloto") -----------------------
 
-async def _ler_planilha_matriculas(request: Request, arquivo: UploadFile) -> tuple[bytes, str]:
+def _ler_planilha_matriculas(request: Request, arquivo: UploadFile) -> tuple[bytes, str]:
+    """Lê a planilha pelo objeto síncrono (as rotas da Lista Piloto são ``def``: rodam
+    no threadpool, fora do event loop), com o teto de 10 MB."""
     declarado = request.headers.get("content-length")
     if declarado and declarado.isdigit() and int(declarado) > TAMANHO_MAXIMO + 1_000_000:
         raise HTTPException(status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, "Arquivo acima de 10 MB.")
-    conteudo = await arquivo.read()
+    conteudo = arquivo.file.read(TAMANHO_MAXIMO + 1)  # o teto limita a RAM
     if len(conteudo) > TAMANHO_MAXIMO:
         raise HTTPException(status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, "Arquivo acima de 10 MB.")
     nome = arquivo.filename or "matriculas"
@@ -3559,18 +3563,18 @@ async def _ler_planilha_matriculas(request: Request, arquivo: UploadFile) -> tup
         # Teto do DESCOMPRIMIDO antes do openpyxl. Aqui, e não só no serviço: lá a
         # falha de leitura vira aviso com 200; a planilha inflada merece a recusa.
         try:
-            await run_in_threadpool(planilhas.exigir_xlsx_contido, conteudo)
+            planilhas.exigir_xlsx_contido(conteudo)
         except planilhas.PlanilhaRecusada as exc:
             raise HTTPException(exc.status_http, str(exc)) from exc
     return conteudo, nome
 
 
-async def _analisar_lista_piloto(conteudo: bytes, nome: str):
+def _analisar_lista_piloto(conteudo: bytes, nome: str):
     """A análise do serviço. A planilha que estoura o orçamento de leitura (linhas
     e células percorridas, ``planilhas.OrcamentoLeitura``) também é recusada com a
     mensagem (413), e não vira aviso com 200."""
     try:
-        return await run_in_threadpool(lista_piloto.analisar_matriculas, conteudo, nome)
+        return lista_piloto.analisar_matriculas(conteudo, nome)
     except planilhas.PlanilhaRecusada as exc:
         raise HTTPException(exc.status_http, str(exc)) from exc
 
@@ -3582,7 +3586,7 @@ _chave_turma = matriculas.chave_turma
 
 
 @router.post("/matriculas/analisar", response_model=MatriculasAnaliseOut)
-async def analisar_matriculas(
+def analisar_matriculas(
     request: Request,
     escola_id: int = Depends(escola_autorizada),
     arquivo: UploadFile = File(...),
@@ -3591,8 +3595,8 @@ async def analisar_matriculas(
 ):
     """Prévia da planilha de matrículas: turmas e alunos detectados, com quais
     turmas já existem — nada é gravado."""
-    conteudo, nome = await _ler_planilha_matriculas(request, arquivo)
-    analise = await _analisar_lista_piloto(conteudo, nome)
+    conteudo, nome = _ler_planilha_matriculas(request, arquivo)
+    analise = _analisar_lista_piloto(conteudo, nome)
     escola = db.get(Escola, escola_id)
     if escola is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Escola não encontrada.")
@@ -4119,7 +4123,7 @@ def _marcar_fora_da_lista(db: Session, escola_id: int, ano: int, usuario: Usuari
 
 
 @router.post("/matriculas/confirmar", response_model=MatriculasResultadoOut)
-async def confirmar_matriculas(
+def confirmar_matriculas(
     request: Request,
     escola_id: int = Depends(escola_autorizada),
     arquivo: UploadFile = File(...),
@@ -4132,8 +4136,8 @@ async def confirmar_matriculas(
     ``services.matching``), que reusa quando é seguro, manda para revisão quando
     é inseguro e só cria quando não há candidato. Orquestra: analisar → travar a
     escola → carregar estado → criar turmas → persistir → recalcular."""
-    conteudo, nome = await _ler_planilha_matriculas(request, arquivo)
-    analise = await _analisar_lista_piloto(conteudo, nome)
+    conteudo, nome = _ler_planilha_matriculas(request, arquivo)
+    analise = _analisar_lista_piloto(conteudo, nome)
     if not analise.turmas:
         raise HTTPException(status.HTTP_400_BAD_REQUEST,
                             "Nenhuma turma reconhecida na planilha.")
