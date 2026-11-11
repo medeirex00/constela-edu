@@ -75,16 +75,26 @@ def _carimbo_pendente():
                _CARIMBO_INSTITUCIONAL != dificuldade_livro.VERSAO_VIGENTE)
 
 
-def _pendentes_recalculo(db: Session, ids: list[int]) -> dict[int, int]:
+# Escolas por consulta na contagem de pendentes: cada turma premiável vira um parâmetro
+# do IN (o PostgreSQL aceita até 65.535 por comando), e as turmas se acumulam ano a ano.
+_ESCOLAS_POR_LOTE_DE_PENDENTES = 100
+
+
+def _pendentes_recalculo(db: Session, ids: list[int], pendente=None) -> dict[int, int]:
     """``{escola_id: nº de notas do ano ativo pendentes de recálculo}`` entre os
-    alunos ativos matriculados (ver ``_carimbo_pendente``).
+    alunos ativos matriculados numa turma PREMIÁVEL (ver ``_q_pendentes``).
+    ``pendente``: a condição da Nota (padrão: ``_carimbo_pendente``).
 
     Só CONTA: o que a rede agrega não muda por causa disto — as médias continuam
     lendo qualquer nota carimbada, e trocar a versão da régua não recalcula nada
     sozinho (só o Admin Global, explicitamente, pelo script)."""
-    if not ids:
-        return {}
-    return {linha[0]: int(linha[1] or 0) for linha in db.execute(_q_pendentes(ids)).all()}
+    saida: dict[int, int] = {}
+    for i in range(0, len(ids), _ESCOLAS_POR_LOTE_DE_PENDENTES):
+        lote = ids[i:i + _ESCOLAS_POR_LOTE_DE_PENDENTES]
+        premiaveis = elegibilidade.turmas_premiaveis_da_rede(db, lote)
+        saida.update({linha[0]: int(linha[1] or 0)
+                      for linha in db.execute(_q_pendentes(lote, premiaveis, pendente)).all()})
+    return saida
 
 
 def escolas_com_notas_pendentes(db: Session) -> list[int]:
@@ -332,16 +342,24 @@ def _alunos_com_qualquer_dado(db: Session, ids: list[int],
     return {escola_id: len(alunos) for escola_id, alunos in total.items()}
 
 
-def _q_pendentes(ids: list[int]):
-    """As notas do ano ativo pendentes de recálculo por escola (``_carimbo_pendente``)."""
+def _q_pendentes(ids: list[int], premiaveis: list[int], pendente=None):
+    """As notas do ano ativo pendentes de recálculo por escola (``pendente``; padrão:
+    ``_carimbo_pendente``).
+
+    Só a população que o recálculo REGRAVA: aluno ativo, matriculado no ano ativo numa
+    turma de ``premiaveis`` — a mesma de ``scoring._carregar_contexto``, que tira a
+    Educação Infantil (Fases) e a turma sem série antes da conta e deixa no banco a
+    Nota já gravada de quem saiu. Contada aqui, a Nota antiga dessa criança nunca
+    ganhava carimbo: o ``--pendentes`` recalculava a escola a cada rodada sem nunca
+    chegar a "0 escolas", e o ``recalculo_pendente`` do painel nunca zerava."""
     return (select(Nota.escola_id, func.count(Nota.id))
             .join(Aluno, Aluno.id == Nota.aluno_id)
             .join(Escola, Escola.id == Nota.escola_id)
             .where(Nota.escola_id.in_(ids),
                    Nota.ano_letivo == Escola.ano_letivo_ativo,
                    Aluno.status == "ativo",
-                   _matriculado_no_ano_ativo(),
-                   _carimbo_pendente())
+                   _matriculado_no_ano_ativo(turma_ids=premiaveis),
+                   _carimbo_pendente() if pendente is None else pendente)
             .group_by(Nota.escola_id))
 
 
@@ -376,11 +394,11 @@ def _leituras_da_rede(db: Session, escolas: list[Escola], contratados: set[str],
                       com_pendentes: bool) -> dict:
     """Tudo o que os cartões das escolas leem do banco, em DUAS consultas (cada uma um
     ``UNION ALL`` de agregados que já eram consultas separadas, com o MESMO SQL de cada
-    um): (A) turmas, alunos, professores, a lista de turmas (para as premiáveis), quem
-    tem dado de alguma plataforma (com a turma, para separar quem concorre) e — no
-    painel — as notas pendentes; (B), que depende das turmas premiáveis, quem concorre,
-    as médias por plataforma e os totais. Antes eram 17 consultas; em produção cada uma
-    custa ~195 ms de ida e volta ao banco."""
+    um): (A) turmas, alunos, professores, a lista de turmas (para as premiáveis) e quem
+    tem dado de alguma plataforma (com a turma, para separar quem concorre); (B), que
+    depende das turmas premiáveis, quem concorre, as médias por plataforma, os totais e
+    — no painel — as notas pendentes de recálculo. Antes eram 17 consultas; em produção
+    cada uma custa ~195 ms de ida e volta ao banco."""
     ids = [e.id for e in escolas]
     anos = {e.id: e.ano_letivo_ativo for e in escolas}
     contagens = {
@@ -414,10 +432,6 @@ def _leituras_da_rede(db: Session, escolas: list[Escola], contratados: set[str],
         partes.append(q.with_only_columns(*_ramo(
             "dado", [(modelo.escola_id, _INT), (modelo.aluno_id, _INT),
                      (Matricula.turma_id, _INT)], larg_a)))
-    if com_pendentes:
-        q = _q_pendentes(ids)
-        partes.append(q.with_only_columns(*_ramo(
-            "pendentes", [(Nota.escola_id, _INT), (func.count(Nota.id), _INT)], larg_a)))
     lido: dict = {"turmas": {}, "alunos": {}, "professores": {}, "pendentes": {}}
     turmas_e_rotulos, com_dado = [], {}
     for fonte, a, b, turma_id, rotulo in _ler_ramos(db, partes, 8 * len(ids)):
@@ -465,10 +479,16 @@ def _leituras_da_rede(db: Session, escolas: list[Escola], contratados: set[str],
         partes.append(q.with_only_columns(*_ramo(
             fonte, [(escola, _INT), *[(c, _INT) for c in colunas]], larg_b))
             .group_by(escola))
-    linhas_b: dict[str, list] = {f: [] for f in ("alunos_p", *medias, *totais)}
-    for fonte, *resto in _ler_ramos(db, partes, 5 * len(premiaveis) + 8 * len(ids)):
+    if com_pendentes:
+        # Só a população que o recálculo regrava (turmas premiáveis): ``_q_pendentes``.
+        q = _q_pendentes(ids, premiaveis)
+        partes.append(q.with_only_columns(*_ramo(
+            "pendentes", [(Nota.escola_id, _INT), (func.count(Nota.id), _INT)], larg_b)))
+    linhas_b: dict[str, list] = {f: [] for f in ("alunos_p", *medias, *totais, "pendentes")}
+    for fonte, *resto in _ler_ramos(db, partes, 6 * len(premiaveis) + 9 * len(ids)):
         linhas_b[fonte].append(resto)
     lido["alunos_premiaveis"] = {r[0]: int(r[1] or 0) for r in linhas_b["alunos_p"]}
+    lido["pendentes"] = {r[0]: int(r[1] or 0) for r in linhas_b["pendentes"]}
     for fonte in medias:
         # (alunos com dado, média, quantos com a nota > 0) — o formato de sempre.
         lido[fonte] = {r[0]: (int(r[1] or 0), float(r[-1] or 0.0), int(r[2] or 0))

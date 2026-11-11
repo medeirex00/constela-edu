@@ -56,3 +56,7 @@ from tests.test_aud2_rede_percapita_exato import (  # noqa: E402,F401
     test_indice_e_regua_saem_do_per_capita_exato as test_pg_percapita_regua,
     test_panorama_global_compara_redes_pelo_per_capita_exato as test_pg_percapita_global,
 )
+from tests.test_aud2_rede_pendentes_converge import (  # noqa: E402,F401
+    test_o_painel_conta_so_a_nota_de_quem_concorre as test_pg_pendentes_painel,
+    test_uma_rodada_de_pendentes_zera_a_selecao_e_o_painel as test_pg_pendentes_converge,
+)
