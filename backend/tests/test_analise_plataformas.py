@@ -583,7 +583,8 @@ def test_matific_com_poucos_ativos_esconde_estrelas_e_desempenho(db):
     """Com ≥ k alunos com retrato mas < k com atividade, "estrelas ÷ atividades" das duas
     médias refaria o desempenho escondido: as estrelas por aluno somem junto. E as atividades
     por aluno também (G_GRUPO-4): com 2 crianças somando, "média × medidos" eram as 12
-    atividades delas — a média some e diz que é proteção."""
+    atividades delas — a média some e diz que é proteção. As estrelas e o desempenho, que
+    somem pela mesma causa (2 crianças com atividade), têm o mesmo rótulo (REV2-ANALISE-2)."""
     rede = nova_rede(db, nome="Rede Fictícia Poucos Ativos", codigo="3599936")
     e = nova_escola(db, rede, "EMEF Fictícia Poucos Ativos", "35993601")
     alunos = turma_com_alunos(db, e, "3º Ano", 8)
@@ -595,7 +596,8 @@ def test_matific_com_poucos_ativos_esconde_estrelas_e_desempenho(db):
     mt = cel["matific"]
     assert mt["alunos_medidos"] == 8 and mt["atividades_por_aluno"] is None
     assert mt["participacao_pct"] == 25.0
-    assert mt["metricas_protegidas"] == ["atividades_por_aluno"]
+    assert mt["metricas_protegidas"] == ["atividades_por_aluno", "estrelas_por_aluno",
+                                         "desempenho_medio"]
     assert mt["estrelas_por_aluno"] is None and mt["desempenho_medio"] is None
 
 

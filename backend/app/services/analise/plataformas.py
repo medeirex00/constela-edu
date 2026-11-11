@@ -161,6 +161,14 @@ _PROTEGIDAS = {
 _POR_CONTRIBUINTES = {"elefante": (("livros_por_aluno", "com_livros"),
                                    ("minutos_por_aluno", "com_tempo")),
                       "matific": (("atividades_por_aluno", "com_atividade"),)}
+# As métricas que a REGRA do próprio subconjunto esconde (com menos de k crianças nele) — o
+# nível médio (com livro de nível), o acerto (com questão), as estrelas por aluno e o
+# desempenho (com atividade). Com 1 a k − 1 crianças no subconjunto é a mesma proteção dos
+# contribuintes e entra em ``metricas_protegidas`` (o mesmo rótulo na mesma célula); com
+# nenhuma, é falta de dado.
+_PELA_REGRA = {"elefante": ((("nivel_medio", "nivel_medio_posicao"), "alunos_com_nivel"),
+                            (("taxa_acerto_pct",), "alunos_com_questao")),
+               "matific": ((("estrelas_por_aluno", "desempenho_medio"), "com_atividade"),)}
 TEXTO_METRICAS_POUCOS_CONTRIBUINTES = ("algumas médias não aparecem: menos de {k} alunos "
                                        "deste recorte têm esse número, e a média por aluno o "
                                        "revelaria")
@@ -1168,11 +1176,17 @@ def _intervalo(bases: list[datetime], atuais: list[datetime], plataforma: str) -
 def _proteger_contribuintes(bloco: dict, s, plataforma: str, k: int) -> dict:
     """Esconde as médias por aluno medido com 1 a k − 1 crianças somando nelas
     (``_POR_CONTRIBUINTES``) e diz que é proteção (``metricas_protegidas``), não falta de
-    dado."""
+    dado — e marca do mesmo jeito as que a regra do subconjunto já escondeu com 1 a k − 1
+    crianças nele (``_PELA_REGRA``)."""
     for chave, campo in _POR_CONTRIBUINTES[plataforma]:
         if 0 < getattr(s, campo) < k and bloco.get(chave) is not None:
             bloco[chave] = None
             bloco["metricas_protegidas"].append(chave)
+    for chaves, campo in _PELA_REGRA[plataforma]:
+        if 0 < getattr(s, campo) < k:
+            for chave in chaves:
+                if bloco.get(chave) is None and chave not in bloco["metricas_protegidas"]:
+                    bloco["metricas_protegidas"].append(chave)
     if bloco["metricas_protegidas"]:
         bloco["texto_metricas_protegidas"] = TEXTO_METRICAS_POUCOS_CONTRIBUINTES.format(k=k)
     return bloco

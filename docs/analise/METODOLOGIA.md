@@ -357,6 +357,12 @@ histórico nem se multiplica pelos períodos.
   (`TEXTO_METRICAS_POUCOS_CONTRIBUINTES`). É a regra dos contribuintes do cartão da
   Secretaria (`grupo_pequeno`) e da vitrine. Releitura conta na participação, não nos livros:
   quem só releu não soma livro novo.
+  **Mesmo rótulo na mesma célula** (REV2-ANALISE-2): a métrica que a regra do próprio
+  subconjunto esconde — nível médio (com livro de nível), acerto (com questão), estrelas por
+  aluno e desempenho (com atividade) — com 1 a k − 1 crianças nele também entra em
+  `metricas_protegidas`, com o mesmo texto: é a mesma causa das médias por contribuinte, e
+  a tela diz "protegido" em todas. Com **nenhuma** criança no subconjunto, continua fora
+  da lista (é falta de dado, não proteção).
   O total diz quais métricas escondeu em complemento (`metricas_protegidas`) e por quê
   (`texto_metricas_protegidas`). Há teste que confere, por álgebra linear exata sobre as
   respostas (rede, rede por série e escola), que nenhuma soma de menos de k crianças
