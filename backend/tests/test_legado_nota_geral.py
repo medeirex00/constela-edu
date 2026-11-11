@@ -249,6 +249,11 @@ ALLOWLIST_FRONT: dict[str, dict] = {
         "ocorrencias": 3, "papel": "fixture de teste",
         "porque": "perfis falsos do app (o tipo exige o campo); o teste lê o '—' de cada nota.",
     },
+    "apps/mobile/src/test/audTelasErroServidor.test.ts": {
+        "ocorrencias": 1, "papel": "fixture de teste",
+        "porque": ("item falso do ranking no cache do app (o tipo exige o campo); o "
+                   "teste lê o aviso de erro do servidor, não a nota (MOBILE-4)."),
+    },
     "apps/mobile/src/telas/Ranking.tsx": {
         "ocorrencias": 1, "papel": "exibição",
         "porque": "app em campo (plano, item 11).",
