@@ -127,18 +127,25 @@ export default function RankingEvolucao({ embutido = false, alvoAcoes }: {
     ]),
   };
 
+  // Só sobe ao pódio e recebe certificado de evolução quem CRESCEU (> 0), a regra do
+  // telão e das Premiações: num período em que ninguém cresceu, os primeiros empatam
+  // em 0,0 e a ordem entre eles é só o desempate alfabético — não há o que celebrar.
+  // A API ordena pela evolução (maior primeiro), então quem cresceu é o começo da
+  // lista, na mesma ordem e com a mesma posição. A tabela continua com todos.
+  const cresceram = lista.filter((item) => item.nota_evolucao > 0);
+
   const acoes = (
     <AcoesRanking
       alvo={alvoAcoes}
       embutido={embutido}
       csv={csv}
       certificados={{
-        alunos: lista.map((item) => ({
+        alunos: cresceram.map((item) => ({
           aluno_id: item.aluno_id, nome: item.nome, turma: item.turma, posicao: item.posicao,
         })),
         // Evolução não tem arte própria: abre no Geral, e o modal deixa trocar.
         modeloInicial: null,
-        contexto: `Ranking de Evolução · ${rotuloPeriodo}${recorte ? ` · ${recorte}` : ""}`,
+        contexto: `Ranking de Evolução · quem cresceu · ${rotuloPeriodo}${recorte ? ` · ${recorte}` : ""}`,
         // Evolução dentro de um bimestre: trocando para uma arte de plataforma, o
         // bimestre impresso abre nele, não no de hoje.
         bimestreInicial: bimestreDoPeriodo(periodo.preset, new Date(), calendario),
@@ -146,11 +153,8 @@ export default function RankingEvolucao({ embutido = false, alvoAcoes }: {
     />
   );
 
-  // Pódio: a nota de evolução (o que ordena), com os ganhos reais do período.
-  // Só sobe ao pódio quem CRESCEU (> 0), a regra do telão: num período em que
-  // ninguém cresceu, os 3 primeiros empatam em 0,0 e a ordem é só o desempate
-  // alfabético — não há o que celebrar. A tabela continua com todos.
-  const cresceram = lista.filter((item) => item.nota_evolucao > 0);
+  // Pódio: a nota de evolução (o que ordena), com os ganhos reais do período, só de
+  // quem cresceu (ver `cresceram` acima).
   const podio: ItemPodio[] = itensDoPodio(cresceram).map((item) => ({
     chave: item.aluno_id,
     posicao: item.posicao,
@@ -276,9 +280,9 @@ function AjudaEvolucao() {
         crescimento do período pode ainda não ter chegado (veja a data no selo).
       </li>
       <li>
-        O nome do aluno abre a evolução dele. Em “Gerar certificados”, o modelo começa no Geral
-        (que imprime a posição do Ranking Geral, não a desta lista); dá para trocar pela arte de
-        uma plataforma.
+        O nome do aluno abre a evolução dele. Em “Gerar certificados” entram só os alunos que
+        cresceram no período, como no pódio. O modelo começa no Geral (que imprime a posição do
+        Ranking Geral, não a desta lista); dá para trocar pela arte de uma plataforma.
       </li>
     </ul>
   );
