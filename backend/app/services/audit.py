@@ -15,6 +15,7 @@ neutro e desligado por padrão (docs/lgpd/RETENCAO-TECNICA.md):
 from __future__ import annotations
 
 import unicodedata
+from collections.abc import Callable
 from datetime import datetime, timedelta, timezone
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -147,6 +148,31 @@ ACOES_PRESERVADAS = frozenset({
     "backup.restaurado",
 })
 
+
+def _id_inteiro(valor) -> int | None:
+    return valor if isinstance(valor, int) and not isinstance(valor, bool) else None
+
+
+def _fusao_reduzida(detalhes) -> dict:
+    """O ``aluno.fundido`` só com a LIGAÇÃO entre as duas fichas: ``mantido.id`` e
+    ``removido.id`` (sem nome, sem ``foto_pre_fusao`` nem o resto do detalhe). O id
+    ausente não vira chave (quem lê cai no ``entidade_id`` da linha, que fica)."""
+    d = detalhes if isinstance(detalhes, dict) else {}
+    reduzido = {}
+    for lado in ("mantido", "removido"):
+        bloco = d.get(lado)
+        ident = _id_inteiro(bloco.get("id")) if isinstance(bloco, dict) else None
+        reduzido[lado] = {"id": ident} if ident is not None else {}
+    return reduzido
+
+
+# Ações que o expurgo NÃO apaga quando vencem: REDUZ ao que não é dado pessoal (a função).
+# ``aluno.fundido`` é a ligação "estas duas fichas são a mesma criança" que
+# ``backup._mesma_crianca``, ``eventos._fichas_absorvidas`` e
+# ``exclusao_aluno.fichas_absorvidas`` leem: apagada, o backup de antes da fusão,
+# restaurado, trazia de volta a duplicata da criança excluída de vez (G_LGPD-2).
+ACOES_REDUZIDAS: dict[str, Callable[[object], dict]] = {"aluno.fundido": _fusao_reduzida}
+
 CATEGORIAS = ("auditoria_acesso", "auditoria_quest", "auditoria_alunos",
               "auditoria_demais", "sincronizacao_logs", "notificacoes")
 
@@ -171,8 +197,10 @@ def _e_alunos():
                                                 "revisao")))
 
 
-def _filtro_auditoria(categoria: str):
-    """Categorias DISJUNTAS: cada entrada cai em exatamente uma."""
+def _filtro_auditoria(categoria: str, *, reduzidas: bool = False):
+    """Categorias DISJUNTAS: cada entrada cai em exatamente uma. Sem ``reduzidas``, o
+    que a categoria APAGA (fora as preservadas e as reduzidas); com ``reduzidas``, as
+    entradas dela que o expurgo reduz em vez de apagar (``ACOES_REDUZIDAS``)."""
     quest = LogAuditoria.acao.like("quest.%")
     filtros = {
         "auditoria_acesso": _e_acesso(),
@@ -180,7 +208,28 @@ def _filtro_auditoria(categoria: str):
         "auditoria_alunos": and_(_e_alunos(), not_(_e_acesso())),
         "auditoria_demais": and_(not_(_e_acesso()), not_(quest), not_(_e_alunos())),
     }
-    return and_(filtros[categoria], LogAuditoria.acao.not_in(ACOES_PRESERVADAS))
+    if reduzidas:
+        return and_(filtros[categoria], LogAuditoria.acao.in_(sorted(ACOES_REDUZIDAS)))
+    return and_(filtros[categoria],
+                LogAuditoria.acao.not_in(sorted(ACOES_PRESERVADAS | set(ACOES_REDUZIDAS))))
+
+
+def _reduzir_vencidas(db: Session, categoria: str, corte: datetime, simular: bool) -> int:
+    """Reduz (``ACOES_REDUZIDAS``) as entradas vencidas da categoria que ainda não
+    estão reduzidas; devolve quantas (com ``simular``, só conta)."""
+    n = 0
+    for entrada in db.execute(select(LogAuditoria).where(
+            LogAuditoria.created_at < corte,
+            _filtro_auditoria(categoria, reduzidas=True))).scalars():
+        reduzido = ACOES_REDUZIDAS[entrada.acao](entrada.detalhes)
+        if entrada.detalhes == reduzido:
+            continue
+        n += 1
+        if not simular:
+            entrada.detalhes = reduzido
+    if n and not simular:
+        db.flush()
+    return n
 
 
 def prazos_configurados() -> dict[str, int]:
@@ -193,7 +242,9 @@ def expurgar_retencao(db: Session, *, simular: bool = True,
                       aceitar_abaixo_do_piso: bool = False) -> dict[str, dict]:
     """Apaga (ou, com ``simular``, só CONTA) o que passou do prazo de cada
     categoria. Prazo 0 (o padrão) = categoria desligada: nem conta. NÃO commita.
-    Devolve {categoria: {"dias", "corte", "linhas"}} — sem dado pessoal."""
+    Devolve {categoria: {"dias", "corte", "linhas"}} — sem dado pessoal; nas
+    categorias do log, também ``reduzidas``: as entradas vencidas que o expurgo REDUZ
+    em vez de apagar (``ACOES_REDUZIDAS``: a ligação da fusão fica, só com os ids)."""
     from app.models import Notificacao, SincronizacaoLog
 
     prazos = {**prazos_configurados(), **(prazos or {})}
@@ -216,8 +267,10 @@ def expurgar_retencao(db: Session, *, simular: bool = True,
     resultado: dict[str, dict] = {}
     for categoria in CATEGORIAS:
         dias = int(prazos.get(categoria) or 0)
+        do_log = categoria.startswith("auditoria_")
         if dias <= 0:
-            resultado[categoria] = {"dias": 0, "corte": None, "linhas": 0}
+            resultado[categoria] = {"dias": 0, "corte": None, "linhas": 0,
+                                    **({"reduzidas": 0} if do_log else {})}
             continue
         modelo, coluna, filtro = alvos[categoria]
         corte = agora - timedelta(days=dias)
@@ -229,7 +282,12 @@ def expurgar_retencao(db: Session, *, simular: bool = True,
                        .execution_options(synchronize_session=False))
         resultado[categoria] = {"dias": dias, "corte": corte.isoformat(timespec="seconds"),
                                 "linhas": linhas}
-    if not simular and any(r["linhas"] for r in resultado.values()):
+        if do_log:
+            resultado[categoria]["reduzidas"] = _reduzir_vencidas(db, categoria, corte,
+                                                                  simular)
+    reduzidas = {c: r["reduzidas"] for c, r in resultado.items() if r.get("reduzidas")}
+    if not simular and (any(r["linhas"] for r in resultado.values()) or reduzidas):
         registrar(db, "retencao.expurgo",
-                  detalhes={c: r["linhas"] for c, r in resultado.items() if r["dias"]})
+                  detalhes={**{c: r["linhas"] for c, r in resultado.items() if r["dias"]},
+                            **({"reduzidas": reduzidas} if reduzidas else {})})
     return resultado

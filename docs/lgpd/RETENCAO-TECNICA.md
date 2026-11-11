@@ -85,6 +85,12 @@ Regras fixas do mecanismo (padrões técnicos, revisáveis com a decisão juríd
   `aluno.esquecimento_fora_do_cadastro`, `ia.conversas_esquecimento`, `retencao.expurgo`,
   `turma.exclusao_com_alunos` e `backup.restaurado` (o mapa de ids das fichas que impede
   um backup antigo de trazer de volta a criança excluída; ver seção 2.3);
+- `aluno.fundido` vencido **não é apagado**: fica reduzido à ligação entre as duas fichas
+  (`{"mantido": {"id"}, "removido": {"id"}}`, sem nome, sem `foto_pre_fusao` nem o resto do
+  detalhe; `audit.ACOES_REDUZIDAS`). É a prova de que as duas fichas são a mesma criança, que
+  a restauração do backup, a exclusão permanente e a linha do tempo leem; apagada, o backup
+  de antes da fusão trazia de volta a duplicata da criança excluída de vez. O resultado (e o
+  `retencao.expurgo`) conta as reduções à parte;
 - `auditoria_acesso` com prazo **menor que 183 dias** é recusado sem `--abaixo-do-piso`
   (referência: Marco Civil da Internet, art. 15 — guarda mínima de 6 meses de registros
   de acesso a aplicações; a aplicabilidade ao caso é pergunta jurídica, seção 5);
