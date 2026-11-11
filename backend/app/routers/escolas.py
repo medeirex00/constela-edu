@@ -12,13 +12,15 @@ from app.core.deps import (
 )
 from app.models import Escola, Nota, Usuario
 from app.schemas import EscolaCreate, EscolaOut, EscolaUpdate
+from app.schemas.comum import EscolaItemOut
+from app.services import modulos as svc_modulos
 from app.services import permissoes, provisionamento
 from app.services.audit import registrar
 
 router = APIRouter(prefix="/escolas", tags=["Escolas"])
 
 
-@router.get("", response_model=list[EscolaOut])
+@router.get("", response_model=list[EscolaItemOut])
 @leitura_sem_transacao
 def listar(
     incluir_inativas: bool = Query(default=False),
@@ -27,8 +29,11 @@ def listar(
 ):
     """Seletor ESCOLA da página inicial (PRD §10, §20). O admin GLOBAL pode
     pedir também as inativas (tela Escolas) — sem isso, uma escola inativada
-    sumiria de todas as listas sem caminho de volta."""
-    consulta = select(Escola).order_by(Escola.nome)
+    sumiria de todas as listas sem caminho de volta. Cada escola traz os módulos
+    do plano dela (``EscolaItemOut.modulos``), lidos na MESMA consulta (uma
+    coluna por módulo do catálogo, ``modulos.colunas_do_contrato``)."""
+    consulta = (select(Escola, *svc_modulos.colunas_do_contrato(Escola.rede_id))
+                .order_by(Escola.nome))
     if not (incluir_inativas and usuario.is_global):
         consulta = consulta.where(Escola.status == "ativa")
     if not usuario.is_global:
@@ -38,7 +43,12 @@ def listar(
             consulta = consulta.where(Escola.rede_id == usuario.rede_id)
         else:
             consulta = consulta.where(Escola.id == usuario.escola_id)
-    return db.execute(consulta).scalars().all()
+    saida = []
+    for escola, *desligados in db.execute(consulta).all():
+        ativos = svc_modulos.modulos_das_colunas(desligados)
+        saida.append(EscolaItemOut.model_validate(escola).model_copy(
+            update={"modulos": [m for m in svc_modulos.TODOS if m in ativos]}))
+    return saida
 
 
 @router.post("", response_model=EscolaOut, status_code=status.HTTP_201_CREATED)

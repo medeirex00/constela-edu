@@ -81,6 +81,14 @@ class EscolaOut(ORMModel):
     status: str
 
 
+class EscolaItemOut(EscolaOut):
+    """Um item de GET /escolas: a escola e os MÓDULOS do plano dela (os da rede dela,
+    ``modulos.modulos_da_escola``; escola sem rede, todos). O admin global recebe em
+    /auth/me o catálogo inteiro — é por aqui que a tela sabe o que a escola SELECIONADA
+    contratou, para não oferecer o que o backend recusaria com 403."""
+    modulos: list[str] = []
+
+
 def _ano_corrente_br() -> int:
     """O ano civil de hoje em Brasília — o ano letivo da escola nova coincide com
     ele. Era o literal 2026: a partir de 2027, a escola cadastrada sem ano (a tela

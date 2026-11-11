@@ -60,8 +60,12 @@ function SetaSelect() {
   );
 }
 
+/** O item de /escolas com o plano da escola (`modulos`, os da rede dela). Opcional: a API
+ *  antiga não o manda. */
+type EscolaComPlano = { modulos?: string[] };
+
 export default function Relatorios() {
-  const { escolaId, usuario } = useApp();
+  const { escolaId, escolaAtual, usuario } = useApp();
   const idExportacoes = useId();
   const idCertificados = useId();
   // Professor exporta só o superficial (ranking e alunos das turmas dele);
@@ -70,8 +74,15 @@ export default function Relatorios() {
     ["admin", "coordenador"].includes(usuario?.cargo ?? "");
   // Módulo fora do plano da rede: o Catálogo de Livros (Leitura) e os certificados da
   // plataforma não aparecem — o backend responderia 403 (o lote de certificados já
-  // filtrava assim).
-  const { leitura, matematica } = useModulos();
+  // filtrava assim). Vale o plano da ESCOLA selecionada (item de /escolas): o admin
+  // global recebe em /auth/me o catálogo inteiro, e numa escola de rede com um módulo
+  // só a tela oferecia o que a rede não contratou. Sem o plano na resposta, o do usuário.
+  const doUsuario = useModulos();
+  const planoDaEscola = (escolaAtual as EscolaComPlano | null)?.modulos;
+  const leitura = planoDaEscola?.length ? planoDaEscola.includes("leitura") : doUsuario.leitura;
+  const matematica = planoDaEscola?.length
+    ? planoDaEscola.includes("matematica")
+    : doUsuario.matematica;
   const relatorios = (gestor
     ? RELATORIOS
     : RELATORIOS.filter((r) => r.tipo === "ranking" || r.tipo === "alunos"))
