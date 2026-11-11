@@ -240,10 +240,16 @@ períodos aproximados saem com "(aproximado: sem calendário oficial de AAAA)".
 "Bimestre anterior" em janeiro/fevereiro é o 4º do ano passado pelo calendário
 **dele** quando houver (jan/2027 → 4º de 2026, 05/10–31/12), mesmo sem o
 calendário do ano corrente.
+O "Nº bimestre" (1º a 4º) é sempre o do ANO LETIVO da escola, o mesmo do preset
+"Ano letivo". Na virada, com a escola ainda no ano anterior, o rótulo diz o ano
+("4º bimestre de 2026 (05/10 a 31/12)").
+No recesso entre dois bimestres, "Este bimestre" é o próximo e "Bimestre
+anterior" é o que acabou de terminar, como em janeiro.
 Para cadastrar sem deploy de código: variável `BIMESTRES_CALENDARIO`, ex.
 `{"2027": [["2027-02-01","2027-04-23"], ["2027-04-26","2027-07-09"],
 ["2027-07-26","2027-10-01"], ["2027-10-04","2027-12-17"]]}` (datas de exemplo —
-usar as da Secretaria). Calendário inválido é ignorado inteiro, com erro no log.
+usar as da Secretaria). Calendário inválido é ignorado inteiro, com erro no log uma
+vez por valor da variável.
 
 ## 10. Validar uma coleta manual (roteiro para a demonstração)
 
