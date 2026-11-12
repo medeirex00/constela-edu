@@ -403,6 +403,17 @@ def bloquear_escola_para_recalculo(db, escola_id: int) -> None:
     endpoints de importação, que soltam 4711 no commit e só então recalculam.
     ``tests/test_recalculo_concorrencia.py`` guarda essa ordem.
 
+    EXCEÇÃO, de propósito: ``importacoes.resolver_revisao`` pega a 4711 e recalcula
+    dentro da mesma transação (``recalcular_escola(commit=False)``), para a resolução
+    da pendência, os dados aplicados e as notas caírem num commit só (falhar no meio
+    deixa tudo pendente). Não há deadlock porque a regra INVERSA é absoluta: nenhum
+    caminho pede a 4711 segurando a 4713 — o recálculo nunca pede a trava de
+    importação, e quem chama ``recalcular_escola(commit=False)`` fora do resolver
+    (``plataformas._aplicar_nivel_ao_historico``) já soltou a 4711. Enquanto a
+    exceção existir, nenhum caminho novo pode pedir a 4711 depois da 4713; um novo
+    aninhamento 4711 → 4713 é registrado aqui.
+    ``tests/test_aud3_costura_hierarquia_travas.py`` guarda as duas coisas.
+
     SQLite (dev/testes): no-op — banco de um único escritor; produção é
     Postgres. A defesa cross-DB é a própria ``uq_nota_aluno_ano``, que impede a
     duplicata virar permanente (ao custo do 500 que esta trava elimina).
