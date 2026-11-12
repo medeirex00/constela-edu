@@ -1443,7 +1443,11 @@ def _lado_escola(db: Session, escola_id: int, *,
     aluno perde a matrícula, então a nota órfã de quem foi desvinculado entrava
     nas médias e no denominador de cada dimensão, e o lado "escola" do
     comparador divergia do dashboard da mesma escola. Mesma régua de
-    `resumo_turma`/`resumo_escola`, que já filtram por matrícula.
+    `resumo_turma`/`resumo_escola`, que já filtram por matrícula. E, como o
+    `resumo_escola` (a Visão da Escola) e o cartão da rede, só a matrícula numa
+    TURMA DO ANO ATIVO (S_G_GRUPO-1): a matrícula do ano ativo que ficou numa turma
+    de outro ano (dado legado) entrava no lado "escola", e escola − turmas devolvia
+    os números dessa criança.
 
     O DESEMPENHO segue os mesmos dois cortes do dashboard e do painel da rede
     (``rankings._desempenho_da_escola``, ``rede._medias_por_plataforma``): só a
@@ -1465,8 +1469,10 @@ def _lado_escola(db: Session, escola_id: int, *,
     aluno_ids = list(db.execute(
         select(Aluno.id)
         .join(Matricula, Matricula.aluno_id == Aluno.id)
+        .join(Turma, Turma.id == Matricula.turma_id)
         .where(Matricula.escola_id == escola_id,
                Matricula.ano_letivo == escola.ano_letivo_ativo,
+               Turma.ano_letivo == escola.ano_letivo_ativo,
                Aluno.status == "ativo")
     ).scalars())
     notas = db.execute(

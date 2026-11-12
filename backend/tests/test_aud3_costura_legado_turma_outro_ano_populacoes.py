@@ -20,9 +20,9 @@ from __future__ import annotations
 from datetime import date
 
 from app.core.tempo import hoje_br
-from app.services import frescor_ranking
+from app.services import evolucao, frescor_ranking
 from tests._ano_letivo import escola_no_ano_de_hoje  # noqa: F401 — fixture
-from tests.test_aud3_rede_legado_turma_outro_ano import _cenario
+from tests.test_aud3_rede_legado_turma_outro_ano import CANARIO, _cenario
 
 
 def _hoje() -> date:
@@ -42,3 +42,18 @@ def test_frescor_controle_sem_legado_conta_as_nove(db, escola_completa):
     escola, _rede, _canario, _antiga = _cenario(db, escola_completa, legado=False)
     bloco = frescor_ranking.frescor_das_escolas(db, [escola], _hoje())[escola.id]
     assert bloco["dimensoes"]["leitura"]["alunos_com_dado"] == 9
+
+
+def test_comparador_lado_escola_nao_conta_a_matricula_numa_turma_de_outro_ano(
+        db, escola_completa):
+    escola, _rede, _canario, _antiga = _cenario(db, escola_completa, legado=True)
+    turma = escola_completa["turma"]
+    resultado = evolucao.comparar(db, escola.id, "escola", escola.id, "turma", turma.id)
+    lado_escola, lado_turma = resultado["a"], resultado["b"]
+    # Antes: 9 alunos e os 37 livros / 1913 min da criança canário no lado "escola" —
+    # escola − turma (a única do ano) devolvia os números dela.
+    assert lado_escola["total_alunos"] == lado_turma["total_alunos"] == 8
+    assert lado_escola["indicadores"]["livros_unicos"] == 80
+    assert (lado_escola["indicadores"]["tempo_leitura_min"]
+            == lado_turma["indicadores"]["tempo_leitura_min"])
+    assert lado_escola["indicadores"]["livros_unicos"] != 80 + CANARIO["livros"]
