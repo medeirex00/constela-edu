@@ -52,7 +52,8 @@ _TABELA_ANCORA = "usuarios"
 _TABELA_VERSAO = "alembic_version"
 
 # Namespace do advisory lock da MIGRAÇÃO (4711–4713 são importação, coleta e
-# recálculo — ver app/core/database.py). Um só migrador por vez no banco inteiro.
+# recálculo; 4715 é a revogação dos cartões do Quest — ver app/core/database.py).
+# Um só migrador por vez no banco inteiro.
 _NS_MIGRACAO = 4714
 _INTERVALO_PG = re.compile(r"^\d+(ms|s|min)?$")
 
