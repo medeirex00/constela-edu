@@ -2121,6 +2121,12 @@ def _concluir(db: Session, execucao: SincronizacaoExecucao, ap: _Apuracao,
         # fica só com quem chegou nesta rodada (``substituir``).
         _salvar_contadores(db, escola_id, plataforma, contexto_fetch.contadores_novos,
                            substituir=completa and bool(ap.falhas))
+        # LGPD (REV3-LGPD-1): a conta da criança excluída de vez, que a plataforma
+        # continua mandando (a porta de identidade a ignora), não volta ao cursor —
+        # nem a que uma restauração devolveu ao cursor gravado, que o MERGE acima
+        # manteria. Depois do merge, no cursor já gravado.
+        from app.services import exclusao_aluno
+        exclusao_aluno.tirar_contas_esquecidas_do_cursor(db, escola_id)
         # A recoleta completa que CHEGOU AO FIM reinicia o relógio semanal também
         # quando terminou 'parcial' (um livro sem data, um aluno cujo pedido
         # falha sempre): antes só 'concluida'/'sem_atualizacao' marcavam, e uma
