@@ -479,9 +479,11 @@ def _no_ranking_vigente(aluno: Aluno, matricula) -> bool:
 
     Fora dela, a Nota continua no banco (o recálculo não apaga a linha de quem
     sai: arquivado, transferido, excluído, Fase) com a posição de um cálculo
-    antigo — que hoje pertence a outra criança."""
-    return (aluno.status == "ativo" and matricula is not None
-            and elegibilidade.participa_de_premiacao(matricula[1].ano_escolar))
+    antigo — que hoje pertence a outra criança.
+
+    A regra é UMA só, ``scoring.no_ranking_vigente`` (a do Comparador); aqui só o
+    par (Matricula, Turma) vira a turma do ano."""
+    return scoring.no_ranking_vigente(aluno, matricula[1] if matricula is not None else None)
 
 
 def _posicao_exibida(db: Session, escola_id: int, ano: int, usuario: Usuario,
