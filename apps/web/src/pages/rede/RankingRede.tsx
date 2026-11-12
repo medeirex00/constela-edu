@@ -307,7 +307,7 @@ function AvisoFrescorRede({ frescor, aba, ids }: {
       <AlertTriangle size={14} aria-hidden className="mt-0.5 shrink-0" />
       <span>
         {lista.length} escola(s) deste ranking com dado de mais de {frescor.limite_dias} dias
-        (ou coleta parcial) — a posição delas reflete um retrato antigo:{" "}
+        (ou parte dos dados antiga) — a posição delas reflete um retrato antigo:{" "}
         {lista.map((e) => `${e.nome} (dados de ${dataDoDia(e.f!.data)})`).join("; ")}.
       </span>
     </p>
@@ -856,7 +856,7 @@ function ConteudoRankingDaRede({ redeId }: { redeId: number }) {
                           {atrasada(f) && (
                             <span
                               className="rounded-full bg-amber-100 px-2 py-0.5 text-[11px] font-semibold text-amber-800 dark:bg-amber-500/15 dark:text-amber-300"
-                              title={`O dado desta escola passou de ${frescor?.limite_dias ?? 7} dias (ou a última coleta foi parcial).`}
+                              title={`O dado desta escola passou de ${frescor?.limite_dias ?? 7} dias (ou parte dos dados dela é antiga).`}
                             >
                               dados de {dataDoDia(f!.data)}
                             </span>
