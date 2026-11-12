@@ -77,7 +77,6 @@ import { Link } from "react-router-dom";
 
 import GerarCertificados from "../components/GerarCertificados";
 import { SeletorPeriodo, avisoPopulacao, periodoParaQuery } from "../components/SeletorPeriodo";
-import type { PopulacaoDoPeriodo } from "../components/SeletorPeriodo";
 import { MolduraPilula, estiloSelectPilula } from "../components/SeletorPilula";
 import { SeletorTurno } from "../components/SeletorTurno";
 import { SeloFrescor, type Frescor } from "../components/SeloFrescor";
@@ -177,7 +176,6 @@ interface ReguaMatematica {
 type RespostaPremiacoes = PremiacoesT & {
   regua_matematica?: ReguaMatematica;
   frescor?: Frescor | null;
-  populacao?: PopulacaoDoPeriodo;
 };
 
 /** "2026-01-31T23:59:59.999999" → "31/01/2026". Sem passar por `Date`: a data

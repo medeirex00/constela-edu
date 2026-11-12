@@ -316,6 +316,19 @@ export interface HistoricoLeituras {
   itens: LeituraHistorico[];
 }
 
+/** De que ano letivo vêm as crianças, as turmas e a série de uma consulta por período
+ *  (`periodos.populacao_do_periodo` no backend): o do período quando ele cai inteiro num
+ *  ano letivo já encerrado (`ano_do_periodo`); senão, o ativo (`ano_ativo`), declarado
+ *  quando o período passa por mais de um ano (`atravessa_anos`). */
+export type OrigemPopulacao = "ano_ativo" | "ano_do_periodo" | "atravessa_anos";
+
+/** O bloco `populacao` das premiações e do Relatório por Período. */
+export interface PopulacaoDoPeriodo {
+  ano_letivo: number;
+  origem: OrigemPopulacao;
+  ano_letivo_ativo?: number;
+}
+
 /** Item do ranking de leitura por período (livros/pontos/tempo no intervalo). */
 export interface RankingLeituraItem {
   posicao: number;
@@ -326,6 +339,9 @@ export interface RankingLeituraItem {
   livros: number;
   pontos: number;
   tempo_leitura_min: number;
+  /** O ano letivo da criança, da turma e da série desta linha, e por quê. */
+  ano_letivo?: number;
+  populacao?: OrigemPopulacao;
 }
 
 /** Ranking de Matemática por período (estrelas/atividades do Matific). */
@@ -338,6 +354,9 @@ export interface RankingMatematicaItem {
   estrelas: number;
   atividades: number;
   pontuacao_media: number;
+  /** O ano letivo da criança, da turma e da série desta linha, e por quê. */
+  ano_letivo?: number;
+  populacao?: OrigemPopulacao;
 }
 
 /** Um colocado no pódio de uma premiação. */
@@ -385,6 +404,9 @@ export interface Premiacoes {
   /** Presente com `?turnos=true` (visão "todas as turmas"): os mesmos pódios
    *  quebrados por TURNO. O front mostra as abas de turno só quando há mais de um. */
   turnos?: PremiacoesTurno[];
+  /** De que ano letivo são as crianças e as turmas dos pódios (e o contador do
+   *  Matific): num período de um ano já encerrado, as daquele ano. */
+  populacao?: PopulacaoDoPeriodo;
 }
 
 /** Aluno no painel de gestão da turma — com nota, posição e data de cadastro. */

@@ -30,7 +30,6 @@ import { useEffect, useMemo, useState } from "react";
 
 import { IconePlataforma } from "../components/identidadePlataforma";
 import { SeletorPeriodo, avisoPopulacao, periodoParaQuery } from "../components/SeletorPeriodo";
-import type { PopulacaoDoPeriodo } from "../components/SeletorPeriodo";
 import { MolduraPilula, estiloSelectPilula } from "../components/SeletorPilula";
 import { TabelaRolavel } from "../components/TabelaRolavel";
 import {
@@ -42,7 +41,7 @@ import { useApi } from "../hooks/useApi";
 import { useModulos } from "../hooks/useModulos";
 import { apiDownload } from "../lib/api";
 import { dataHora, numero, tempoLeitura } from "../lib/formato";
-import type { Turma } from "../lib/types";
+import type { PopulacaoDoPeriodo, Turma } from "../lib/types";
 
 type Classificacao = "SUPORTADO" | "SUPORTADO COM RESSALVA" | "NÃO SUPORTADO";
 

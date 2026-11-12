@@ -35,7 +35,6 @@ import {
   tabelaRanking as t,
 } from "../components/RankingUi";
 import { SeletorPeriodo, avisoPopulacao, periodoParaQuery } from "../components/SeletorPeriodo";
-import type { OrigemPopulacao } from "../components/SeletorPeriodo";
 import { SeloFrescorDaEscola } from "../components/SeloFrescor";
 import { SeletorTurno } from "../components/SeletorTurno";
 import { TabelaRolavel } from "../components/TabelaRolavel";
@@ -51,13 +50,9 @@ import { bimestreDoPeriodo } from "../lib/tiposCertificados";
 import { TURNO_SEM, TURNO_TODOS, aplicarTurno, rotuloTurno, turnoEfetivo } from "../lib/turnos";
 import type { RankingLeituraItem, Turma } from "../lib/types";
 
-/** Linha do ranking por período com o ANO LETIVO da criança e da turma (`ano_letivo`)
- *  e por quê (`populacao`): num período de um ano já encerrado, as daquele ano. Ainda
- *  não está em packages/core, por isso o tipo é estendido aqui. */
-type ItemLeituraPeriodo = RankingLeituraItem & {
-  ano_letivo?: number;
-  populacao?: OrigemPopulacao;
-};
+/** Linha do ranking por período, com o ANO LETIVO da criança e da turma (`ano_letivo`)
+ *  e por quê (`populacao`): num período de um ano já encerrado, as daquele ano. */
+type ItemLeituraPeriodo = RankingLeituraItem;
 
 export default function RankingLeitura({ embutido = false, alvoAcoes }: {
   embutido?: boolean;

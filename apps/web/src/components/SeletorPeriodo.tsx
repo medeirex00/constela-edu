@@ -7,6 +7,8 @@
  */
 import { CalendarRange } from "lucide-react";
 
+import type { PopulacaoDoPeriodo } from "../lib/types";
+
 import { MolduraPilula, estiloDataPilula, estiloSelectPilula } from "./SeletorPilula";
 
 export interface Periodo {
@@ -53,17 +55,11 @@ export function periodoParaQuery(p: Periodo): string {
   return q.toString();
 }
 
-/** De que ano letivo vêm as crianças de uma consulta por período (`periodos.
- *  populacao_do_periodo` no backend): `populacao` nas premiações e no Relatório por
- *  Período; `ano_letivo` + `populacao` em cada linha do Ranking de Leitura por período.
- *  Ainda não está em packages/core, por isso é tipado aqui. */
-export type OrigemPopulacao = "ano_ativo" | "ano_do_periodo" | "atravessa_anos";
-
-export interface PopulacaoDoPeriodo {
-  ano_letivo: number;
-  origem: OrigemPopulacao;
-  ano_letivo_ativo?: number;
-}
+/** De que ano letivo vêm as crianças de uma consulta por período: `populacao` nas
+ *  premiações e no Relatório por Período; `ano_letivo` + `populacao` em cada linha dos
+ *  rankings por período. Os tipos são os do @constela/core (re-exportados aqui para quem
+ *  já os importava deste módulo). */
+export type { OrigemPopulacao, PopulacaoDoPeriodo } from "../lib/types";
 
 /** O aviso de que ano são as crianças e as turmas — a mesma frase do PDF do Relatório
  *  por Período (`relatorios_periodo_pdf._populacao`). `null` no caso de sempre (o
