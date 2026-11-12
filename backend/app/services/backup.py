@@ -927,6 +927,12 @@ def restaurar(db: Session, escola_id: int, dados: dict,
             if id_antigo is not None:
                 mapas[nome][int(id_antigo)] = objeto.id
         contagem[nome] = restauradas
+    # LGPD (REV3-LGPD-1): o cursor da coleta incremental volta do arquivo com a conta
+    # da criança excluída de vez depois dele (a ficha não volta; a conta voltava ao
+    # banco e a todo backup seguinte). Marcas de qualquer escola: o arquivo pode ser
+    # de outra (como _excluidos_depois_do_backup).
+    from app.services import exclusao_aluno  # noqa: E402  (evita ciclo no import)
+    exclusao_aluno.tirar_contas_esquecidas_do_cursor(db, escola_id, todas_as_escolas=True)
     religadas = _reapontar(db, referencias, mapas, tabelas)
     if reapontadas is not None:
         reapontadas.update(religadas)
