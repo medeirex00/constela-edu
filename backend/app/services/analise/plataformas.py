@@ -429,14 +429,30 @@ def _partes_coletas(ids: list[int], com_primeiro_evento: bool, com_carimbo: bool
     ``relatorios_periodo._primeiro_evento``): um ``GROUP BY`` por fonte. ``com_carimbo``: o
     carimbo dos dados de cada escola junto (``_chave_do_bloco``) — nos retratos, no mesmo
     ``GROUP BY`` que já lê a tabela inteira da escola; nas leituras, nos eventos de leitura e
-    nas importações (o status "sem questões" incluído), um ``GROUP BY`` a mais por tabela."""
+    nas importações (o status "sem questões" incluído), um ``GROUP BY`` a mais por tabela.
+
+    A primeira e a última COLETA não contam o ajuste manual (``Importacao.tipo ==
+    "manual"``, o botão Editar; numa escola integrada, o "fale com o suporte"): o número
+    digitado hoje não diz que o dado da escola chegou hoje — com ele, a escola com a coleta
+    parada há semanas aparecia "coletada hoje", com cobertura completa (a regra do frescor,
+    ``frescor_ranking._datas_por_escola``). Na escola SEM coleta nenhuma (sem integração,
+    que digita os números), as datas são as dos ajustes: ali eles são o único dado."""
     def _coluna_vazia():
         return (_SEM_INTEIRO.label("aluno_id"), _SEM_INTEIRO.label("turma_id"),
                 _SEM_TEXTO.label("ano_escolar"))
+
+    def _datas(m):
+        manual = Importacao.tipo == IMPORTACAO_AJUSTE_MANUAL
+        coletado = or_(Importacao.tipo.is_(None), Importacao.tipo != IMPORTACAO_AJUSTE_MANUAL)
+        return (func.coalesce(func.min(case((coletado, m.data_referencia))),
+                              func.min(case((manual, m.data_referencia)))).label("ini"),
+                func.coalesce(func.max(case((coletado, m.data_referencia))),
+                              func.max(case((manual, m.data_referencia)))).label("fim"))
     partes = [select(literal_column(f"'{p}'").label("fonte"), m.escola_id.label("escola_id"),
-                     *_coluna_vazia(), func.min(m.data_referencia).label("ini"),
-                     func.max(m.data_referencia).label("fim"),
+                     *_coluna_vazia(), *_datas(m),
                      *(_carimbo(m) if com_carimbo else _sem_carimbo()))
+              .select_from(m)
+              .outerjoin(Importacao, Importacao.id == m.importacao_id)
               .where(m.escola_id.in_(ids)).group_by(m.escola_id)
               for p, m in (("elefante", SnapshotElefante), ("matific", SnapshotMatific))]
     if com_primeiro_evento:
