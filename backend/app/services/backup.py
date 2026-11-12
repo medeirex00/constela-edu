@@ -229,11 +229,16 @@ REFERENCIAS_A_USUARIO: dict[str, tuple[str, ...]] = {
 #   * assistente — ``api_key_cifrada`` (cifra da DEK; a chave de um provedor nunca
 #     pode ir para outro, então provedor e chave ficam juntos, como estão);
 #   * matific_sessao — sessão do Matific cifrada (efêmera; a de outra conta ou de
-#     antes da troca de credenciais não pode voltar).
+#     antes da troca de credenciais não pode voltar);
+#   * push — a impressão HMAC da SECRET_KEY com que os aparelhos foram registrados
+#     (``push.NAMESPACE_CHAVE_DE_SESSAO``). Não revela a chave, mas é valor derivado de
+#     segredo; e a de um backup anterior a uma troca de chave, reposta, faria o
+#     próximo push apagar sem motivo os aparelhos registrados depois da troca.
 SEGREDOS_DE_CONFIGURACAO: dict[str, tuple[str, ...] | None] = {
     "painel_publico": ("token",),
     "assistente": ("api_key_cifrada",),
     "matific_sessao": None,
+    "push": None,
 }
 
 # Namespaces que a restauração NÃO toca: as linhas atuais ficam intactas e as do
