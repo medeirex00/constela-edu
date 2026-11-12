@@ -24,6 +24,9 @@ from app.services import backup as svc_backup
 from app.services import exclusao_aluno
 from app.sync import service
 from tests._sync_nucleo_fakes import NavElefante, aluno_el, credencial, instalar, livro, rodar
+# A coleta roda "agora": num dia de outro ano que o letivo da escola, ela não cria a
+# ficha (coleta_fora_do_ano_letivo, S_G_VIRADA-1) e os testes perdiam o objeto.
+from tests._ano_letivo import escola_no_ano_de_hoje  # noqa: F401 — fixture
 
 API = "/api/v1"
 NOME = "LIVIA FICTICIA ESQUECIDA DO CURSOR"

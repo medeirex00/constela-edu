@@ -58,6 +58,7 @@ def db():
     engine.dispose()
 
 
+from tests._ano_letivo import escola_no_ano_de_hoje  # noqa: E402,F401 — fixture
 from tests.test_aud3_lgpd_esquecimento_cursor_elefante import (  # noqa: E402,F401
     test_coleta_seguinte_nao_regrava_a_conta_esquecida_no_cursor as test_pg_coleta_seguinte,
     test_coleta_tira_a_conta_esquecida_que_ja_estava_no_cursor as test_pg_coleta_cursor_antigo,
