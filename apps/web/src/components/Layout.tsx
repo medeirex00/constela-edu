@@ -1811,13 +1811,17 @@ const LEEM_O_CONTEXTO_NO_LUGAR = ["/suporte"];
  *  quase todo nome de escola), com o texto inteiro no title. O foco do teclado aparece no
  *  contorno do cartão. Na barra recolhida vira um botão que expande o menu. */
 function CartaoEscola({ compacto = false, aoExpandir }: { compacto?: boolean; aoExpandir?: () => void }) {
-  const { escolas, escolaId, selecionarEscola } = useApp();
+  const { escolas, escolaId, escolaAtual, selecionarEscola } = useApp();
   const { secretaria } = usePerfil();
   const navegar = useNavigate();
   const { pathname } = useLocation();
   if (!secretaria && escolas.length === 0) return null;
-  const atual = escolas.find((e) => e.id === escolaId) ?? null;
-  // Escola no contexto que não está na lista: nome próprio (nunca "Toda a Rede Municipal").
+  // A escola aberta: a da lista ou, para o Admin Global, a que ele abriu fora dela (uma
+  // inativa — o AppContext a busca com as inativas), com o nome dela como Turmas e
+  // Configurações já mostram.
+  const atual = escolaAtual;
+  const atualForaDaLista = atual != null && !escolas.some((e) => e.id === atual.id);
+  // Escola no contexto que não se sabe qual é: o número (nunca "Toda a Rede Municipal").
   const foraDaLista = escolaId != null && !atual ? `Escola nº ${escolaId} (fora da lista)` : null;
   const rotulo = secretaria ? "Contexto" : "Escola";
   const nomeAtual = atual?.nome ?? foraDaLista ?? (secretaria ? "Toda a Rede Municipal" : "");
@@ -1871,6 +1875,7 @@ function CartaoEscola({ compacto = false, aoExpandir }: { compacto?: boolean; ao
         {/* Sem emoji no texto: o ícone do cartão já diz que é a rede, e o nome cabe. */}
         {secretaria && <option value="">Toda a Rede Municipal</option>}
         {foraDaLista && <option value={escolaId ?? ""}>{foraDaLista}</option>}
+        {atualForaDaLista && <option value={atual.id}>{atual.nome}</option>}
         {escolas.map((escola) => (
           <option key={escola.id} value={escola.id}>
             {escola.nome}
