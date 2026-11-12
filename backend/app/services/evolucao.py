@@ -665,6 +665,8 @@ def ranking_evolucao(db: Session, escola_id: int, inicio: datetime | None = None
                      mapa_dif: dict[tuple[str, str], float] | None = None,
                      alunos_com_leituras: set[int] | None = None,
                      base_no_periodo: bool = False,
+                     ano_letivo: int | None = None,
+                     alunos_permitidos: set[int] | None = None,
                      ) -> list[ItemEvolucao]:
     """Ranking de quem mais cresceu DENTRO da janela [inicio, fim] (o ganho é
     medido pela `_janela`, que ignora o acumulado anterior ao período).
@@ -701,9 +703,16 @@ def ranking_evolucao(db: Session, escola_id: int, inicio: datetime | None = None
     numerados DENTRO do recorte (1..N de quem aparece na lista).
 
     ANO LETIVO: a série do Matific traz contadores DO ANO, então, havendo
-    ``inicio``, a `_janela` dela ignora snapshots fora do ano letivo ativo (um
+    ``inicio``, a `_janela` dela ignora snapshots fora do ano letivo (um
     dezembro anterior não é base de janeiro). A do Elefante (contadores de vida
-    inteira) não é recortada.
+    inteira) não é recortada. ``ano_letivo`` é o ano da COORTE e do contador do
+    Matific — o ativo por padrão; num período inteiro de um ano letivo já
+    encerrado, o daquele ano (``periodos.populacao_do_periodo``, decidido pela
+    rota, como nas premiações): as crianças, as turmas e a série daquele ano.
+    ``alunos_permitidos`` recorta QUEM aparece por aluno (no ano encerrado, o
+    filtro de turma e as turmas do professor, que são as de agora, escolhem as
+    crianças por ``PopulacaoDoPeriodo.alunos_das_turmas``); como os outros
+    recortes, não muda a régua.
 
     `serie_m`/`serie_e`/`mapa_dif` são as varreduras CARAS e INDEPENDENTES da
     janela; um chamador que precise de VÁRIAS janelas (o mural: dia/semana/mês)
@@ -727,7 +736,8 @@ def ranking_evolucao(db: Session, escola_id: int, inicio: datetime | None = None
         inicio = (_agora_da_requisicao(db) - timedelta(days=dias)).replace(tzinfo=None)
 
     # COORTE COMPLETA da escola — base dos ganhos e da régua. Sem filtro aqui.
-    matriculas = matriculas_ativas(db, escola_id, escola.ano_letivo_ativo)
+    ano_da_coorte = escola.ano_letivo_ativo if ano_letivo is None else ano_letivo
+    matriculas = matriculas_ativas(db, escola_id, ano_da_coorte)
 
     permitidas = set(turma_ids) if turma_ids is not None else None
 
@@ -770,7 +780,7 @@ def ranking_evolucao(db: Session, escola_id: int, inicio: datetime | None = None
     # dado DA PLATAFORMA daquela dimensão até `fim`. Nunca "cresceu > 0".
     aferido: dict[int, dict[str, bool]] = {}
     # Contadores do Matific são DO ANO: com início, só snapshots do ano letivo.
-    ano_matific = escola.ano_letivo_ativo if inicio is not None else None
+    ano_matific = ano_da_coorte if inicio is not None else None
     for matricula, turma in matriculas:
         aluno_id = matricula.aluno_id
         atual_m, base_m = _janela(serie_m.get(aluno_id, []), inicio, fim,
@@ -866,6 +876,8 @@ def ranking_evolucao(db: Session, escola_id: int, inicio: datetime | None = None
     itens: list[ItemEvolucao] = []
     for matricula, turma in matriculas:
         if not _no_recorte(turma):
+            continue
+        if alunos_permitidos is not None and matricula.aluno_id not in alunos_permitidos:
             continue
         aluno_id = matricula.aluno_id
         nota_m, _ = scoring.calcular_matific(

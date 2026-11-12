@@ -204,6 +204,16 @@ def ranking_evolucao(
     o telão público já faz (``publico._dados_publicos``): ``turma_ids`` só
     recorta a lista — a régua continua a da escola inteira, então a nota de cada
     criança é a mesma do sistema.
+
+    POPULAÇÃO DO PERÍODO (S_G_VIRADA-2), a mesma das premiações
+    (``periodos.populacao_do_periodo``): num período inteiro de um ano letivo já
+    encerrado, as crianças, as turmas, a série e o contador do Matific são os
+    daquele ano — a "Melhor Evolução" da cerimônia feita depois da virada não perde
+    a formanda nem põe as demais na turma do ano novo. O filtro de turma e as
+    turmas do professor são as de agora (as únicas que a tela e as permissões
+    conhecem): escolhem QUEM aparece pelas matrículas nelas, e cada criança sai com
+    a turma daquele ano. Cada linha diz de que ano é (``ano_letivo``,
+    ``populacao``), como as do Ranking de Leitura.
     """
     escola = db.get(Escola, escola_id)
     if dimensao is not None:
@@ -232,10 +242,27 @@ def ranking_evolucao(
         except ValueError as exc:
             raise HTTPException(status.HTTP_400_BAD_REQUEST,
                                 "Data inválida (use AAAA-MM-DD).") from exc
-        dados = svc.ranking_evolucao(db, escola_id, ini, fim_dt, turma_id, ano_escolar,
+        populacao = periodos.populacao_do_periodo(ini, fim_dt, escola.ano_letivo_ativo)
+        filtro_turma, alunos_permitidos = turma_id, None
+        if populacao.outro_ano:
+            # As turmas que concorrem são as DAQUELE ano; o filtro e as do professor
+            # (de agora) escolhem as crianças pelas matrículas nelas.
+            recorte = elegibilidade.turmas_premiaveis(db, escola_id, populacao.ano_letivo)
+            for ids in ([turma_id] if turma_id else None, permitidas):
+                if ids is None:
+                    continue
+                quem = set(db.execute(
+                    populacao.alunos_das_turmas(escola_id, ids)).scalars())
+                alunos_permitidos = (quem if alunos_permitidos is None
+                                     else alunos_permitidos & quem)
+            filtro_turma = None
+        dados = svc.ranking_evolucao(db, escola_id, ini, fim_dt, filtro_turma, ano_escolar,
                                      turno=turno, turma_ids=recorte,
-                                     base_no_periodo=True)
+                                     base_no_periodo=True,
+                                     ano_letivo=populacao.ano_letivo,
+                                     alunos_permitidos=alunos_permitidos)
     else:
+        populacao = periodos.populacao_do_periodo(None, None, escola.ano_letivo_ativo)
         dados = svc.ranking_evolucao(db, escola_id, turma_id=turma_id,
                                      ano_escolar=ano_escolar, dias=dias, turno=turno,
                                      turma_ids=recorte, base_no_periodo=True)
@@ -251,6 +278,9 @@ def ranking_evolucao(
             "nome": item.nome,
             "turma": item.turma,
             "ano_escolar": item.ano_escolar,
+            # De que ano letivo são a criança, a turma e a série desta linha.
+            "ano_letivo": populacao.ano_letivo,
+            "populacao": populacao.origem,
             # LEGADO — a nota única de crescimento.
             "nota_evolucao": item.nota_evolucao,
             "ganhos": item.ganhos,
