@@ -22,7 +22,7 @@ from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta, timezone
 from types import SimpleNamespace
 
-from sqlalchemy import func, select
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.orm import Session, selectinload
 
 from app.models import (
@@ -37,6 +37,7 @@ from app.models import (
     SnapshotMatific,
     Turma,
 )
+from app.models.plataformas import IMPORTACAO_SEM_QUESTOES
 from app.services import (bimestres, dificuldade_livro, elegibilidade, matific_destaque,
                           scoring)
 
@@ -76,7 +77,35 @@ def ajustes_manuais_matific(db: Session, escola_id: int) -> frozenset[int]:
 def ajustes_manuais_elefante(db: Session, escola_id: int) -> frozenset[int]:
     """``ajustes_manuais`` do Elefante — a entrada de
     ``sem_ajustes_superados_vitalicio``."""
-    return ajustes_manuais(db, escola_id, "elefante")
+    return _importacoes_especiais_elefante(db, escola_id)[0]
+
+
+def _importacoes_especiais_elefante(db: Session, escola_id: int
+                                    ) -> tuple[frozenset[int], frozenset[int]]:
+    """(ajustes manuais, coletas S9) do Elefante da escola: os ids das importações que
+    são AJUSTE MANUAL (``ajustes_manuais``) e os das coletas em que as questões NÃO
+    vieram (``Importacao.status == IMPORTACAO_SEM_QUESTOES``) — numa consulta só e, dentro
+    de ``scoring.leituras_da_requisicao``, uma vez por requisição (a série de livros e a
+    das questões leem as duas listas)."""
+    memoria = scoring.memoria_da_requisicao(db, "importacoes_especiais_elefante")
+    if memoria is not None and escola_id in memoria:
+        return memoria[escola_id]
+    manuais: set[int] = set()
+    s9: set[int] = set()
+    for iid, plataforma, tipo, situacao in db.execute(
+            select(Importacao.id, Importacao.plataforma, Importacao.tipo, Importacao.status)
+            .where(Importacao.escola_id == escola_id,
+                   or_(and_(Importacao.plataforma == "elefante",
+                            Importacao.tipo == IMPORTACAO_AJUSTE_MANUAL),
+                       Importacao.status == IMPORTACAO_SEM_QUESTOES))).all():
+        if plataforma == "elefante" and tipo == IMPORTACAO_AJUSTE_MANUAL:
+            manuais.add(iid)
+        if situacao == IMPORTACAO_SEM_QUESTOES:
+            s9.add(iid)
+    resultado = (frozenset(manuais), frozenset(s9))
+    if memoria is not None:
+        memoria[escola_id] = resultado
+    return resultado
 
 
 def sem_ajustes_superados_matific(db: Session, escola_id: int,
@@ -137,6 +166,18 @@ def sem_ajustes_superados_elefante(db: Session, escola_id: int,
             for aluno_id, serie in series.items()}
 
 
+def _series_brutas(db: Session, escola_id: int, modelo) -> dict[int, list]:
+    """Todos os snapshots da escola agrupados por aluno, em ordem cronológica
+    (``data_referencia``; o id desempata), sem filtro nenhum."""
+    series: dict[int, list] = {}
+    for snap in db.execute(
+        select(modelo).where(modelo.escola_id == escola_id)
+        .order_by(modelo.data_referencia, modelo.id)
+    ).scalars():
+        series.setdefault(snap.aluno_id, []).append(snap)
+    return series
+
+
 def _series_por_aluno(db: Session, escola_id: int, modelo) -> dict[int, list]:
     """Todos os snapshots da escola agrupados por aluno, em ordem cronológica.
 
@@ -150,16 +191,44 @@ def _series_por_aluno(db: Session, escola_id: int, modelo) -> dict[int, list]:
     senão ele virava base ou estado atual de um período e inventava ganho (ou o
     apagava). É a série do Ranking de Evolução, do mural, do /insights, do app e
     do assistente."""
-    series: dict[int, list] = {}
-    for snap in db.execute(
-        select(modelo).where(modelo.escola_id == escola_id)
-        .order_by(modelo.data_referencia, modelo.id)
-    ).scalars():
-        series.setdefault(snap.aluno_id, []).append(snap)
+    series = _series_brutas(db, escola_id, modelo)
     if modelo is SnapshotMatific:
         return sem_ajustes_superados_matific(db, escola_id, series)
     if modelo is SnapshotElefante:
         return sem_ajustes_superados_elefante(db, escola_id, series)
+    return series
+
+
+def series_das_questoes_elefante(db: Session, escola_id: int,
+                                 serie_e: dict[int, list]) -> dict[int, list]:
+    """A série das QUESTÕES do Elefante por aluno: só os retratos que medem as
+    questões, sem o ajuste manual que uma coleta das questões desmentiu — a regra
+    das Questões do período do Relatório (``relatorios_periodo._retratos_das_questoes``).
+
+    O retrato de uma coleta em que as questões NÃO vieram (S9,
+    ``Importacao.status == IMPORTACAO_SEM_QUESTOES``) leva as questões do retrato atual
+    de antes dele — que pode ser um ajuste manual do suporte. Na série de livros e
+    tempo (``serie_e``) ele MEDE e desmente o ajuste; nas questões, ele repetia o
+    número digitado e, como base de um período, devolvia o degrau entre o digitado e
+    o número da plataforma como "questões do período" (S_G_AJUSTE-1, resíduo S9).
+    Aqui ele sai, e só a coleta que mede as questões desmente o ajuste.
+
+    Escola sem nenhuma coleta S9 (o comum): devolve ``serie_e`` como veio (uma
+    consulta só). Dentro de ``scoring.leituras_da_requisicao`` sai do banco uma vez
+    por requisição."""
+    memoria = scoring.memoria_da_requisicao(db, "series_das_questoes_elefante")
+    if memoria is not None and escola_id in memoria:
+        return memoria[escola_id]
+    manuais, s9 = _importacoes_especiais_elefante(db, escola_id)
+    if not s9:
+        series = serie_e
+    else:
+        series = {
+            aluno_id: sem_ajustes_superados_vitalicio(
+                [s for s in serie if s.importacao_id not in s9], manuais)
+            for aluno_id, serie in _series_brutas(db, escola_id, SnapshotElefante).items()}
+    if memoria is not None:
+        memoria[escola_id] = series
     return series
 
 
@@ -667,6 +736,7 @@ def ranking_evolucao(db: Session, escola_id: int, inicio: datetime | None = None
                      base_no_periodo: bool = False,
                      ano_letivo: int | None = None,
                      alunos_permitidos: set[int] | None = None,
+                     serie_q: dict[int, list] | None = None,
                      ) -> list[ItemEvolucao]:
     """Ranking de quem mais cresceu DENTRO da janela [inicio, fim] (o ganho é
     medido pela `_janela`, que ignora o acumulado anterior ao período).
@@ -761,6 +831,10 @@ def ranking_evolucao(db: Session, escola_id: int, inicio: datetime | None = None
         serie_m = _series_por_aluno(db, escola_id, SnapshotMatific)
     if serie_e is None:
         serie_e = _series_por_aluno(db, escola_id, SnapshotElefante)
+    # As QUESTÕES só dos retratos que as medem (sem os da coleta S9, que repetem as
+    # de antes): ``series_das_questoes_elefante`` — ``serie_e`` mesmo, sem S9.
+    if serie_q is None:
+        serie_q = series_das_questoes_elefante(db, escola_id, serie_e)
     if mapa_dif is None:   # a REGRA de dificuldade (fonte única), injetável
         mapa_dif = dificuldade_livro.regra_da_escola(db, escola_id)
     # Leituras com data REAL: para quem tem relatório individual importado, o
@@ -797,9 +871,13 @@ def ranking_evolucao(db: Session, escola_id: int, inicio: datetime | None = None
         )
         atual_e, base_e = _janela(serie_e.get(aluno_id, []), inicio, fim,
                                   base_no_periodo=base_no_periodo)
-        # Questões só existem agregadas (snapshot); leitura tem data real.
-        questoes_t = _delta(atual_e, base_e, "questoes_tentativas")
-        questoes_a = _delta(atual_e, base_e, "questoes_acertos")
+        # Questões só existem agregadas (snapshot); leitura tem data real. A janela
+        # delas é a da série das questões (sem os retratos S9 como borda).
+        atual_q, base_q = ((atual_e, base_e) if serie_q is serie_e else
+                           _janela(serie_q.get(aluno_id, []), inicio, fim,
+                                   base_no_periodo=base_no_periodo))
+        questoes_t = _delta(atual_q, base_q, "questoes_tentativas")
+        questoes_a = _delta(atual_q, base_q, "questoes_acertos")
         itens_periodo = None
         if aluno_id in com_leituras:
             # Fonte exata: as leituras individuais datadas dentro do período.
