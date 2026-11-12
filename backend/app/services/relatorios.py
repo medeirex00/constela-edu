@@ -298,8 +298,10 @@ def legenda_data_dos_dados(frescor: dict | None, dimensoes) -> str | None:
     """DE QUANDO é o dado de um documento de ranking (cartaz, certificado).
 
     ``"Dados das plataformas: Leitura de 19/10/2026; Matemática de 18/10/2026"``
-    — a data do retrato mais recente de quem concorre, por dimensão: a MESMA do
-    selo de frescor da tela (``services.frescor_ranking``, dia de Brasília). Um
+    — a data da última COLETA da escola entre quem concorre, por dimensão (o ajuste
+    manual não renova essa data; na escola sem coleta nenhuma, a do ajuste mais
+    recente, o único dado que ela tem): a MESMA do selo de frescor da tela
+    (``frescor_ranking``, ``dado_mais_recente_em``, dia de Brasília). Um
     cartaz impresso com a coleta parada há três semanas tinha a mesma cara de um
     de ontem; a data de emissão não diz isso. Nenhuma fórmula muda.
 
