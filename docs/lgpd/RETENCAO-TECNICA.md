@@ -141,14 +141,9 @@ contadores parados há mais de 1 dia e sem bloqueio vigente.
   identidade); na restauração, depois de recriar as configurações, com as marcas de
   qualquer escola (o arquivo pode ser de outra). Fora do cursor, a conta esquecida é
   buscada inteira a cada coleta e descartada pela porta de identidade (o custo de uma
-  conta a mais na coleta).
-  **Limite, enquanto as duas chamadas não entram:** a sincronização
-  (`app/sync/service.py`) e a restauração (`services/backup.restaurar`) ainda não chamam
-  essa função. Até lá, a coleta seguinte regrava a conta no cursor, a restauração de um
-  backup anterior à exclusão a devolve (o id da conta na plataforma e o total de livros,
-  sem nome nem ficha) e ela sai em todo backup seguinte. Os testes de ponta a ponta de
-  `tests/test_aud3_lgpd_esquecimento_cursor_elefante.py` ficam em falha esperada até as
-  chamadas entrarem e passam a exigi-las sozinhos depois; tirar este limite nesse dia;
+  conta a mais na coleta). As duas chamadas estão no código (`app/sync/service.py`,
+  bloco do cursor, e `services/backup.restaurar`) e os testes de ponta a ponta de
+  `tests/test_aud3_lgpd_esquecimento_cursor_elefante.py` (e o `_pg`) as exigem;
 - o arquivo original de um relatório **individual** dela (o nome do arquivo traz o nome
   dela, o arquivo foi gravado pelo servidor para esta escola e a importação não trouxe
   dado de criança que fica) e **todas** as cópias em `exports/` (não há como saber quais
@@ -266,10 +261,8 @@ a exclusão de turma com alunos não grava a marca)
   restauração do backup JSON da escola pelo app (só o Admin Global) não traz de volta a
   criança excluída de vez depois do arquivo, nem os dados dela, e avisa quantas ficaram de
   fora (`backup.restaurar`, pelo `aluno.excluido_permanente` do log, feito em qualquer
-  escola: vale também para o arquivo de uma escola restaurado em outra) — com uma
-  exceção enquanto a restauração não chama `tirar_contas_esquecidas_do_cursor`: o id da
-  conta dela na plataforma, com o total de livros, volta no cursor da coleta incremental
-  (ver o limite do cursor, acima). Vale também para o
+  escola: vale também para o arquivo de uma escola restaurado em outra), nem a conta dela
+  no cursor da coleta incremental (`tirar_contas_esquecidas_do_cursor`). Vale também para o
   arquivo gerado antes de outra restauração, que troca os ids das fichas: cada
   restauração grava em `backup.restaurado` o mapa {id novo: id do arquivo} (só números,
   preservado do expurgo) e a seguinte segue essa linhagem, gravada em qualquer escola

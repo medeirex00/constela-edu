@@ -24,9 +24,8 @@ APAGADO (é dado da criança e não sustenta nenhuma obrigação):
     ``sync_incremental``: ``{id da conta na plataforma: total}``), que saía também
     no backup da escola (``_tirar_do_cursor_da_sincronizacao``); a conta marcada
     como esquecida que volta ao cursor pela coleta seguinte ou pela restauração de
-    um backup anterior sai por ``tirar_contas_esquecidas_do_cursor``, a chamar pela
-    sincronização e pela restauração (até as duas chamadas entrarem, é o limite
-    registrado no docs/lgpd/RETENCAO-TECNICA.md, seção 2.3).
+    um backup anterior sai por ``tirar_contas_esquecidas_do_cursor``, que a
+    sincronização (bloco do cursor) e a restauração (``backup.restaurar``) chamam.
 ANONIMIZADO (o nome vira ``[removido]``; o resto do registro fica):
   * revisão de OUTRA criança que a listava como candidata: a candidata excluída
     sai da lista, o nome dela some dos dados;
