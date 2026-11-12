@@ -286,9 +286,13 @@ def frescor_das_escolas(db: Session, escolas: list[Escola], hoje: date,
         return {}
     ids = [e.id for e in escolas]
     corte = _corte_dos_antigos(hoje, limite)
-    premiaveis = elegibilidade.turmas_premiaveis_da_rede(db, ids)
-    # Cada escola filtrada pelo SEU ano letivo: a lista acima traz turmas de
-    # todos os anos; quem garante o ano é o `Matricula.ano_letivo` da consulta.
+    # Só as turmas do ano letivo ATIVO de cada escola (S_G_GRUPO-1): a matrícula do ano
+    # ativo que ficou numa turma de outro ano (dado legado) não entra — a mesma
+    # população do cartão da rede, da Visão da Escola e do ranking da escola. Com as
+    # turmas de todos os anos, "alunos com dado" e as datas contavam essa criança, e o
+    # frescor cruzado com o cartão a devolvia à Secretaria. O ano da matrícula continua
+    # garantido pelo `Matricula.ano_letivo` da consulta.
+    premiaveis = elegibilidade.turmas_premiaveis_da_rede(db, ids, no_ano_ativo=True)
     datas = {dim: _datas_por_escola(db, escolas, modelo, premiaveis, turma_ids, corte)
              for dim, (_plat, modelo) in _FONTES.items()}
     syncs = _ultimas_sincronizacoes_ok(db, ids)
