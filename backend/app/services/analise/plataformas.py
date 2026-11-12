@@ -401,7 +401,14 @@ def _parte_coorte(ids: list[int]):
     """A coorte de cada escola (a população de ``relatorios_periodo._coorte``: aluno ATIVO
     matriculado no ano letivo ATIVO da escola; uma matrícula por aluno no ano,
     ``uq_matricula_aluno_ano``). Da coorte fica só o que as somas usam (turma e ano escolar);
-    o nome do aluno nem é lido."""
+    o nome do aluno nem é lido.
+
+    Só a matrícula numa TURMA DO ANO ATIVO (S_G_GRUPO-1), como o cartão da rede, a Visão
+    da Escola e o ranking da escola: a matrícula do ano ativo que ficou numa turma de outro
+    ano (dado legado de antes das travas de escrita) entrava na coorte com a série da turma
+    antiga, e a Análise, cruzada com o cartão, devolvia à Secretaria os números dessa
+    criança. (O Relatório por Período da própria escola ainda a lista — é a gestão da
+    escola, que a vê de qualquer jeito, quem o lê.)"""
     return (select(literal_column("'coorte'").label("fonte"), Aluno.escola_id.label("escola_id"),
                    Aluno.id.label("aluno_id"), Turma.id.label("turma_id"),
                    Turma.ano_escolar.label("ano_escolar"), _SEM_DATA.label("ini"),
@@ -411,7 +418,8 @@ def _parte_coorte(ids: list[int]):
             .join(Escola, Escola.id == Aluno.escola_id)
             .add_columns(*_sem_carimbo())
             .where(Aluno.escola_id.in_(ids), Aluno.status == "ativo",
-                   Matricula.ano_letivo == Escola.ano_letivo_ativo))
+                   Matricula.ano_letivo == Escola.ano_letivo_ativo,
+                   Turma.ano_letivo == Escola.ano_letivo_ativo))
 
 
 def _partes_coletas(ids: list[int], com_primeiro_evento: bool, com_carimbo: bool = False

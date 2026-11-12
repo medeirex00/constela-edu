@@ -21,6 +21,7 @@ from datetime import date
 
 from app.core.tempo import hoje_br
 from app.services import evolucao, frescor_ranking
+from app.services.analise import plataformas as analise_plataformas
 from tests._ano_letivo import escola_no_ano_de_hoje  # noqa: F401 — fixture
 from tests.test_aud3_rede_legado_turma_outro_ano import CANARIO, _cenario
 
@@ -57,3 +58,20 @@ def test_comparador_lado_escola_nao_conta_a_matricula_numa_turma_de_outro_ano(
     assert (lado_escola["indicadores"]["tempo_leitura_min"]
             == lado_turma["indicadores"]["tempo_leitura_min"])
     assert lado_escola["indicadores"]["livros_unicos"] != 80 + CANARIO["livros"]
+
+
+def test_coorte_da_analise_da_rede_nao_conta_a_matricula_numa_turma_de_outro_ano(
+        db, escola_completa):
+    escola, _rede, canario, _antiga = _cenario(db, escola_completa, legado=True)
+    contagens, coortes = analise_plataformas._coortes(db, [escola])
+    # Antes: a canário entrava na coorte (e na série) com a turma do ano passado.
+    assert canario.id not in coortes[escola.id]
+    assert contagens[escola.id].total + contagens[escola.id].fora == 8
+    assert contagens[escola.id].series == {3: 8}
+
+
+def test_coorte_da_analise_controle_sem_legado(db, escola_completa):
+    escola, _rede, canario, _antiga = _cenario(db, escola_completa, legado=False)
+    contagens, coortes = analise_plataformas._coortes(db, [escola])
+    assert canario.id in coortes[escola.id]
+    assert contagens[escola.id].series == {3: 9}
