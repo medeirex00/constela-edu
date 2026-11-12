@@ -458,6 +458,9 @@ def exigir_merito(db: Session, preparo: PreparoCertificado) -> Nota:
     # ano novo sem estar na escola — e o Mérito pedido (o do ano encerrado)
     # continuava sem caminho: ele é sempre do ano letivo ativo, e voltar o ano é
     # recusado (histórico protegido). A recusa diz isso, sem mandar matricular.
+    # A Nota do ano encerrado é o resultado oficial daquele ano (histórico, não é
+    # reescrito): a recusa não diz que ela "não vale mais" (REV3-VIRADA-3), e fala
+    # de "a criança" — o nome vem entre aspas e não é antecedente de "ela".
     if matricula is None:
         ativo = escola.ano_letivo_ativo
         ultimo_ano = db.execute(
@@ -465,24 +468,30 @@ def exigir_merito(db: Session, preparo: PreparoCertificado) -> Nota:
             .where(Matricula.aluno_id == aluno.id, Matricula.ano_letivo < ativo)
         ).scalar_one_or_none()
         if ultimo_ano is not None:
-            saida = (f"Se ela saiu da escola ou se formou, não a coloque numa turma de "
-                     f"{ativo} para emitir: ela passaria a contar no ranking e nas "
-                     f"premiações de {ativo}. Se ela continua na escola, o certificado "
-                     f"sai depois que ela estiver na turma dela de {ativo} (pela Lista "
-                     f"Piloto de {ativo}, ou no perfil dela, três pontinhos › “Editar "
-                     "dados” › Turma)."
+            nota_do_ultimo_ano = db.execute(
+                select(Nota.id).where(Nota.aluno_id == aluno.id,
+                                      Nota.ano_letivo == ultimo_ano)
+            ).first() is not None
+            merito = (f"A nota e a posição de {ultimo_ano} continuam guardadas, mas o "
+                      "certificado de Mérito é do ano letivo ativo"
+                      if nota_do_ultimo_ano else
+                      "O certificado de Mérito é do ano letivo ativo")
+            saida = (f"Se a criança saiu da escola ou se formou, não a coloque numa "
+                     f"turma de {ativo} para emitir: ela passaria a contar no ranking e "
+                     f"nas premiações de {ativo}. Se a criança continua na escola, o "
+                     f"certificado sai depois que ela estiver na turma de {ativo} (pela "
+                     f"Lista Piloto de {ativo}, ou no perfil da criança, três pontinhos › "
+                     "“Editar dados” › Turma)."
                      if preparo.gestao else
-                     f"Se ela saiu da escola ou se formou, não há certificado de Mérito "
-                     f"de {ativo} para ela. Se ela continua na escola, peça à "
-                     f"coordenação para colocá-la na turma dela de {ativo} e emita "
-                     "depois disso.")
+                     f"Se a criança saiu da escola ou se formou, não há certificado de "
+                     f"Mérito de {ativo}. Se a criança continua na escola, peça à "
+                     f"coordenação para colocá-la na turma de {ativo} e emita depois "
+                     "disso.")
             raise HTTPException(
                 status.HTTP_409_CONFLICT,
                 f"“{aluno.nome}” tem matrícula só em {ultimo_ano}, ano letivo já "
-                f"encerrado, e nenhuma no ano letivo ativo ({ativo}). O certificado "
-                f"de Mérito é do ano letivo ativo, e no ranking de {ativo} ela não "
-                f"está: a posição guardada para ela é de um cálculo antigo e não "
-                f"vale mais. {saida}")
+                f"encerrado, e nenhuma no ano letivo ativo ({ativo}). {merito}, e no "
+                f"ranking de {ativo} a criança não está. {saida}")
     if matricula is None or not elegibilidade.participa_de_premiacao(
             matricula[1].ano_escolar):
         onde = (f"está em {matricula[1].nome!r} sem uma série do 1º ao 5º ano "
