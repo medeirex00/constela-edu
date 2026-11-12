@@ -582,7 +582,13 @@ def placar_matific(db: Session, escola_id: int, *, periodo: str | None,
                            recuperavel=False)
     ano_letivo = escola.ano_letivo_ativo
 
-    filtro, rotulo, _di, _df = mapa_filtro(periodo, inicio, fim, ano_letivo, hoje_br)
+    filtro, rotulo, di, df = mapa_filtro(periodo, inicio, fim, ano_letivo, hoje_br)
+    # De que ano letivo são as FICHAS que as linhas abrem: o do período quando ele cai
+    # inteiro num ano letivo já encerrado (a cerimônia de 2026 depois da virada — a
+    # formanda sem matrícula no ano novo continua com link), senão o ativo. A mesma
+    # população das Premiações e dos rankings por período
+    # (``periodos.populacao_do_periodo``); a lista e as turmas vêm do Matific.
+    populacao = periodos.populacao_do_periodo(di, df, ano_letivo)
 
     # A credencial VIGENTE vem antes de tudo, inclusive do cache: sem ela nada do
     # cache é servido, e o carimbo dela amarra o cache e a sessão a esta conta.
@@ -661,7 +667,7 @@ def placar_matific(db: Session, escola_id: int, *, periodo: str | None,
                 db.rollback()
 
         _recusar_linhas_sem_numeros(alunos)
-        fichas = _fichas_da_escola(db, escola_id, ano_letivo,
+        fichas = _fichas_da_escola(db, escola_id, populacao.ano_letivo,
                                    uuids=[a.get("uuid") for a in alunos])
         itens = _montar_ranking(alunos, fichas)
         resultado = {
@@ -671,6 +677,8 @@ def placar_matific(db: Session, escola_id: int, *, periodo: str | None,
             "total": len(itens),
             "com_link": sum(1 for i in itens if i["aluno_id"]),
             "itens": itens,
+            # De que ano letivo são as fichas que as linhas abrem, e por quê.
+            "populacao": populacao.como_dict(),
             "cache": False,
         }
         # Com o carimbo lido no INÍCIO: se a credencial mudou durante a consulta, o
