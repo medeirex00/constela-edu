@@ -224,6 +224,31 @@ Frontend: `apps/web/src/pages/Comecar.tsx` + `components/CredenciaisForm.tsx`
     `studentId` recebidos passam pela mesma normalização que grava a identidade
     (`importacao.student_id_elefante`: sem espaços, sem o sufixo `.0`, nunca só
     zeros), para `" 123 "` ou `123.0` não virarem aviso falso.
+- **Troca de sala do Matific só na MESMA série** (S_G_VIRADA-1,
+  `importacoes._mesma_serie`): a coleta move a matrícula entre turmas ativas e
+  já cadastradas da mesma etapa **e da mesma série** (o 3º A para o 3º B). Turma
+  de outra série vira aviso na importação e a matrícula fica onde está: mudar de
+  série é a virada do ano letivo (a matrícula do ano novo vem da Lista Piloto),
+  não troca de sala. Antes, na virada, o Placar já com as turmas do ano seguinte
+  levava o 3º A inteiro para o 4º A do ano que terminou. Se a criança mudou mesmo
+  de série no meio do ano, a turma é trocada à mão em Alunos.
+- **Coleta fora do ano letivo ativo** (S_G_VIRADA-1; o dia da coleta conta pelo
+  horário de Brasília): a coleta feita num dia de outro ano que o ano letivo ativo
+  da escola (em janeiro/fevereiro, com a escola ainda no ano que terminou; ou com o
+  ano ativo adiantado) **grava os números de quem já tem ficha**, mas **não move
+  matrícula nem cria ficha**. A criança sem ficha fica de fora (descarte
+  `coleta_fora_do_ano_letivo`), com o cursor dela desfeito: a coleta depois da
+  virada (o administrador global troca o "Ano letivo ativo" e a escola envia a
+  Lista Piloto do ano novo) a traz. Quando isso deixa alguém de fora (ficha não
+  criada ou matrícula não movida), abre o aviso **`coleta_fora_do_ano_letivo`**
+  (sem nome de criança, com o que fazer), que fecha sozinho na primeira coleta
+  feita dentro do ano letivo que termina sem falha, e **não** é correspondência
+  pendente (a linha dessa criança não vai para a Revisão de identidade). Se
+  nenhuma conta já ligada a uma ficha da escola veio na coleta, nada foi
+  atualizado: a execução termina
+  `sem_atualizacao` com o motivo `fora_do_ano_sem_conferencia` e não conta como
+  coleta em dia. O destino da criança sem ficha na janela da virada é decisão
+  pendente do dono.
 
 ## Estados da execução: "em dia", "verificado" e período (revisão e93)
 - **Em dia** (fecha o alerta crítico `desatualizada`): coleta completa e sem
