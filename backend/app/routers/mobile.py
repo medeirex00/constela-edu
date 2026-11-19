@@ -78,9 +78,15 @@ def registrar_dispositivo(
     # trava é a linha da conta (FOR NO KEY UPDATE: não segura quem só a referencia,
     # como as linhas da auditoria); o próximo registro espera este confirmar e já o
     # conta. No SQLite as escritas já são uma por vez e a trava não gera SQL.
-    db.execute(
-        select(Usuario.id).where(Usuario.id == usuario.id).with_for_update(key_share=True)
-    )
+    versao_autenticada = usuario.token_version
+    usuario = db.get(Usuario, usuario.id, with_for_update={"key_share": True},
+                     populate_existing=True)
+    if (usuario is None or usuario.status != "ativo"
+            or usuario.token_version != versao_autenticada):
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED,
+                            "Sessão expirada. Entre novamente.")
+    if not usuario.is_global and (usuario.rede_id is not None or usuario.escola_id != escola_id):
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "Acesso negado a esta escola.")
     # A SECRET_KEY mudou desde o último registro na escola: os aparelhos dela são de
     # sessões que já não valem e saem antes deste registro (``push.
     # conferir_chave_de_sessao``); este fica com a chave atual.
