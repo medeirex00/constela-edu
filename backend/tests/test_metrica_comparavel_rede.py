@@ -14,6 +14,7 @@ testes travam que ele é quem governa, e que ``media_geral`` continua exposta
 onde de fato significa desempenho (média das notas de quem usa a plataforma).
 """
 import pytest
+from sqlalchemy import select
 
 from app.models import (
     Aluno,
@@ -24,6 +25,7 @@ from app.models import (
     NivelDificuldade,
     Rede,
     ReferenciaNormalizacao,
+    ResultadoAvaliacao,
     SnapshotElefante,
     SnapshotMatific,
     Turma,
@@ -302,6 +304,31 @@ def test_correlacao_recusa_metrica_desconhecida_caindo_no_indice(rede_desigual, 
         db, rede.id, avaliacao_chave="saeb", indicador="proficiencia",
         edicao=2023, metrica="inventada")
     assert dados["metrica"] == "pontuacao_geral"
+
+
+@pytest.mark.parametrize("metrica", ["pontuacao_geral", "media_geral", "adocao"])
+def test_correlacao_usa_a_mesma_populacao_comparada_do_painel(rede_desigual, db, metrica):
+    rede, pequena, grande = rede_desigual
+    so_fases = _escola(db, rede.id, "EM Somente Fases", livros_por_aluno=[30] * 5)
+    turma = db.scalar(select(Turma).where(Turma.escola_id == so_fases.id))
+    turma.ano_escolar = "Fase 5"
+    db.commit()
+    scoring.recalcular_escola(db, so_fases.id)
+    avaliacao = svc_avaliacoes.obter_avaliacao(db, "saeb")
+    for escola, valor in ((pequena, 220.0), (grande, 250.0), (so_fases, 240.0)):
+        db.add(ResultadoAvaliacao(avaliacao_id=avaliacao.id, edicao=2023, rede_id=rede.id,
+                                  escola_id=escola.id, indicador="proficiencia", valor=valor,
+                                  unidade="escala_saeb"))
+    db.commit()
+
+    painel = svc.dashboard_rede(db, rede.id)
+    escola_fase = next(c for c in painel["escolas"] if c["escola_id"] == so_fases.id)
+    assert escola_fase["alunos_com_dados"] == 5 and escola_fase["comparada"] is False
+    dados = svc_avaliacoes.correlacao_rede(
+        db, rede.id, avaliacao_chave="saeb", indicador="proficiencia", edicao=2023,
+        metrica=metrica)
+    assert {p["escola_id"] for p in dados["pontos"]} == {pequena.id, grande.id}
+    assert dados["pearson"] is None
 
 
 # --- Boletim PDF da rede ------------------------------------------------------

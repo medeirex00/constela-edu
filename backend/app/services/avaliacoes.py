@@ -780,8 +780,8 @@ def correlacao_rede(db: Session, rede_id: int, *, avaliacao_chave: str, indicado
     pontos = []
     for eid, valor in valores.items():
         c = engaj.get(eid)
-        if c is None or c.get("alunos_com_dados", 0) <= 0:
-            continue  # sem engajamento com dados: não entra na correlação
+        if c is None or not svc_rede.tem_dado_de_quem_concorre(c):
+            continue  # a correlação usa a mesma coorte comparável do painel da rede
         x = float(c[metrica])
         pontos.append({"escola_id": eid, "nome": c["nome"], "x": round(x, 1),
                        "y": round(float(valor), 2)})
