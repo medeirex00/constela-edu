@@ -5517,6 +5517,7 @@ def descartar_revisao(
     """O gestor decide que estes dados NÃO devem ir para ninguém (linha de teste,
     aluno que não é da escola…). Nada é associado nem criado; fica auditado. Se a
     mesma linha voltar numa importação futura, abre uma pendência nova."""
+    bloquear_escola_para_importacao(db, escola_id)
     rev = _revisao_da_escola(db, escola_id, revisao_id)
     if rev.status != "pendente":
         raise HTTPException(status.HTTP_409_CONFLICT,

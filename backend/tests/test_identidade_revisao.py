@@ -1217,19 +1217,20 @@ def test_duas_irmas_aplicam_e_fecham_num_unico_commit(db, sala, cliente, monkeyp
                                 "nivel": "A", "data": "2026-03-06",
                                 "elefante_student_id": "4242"}])
 
-    # A rota roda numa sessão PRÓPRIA (conftest `_get_db`), então contar commits
-    # tem de ser por evento do SQLAlchemy, não pelo objeto `db` do teste.
-    commits = {"n": 0}
+    # O recálculo identifica a sessão da requisição. O push posterior roda em
+    # outra sessão e pode gravar a configuração do dispositivo.
+    commits = {}
 
-    def contar_commit(_sessao):
-        commits["n"] += 1
+    def contar_commit(sessao):
+        if not sessao.in_nested_transaction():
+            commits[sessao] = commits.get(sessao, 0) + 1
 
-    recalculos = {"n": 0}
+    recalculos = []
     recalcular_real = scoring.recalcular_escola
 
-    def contar_recalculo(*a, **kw):
-        recalculos["n"] += 1
-        return recalcular_real(*a, **kw)
+    def contar_recalculo(sessao, *a, **kw):
+        recalculos.append(sessao)
+        return recalcular_real(sessao, *a, **kw)
 
     monkeypatch.setattr(scoring, "recalcular_escola", contar_recalculo)
     event.listen(SASession, "after_commit", contar_commit)
@@ -1242,8 +1243,8 @@ def test_duas_irmas_aplicam_e_fecham_num_unico_commit(db, sala, cliente, monkeyp
     assert resp.status_code == 200, resp.text
     assert sorted(resp.json()["revisoes_resolvidas"]) == sorted([rev_a.id, rev_b.id])
     assert len(resp.json()["importacoes"]) == 2          # as DUAS aplicadas
-    assert commits["n"] == 1, f"esperado 1 commit, houve {commits['n']}"
-    assert recalculos["n"] == 1                          # scoring rodou, uma vez
+    assert len(recalculos) == 1
+    assert commits[recalculos[0]] == 1
     db.expire_all()
     for r in (rev_a, rev_b):
         assert db.get(RevisaoIdentidade, r.id).status == "resolvida"
