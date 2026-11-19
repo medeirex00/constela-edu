@@ -180,7 +180,7 @@ def _reservar_tetos_de_falha(db: Session, rede: str, entrada: str,
     estourado: tuple[str, int] | None = None
     for dimensao, valor, limitador in reversed(tetos):  # global 1º
         if limitador.bloqueado(valor):
-            estourado = (dimensao, limitador.segundos_restantes(valor))
+            estourado = (dimensao, limitador.segundos_para_resposta(valor))
             break
     reserva = None
     if estourado is None:
@@ -197,7 +197,8 @@ def _reservar_tetos_de_falha(db: Session, rede: str, entrada: str,
                 espera = reserva.espera(chaves[dimensao])
                 if espera is not None:
                     limitador.bloquear_por(
-                        valor, min(espera, _RECUSA_DO_BANCO_NA_MEMORIA_S))
+                        valor, min(espera, _RECUSA_DO_BANCO_NA_MEMORIA_S),
+                        espera_persistente=espera)
             global_ = reserva.espera(chaves[_DIM_GLOBAL_FALHA])
             estourado = ((_DIM_GLOBAL_FALHA, global_) if global_ is not None
                          else (_DIM_IP_FALHA, reserva.espera(chaves[_DIM_IP_FALHA]) or 1))

@@ -30,6 +30,7 @@ Memória: o dicionário é LIMITADO (_MAX_CHAVES) com descarte de chaves expirad
 from __future__ import annotations
 
 import ipaddress
+import math
 import threading
 import time
 from collections import deque
@@ -48,6 +49,7 @@ class LimitadorTentativas:
         self.max_tentativas = max_tentativas
         self.janela_s = janela_s
         self._eventos: dict[str, deque[float]] = {}
+        self._esperas_persistentes: dict[str, tuple[float, float]] = {}
         self._lock = threading.Lock()
 
     def _agora(self) -> float:
@@ -61,11 +63,13 @@ class LimitadorTentativas:
                      if not f or agora - f[-1] > self.janela_s]
         for k in expiradas:
             del self._eventos[k]
+            self._esperas_persistentes.pop(k, None)
         if len(self._eventos) >= _MAX_CHAVES:
             ordenadas = sorted(self._eventos.items(),
                                key=lambda kv: kv[1][-1] if kv[1] else 0.0)
             for k, _ in ordenadas[: max(1, _MAX_CHAVES // 10)]:
                 self._eventos.pop(k, None)
+                self._esperas_persistentes.pop(k, None)
 
     def bloqueado(self, chave: str) -> bool:
         """True se a chave já estourou o limite dentro da janela."""
@@ -78,6 +82,7 @@ class LimitadorTentativas:
                 fila.popleft()
             if not fila:
                 self._eventos.pop(chave, None)
+                self._esperas_persistentes.pop(chave, None)
                 return False
             return len(fila) >= self.max_tentativas
 
@@ -95,6 +100,7 @@ class LimitadorTentativas:
         """Zera o contador (ex.: após login bem-sucedido)."""
         with self._lock:
             self._eventos.pop(chave, None)
+            self._esperas_persistentes.pop(chave, None)
 
     def limpar_prefixo(self, prefixo: str) -> int:
         """Zera os contadores de todas as chaves que começam com ``prefixo`` (ex.:
@@ -105,6 +111,7 @@ class LimitadorTentativas:
             chaves = [k for k in self._eventos if k.startswith(prefixo)]
             for k in chaves:
                 del self._eventos[k]
+                self._esperas_persistentes.pop(k, None)
             return len(chaves)
 
     def segundos_restantes(self, chave: str) -> int:
@@ -126,7 +133,17 @@ class LimitadorTentativas:
                 return 0
             return max(0, int(self.janela_s - (agora - vivos[excesso])))
 
-    def bloquear_por(self, chave: str, segundos: float) -> None:
+    def segundos_para_resposta(self, chave: str) -> int:
+        segundos = self.segundos_restantes(chave)
+        agora = self._agora()
+        with self._lock:
+            cache_ate, bloqueio_ate = self._esperas_persistentes.get(chave, (0, 0))
+        if cache_ate > agora:
+            return max(segundos, math.ceil(bloqueio_ate - agora))
+        return segundos
+
+    def bloquear_por(self, chave: str, segundos: float, *,
+                     espera_persistente: float | None = None) -> None:
         """Bloqueia a chave NESTE processo por ``segundos`` (no máximo a janela): a
         recusa que a camada persistente deu (outro worker contou as falhas) passa a
         valer aqui sem ida ao banco. Nunca encurta um bloqueio mais longo.
@@ -138,9 +155,15 @@ class LimitadorTentativas:
         janela delas, como se ele não tivesse existido."""
         agora = self._agora()
         segundos = max(0.0, min(float(segundos), float(self.janela_s)))
-        if segundos <= self.segundos_restantes(chave):
-            return
+        espera_local = self.segundos_restantes(chave)
         with self._lock:
+            if espera_persistente is not None and segundos > 0:
+                if chave not in self._eventos and len(self._eventos) >= _MAX_CHAVES:
+                    self._evacuar(agora)
+                self._esperas_persistentes[chave] = (
+                    agora + segundos, agora + espera_persistente)
+            if segundos <= espera_local:
+                return
             if chave not in self._eventos and len(self._eventos) >= _MAX_CHAVES:
                 self._evacuar(agora)
             marca = agora - self.janela_s + segundos

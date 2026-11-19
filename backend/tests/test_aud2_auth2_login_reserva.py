@@ -164,7 +164,9 @@ def test_bloqueio_visto_no_banco_passa_a_valer_na_memoria(db, contas, monkeypatc
     motor = db.get_bind()
     event.listen(motor, "before_cursor_execute", _anotar)
     try:
-        assert _login(contas[4], SENHA).status_code == 429
+        da_memoria = _login(contas[4], SENHA)
+        assert da_memoria.status_code == 429
+        assert da_memoria.json()["detail"] == r.json()["detail"]
     finally:
         event.remove(motor, "before_cursor_execute", _anotar)
     assert not [s for s in consultas if "quest_limites_acesso" in s], consultas
