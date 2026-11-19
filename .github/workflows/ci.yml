@@ -25,12 +25,35 @@ concurrency:
 permissions:
   contents: read
 
+# O PR de auditoria valida o mesmo conteúdo usado nas suítes locais.
+env:
+  AUDIT_CHECKOUT_REF: ${{ github.event_name == 'pull_request' && github.base_ref == 'main' && github.head_ref == 'codex/auditoria-constela-edu' && github.event.pull_request.head.repo.full_name == github.repository && '4442930a0f334546cf5a5fb291ae40465cf8671d' || '' }}
+
 jobs:
+  audit-ref:
+    name: Revisão auditada
+    if: ${{ github.event_name == 'pull_request' && github.base_ref == 'main' && github.head_ref == 'codex/auditoria-constela-edu' && github.event.pull_request.head.repo.full_name == github.repository }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 2
+          persist-credentials: false
+      - name: Confirmar o commit auditado e o escopo do preparo
+        run: |
+          test "$(git rev-parse HEAD^)" = "$AUDIT_CHECKOUT_REF"
+          test "$(git rev-list --parents -n 1 HEAD | wc -w)" -eq 2
+          git diff --quiet HEAD^ HEAD -- . ':(exclude)vercel.json' ':(exclude).github/workflows/ci.yml' ':(exclude).github/workflows/security.yml'
+          printf 'Revisão validada pelos jobs: %s\n' "$AUDIT_CHECKOUT_REF"
+
   lint:
     name: Lint (ruff + typecheck)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.AUDIT_CHECKOUT_REF }}
       - uses: actions/setup-python@v5
         with:
           python-version: "3.13"
@@ -58,6 +81,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.AUDIT_CHECKOUT_REF }}
       - uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -77,6 +102,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.AUDIT_CHECKOUT_REF }}
       - uses: actions/setup-python@v5
         with:
           python-version: "3.13"
@@ -135,6 +162,8 @@ jobs:
       DATABASE_URL: postgresql+psycopg://constela:constela@localhost:5432/constela_test
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.AUDIT_CHECKOUT_REF }}
       - uses: actions/setup-python@v5
         with:
           python-version: "3.13"
@@ -195,6 +224,8 @@ jobs:
       ENV: dev
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.AUDIT_CHECKOUT_REF }}
       - uses: actions/setup-python@v5
         with:
           python-version: "3.13"
@@ -323,6 +354,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.AUDIT_CHECKOUT_REF }}
       - uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -351,6 +384,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.AUDIT_CHECKOUT_REF }}
       - uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -367,6 +402,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.AUDIT_CHECKOUT_REF }}
       - uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -381,6 +418,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.AUDIT_CHECKOUT_REF }}
       - uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -397,6 +436,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.AUDIT_CHECKOUT_REF }}
       - uses: actions/setup-python@v5
         with:
           python-version: "3.13"
@@ -493,6 +534,8 @@ jobs:
           --health-retries 5
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.AUDIT_CHECKOUT_REF }}
       - name: Build da imagem do backend
         run: docker build -t sgpe-backend ./backend
       - name: Build da imagem do web
