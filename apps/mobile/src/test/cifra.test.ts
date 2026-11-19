@@ -2,7 +2,32 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 // SecureStore fake (Keystore/Keychain do SO). Compartilhado via vi.hoisted para
 // o factory do mock enxergá-lo apesar do hoisting do vi.mock.
-const { cofre } = vi.hoisted(() => ({ cofre: new Map<string, string>() }));
+const { cofre, disco } = vi.hoisted(() => ({
+  cofre: new Map<string, string>(),
+  disco: {
+    dados: new Map<string, string>(),
+    esperar: false,
+    liberar: null as (() => void) | null,
+    remover: vi.fn(),
+  },
+}));
+
+vi.mock("@react-native-async-storage/async-storage", () => ({
+  default: {
+    getItem: async (chave: string) => disco.dados.get(chave) ?? null,
+    setItem: async (chave: string, valor: string) => {
+      if (disco.esperar) {
+        disco.esperar = false;
+        await new Promise<void>((resolver) => { disco.liberar = resolver; });
+      }
+      disco.dados.set(chave, valor);
+    },
+    removeItem: async (chave: string) => {
+      disco.remover(chave);
+      disco.dados.delete(chave);
+    },
+  },
+}));
 
 vi.mock("expo-secure-store", () => ({
   getItemAsync: async (chave: string) => cofre.get(chave) ?? null,
@@ -31,10 +56,15 @@ vi.mock("expo-crypto", () => {
 });
 
 import { cifrar, decifrar, esquecerChave } from "../armazenamento/cifra";
+import { armazenamentoCifrado } from "../armazenamento/armazenamentoCifrado";
 
 describe("cifra AES-256 do cache em repouso (LGPD: dados no aparelho)", () => {
   beforeEach(async () => {
     cofre.clear();
+    disco.dados.clear();
+    disco.esperar = false;
+    disco.liberar = null;
+    disco.remover.mockClear();
     await esquecerChave(); // zera a chave em memória entre os testes
   });
 
@@ -83,5 +113,19 @@ describe("cifra AES-256 do cache em repouso (LGPD: dados no aparelho)", () => {
     expect(cofre.has("constela_cache_chave_v1")).toBe(false);
     // Próximo acesso gera nova chave; o blob antigo não decifra mais.
     expect(await decifrar(blob)).toBeNull();
+  });
+
+  it("uma gravação antiga no disco termina antes da remoção do cache", async () => {
+    disco.esperar = true;
+    const antiga = armazenamentoCifrado.setItem("cache", "dado anterior");
+    await vi.waitFor(() => expect(disco.liberar).not.toBeNull());
+
+    const remover = armazenamentoCifrado.removeItem("cache");
+    const atual = armazenamentoCifrado.setItem("cache", "dado atual");
+    expect(disco.remover).not.toHaveBeenCalled();
+
+    disco.liberar!();
+    await Promise.all([antiga, remover, atual]);
+    expect(await armazenamentoCifrado.getItem("cache")).toBe("dado atual");
   });
 });
