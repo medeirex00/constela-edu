@@ -8,10 +8,16 @@
  * todos — 0,0 de quem tem dado e não cresceu é zero legítimo. Achado RANKINGS-4.
  * Dados fictícios.
  */
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
+import { baixarCsv } from "../lib/csvRanking";
 import RankingEvolucao from "../pages/RankingEvolucao";
-import { renderComApp, responder, screen } from "./utils";
+import { escolaFake, renderComApp, responder, screen, userEvent, usuarioFake } from "./utils";
+
+vi.mock("../lib/csvRanking", async (importarReal) => ({
+  ...(await importarReal<typeof import("../lib/csvRanking")>()),
+  baixarCsv: vi.fn(),
+}));
 
 const PODIO = "Pódio da evolução no período";
 
@@ -56,5 +62,29 @@ describe("Ranking de Evolução: pódio", () => {
     expect(podio).not.toHaveTextContent("Ana Beatriz Souza");
     expect(podio).not.toHaveTextContent("João Pedro Barbosa");
     expect(podio).not.toHaveTextContent("0,0 de evolução");
+  });
+
+  it("Admin Global numa escola só de Leitura vê e exporta apenas ganhos do plano", async () => {
+    const aluno = item(31, "Criança Inventada", 1, 12.5);
+    aluno.ganhos = { atividades: 30, estrelas: 120, livros: 2, tempo_leitura_min: 12, acertos: 4 };
+    responder("GET", "/escolas/1/turmas", []);
+    responder("GET", "/escolas/1/ranking-evolucao", [aluno]);
+    renderComApp(<RankingEvolucao />, {
+      usuario: usuarioFake({ is_global: true, modulos: ["leitura", "matematica"] }),
+      escolas: [escolaFake({ modulos: ["leitura"] })],
+    });
+
+    const podio = await screen.findByRole("region", { name: PODIO });
+    const tabela = screen.getByRole("table");
+    expect(podio).toHaveTextContent(/\+2\s*livros|livros\s*\+2/);
+    expect(tabela).toHaveTextContent(/\+2 livros/);
+    expect(podio).not.toHaveTextContent(/atividades|estrelas/);
+    expect(tabela).not.toHaveTextContent(/atividades|estrelas/);
+
+    await userEvent.click(screen.getByRole("button", { name: "Exportar lista (CSV)" }));
+    expect(baixarCsv).toHaveBeenCalledWith(expect.objectContaining({
+      cabecalho: ["Posição", "Aluno", "Turma", "Livros (+)", "Acertos (+)", "Evolução"],
+      linhas: [[1, "Criança Inventada", "3º Ano A", 2, 4, "12,5"]],
+    }));
   });
 });

@@ -46,48 +46,54 @@ interface ItemEvolucao {
   turma: string;
   ano_escolar: string;
   nota_evolucao: number;
-  ganhos: {
+  ganhos: Partial<{
     atividades: number;
     estrelas: number;
     livros: number;
     tempo_leitura_min: number;
     acertos: number;
-  };
+  }>;
 }
 
 /** Os ganhos exibidos (os mesmos de antes), com o tom da plataforma de cada um. */
 const GANHOS: {
   chave: keyof ItemEvolucao["ganhos"];
+  dimensao: Dimensao;
+  colunaCsv: string;
   rotulo: string;
   /** Rótulo quando o ganho é exatamente 1 ("+1 livro", não "+1 livros"). */
   singular: string;
   icone: LucideIcon;
   tom: string;
 }[] = [
-  { chave: "atividades", rotulo: "atividades", singular: "atividade", icone: Calculator,
+  { chave: "atividades", dimensao: "matematica", colunaCsv: "Atividades (+)",
+    rotulo: "atividades", singular: "atividade", icone: Calculator,
     tom: "bg-teal-50 text-teal-700 dark:bg-teal-500/15 dark:text-teal-300" },
-  { chave: "livros", rotulo: "livros", singular: "livro", icone: BookOpen,
+  { chave: "livros", dimensao: "leitura", colunaCsv: "Livros (+)",
+    rotulo: "livros", singular: "livro", icone: BookOpen,
     tom: "bg-indigo-50 text-indigo-700 dark:bg-indigo-500/15 dark:text-indigo-300" },
-  { chave: "estrelas", rotulo: "estrelas", singular: "estrela", icone: Star,
+  { chave: "estrelas", dimensao: "matematica", colunaCsv: "Estrelas (+)",
+    rotulo: "estrelas", singular: "estrela", icone: Star,
     tom: "bg-ouro-50 text-ouro-700 dark:bg-ouro-400/15 dark:text-ouro-300" },
-  { chave: "acertos", rotulo: "acertos", singular: "acerto", icone: CheckCircle2,
+  { chave: "acertos", dimensao: "leitura", colunaCsv: "Acertos (+)",
+    rotulo: "acertos", singular: "acerto", icone: CheckCircle2,
     tom: "bg-emerald-50 text-emerald-700 dark:bg-emerald-500/15 dark:text-emerald-300" },
 ];
-
-/** Ganhos positivos do aluno, com o rótulo já no número certo (singular só no 1). */
-const ganhosDe = (item: ItemEvolucao) =>
-  GANHOS.filter((g) => (item.ganhos?.[g.chave] ?? 0) > 0).map((g) => {
-    const valor = item.ganhos[g.chave];
-    return { ...g, valor, rotulo: valor === 1 ? g.singular : g.rotulo };
-  });
 
 export default function RankingEvolucao({ embutido = false, alvoAcoes }: {
   embutido?: boolean;
   /** Espaço de ações do cabeçalho da tela Ranking (os botões vão para lá). */
   alvoAcoes?: HTMLElement | null;
 } = {}) {
-  const { escolaId, periodo, definirPeriodo, turno, definirTurno } = useApp();
-  const { tem } = useModulos();
+  const { escolaId, escolaAtual, periodo, definirPeriodo, turno, definirTurno } = useApp();
+  const { modulos } = useModulos();
+  const plano = escolaAtual?.modulos ?? modulos;
+  const dimensoes = (["leitura", "matematica"] as const).filter((d) => plano.includes(d));
+  const ganhosNoPlano = GANHOS.filter((g) => plano.includes(g.dimensao));
+  const ganhosDe = (item: ItemEvolucao) => ganhosNoPlano.flatMap((g) => {
+    const valor = item.ganhos?.[g.chave] ?? 0;
+    return valor > 0 ? [{ ...g, valor, rotulo: valor === 1 ? g.singular : g.rotulo }] : [];
+  });
   const [alvo, setAlvo] = useState<AlvoRanking>({});
 
   // Turmas alimentam apenas os filtros; na falha caímos para lista vazia.
@@ -119,10 +125,10 @@ export default function RankingEvolucao({ embutido = false, alvoAcoes }: {
 
   const csv: TabelaCsv | null = lista.length === 0 ? null : {
     nomeArquivo: nomeArquivoCsv(`ranking-evolucao-${rotuloPeriodo}${recorte ? `-${recorte}` : ""}`),
-    cabecalho: ["Posição", "Aluno", "Turma", "Atividades (+)", "Livros (+)", "Estrelas (+)", "Acertos (+)", "Evolução"],
+    cabecalho: ["Posição", "Aluno", "Turma", ...ganhosNoPlano.map((g) => g.colunaCsv), "Evolução"],
     linhas: lista.map((item) => [
       item.posicao, item.nome, item.turma ?? "",
-      item.ganhos?.atividades ?? 0, item.ganhos?.livros ?? 0, item.ganhos?.estrelas ?? 0, item.ganhos?.acertos ?? 0,
+      ...ganhosNoPlano.map((g) => item.ganhos?.[g.chave] ?? 0),
       nota(item.nota_evolucao),
     ]),
   };
@@ -168,8 +174,6 @@ export default function RankingEvolucao({ embutido = false, alvoAcoes }: {
     metricas: ganhosDe(item).slice(0, 3).map((g) => ({ rotulo: g.rotulo, valor: `+${numero(g.valor)}` })),
   }));
 
-  const dimensoes = (["leitura", "matematica"] as Dimensao[]).filter((d) => tem(d));
-
   return (
     <div>
       {embutido ? acoes : (
@@ -188,7 +192,7 @@ export default function RankingEvolucao({ embutido = false, alvoAcoes }: {
 
       {/* A evolução é medida entre retratos: se a última coleta é antiga, o
           crescimento "do período" pode simplesmente não ter sido coletado. */}
-      <SeloFrescorDaEscola dimensoes={["leitura", "matematica"]} />
+      <SeloFrescorDaEscola dimensoes={dimensoes} />
 
       {/* No ano inteiro não há acumulado anterior a descontar (serviço evolucao._janela):
           o ganho é o total do ano e o pódio coincide com o do Ranking Geral. */}
