@@ -9,15 +9,15 @@ from datetime import datetime, timezone
 
 from fastapi import (APIRouter, Depends, File, HTTPException, Query, Response,
                      UploadFile, status)
-from sqlalchemy import func, select, update
+from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db, leitura_sem_transacao
 from app.core.deps import exigir_admin_global, exigir_rede, get_usuario_atual
 from app.core.tempo import hoje_br
-from app.models import Escola, Rede, TokenResetSenha, Usuario
-from app.routers.admin import _invalidar_links_emitidos
+from app.models import Escola, Rede, Usuario
+from app.routers.admin import _revogar_acessos
 from app.routers.publico import base_do_link_publico
 from app.schemas import (
     EscolaLocalIn,
@@ -35,7 +35,6 @@ from app.services import frescor_ranking
 from app.services import geocodificacao as svc_geo
 from app.services import modulos as svc_modulos
 from app.services import permissoes
-from app.services import push as svc_push
 from app.services import relatorios as svc_relatorios
 from app.services import rede as svc_rede
 from app.services.audit import registrar
@@ -405,8 +404,8 @@ def definir_usuarios(
     global — e o router de administração inteiro nega a Secretaria
     (`deps.negar_secretaria`), independentemente do cargo dela.
 
-    A conta que PASSA A TER o `rede_id` desta rede (promovida a Secretaria, ou
-    vinda de outra rede) muda de alcance: as sessões abertas dela caem
+    Quando uma conta entra, sai ou muda de rede, seu alcance muda: as sessões
+    abertas dela caem
     (`token_version`) e os links de redefinição pendentes deixam de valer — os
     dela e os que ela GEROU para outras contas da escola (a Secretaria não os
     poderia gerar; sem isto voltavam a valer se ela deixasse a rede) —, e
@@ -426,36 +425,24 @@ def definir_usuarios(
     atuais = db.execute(
         select(Usuario).where(Usuario.rede_id == rede_id)
     ).scalars().all()
-    for alvo_u in atuais:
-        if alvo_u.id not in ids_validos:
-            alvo_u.rede_id = None
-    agora = datetime.now(timezone.utc)
     promovidas: list[int] = []
-    for alvo_u in validos:
-        if alvo_u.rede_id != rede_id:
-            # Promoção: alcance novo = sessões antigas caem e links pendentes morrem.
-            rede_anterior = alvo_u.rede_id
-            alvo_u.token_version = (alvo_u.token_version or 0) + 1
-            links = db.execute(
-                update(TokenResetSenha)
-                .where(TokenResetSenha.usuario_id == alvo_u.id,
-                       TokenResetSenha.usado_em.is_(None))
-                .values(usado_em=agora)
-                .execution_options(synchronize_session=False)).rowcount
-            emitidos = _invalidar_links_emitidos(db, alvo_u.id, agora)
-            # Os aparelhos registrados no alcance antigo (push da ESCOLA, com o
-            # primeiro nome de criança) saem junto: a Secretaria não é equipe
-            # da escola.
-            aparelhos = svc_push.remover_aparelhos_da_conta(db, alvo_u.id)
-            promovidas.append(alvo_u.id)
-            registrar(db, "usuario.promovido_a_secretaria", escola_id=alvo_u.escola_id,
-                      usuario_id=usuario.id, entidade="usuario", entidade_id=alvo_u.id,
-                      detalhes={"rede_id": rede_id, "rede_anterior": rede_anterior,
-                                "sessoes_encerradas": True,
-                                "links_pendentes_invalidados": links,
-                                "links_emitidos_invalidados": emitidos,
-                                "dispositivos_removidos": aparelhos})
-        alvo_u.rede_id = rede_id
+    contas = {u.id: u for u in atuais + validos}
+    for conta_id, conta in sorted(contas.items()):
+        proxima_rede = rede_id if conta_id in ids_validos else None
+        if conta.rede_id == proxima_rede:
+            continue
+        rede_anterior = conta.rede_id
+        conta.rede_id = proxima_rede
+        # Ao sair da Secretaria, a conta pode voltar a ter funções na escola.
+        # Exige um novo login também nessa direção da mudança de alcance.
+        revogacao = _revogar_acessos(db, conta, alcance_alterado=True)
+        if proxima_rede is not None:
+            promovidas.append(conta_id)
+        acao = ("usuario.promovido_a_secretaria" if proxima_rede is not None
+                else "usuario.removido_da_secretaria")
+        registrar(db, acao, escola_id=conta.escola_id, usuario_id=usuario.id,
+                  entidade="usuario", entidade_id=conta_id,
+                  detalhes={"rede_id": rede_id, "rede_anterior": rede_anterior, **revogacao})
     registrar(db, "rede.usuarios_definidos", usuario_id=usuario.id, entidade="rede",
               entidade_id=rede_id, detalhes={"usuario_ids": sorted(ids_validos),
                                              "promovidas": sorted(promovidas)})

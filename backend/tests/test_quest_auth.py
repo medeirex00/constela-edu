@@ -9,7 +9,8 @@ import re
 
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import select
+from sqlalchemy import event, select
+from sqlalchemy.orm import Session
 
 from app.core.security import hash_senha
 from app.main import app
@@ -46,6 +47,32 @@ def _credencial_de(db, aluno_id) -> QuestCredencialAluno:
 def _entrar(codigo):
     return TestClient(app).post("/api/v1/quest/auth/entrar",
                                 json={"codigo": codigo})
+
+
+def test_login_do_quest_assina_com_a_versao_do_cartao(cliente, db, escola_completa, monkeypatch):
+    escola = escola_completa["escola"]
+    turma = escola_completa["turma"]
+    assert _gerar_cartoes(cliente, escola.id, turma.id).status_code == 200
+    codigo = _credencial_de(db, escola_completa["alunos"][0].id).codigo_login
+    ordem = []
+    assinar = svc_credenciais.criar_token_aluno
+
+    def criar_token(credencial):
+        ordem.append("assinar")
+        return assinar(credencial)
+
+    def confirmou(sessao):
+        if sessao.get_bind() == db.bind:
+            ordem.append("confirmar")
+
+    monkeypatch.setattr(svc_credenciais, "criar_token_aluno", criar_token)
+    event.listen(Session, "after_commit", confirmou)
+    try:
+        resposta = _entrar(codigo)
+    finally:
+        event.remove(Session, "after_commit", confirmou)
+    assert resposta.status_code == 200
+    assert ordem[:2] == ["assinar", "confirmar"]
 
 
 # ---------------------------------------------------------------------------

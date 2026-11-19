@@ -10,11 +10,13 @@ Os quatro primeiros testes são as provas do achado com o resultado invertido.
 Dados 100% fictícios.
 """
 from fastapi.testclient import TestClient
-from sqlalchemy import select
+from sqlalchemy import event, select
+from sqlalchemy.orm import Session
 
 from app.core.security import hash_senha
 from app.main import app
 from app.models import LogAuditoria, TokenResetSenha, Usuario
+from app.routers import admin, auth
 
 SENHA = "s3nh4-forte-1"
 
@@ -45,6 +47,52 @@ def _consumir(link, nova):
 
 def _valido(link):
     return TestClient(app).get(f"/api/v1/auth/redefinir-senha/{link}").json()["valido"]
+
+
+def test_login_assina_com_a_versao_da_transacao(db, escola_completa, monkeypatch):
+    _prof(db, escola_completa["escola"].id)
+    ordem = []
+    assinar = auth.criar_token
+
+    def criar_token(usuario_id, versao):
+        ordem.append("assinar")
+        return assinar(usuario_id, versao)
+
+    def confirmou(sessao):
+        if any(isinstance(obj, LogAuditoria) and obj.acao == "login" for obj in sessao.new):
+            ordem.append("confirmar")
+
+    monkeypatch.setattr(auth, "criar_token", criar_token)
+    event.listen(Session, "before_commit", confirmou)
+    try:
+        resposta = _login("p4@teste.local", SENHA)
+    finally:
+        event.remove(Session, "before_commit", confirmou)
+    assert resposta.status_code == 200
+    assert ordem[:2] == ["assinar", "confirmar"]
+
+
+def test_revogacao_grava_conta_antes_dos_links(cliente, db, escola_completa):
+    escola = escola_completa["escola"]
+    conta = _prof(db, escola.id)
+    base = f"/api/v1/escolas/{escola.id}/usuarios/{conta.id}"
+    assert cliente.post(f"{base}/redefinir-senha").status_code == 200
+    tabelas = []
+
+    def anotar_update(_conn, _cursor, sql, _params, _ctx, _many):
+        partes = sql.split()
+        if partes and partes[0] == "UPDATE":
+            tabelas.append(partes[1])
+
+    event.listen(db.bind, "before_cursor_execute", anotar_update)
+    try:
+        with db.no_autoflush:
+            conta.status = "inativo"
+            admin._revogar_acessos(db, conta)
+        db.commit()
+    finally:
+        event.remove(db.bind, "before_cursor_execute", anotar_update)
+    assert tabelas.index(Usuario.__tablename__) < tabelas.index(TokenResetSenha.__tablename__)
 
 
 def test_desativar_e_reativar_nao_ressuscita_o_jwt(cliente, db, escola_completa):

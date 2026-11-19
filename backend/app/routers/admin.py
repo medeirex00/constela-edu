@@ -312,7 +312,8 @@ def _invalidar_links_emitidos(db: Session, criador_id: int, agora: datetime) -> 
 
 
 def _revogar_acessos(db: Session, alvo: Usuario, *,
-                     senha_substituida: bool = False) -> dict:
+                     senha_substituida: bool = False,
+                     alcance_alterado: bool = False) -> dict:
     """Derruba as sessões abertas (``token_version``), os links de redefinição
     pendentes da conta e os que ela gerou para outras contas — na troca de senha
     pelo admin, em toda mudança de situação (desativar, reativar, restaurar) e na
@@ -332,12 +333,15 @@ def _revogar_acessos(db: Session, alvo: Usuario, *,
     a conta segue ativa, e o app, já em 401, não consegue se descadastrar.
     Reativar não traz o aparelho de volta; o app registra de novo no login."""
     agora = datetime.now(timezone.utc)
-    alvo.token_version = (alvo.token_version or 0) + 1
+    alvo.token_version = func.coalesce(Usuario.token_version, 0) + 1
+    # A sessão usa autoflush=False. Persiste a conta antes de tocar nos links,
+    # na mesma ordem usada por quem consome um link de redefinição.
+    db.flush([alvo])
     revogacao = {
         "sessoes_encerradas": True,
         "links_pendentes_invalidados": _invalidar_links_pendentes(db, alvo.id, agora),
         "links_emitidos_invalidados": _invalidar_links_emitidos(db, alvo.id, agora)}
-    if alvo.status != "ativo" or senha_substituida:
+    if alvo.status != "ativo" or senha_substituida or alcance_alterado:
         revogacao["dispositivos_removidos"] = svc_push.remover_aparelhos_da_conta(
             db, alvo.id)
     return revogacao
@@ -483,6 +487,7 @@ def atualizar_usuario(
         # O cargo é o que dava o poder de gerar os links (``_pode_redefinir_senha``):
         # mudou, os links que a conta gerou morrem de vez — senão voltavam a valer
         # quando o cargo antigo fosse devolvido.
+        db.flush([alvo])
         revogacao = {"links_emitidos_invalidados": _invalidar_links_emitidos(
             db, alvo.id, datetime.now(timezone.utc))}
 

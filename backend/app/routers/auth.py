@@ -354,7 +354,9 @@ def _avaliar(form: OAuth2PasswordRequestForm, db: Session, entrada: str, ip: str
         raise HTTPException(status.HTTP_401_UNAUTHORIZED,
                             "E-mail/usuário ou senha incorretos.")
 
-    if not verificar_senha(form.password, usuario.senha_hash):
+    senha_hash = usuario.senha_hash
+    versao_autenticada = usuario.token_version
+    if not verificar_senha(form.password, senha_hash):
         limitador_login.registrar_falha(chave)
         limitador_conta.registrar_falha(identidade)
         registrar(db, "login.falhou", escola_id=usuario.escola_id, usuario_id=usuario.id,
@@ -388,16 +390,30 @@ def _avaliar(form: OAuth2PasswordRequestForm, db: Session, entrada: str, ip: str
         db.commit()
         raise HTTPException(status.HTTP_403_FORBIDDEN, "Usuário desativado.")
 
-    limitador_login.limpar(chave)
-    limitador_conta.limpar(identidade)
-    usuario.ultimo_acesso = datetime.now(timezone.utc)
+    # A senha foi conferida antes da escrita. Só registra o acesso se a mesma
+    # credencial continua ativa, mesmo quando uma revogação termina nesse intervalo.
+    acesso = db.execute(
+        update(Usuario).where(
+            Usuario.id == usuario.id,
+            Usuario.status == "ativo",
+            Usuario.senha_hash == senha_hash,
+            Usuario.token_version == versao_autenticada,
+        ).values(ultimo_acesso=datetime.now(timezone.utc))
+        .execution_options(synchronize_session=False)
+    )
+    if acesso.rowcount != 1:
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED,
+                            "E-mail/usuário ou senha incorretos.")
+    token = criar_token(usuario.id, versao_autenticada)
     registrar(db, "login", escola_id=usuario.escola_id, usuario_id=usuario.id)
     db.commit()
+    limitador_login.limpar(chave)
+    limitador_conta.limpar(identidade)
     # Login certo não conta no teto do IP nem no global: a vaga reservada volta.
     tetos.devolver()
 
     return LoginOut(
-        access_token=criar_token(usuario.id, usuario.token_version),
+        access_token=token,
         usuario=_com_modulos(db, usuario),
     )
 
@@ -557,7 +573,7 @@ def consumir_link_reset(dados: RedefinirSenhaIn, db: Session = Depends(get_db)):
     Atomicidade com as revogações (desativar, excluir, trocar a senha pelo
     admin, promover a Secretaria, mexer no autor do link): elas gravam a linha
     do USUÁRIO e só depois marcam os tokens pendentes (``UPDATE ... WHERE
-    usado_em IS NULL``). Aqui é a MESMA ordem: (1) trava a conta (``FOR
+    usado_em IS NULL``). Aqui é a MESMA ordem: (1) trava a conta (``FOR NO KEY
     UPDATE``), (2) marca o token com UPDATE condicional e exige 1 linha, (3) só
     então confere a situação da conta e o autor. Sem isso as conferências eram
     SELECTs comuns e a gravação vinha depois, por chave primária: a revogação
@@ -577,18 +593,20 @@ def consumir_link_reset(dados: RedefinirSenhaIn, db: Session = Depends(get_db)):
 
     # (1) Trava a conta e relê do banco (``populate_existing``): uma revogação
     # em curso termina antes, e o que se confere abaixo é o estado já gravado.
-    alvo = db.get(Usuario, registro.usuario_id, with_for_update=True,
+    alvo = db.get(Usuario, registro.usuario_id, with_for_update={"key_share": True},
                   populate_existing=True)
     if alvo is None:
         raise HTTPException(status.HTTP_400_BAD_REQUEST,
                             "Conta indisponível. Fale com o administrador.")
     # (2) Uso único de verdade: só um pedido marca o token. O que chegou depois
     # de outro consumo — ou de uma revogação, que também marca — recebe 0 linhas.
+    agora = datetime.now(timezone.utc)
     marcado = db.execute(
         update(TokenResetSenha)
         .where(TokenResetSenha.id == registro.id,
-               TokenResetSenha.usado_em.is_(None))
-        .values(usado_em=datetime.now(timezone.utc))
+               TokenResetSenha.usado_em.is_(None),
+               TokenResetSenha.expira_em > agora)
+        .values(usado_em=agora)
         .execution_options(synchronize_session=False)).rowcount
     if marcado != 1:
         raise _link_invalido(alvo)

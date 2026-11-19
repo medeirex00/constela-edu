@@ -373,6 +373,12 @@ def test_crud_rede_provisiona_escolas_coords_e_secretaria(db):
     sec = db.get(Usuario, sec_id)
     assert sec.rede_id == rede_id
 
+    secretaria = _login("fut@sec.gov", "s3nh4futurasec")
+    assert secretaria.get("/api/v1/auth/me").status_code == 200
+    assert root.put(f"/api/v1/redes/{rede_id}/usuarios",
+                    json={"usuario_ids": []}).status_code == 200
+    assert secretaria.get("/api/v1/auth/me").status_code == 401
+
 
 def test_desvincular_escola_ao_redefinir_o_conjunto(db):
     rede = Rede(nome="Rede Y", status="ativa")

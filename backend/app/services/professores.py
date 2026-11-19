@@ -520,7 +520,8 @@ def _entregar_credencial_nova(db: Session, escola_id: int, conta: Usuario,
         conta.email = email
         prof.email = email
     conta.senha_hash = hash_senha(senha)
-    conta.token_version = (conta.token_version or 0) + 1
+    conta.token_version = func.coalesce(Usuario.token_version, 0) + 1
+    db.flush([conta])
     db.execute(
         update(TokenResetSenha)
         .where(TokenResetSenha.usuario_id == conta.id,

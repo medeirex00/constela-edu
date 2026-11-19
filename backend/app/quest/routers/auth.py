@@ -259,6 +259,9 @@ def _checar_credencial(credencial: QuestCredencialAluno | None,
 def _sessao(db: Session, credencial: QuestCredencialAluno, request: Request,
             via: str) -> schemas.SessaoOut:
     aluno = credencial.aluno
+    # O commit expira a ficha ORM. Assina com a versão do cartão que o pedido
+    # validou, pois uma reemissão logo depois pode tornar aquela versão inválida.
+    token = svc.criar_token_aluno(credencial)
     perfil = svc_perfis.obter_ou_criar_perfil(db, aluno)
     primeira_vez = credencial.ultimo_acesso is None
     saida_perfil = _montar_perfil(credencial, perfil, aluno)
@@ -270,7 +273,7 @@ def _sessao(db: Session, credencial: QuestCredencialAluno, request: Request,
               detalhes={"via": via, "ip": mascarar_ip(ip_do_cliente(request))})
     db.commit()
     return schemas.SessaoOut(
-        access_token=svc.criar_token_aluno(credencial),
+        access_token=token,
         primeira_vez=primeira_vez,
         perfil=saida_perfil,
     )
