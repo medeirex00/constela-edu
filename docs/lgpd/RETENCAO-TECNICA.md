@@ -146,7 +146,7 @@ contadores parados há mais de 1 dia e sem bloqueio vigente.
   `tests/test_aud3_lgpd_esquecimento_cursor_elefante.py` (e o `_pg`) as exigem;
 - o arquivo original de um relatório **individual** dela (o nome do arquivo traz o nome
   dela, o arquivo foi gravado pelo servidor para esta escola e a importação não trouxe
-  dado de criança que fica) e **todas** as cópias em `exports/` (não há como saber quais
+  dado de criança que fica) e **todas** as cópias de relatórios geradas pelo app em `exports/` (não há como saber quais
   trazem o nome; o download nunca depende delas). Arquivos só somem **no commit** da
   transação: se a exclusão reverter, nada some.
 

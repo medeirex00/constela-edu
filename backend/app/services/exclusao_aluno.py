@@ -14,7 +14,7 @@ APAGADO (é dado da criança e não sustenta nenhuma obrigação):
     (plataforma + id externo) ou com o nome dela quando nenhuma outra criança da
     escola tem o mesmo nome (com homônimo vivo, o nome também é do outro: fica);
   * o arquivo original de um relatório INDIVIDUAL dela (o nome do arquivo traz o
-    nome dela) e todas as cópias em /exports (não dá para saber quais trazem o
+    nome dela) e todas as cópias de relatórios em /exports (não dá para saber quais trazem o
     nome; o download nunca depende delas) — os dois só DEPOIS do commit: se a
     exclusão reverter, nenhum arquivo some. O original só sai se for um arquivo
     que o servidor gravou para ESTA escola (nenhuma importação de outra escola
@@ -377,11 +377,13 @@ def _esquecer_originais_individuais(
 
 
 def _copias_em_exports() -> list[Path]:
+    from app.core.expurgo_arquivos import NOME_DA_COPIA
+
     pasta = settings.EXPORTS_DIR
     try:
         if not pasta.exists():
             return []
-        return [a for a in pasta.iterdir() if a.is_file() and not a.name.startswith(".")]
+        return [a for a in pasta.iterdir() if NOME_DA_COPIA.fullmatch(a.name) and a.is_file()]
     except OSError:
         return []
 
