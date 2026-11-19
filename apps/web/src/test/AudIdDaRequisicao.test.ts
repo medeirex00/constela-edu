@@ -14,7 +14,10 @@ function responder(resposta: Response) {
 }
 
 describe("apiDownloadPost: id da requisição no erro", () => {
-  afterEach(() => vi.unstubAllGlobals());
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    localStorage.removeItem("sgpe_token");
+  });
 
   it("um 500 leva o id no ApiError e o começo dele na mensagem; o corpo vai junto", async () => {
     const corpo = { detail: "Erro interno. Tente novamente em instantes." };
@@ -38,5 +41,23 @@ describe("apiDownloadPost: id da requisição no erro", () => {
     await expect(apiDownloadPost(LOTE, { aluno_ids: [101] })).rejects.toMatchObject({
       status: 422, requestId: ID, message: "Nenhum aluno apto para o certificado.",
     });
+  });
+
+  it("um 401 atrasado do download preserva a sessão que entrou depois", async () => {
+    const { apiDownloadPost, guardarToken, obterToken } = await real();
+    let responderDownload!: (resposta: Response) => void;
+    const fetchFalso = vi.fn(() => new Promise<Response>((resolve) => { responderDownload = resolve; }));
+    vi.stubGlobal("fetch", fetchFalso);
+    guardarToken("token-anterior");
+
+    const resultado = apiDownloadPost(LOTE, { aluno_ids: [101] });
+    expect(fetchFalso).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({
+      headers: expect.objectContaining({ Authorization: "Bearer token-anterior" }),
+    }));
+    guardarToken("token-novo");
+    responderDownload(new Response(null, { status: 401 }));
+
+    await expect(resultado).rejects.toMatchObject({ status: 401 });
+    expect(obterToken()).toBe("token-novo");
   });
 });

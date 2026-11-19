@@ -170,7 +170,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         return;
       } catch (erro) {
         if (erro instanceof ApiError && erro.status === 401) {
-          limparToken(); // sessão realmente inválida (o core já redireciona)
+          // O cliente já invalidou a sessão se o token ainda era o desta chamada.
           setCarregando(false);
           return;
         }

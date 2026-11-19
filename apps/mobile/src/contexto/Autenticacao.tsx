@@ -97,7 +97,6 @@ export function ProvedorAutenticacao({ children }: { children: ReactNode }) {
     // Token inválido/expirado (401 no cliente HTTP): aí sim desloga de fato — e o
     // aparelho sai do push, como no "Sair".
     aoExpirarSessao(() => {
-      void limparToken();
       void removerRegistroPush();
       void encerrarLocal();
     });

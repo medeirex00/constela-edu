@@ -16,6 +16,7 @@ import {
   comCodigoDeSuporte,
   configurarApi,
   idDaRequisicao,
+  invalidarSessao,
 } from "@constela/core";
 
 import { ehTelaPublica } from "./pwaAtualizacao";
@@ -135,9 +136,7 @@ export async function apiDownloadPost(
     throw new ApiError(0, MENSAGEM_SEM_REDE);
   }
   if (resposta.status === 401) {
-    // A mesma reação do `aoExpirarSessao` configurado acima.
-    limparToken();
-    window.location.href = "/login";
+    await invalidarSessao(token);
     throw new ApiError(401, "Sessão expirada. Entre novamente.");
   }
   if (!resposta.ok) throw await erroDaResposta(resposta);
