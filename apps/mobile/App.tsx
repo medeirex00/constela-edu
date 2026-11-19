@@ -30,6 +30,7 @@ import { LimiteErro } from "./src/componentes/LimiteErro";
 import { ProvedorAutenticacao, useAutenticacao } from "./src/contexto/Autenticacao";
 import { ligarFilaAReconexao, processarFila } from "./src/filaOffline";
 import { NavegacaoPrincipal } from "./src/navegacao";
+import { enviarRegistroPush } from "./src/notificacoes";
 import Entrar from "./src/telas/Entrar";
 
 // Reconexão → revalida tudo (a "sincronização automática" pedida no produto).
@@ -41,7 +42,7 @@ onlineManager.setEventListener((setOnline) =>
 
 // A fila de escritas offline drena sozinha quando a rede volta (vive todo o
 // ciclo do app).
-ligarFilaAReconexao();
+ligarFilaAReconexao(enviarRegistroPush);
 
 function Raiz() {
   const { usuario, carregando } = useAutenticacao();
@@ -82,7 +83,7 @@ export default function App() {
             // Cache restaurado no boot: retoma mutações pausadas e drena a fila
             // (caso o app tenha sido fechado com escritas pendentes e já haja rede).
             void clienteQuery.resumePausedMutations();
-            void processarFila();
+            void processarFila(enviarRegistroPush);
           }}
         >
           <ProvedorAutenticacao>

@@ -26,7 +26,7 @@ import * as Notifications from "expo-notifications";
 import * as SecureStore from "expo-secure-store";
 import { Platform } from "react-native";
 
-import { enviarOuEnfileirar } from "./filaOffline";
+import { enviarOuEnfileirar, enviarPelaApi, type EnvioDaFila } from "./filaOffline";
 
 Notifications.setNotificationHandler({
   handleNotification: async () => ({
@@ -47,12 +47,12 @@ const CHAVE_REGISTRO = "constela_push_registro_v1";
 /** Descadastro pedido e ainda não confirmado pelo servidor. */
 const CHAVE_DESCADASTRO = "constela_push_descadastro_v1";
 
-// Registro e descadastro mexem nas mesmas duas chaves: um passo de cada vez, para um
-// descadastro atrasado nunca tirar o registro que veio depois dele. A chamada do
-// descadastro ao servidor também vai na sequência; a do REGISTRO não (pode ficar
-// presa na rede, e o "Sair" não espera por ela): o registro confere, na volta, se
-// a sessão acabou enquanto ele ia ao servidor (registrarParaPush).
+// A sequência protege as duas chaves e as tentativas de descadastro. A fila de
+// registros ordena os POSTs da abertura e da reconexão. O logout pode marcar e
+// enviar o descadastro enquanto espera a resposta de um desses POSTs.
 let ultimoPasso: Promise<unknown> = Promise.resolve();
+let ultimoRegistro: Promise<void> = Promise.resolve();
+let geracaoPush = 0;
 
 function emSequencia<T>(passo: () => Promise<T>): Promise<T> {
   const resultado = ultimoPasso.then(passo);
@@ -76,6 +76,9 @@ async function lerRegistro(chave: string): Promise<RegistroPush | null> {
 export async function registrarParaPush(escolaId: number): Promise<string | null> {
   try {
     if (!Device.isDevice) return null; // emulador sem serviços de push
+    const desta = geracaoPush;
+    const tokenDaSessao = await obterToken();
+    if (!tokenDaSessao) return null;
 
     const { status: atual } = await Notifications.getPermissionsAsync();
     let status = atual;
@@ -95,36 +98,62 @@ export async function registrarParaPush(escolaId: number): Promise<string | null
     const { data: token } = await Notifications.getExpoPushTokenAsync(
       projectId ? { projectId } : undefined,
     );
+    if (await obterToken() !== tokenDaSessao || desta !== geracaoPush) return null;
 
-    await emSequencia(async () => {
-      // Alguém entrou de novo neste aparelho: o descadastro pendente de uma saída
-      // anterior não pode tirar o registro que vem agora.
-      await SecureStore.deleteItemAsync(CHAVE_DESCADASTRO);
-      const registro: RegistroPush = { escolaId, token };
-      await SecureStore.setItemAsync(CHAVE_REGISTRO, JSON.stringify(registro));
-    });
-
-    // Registro do aparelho via fila offline: se a conexão cair entre obter o
-    // token e avisar o backend, o POST é reenviado sozinho na reconexão.
     await enviarOuEnfileirar(`/escolas/${escolaId}/dispositivos`, "POST", {
       token_push: token,
       plataforma: Platform.OS === "ios" ? "ios" : "android",
-    });
-    // A sessão acabou ("Sair" ou sessão expirada) enquanto o registro ia ao
-    // servidor: o descadastro do "Sair" pode ter sido processado ANTES dele, e o
-    // aparelho voltou a ficar cadastrado para a conta. Marca o descadastro de novo,
-    // agora depois da resposta do registro.
-    if (!(await obterToken())) {
-      await emSequencia(async () => {
-        const registro: RegistroPush = { escolaId, token };
-        await SecureStore.setItemAsync(CHAVE_DESCADASTRO, JSON.stringify(registro));
-      });
-      void descadastrarPendente();
-    }
+    }, { tokenDaSessao, enviar: enviarRegistroPush });
     return token;
   } catch {
     return null; // push é opcional — nunca bloqueia o uso do app
   }
+}
+
+/** O registro do login e o da fila offline seguem a mesma ordem no aparelho. */
+export function enviarRegistroPush(envio: EnvioDaFila): Promise<void> {
+  const escola = /^\/escolas\/(\d+)\/dispositivos$/.exec(envio.caminho);
+  if (!escola) return enviarPelaApi(envio);
+  let token: unknown;
+  try {
+    token = (JSON.parse(envio.corpo ?? "{}") as { token_push?: unknown } | null)?.token_push;
+  } catch {
+    return Promise.resolve();
+  }
+  if (typeof token !== "string" || !token) return Promise.resolve();
+
+  const registro = { escolaId: Number(escola[1]), token };
+  const desta = geracaoPush;
+  const resultado = ultimoRegistro.then(async () => {
+    const pendenteAnterior = await emSequencia(async () => {
+      if (await obterToken() !== envio.tokenDaSessao || desta !== geracaoPush) return undefined;
+
+      // Suspende o descadastro antigo enquanto o POST reassocia o aparelho. Se
+      // a rede falhar, o pedido antigo volta a ficar pendente.
+      const anterior = await lerRegistro(CHAVE_DESCADASTRO);
+      await SecureStore.setItemAsync(CHAVE_REGISTRO, JSON.stringify(registro));
+      await SecureStore.deleteItemAsync(CHAVE_DESCADASTRO);
+      return anterior;
+    });
+    if (pendenteAnterior === undefined) return;
+
+    let registrado = false;
+    try {
+      await enviarPelaApi(envio);
+      registrado = true;
+    } finally {
+      const encerrou = await obterToken() !== envio.tokenDaSessao || desta !== geracaoPush;
+      const retirar = encerrou ? registro : registrado ? null : pendenteAnterior;
+      if (retirar) {
+        await emSequencia(() => SecureStore.setItemAsync(CHAVE_DESCADASTRO, JSON.stringify(retirar)));
+        // Um novo registro só sai depois desta tentativa. Assim um descadastro
+        // antigo nunca invalida um registro confirmado da conta seguinte.
+        await descadastrarPendente();
+      }
+    }
+  });
+  ultimoRegistro = resultado.catch(() => undefined);
+  return resultado;
 }
 
 /** Erro que repetir não resolve: o servidor recusou o pedido (4xx), exceto
@@ -177,6 +206,7 @@ export function descadastrarPendente(): Promise<void> {
  *  SEGUNDO PLANO — quem chama não espera o servidor. Não lança: a saída da conta
  *  segue mesmo se o servidor não responder. */
 export async function removerRegistroPush(): Promise<void> {
+  geracaoPush += 1;
   try {
     const marcado = await emSequencia(async () => {
       const registro = await lerRegistro(CHAVE_REGISTRO);

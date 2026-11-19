@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import { ApiError } from "@constela/core";
+import { ApiError, guardarToken } from "@constela/core";
 
 // Estado compartilhado com os factories dos mocks (hoisting).
 const { armazem, apiMock, online } = vi.hoisted(() => {
@@ -46,7 +46,8 @@ const CHAVE = "constela_fila_offline_v1";
 const fila = () => JSON.parse(armazem.mapa.get(CHAVE) ?? "[]") as unknown[];
 
 describe("fila de escritas offline (não perder ação sem rede)", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
+    await guardarToken("sessao-ficticia-original");
     armazem.mapa.clear();
     apiMock.mockReset();
     online.valor = true;
@@ -109,6 +110,20 @@ describe("fila de escritas offline (não perder ação sem rede)", () => {
       .mockResolvedValueOnce({}); // /bom envia
     await processarFila();
     expect(apiMock.mock.calls.map((c) => c[0])).toEqual(["/ruim", "/bom"]);
+    expect(fila()).toHaveLength(0);
+  });
+
+  it("uma escrita pendente da conta anterior nunca é enviada com o token da atual", async () => {
+    online.valor = false;
+    await enviarOuEnfileirar("/sessao-anterior", "POST");
+    await guardarToken("sessao-ficticia-atual");
+    await enviarOuEnfileirar("/sessao-atual", "POST");
+    expect(armazem.mapa.get(CHAVE)).not.toContain("sessao-ficticia");
+
+    online.valor = true;
+    apiMock.mockResolvedValue({});
+    await processarFila();
+    expect(apiMock.mock.calls.map(([caminho]) => caminho)).toEqual(["/sessao-atual"]);
     expect(fila()).toHaveLength(0);
   });
 });

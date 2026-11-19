@@ -24,9 +24,13 @@ const estado = vi.hoisted(() => ({
   semRede: false,
   // Tabela de aparelhos do servidor, aplicada na ordem em que cada pedido é PROCESSADO.
   cadastrados: new Set<string>(),
+  donoDoPush: null as string | null,
+  tokenDoLogin: "tok-ficticio",
   // Rede lenta: o registro do push só é processado quando o teste o liberar.
   registroPendurado: false,
   liberarRegistro: null as null | (() => void),
+  liberarLimpeza: null as null | (() => void),
+  limparSessaoPendurado: false,
 }));
 
 vi.mock("react", async () => {
@@ -46,7 +50,12 @@ vi.mock("@react-native-async-storage/async-storage", () => ({
   default: {
     getItem: async (k: string) => estado.disco.get(k) ?? null,
     setItem: async (k: string, v: string) => void estado.disco.set(k, v),
-    removeItem: async (k: string) => void estado.disco.delete(k),
+    removeItem: async (k: string) => {
+      if (k === "constela_sessao_v1" && estado.limparSessaoPendurado) {
+        await new Promise<void>((liberar) => { estado.liberarLimpeza = liberar; });
+      }
+      estado.disco.delete(k);
+    },
   },
 }));
 vi.mock("expo-crypto", () => {
@@ -93,14 +102,14 @@ async function servidorFalso(url: string, init?: RequestInit): Promise<Response>
     estado.corpos.push({ chave, corpo: JSON.parse(String(init.body)) });
   }
   if (estado.semRede) throw new TypeError("Network request failed");
-  if (caminho === "/auth/login") return responder({ access_token: "tok-ficticio", usuario: USUARIO });
+  if (caminho === "/auth/login") return responder({ access_token: estado.tokenDoLogin, usuario: USUARIO });
   if (sessaoRevogada && caminho === "/auth/me") {
     return responder({ detail: "Sessão expirada. Entre novamente." }, 401);
   }
   if (caminho === "/auth/me") return responder(USUARIO);
   if (caminho === "/escolas") return responder(ESCOLAS);
   if (caminho === "/escolas/1/dispositivos") {
-    const autenticado = Boolean((init?.headers as Record<string, string> | undefined)?.Authorization);
+    const autenticado = (init?.headers as Record<string, string> | undefined)?.Authorization;
     if (!autenticado) return responder({ detail: "Sessão expirada. Entre novamente." }, 401);
     if (estado.registroPendurado) {
       await new Promise<void>((liberar) => {
@@ -108,6 +117,7 @@ async function servidorFalso(url: string, init?: RequestInit): Promise<Response>
       });
     }
     estado.cadastrados.add((JSON.parse(String(init?.body)) as { token_push: string }).token_push);
+    estado.donoDoPush = autenticado;
     estado.chamadas.push("PROCESSADO registro");
     return responder({ id: 1, plataforma: "android" });
   }
@@ -116,6 +126,7 @@ async function servidorFalso(url: string, init?: RequestInit): Promise<Response>
   }
   if (caminho.startsWith("/escolas/1/dispositivos/")) {
     estado.cadastrados.delete((JSON.parse(String(init?.body)) as { token_push: string }).token_push);
+    estado.donoDoPush = null;
     estado.chamadas.push("PROCESSADO descadastro");
     return responder({ mensagem: "Dispositivo removido." });
   }
@@ -128,6 +139,8 @@ import { act, cleanup, render, waitFor } from "@testing-library/react";
 
 import { salvarSessao } from "../armazenamento/sessao";
 import { ProvedorAutenticacao, useAutenticacao } from "../contexto/Autenticacao";
+import { processarFila } from "../filaOffline";
+import { enviarRegistroPush } from "../notificacoes";
 
 (globalThis as { React?: unknown }).React = React;
 
@@ -172,8 +185,12 @@ beforeEach(() => {
   estado.corpos.length = 0;
   estado.semRede = false;
   estado.cadastrados.clear();
+  estado.donoDoPush = null;
+  estado.tokenDoLogin = "tok-ficticio";
   estado.registroPendurado = false;
   estado.liberarRegistro = null;
+  estado.liberarLimpeza = null;
+  estado.limparSessaoPendurado = false;
   sessaoRevogada = false;
   statusDescadastro = 200;
   onlineManager.setOnline(true);
@@ -317,6 +334,61 @@ describe("'Sair' com o registro do push ainda a caminho do servidor (REV-MOBILE-
     });
     expect(ctx.usuario).toBeNull();
     expect([...estado.cadastrados]).toEqual([]);
+  });
+
+  it.each([false, true])("registro atrasado da primeira conta preserva a seguinte (replay=%s)", async (replay) => {
+    estado.registroPendurado = true;
+    if (replay) onlineManager.setOnline(false);
+    montar();
+    await waitFor(() => expect(ctx.carregando).toBe(false));
+    await act(async () => { await ctx.entrar("primeira@ficticio.local", "senha-ficticia"); });
+    let drenagem: Promise<void> | undefined;
+    if (replay) {
+      await waitFor(() => expect(estado.disco.has("constela_fila_offline_v1")).toBe(true));
+      await act(async () => {
+        onlineManager.setOnline(true);
+        drenagem = processarFila(enviarRegistroPush);
+      });
+    }
+    await waitFor(() => expect(estado.liberarRegistro).not.toBeNull());
+    await sairEEsperar();
+
+    estado.registroPendurado = false;
+    estado.tokenDoLogin = "tok-segunda-conta";
+    await act(async () => { await ctx.entrar("segunda@ficticio.local", "senha-ficticia"); });
+    expect(estado.donoDoPush).toBeNull();
+
+    await act(async () => {
+      estado.liberarRegistro!();
+      await drenagem;
+    });
+    await waitFor(() => expect(estado.donoDoPush).toBe("Bearer tok-segunda-conta"));
+    expect(estado.chamadas.filter((c) => c.startsWith("PROCESSADO")).slice(-3))
+      .toEqual(["PROCESSADO registro", "PROCESSADO descadastro", "PROCESSADO registro"]);
+    expect(estado.cofre.get("sgpe_token")).toBe("tok-segunda-conta");
+    expect(estado.cofre.has("constela_push_descadastro_v1")).toBe(false);
+  });
+
+  it("um novo login aguarda a limpeza local que já começou", async () => {
+    await entrarComoProfessora();
+    estado.limparSessaoPendurado = true;
+    let saida!: Promise<void>;
+    await act(async () => { saida = ctx.sair(); });
+    await waitFor(() => expect(estado.liberarLimpeza).not.toBeNull());
+    expect(ctx.usuario).toBeNull();
+
+    let entrada!: Promise<void>;
+    estado.tokenDoLogin = "tok-segunda-conta";
+    await act(async () => { entrada = ctx.entrar("nova@ficticio.local", "senha-ficticia"); });
+    expect(estado.chamadas.filter((c) => c === "POST /auth/login")).toHaveLength(1);
+    await act(async () => {
+      estado.liberarLimpeza!();
+      await Promise.all([saida, entrada]);
+    });
+
+    await waitFor(() => expect(estado.donoDoPush).toBe("Bearer tok-segunda-conta"));
+    expect(estado.cofre.get("sgpe_token")).toBe("tok-segunda-conta");
+    expect(estado.disco.has("constela_sessao_v1")).toBe(true);
   });
 });
 

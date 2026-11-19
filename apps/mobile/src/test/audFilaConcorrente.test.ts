@@ -9,7 +9,7 @@
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import { ApiError } from "@constela/core";
+import { ApiError, guardarToken } from "@constela/core";
 
 const { disco, apiMock, online } = vi.hoisted(() => ({
   disco: new Map<string, string>(),
@@ -50,7 +50,8 @@ const fila = () =>
 const tique = () => new Promise((r) => setTimeout(r, 0));
 
 describe("fila offline: escrita nova durante a drenagem não se perde", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
+    await guardarToken("sessao-ficticia");
     disco.clear();
     apiMock.mockReset();
     online.valor = true;

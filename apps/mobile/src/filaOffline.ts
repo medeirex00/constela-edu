@@ -16,8 +16,9 @@
  * senão a gravação de um apaga o que o outro acabou de pôr (uma escrita que falhou
  * e entrou na fila enquanto a drenagem enviava um item antigo sumia do disco).
  */
-import { ApiError, api } from "@constela/core";
+import { ApiError, api, obterToken } from "@constela/core";
 import { onlineManager } from "@tanstack/react-query";
+import CryptoJS from "crypto-js";
 
 import { armazenamentoCifrado } from "./armazenamento/armazenamentoCifrado";
 
@@ -28,6 +29,24 @@ interface ItemFila {
   caminho: string;
   metodo: string;
   corpo: string | null;
+  sessao: string;
+}
+
+export interface EnvioDaFila {
+  caminho: string;
+  metodo: string;
+  corpo: string | null;
+  tokenDaSessao: string;
+}
+
+type EnviarDaFila = (envio: EnvioDaFila) => Promise<void>;
+
+export async function enviarPelaApi(envio: EnvioDaFila): Promise<void> {
+  await api(envio.caminho, { method: envio.metodo, body: envio.corpo ?? undefined }, envio.tokenDaSessao);
+}
+
+function impressaoDaSessao(token: string): string {
+  return CryptoJS.SHA256(token).toString();
 }
 
 let processando = false;
@@ -51,7 +70,8 @@ async function ler(): Promise<ItemFila[]> {
   const bruto = await armazenamentoCifrado.getItem(CHAVE);
   if (!bruto) return [];
   try {
-    return JSON.parse(bruto) as ItemFila[];
+    const itens: unknown = JSON.parse(bruto);
+    return Array.isArray(itens) ? itens as ItemFila[] : [];
   } catch {
     return [];
   }
@@ -65,15 +85,17 @@ async function gravar(itens: ItemFila[]): Promise<void> {
   await armazenamentoCifrado.setItem(CHAVE, JSON.stringify(itens));
 }
 
-function enfileirar(caminho: string, metodo: string, corpo: unknown): Promise<void> {
+function enfileirar(envio: EnvioDaFila): Promise<void> {
   // Sem Math.random (indisponível de forma estável): timestamp + contador.
   const item: ItemFila = {
     id: `${Date.now()}_${sequencia++}`,
-    caminho,
-    metodo,
-    corpo: corpo === undefined ? null : JSON.stringify(corpo),
+    caminho: envio.caminho,
+    metodo: envio.metodo,
+    corpo: envio.corpo,
+    sessao: impressaoDaSessao(envio.tokenDaSessao),
   };
   return emOrdem(async () => {
+    if (await obterToken() !== envio.tokenDaSessao) return;
     const itens = await ler();
     itens.push(item);
     await gravar(itens);
@@ -91,23 +113,26 @@ function retirar(id: string): Promise<void> {
 
 export async function enviarOuEnfileirar(
   caminho: string, metodo: string, corpo?: unknown,
+  opcoes: { tokenDaSessao?: string; enviar?: EnviarDaFila } = {},
 ): Promise<void> {
+  const tokenDaSessao = opcoes.tokenDaSessao ?? await obterToken();
+  if (!tokenDaSessao) throw new ApiError(401, "Entre na conta para enviar esta operação.");
+  const envio = {
+    caminho, metodo, corpo: corpo === undefined ? null : JSON.stringify(corpo), tokenDaSessao,
+  };
   if (!onlineManager.isOnline()) {
-    await enfileirar(caminho, metodo, corpo);
+    await enfileirar(envio);
     return;
   }
   try {
-    await api(caminho, {
-      method: metodo,
-      body: corpo === undefined ? undefined : JSON.stringify(corpo),
-    });
+    await (opcoes.enviar ?? enviarPelaApi)(envio);
   } catch (erro) {
     if (permanente(erro)) throw erro;
-    await enfileirar(caminho, metodo, corpo); // rede/servidor: tenta depois
+    await enfileirar(envio); // rede/servidor: tenta depois
   }
 }
 
-export async function processarFila(): Promise<void> {
+export async function processarFila(enviar: EnviarDaFila = enviarPelaApi): Promise<void> {
   if (processando || !onlineManager.isOnline()) return;
   processando = true;
   try {
@@ -115,8 +140,15 @@ export async function processarFila(): Promise<void> {
       // Relê a cabeça da fila a cada volta: inclui o que chegou durante a drenagem.
       const [item] = await ler();
       if (!item) break;
+      const tokenDaSessao = await obterToken();
+      // Uma entrada antiga sem vínculo é descartada. Ao abrir a sessão, o app
+      // envia um registro novo do aparelho.
+      if (!tokenDaSessao || item.sessao !== impressaoDaSessao(tokenDaSessao)) {
+        await retirar(item.id);
+        continue;
+      }
       try {
-        await api(item.caminho, { method: item.metodo, body: item.corpo ?? undefined });
+        await enviar({ caminho: item.caminho, metodo: item.metodo, corpo: item.corpo, tokenDaSessao });
       } catch (erro) {
         if (!permanente(erro)) break; // rede caiu de novo: mantém e sai
         // erro permanente: descarta o item e segue para o próximo
@@ -129,8 +161,8 @@ export async function processarFila(): Promise<void> {
 }
 
 /** Liga a fila à reconexão automática. Devolve a função para cancelar. */
-export function ligarFilaAReconexao(): () => void {
+export function ligarFilaAReconexao(enviar?: EnviarDaFila): () => void {
   return onlineManager.subscribe((online) => {
-    if (online) void processarFila();
+    if (online) void processarFila(enviar);
   });
 }

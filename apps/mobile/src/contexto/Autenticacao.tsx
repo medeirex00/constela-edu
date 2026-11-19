@@ -51,6 +51,7 @@ export function ProvedorAutenticacao({ children }: { children: ReactNode }) {
   // Muda a cada sessão encerrada: uma resposta da rede que chega DEPOIS do "Sair"
   // (um refresh do boot que estava pendurado) não pode pôr a sessão de volta.
   const geracao = useRef(0);
+  const limpezaLocal = useRef<Promise<void> | null>(null);
 
   // Toda mudança de sessão é persistida CIFRADA — é o que permite o boot offline.
   useEffect(() => {
@@ -83,22 +84,29 @@ export function ProvedorAutenticacao({ children }: { children: ReactNode }) {
 
   // Encerra a sessão LOCAL: estado, sessão salva, cache das telas e chave de
   // cifra (rotacionada para o cache antigo virar ilegível num aparelho partilhado).
-  const encerrarLocal = useCallback(async () => {
+  const encerrarLocal = useCallback(() => {
+    if (limpezaLocal.current) return limpezaLocal.current;
     geracao.current += 1;
+    // Marca o descadastro antes de exibir o formulário da conta seguinte.
+    const descadastro = removerRegistroPush();
     setUsuario(null);
     setEscolas([]);
     setEscolaId(null);
     clienteQuery.clear();
-    await Promise.allSettled([limparSessao(), persistidor.removeClient()]);
-    await esquecerChave();
+    const limpeza = (async () => {
+      await Promise.allSettled([limparSessao(), persistidor.removeClient()]);
+      await esquecerChave();
+      await descadastro;
+    })().finally(() => { limpezaLocal.current = null; });
+    limpezaLocal.current = limpeza;
+    return limpeza;
   }, []);
 
   useEffect(() => {
     // Token inválido/expirado (401 no cliente HTTP): aí sim desloga de fato — e o
     // aparelho sai do push, como no "Sair".
     aoExpirarSessao(() => {
-      void removerRegistroPush();
-      void encerrarLocal();
+      void encerrarLocal().catch(() => undefined);
     });
 
     // Descadastro do push que ficou pendente (saída sem rede): tenta agora e a
@@ -132,6 +140,7 @@ export function ProvedorAutenticacao({ children }: { children: ReactNode }) {
 
   const entrar = useCallback(
     async (email: string, senha: string) => {
+      await limpezaLocal.current;
       const resposta = await loginRequest(email, senha);
       await guardarToken(resposta.access_token);
       await atualizarSessao(null);
@@ -145,7 +154,6 @@ export function ProvedorAutenticacao({ children }: { children: ReactNode }) {
   const sair = useCallback(async () => {
     await limparToken();
     await encerrarLocal();
-    await removerRegistroPush();
   }, [encerrarLocal]);
 
   const selecionarEscola = useCallback((id: number) => {
