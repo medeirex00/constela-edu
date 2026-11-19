@@ -538,7 +538,7 @@ function TopEscolas({ escolas, aoAbrir }: { escolas: EscolaCartao[]; aoAbrir: (i
                       </button>
                     </td>
                     <td className="whitespace-nowrap px-4 py-2.5 text-right text-lg font-bold text-indigo-700 tabular-nums dark:text-indigo-300">
-                      {m.indice ? numero(Math.round(val(e))) : nota(val(e))}
+                      {m.indice ? numero(Math.round(Number(e[m.chave] ?? 0))) : nota(Number(e[m.chave] ?? 0))}
                       {m.sufixo ?? ""}
                     </td>
                   </tr>

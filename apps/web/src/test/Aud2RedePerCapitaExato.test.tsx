@@ -82,8 +82,7 @@ function dashRede() {
 
 function linhas(titulo: string) {
   const card = screen.getByText(titulo).closest("div")!.parentElement!;
-  return Array.from(card.querySelector("table")!.querySelectorAll("tbody tr"))
-    .map((linha) => linha.textContent ?? "");
+  return Array.from(card.querySelector("table")!.querySelectorAll("tbody tr"));
 }
 
 describe("Per capita: a ordem do cliente é a da conta exata", () => {
@@ -96,8 +95,9 @@ describe("Per capita: a ordem do cliente é a da conta exata", () => {
 
     await userEvent.click(screen.getByRole("button", { name: "Livros/aluno" }));
     const top = linhas("Top 5 escolas da rede");
-    expect(top[0]).toContain("EM Inventada Pi");
-    expect(top[1]).toContain("EM Inventada Qui");
+    expect(top[0]).toHaveTextContent("EM Inventada Pi");
+    expect(top[1]).toHaveTextContent("EM Inventada Qui");
+    expect(top.map((linha) => linha.lastElementChild?.textContent)).toEqual(["12,2", "12,2"]);
   });
 
   it("Comparação entre redes por Livros/aluno: pela conta exata dos totais da rede", async () => {
@@ -128,7 +128,7 @@ describe("Per capita: a ordem do cliente é a da conta exata", () => {
 
     await userEvent.click(screen.getByRole("button", { name: "Livros/aluno" }));
     const ordem = linhas("Comparação entre redes");
-    expect(ordem[0]).toContain("Rede Inventada Pi");
-    expect(ordem[1]).toContain("Rede Inventada Qui");
+    expect(ordem[0]).toHaveTextContent("Rede Inventada Pi");
+    expect(ordem[1]).toHaveTextContent("Rede Inventada Qui");
   });
 });
