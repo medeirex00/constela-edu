@@ -38,7 +38,7 @@ from app.core.security import cifrar_segredo, decifrar_segredo
 from app.models.academico import Aluno, IdentidadeExterna, Matricula
 from app.models.configuracao import Configuracao
 from app.models.escola import Escola
-from app.services import periodos
+from app.services import exclusao_aluno, periodos
 from app.sync import connectors, escola_externa, fuso, vault
 from app.sync.connectors.navegador import (
     FALHA_CONHECIDA,
@@ -314,15 +314,17 @@ def limpar_sessao(db: Session, escola_id: int) -> None:
 # início da consulta) e só é servida para a mesma credencial. É isso que garante
 # nunca servir o ranking da conta antiga (PII de outra conta) depois de trocar ou
 # remover a credencial — em QUALQUER worker, e também quando uma consulta que já
-# estava em andamento termina depois da troca. O ``invalidar_cache`` só libera a
-# memória do processo que atendeu o pedido.
+# estava em andamento termina depois da troca. O cache também compara as marcas
+# de esquecimento da escola antes de servir uma resposta. ``invalidar_cache``
+# só libera a memória do processo que atendeu o pedido.
 _CACHE_TTL_S = 60
-_cache: dict[tuple[int, str], tuple[datetime, str, dict]] = {}
+_CarimboCache = tuple[str, int, frozenset[tuple[str, str]]]
+_cache: dict[tuple[int, str], tuple[datetime, str | _CarimboCache, dict]] = {}
 _cache_guard = threading.Lock()
 
 
 def _cache_get(escola_id: int, filtro: str, agora: datetime,
-               carimbo: str = "") -> dict | None:
+               carimbo: str | _CarimboCache = "") -> dict | None:
     with _cache_guard:
         item = _cache.get((escola_id, filtro))
     if item is None:
@@ -334,7 +336,7 @@ def _cache_get(escola_id: int, filtro: str, agora: datetime,
 
 
 def _cache_put(escola_id: int, filtro: str, agora: datetime, valor: dict,
-               carimbo: str = "") -> None:
+               carimbo: str | _CarimboCache = "") -> None:
     with _cache_guard:
         _cache[(escola_id, filtro)] = (agora, carimbo, valor)
         # Poda preguiçosa: descarta entradas vencidas para não crescer sem fim.
@@ -607,9 +609,15 @@ def placar_matific(db: Session, escola_id: int, *, periodo: str | None,
                            codigo=vault.CODIGO_CREDENCIAL_ILEGIVEL, recuperavel=False)
     carimbo = vault.carimbo_da_credencial(linha)
 
+    def carimbo_do_placar() -> _CarimboCache:
+        marcas_matific = frozenset(
+            marca for marca in exclusao_aluno.marcas_esquecidas(db, escola_id)
+            if marca[0] == "matific")
+        return carimbo, ano_letivo, marcas_matific
+
     # Cache curto de resultado (dedupe): antes de qualquer trabalho pesado.
     if not forcar:
-        hit = _cache_get(escola_id, filtro, agora, carimbo)
+        hit = _cache_get(escola_id, filtro, agora, carimbo_do_placar())
         if hit is not None:
             return {**hit, "cache": True}
 
@@ -622,7 +630,7 @@ def placar_matific(db: Session, escola_id: int, *, periodo: str | None,
         # Re-checa o cache: outra requisição pode tê-lo preenchido enquanto
         # esperávamos o lock (evita duas coletas para o mesmo período).
         if not forcar:
-            hit = _cache_get(escola_id, filtro, agora, carimbo)
+            hit = _cache_get(escola_id, filtro, agora, carimbo_do_placar())
             if hit is not None:
                 return {**hit, "cache": True}
 
@@ -666,6 +674,10 @@ def placar_matific(db: Session, escola_id: int, *, periodo: str | None,
             except Exception:  # noqa: BLE001
                 db.rollback()
 
+        carimbo_cache = carimbo_do_placar()
+        marcas = carimbo_cache[2]
+        alunos = [a for a in alunos if not exclusao_aluno.conta_esquecida(
+            marcas, "matific", a.get("uuid"))]
         _recusar_linhas_sem_numeros(alunos)
         fichas = _fichas_da_escola(db, escola_id, populacao.ano_letivo,
                                    uuids=[a.get("uuid") for a in alunos])
@@ -683,5 +695,5 @@ def placar_matific(db: Session, escola_id: int, *, periodo: str | None,
         }
         # Com o carimbo lido no INÍCIO: se a credencial mudou durante a consulta, o
         # resultado não vale para a nova (nem para "sem credencial").
-        _cache_put(escola_id, filtro, agora, resultado, carimbo)
+        _cache_put(escola_id, filtro, agora, resultado, carimbo_cache)
         return resultado

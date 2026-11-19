@@ -193,3 +193,36 @@ def test_placar_ao_vivo_ponta_a_ponta_liga_pela_conta(db, escola_completa, monke
                               agora=_agora())
     assert [i["aluno_id"] for i in r["itens"]] == [a.id, None]
     assert r["com_link"] == 1
+
+
+def test_placar_descarta_conta_esquecida_e_nao_serve_cache_anterior(
+        db, escola_completa, cliente_global, monkeypatch):
+    escola = escola_completa["escola"]
+    aluno = escola_completa["alunos"][0]
+    homonimo = _aluno_extra(db, escola_completa, aluno.nome)
+    aluno_id = aluno.id
+    _conta(db, escola.id, aluno_id, "u-esquecido-teste")
+    linhas = [_linha(aluno.nome, "u-esquecido-teste", estrelas=50),
+              _linha(homonimo.nome, "u-outro-teste", estrelas=30)]
+
+    class Conector:
+        def coletar_via_http(self):  # pragma: no cover - substituído abaixo
+            raise AssertionError("não deve ser chamado")
+
+    monkeypatch.setattr(connectors, "obter", lambda _: Conector())
+    monkeypatch.setattr(aovivo, "_coletar_http_first", lambda *_: (linhas, None))
+    vault.salvar_credencial(db, escola.id, "matific", Credenciais(usuario="u", senha="p"))
+    db.commit()
+    filtros = dict(periodo="mes", inicio=None, fim=None, agora=_agora())
+    antes = aovivo.placar_matific(db, escola.id, **filtros)
+    assert antes["total"] == 2 and antes["itens"][0]["aluno_id"] == aluno_id
+    resposta = cliente_global.post(f"/api/v1/escolas/{escola.id}/alunos/excluir-permanente",
+                                   json={"aluno_ids": [aluno_id], "confirmacao": "EXCLUIR"})
+    assert resposta.status_code == 200, resposta.text
+
+    depois = aovivo.placar_matific(db, escola.id, **filtros)
+    assert depois["cache"] is False
+    assert depois["total"] == depois["com_link"] == 1
+    assert depois["itens"][0]["aluno_id"] == homonimo.id
+    assert depois["itens"][0]["estrelas"] == 30
+    assert aovivo.placar_matific(db, escola.id, **filtros)["cache"] is True
