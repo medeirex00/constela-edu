@@ -49,7 +49,7 @@ class LimitadorTentativas:
         self.max_tentativas = max_tentativas
         self.janela_s = janela_s
         self._eventos: dict[str, deque[float]] = {}
-        self._esperas_persistentes: dict[str, tuple[float, float]] = {}
+        self._esperas_persistentes: dict[str, tuple[deque[float], float, float]] = {}
         self._lock = threading.Lock()
 
     def _agora(self) -> float:
@@ -137,9 +137,12 @@ class LimitadorTentativas:
         segundos = self.segundos_restantes(chave)
         agora = self._agora()
         with self._lock:
-            cache_ate, bloqueio_ate = self._esperas_persistentes.get(chave, (0, 0))
-        if cache_ate > agora:
-            return max(segundos, math.ceil(bloqueio_ate - agora))
+            recusa = self._esperas_persistentes.get(chave)
+            if recusa is not None:
+                fila, cache_ate, bloqueio_ate = recusa
+                if cache_ate > agora and self._eventos.get(chave) is fila:
+                    return max(segundos, math.ceil(bloqueio_ate - agora))
+                self._esperas_persistentes.pop(chave, None)
         return segundos
 
     def bloquear_por(self, chave: str, segundos: float, *,
@@ -155,20 +158,20 @@ class LimitadorTentativas:
         janela delas, como se ele não tivesse existido."""
         agora = self._agora()
         segundos = max(0.0, min(float(segundos), float(self.janela_s)))
-        espera_local = self.segundos_restantes(chave)
+        if not segundos:
+            return
         with self._lock:
-            if espera_persistente is not None and segundos > 0:
+            vivos = [t for t in self._eventos.get(chave, ()) if agora - t <= self.janela_s]
+            excesso = len(vivos) - self.max_tentativas
+            espera_local = self.janela_s - (agora - vivos[excesso]) if excesso >= 0 else 0
+            if segundos > espera_local:
                 if chave not in self._eventos and len(self._eventos) >= _MAX_CHAVES:
                     self._evacuar(agora)
+                marca = agora - self.janela_s + segundos
+                self._eventos[chave] = deque(sorted(vivos + [marca] * self.max_tentativas))
+            if espera_persistente is not None:
                 self._esperas_persistentes[chave] = (
-                    agora + segundos, agora + espera_persistente)
-            if segundos <= espera_local:
-                return
-            if chave not in self._eventos and len(self._eventos) >= _MAX_CHAVES:
-                self._evacuar(agora)
-            marca = agora - self.janela_s + segundos
-            vivos = [t for t in self._eventos.get(chave, ()) if agora - t <= self.janela_s]
-            self._eventos[chave] = deque(sorted(vivos + [marca] * self.max_tentativas))
+                    self._eventos[chave], agora + segundos, agora + espera_persistente)
 
     def falhas_na_janela(self, chave: str) -> int:
         """Quantas falhas da chave estão na janela, neste processo (o que a camada em
