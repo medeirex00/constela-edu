@@ -23,6 +23,7 @@ bloqueio — um único código válido conhecido "carimbaria" IPs novos e anular
 teto.
 """
 import logging
+from contextlib import contextmanager
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
@@ -149,18 +150,52 @@ class _Tentativa:
                          "global_falha": _GLOBAL}
         self._dimensoes = tuple(d for d in _DIMENSOES
                                 if com_global or d != "global_falha")
+        self._reserva: limites.Reserva | None = None
 
     def _chave(self, dimensao: str) -> str:
         return limites.chave(dimensao, self._valores[dimensao])
 
+    def _bloqueada_em_memoria(self) -> bool:
+        return any(_DIMENSOES[d].bloqueado(self._valores[d]) for d in self._dimensoes)
+
     def exigir_liberada(self, db: Session) -> None:
         """429 se QUALQUER dimensão estiver bloqueada — checado ANTES de procurar
         o código, e com a mesma resposta exista o código ou não (sem enumeração)."""
-        em_memoria = any(_DIMENSOES[d].bloqueado(self._valores[d])
-                         for d in self._dimensoes)
-        if em_memoria or limites.bloqueado(
+        if self._bloqueada_em_memoria() or limites.bloqueado(
                 db, [self._chave(d) for d in self._dimensoes]):
             raise HTTPException(status.HTTP_429_TOO_MANY_REQUESTS, ERRO_MUITAS)
+
+    def _limites(self, dimensoes):
+        return [limites.Limite(self._chave(d), _DIMENSOES[d].max_tentativas,
+                              _DIMENSOES[d].janela_s) for d in dimensoes]
+
+    @contextmanager
+    def avaliar_codigo(self, db: Session):
+        """Reserva a vaga nos limites compartilhados antes de consultar a credencial."""
+        if self._bloqueada_em_memoria():
+            raise HTTPException(status.HTTP_429_TOO_MANY_REQUESTS, ERRO_MUITAS)
+        try:
+            self._reserva = limites.reservar(db, self._limites(self._dimensoes))
+        except limites.LimiteIndisponivel:
+            self._reserva = None
+        if self._reserva is not None and not self._reserva.aceita:
+            raise HTTPException(status.HTTP_429_TOO_MANY_REQUESTS, ERRO_MUITAS)
+        try:
+            yield
+        finally:
+            if self._reserva is not None:
+                db.rollback()
+                self._encerrar_reserva(db, ())
+
+    def _encerrar_reserva(self, db: Session, manter) -> dict[str, int]:
+        reserva, self._reserva = self._reserva, None
+        chaves_mantidas = {self._chave(d) for d in manter}
+        devolver = tuple(t for t in reserva.tomadas if t.chave not in chaves_mantidas)
+        try:
+            limites.devolver(db, limites.Reserva(tomadas=devolver))
+        except limites.LimiteIndisponivel:
+            pass   # a contagem fica até o fim da janela
+        return {d: reserva.falhas(self._chave(d)) for d in manter}
 
     def contar(self, db: Session, *dimensoes: str) -> int:
         """Conta 1 tentativa nas dimensões dadas, nas duas camadas. Devolve as
@@ -179,14 +214,15 @@ class _Tentativa:
             return 0
         for dimensao in contadas:
             _DIMENSOES[dimensao].registrar_falha(self._valores[dimensao])
-        try:
-            no_banco = limites.contar(db, [
-                limites.Limite(self._chave(d), _DIMENSOES[d].max_tentativas,
-                               _DIMENSOES[d].janela_s) for d in contadas])
-            falhas = {d: no_banco[self._chave(d)] for d in contadas}
-        except limites.LimiteIndisponivel:
-            falhas = {d: _DIMENSOES[d].falhas_na_janela(self._valores[d])
-                      for d in contadas}
+        if self._reserva is not None:
+            falhas = self._encerrar_reserva(db, contadas)
+        else:
+            try:
+                no_banco = limites.contar(db, self._limites(contadas))
+                falhas = {d: no_banco[self._chave(d)] for d in contadas}
+            except limites.LimiteIndisponivel:
+                falhas = {d: _DIMENSOES[d].falhas_na_janela(self._valores[d])
+                          for d in contadas}
         if "global_falha" in falhas and (
                 falhas["global_falha"] >= limitador_global_falha.max_tentativas
                 or limitador_global_falha.bloqueado(_GLOBAL)):
@@ -200,7 +236,12 @@ class _Tentativa:
         janela (o contador do banco voltou 1 — o incremento é atômico, só UM pedido
         vê o 1)."""
         db.commit()
-        if self.contar(db, *_FALHA_INATIVO_SEMPRE) == 1:
+        if self._reserva is not None:
+            primeira = self._reserva.falhas(self._chave("codigo_ip")) == 1
+            manter = (_FALHA_INATIVO_SEMPRE + _FALHA_INATIVO_PRIMEIRA
+                      if primeira else _FALHA_INATIVO_SEMPRE)
+            self.contar(db, *manter)
+        elif self.contar(db, *_FALHA_INATIVO_SEMPRE) == 1:
             self.contar(db, *_FALHA_INATIVO_PRIMEIRA)
 
     def limpar_conta(self, db: Session) -> None:
@@ -208,6 +249,11 @@ class _Tentativa:
         limitador_codigo.limpar(self.codigo_ip)
         limitador_codigo_conta.limpar(self.conta)
         limites.limpar(db, [self._chave("codigo_ip"), self._chave("codigo")])
+
+    def devolver_apos_login(self, db: Session) -> None:
+        if self._reserva is not None:
+            # Os dois contadores da conta já foram apagados pelo commit.
+            self._encerrar_reserva(db, ("codigo_ip", "codigo"))
 
 
 def _alertar_limite_global(falhas: int) -> None:
@@ -283,7 +329,6 @@ def _sessao(db: Session, credencial: QuestCredencialAluno, request: Request,
 def quem(dados: schemas.QuemIn, request: Request, db: Session = Depends(get_db)):
     """Etapa 1 — "É você?": devolve nome/avatar do dono do código."""
     tentativa = _Tentativa(request, svc.normalizar_codigo(dados.codigo))
-    tentativa.exigir_liberada(db)
 
     def falhou():
         # código inexistente → conta também no anti-enumeração por IP. A contagem é
@@ -291,21 +336,19 @@ def quem(dados: schemas.QuemIn, request: Request, db: Session = Depends(get_db))
         db.commit()
         tentativa.contar(db, *_FALHA_CODIGO)
 
-    credencial = _checar_credencial(svc.buscar_por_codigo(db, tentativa.conta),
-                                    falhou, lambda: tentativa.contar_inativo(db))
-    perfil = svc_perfis.obter_ou_criar_perfil(db, credencial.aluno)
-    saida = schemas.QuemOut(
-        nome=svc_perfis.nome_para_falas(perfil, credencial.aluno.nome),
-        apelido=perfil.apelido,
-        avatar=perfil.avatar or {},
-    )
-    db.commit()
-    # Anti-enumeração: revelar um nome conta contra o teto POR IP (limitador_ip).
-    # Colher nomes em massa de um mesmo IP é barrado; a criança que confirma o
-    # próprio código 1-2x não chega perto do teto. Depois do commit: a contagem é
-    # fora da transação e a sessão não pode estar segurando conexão.
-    tentativa.contar(db, "ip")
-    return saida
+    with tentativa.avaliar_codigo(db):
+        credencial = _checar_credencial(svc.buscar_por_codigo(db, tentativa.conta),
+                                        falhou, lambda: tentativa.contar_inativo(db))
+        perfil = svc_perfis.obter_ou_criar_perfil(db, credencial.aluno)
+        saida = schemas.QuemOut(
+            nome=svc_perfis.nome_para_falas(perfil, credencial.aluno.nome),
+            apelido=perfil.apelido,
+            avatar=perfil.avatar or {},
+        )
+        db.commit()
+        # Revelar o nome conta no limite do IP mesmo quando o código está certo.
+        tentativa.contar(db, "ip")
+        return saida
 
 
 @router.post("/entrar", response_model=schemas.SessaoOut)
@@ -313,7 +356,6 @@ def entrar(dados: schemas.EntrarIn, request: Request,
            db: Session = Depends(get_db)):
     """Etapa 2 — cria a sessão do aluno (o código é a credencial)."""
     tentativa = _Tentativa(request, svc.normalizar_codigo(dados.codigo))
-    tentativa.exigir_liberada(db)
 
     def falhou():
         # NÃO gravar o código digitado (credencial de menor, near-miss) e
@@ -325,10 +367,13 @@ def entrar(dados: schemas.EntrarIn, request: Request,
         # AUTOCOMMIT), e a sessão não segura conexão enquanto ela roda.
         tentativa.contar(db, *_FALHA_CODIGO)
 
-    credencial = _checar_credencial(svc.buscar_por_codigo(db, tentativa.conta),
-                                    falhou, lambda: tentativa.contar_inativo(db))
-    tentativa.limpar_conta(db)
-    return _sessao(db, credencial, request, via="codigo")
+    with tentativa.avaliar_codigo(db):
+        credencial = _checar_credencial(svc.buscar_por_codigo(db, tentativa.conta),
+                                        falhou, lambda: tentativa.contar_inativo(db))
+        tentativa.limpar_conta(db)
+        saida = _sessao(db, credencial, request, via="codigo")
+        tentativa.devolver_apos_login(db)
+        return saida
 
 
 @router.post("/entrar-qr", response_model=schemas.SessaoOut)
