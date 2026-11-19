@@ -13,13 +13,14 @@ Agora a regra 9 lê também os descartes da escola: mesmo livro, instante anteri
 chave que prova a mesma ficha de origem → recusa, dizendo que a anterior foi
 descartada como cópia repetida. Dados fictícios.
 """
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 
 import pytest
 from sqlalchemy import select
 from sqlalchemy.orm.attributes import flag_modified
 
 from app.models import EventoAluno, LogAuditoria
+from app.services import audit
 from app.services import leituras_restauracao as lr
 from app.services.eventos import chave_evento, deduplicar_eventos_por_conteudo
 from tests.test_aud_alunos_fusao_eventos import AGOSTO, MARCO, TITULO, _eventos, _fundir, _importar
@@ -41,8 +42,9 @@ def _de(eventos, quando, origem):
                 chave_evento("elefante", "leitura", origem, TITULO, quando))
 
 
+@pytest.mark.parametrize("expurgar", [False, True])
 def test_releitura_nao_passa_por_primeira_quando_a_primeira_saiu_na_fusao(
-        cliente, db, escola_completa):
+        cliente, db, escola_completa, expurgar):
     """D e Y leram em março (a mesma linha do relatório). D absorve Y: sai a cópia
     nativa de D (sem releitura naquela hora). D lê de novo em agosto e W absorve D.
     Agosto não é a primeira leitura de D: a restauração tem de recusar."""
@@ -59,11 +61,21 @@ def test_releitura_nao_passa_por_primeira_quando_a_primeira_saiu_na_fusao(
     assert not [e for e in eventos if e.chave_natural == chave_evento(
         "elefante", "leitura", did, TITULO, T_MARCO)], "pré-condição: a de março de D saiu"
 
+    if expurgar:
+        audit.expurgar_retencao(db, simular=False, prazos={"auditoria_alunos": 1},
+                                  agora=datetime.now(timezone.utc) + timedelta(days=365))
+        log = db.scalar(select(LogAuditoria).where(LogAuditoria.acao == "aluno.fundido",
+                                                   LogAuditoria.entidade_id == did))
+        assert log.detalhes[audit.PROVA_ORDEM_LEITURA_EXPURGADA] is True
+        assert "eventos_descartados_detalhe" not in log.detalhes
     with pytest.raises(lr.RestauracaoInvalida) as recusa:
-        print("PLANO ACEITO:", _pedir(db, esc.id, wid, did, _de(eventos, T_AGOSTO, did)))
+        _pedir(db, esc.id, wid, did, _de(eventos, T_AGOSTO, did))
     texto = recusa.value.mensagem
-    assert "não é a primeira ocorrência" in texto
-    assert "10/03/2026" in texto and "descartad" in texto
+    if expurgar:
+        assert "prazo de retenção" in texto
+    else:
+        assert "não é a primeira ocorrência" in texto
+        assert "10/03/2026" in texto and "descartad" in texto
 
 
 def test_releitura_nao_passa_por_primeira_quando_a_limpeza_tirou_a_primeira(

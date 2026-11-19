@@ -153,12 +153,24 @@ def _id_inteiro(valor) -> int | None:
     return valor if isinstance(valor, int) and not isinstance(valor, bool) else None
 
 
+PROVA_ORDEM_LEITURA_EXPURGADA = "prova_ordem_leitura_expurgada"
+
+
+def _prova_expurgada(detalhes, chave: str = "eventos") -> dict:
+    """Guarda só que uma prova foi expurgada. Uma releitura restante não
+    demonstra que foi a primeira, e a restauração precisa recusar a inferência."""
+    if isinstance(detalhes, dict) and (detalhes.get(chave)
+                                      or detalhes.get(PROVA_ORDEM_LEITURA_EXPURGADA)):
+        return {PROVA_ORDEM_LEITURA_EXPURGADA: True}
+    return {}
+
+
 def _fusao_reduzida(detalhes) -> dict:
-    """O ``aluno.fundido`` só com a LIGAÇÃO entre as duas fichas: ``mantido.id`` e
-    ``removido.id`` (sem nome, sem ``foto_pre_fusao`` nem o resto do detalhe). O id
+    """O ``aluno.fundido`` com a ligação entre as fichas e, se houve descarte,
+    a marca de prova expurgada. A ligação guarda ``mantido.id`` e ``removido.id``. O id
     ausente não vira chave (quem lê cai no ``entidade_id`` da linha, que fica)."""
     d = detalhes if isinstance(detalhes, dict) else {}
-    reduzido = {}
+    reduzido = _prova_expurgada(d, "eventos_descartados_detalhe")
     for lado in ("mantido", "removido"):
         bloco = d.get(lado)
         ident = _id_inteiro(bloco.get("id")) if isinstance(bloco, dict) else None
@@ -171,7 +183,11 @@ def _fusao_reduzida(detalhes) -> dict:
 # ``backup._mesma_crianca``, ``eventos._fichas_absorvidas`` e
 # ``exclusao_aluno.fichas_absorvidas`` leem: apagada, o backup de antes da fusão,
 # restaurado, trazia de volta a duplicata da criança excluída de vez (G_LGPD-2).
-ACOES_REDUZIDAS: dict[str, Callable[[object], dict]] = {"aluno.fundido": _fusao_reduzida}
+ACOES_REDUZIDAS: dict[str, Callable[[object], dict]] = {
+    "aluno.fundido": _fusao_reduzida,
+    "aluno.eventos_duplicados_removidos": _prova_expurgada,
+    "aluno.eventos_nativos_nao_gravados": _prova_expurgada,
+}
 
 CATEGORIAS = ("auditoria_acesso", "auditoria_quest", "auditoria_alunos",
               "auditoria_demais", "sincronizacao_logs", "notificacoes")

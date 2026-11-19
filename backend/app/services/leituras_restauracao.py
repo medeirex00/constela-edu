@@ -49,8 +49,8 @@ from sqlalchemy.orm import Session
 
 from app.models import Aluno, Escola, EventoAluno, Leitura, Livro, LogAuditoria
 from app.models.base import agora
-from app.services.audit import registrar
-from app.services.eventos import chave_evento
+from app.services.audit import PROVA_ORDEM_LEITURA_EXPURGADA, registrar
+from app.services.eventos import chave_evento, fichas_absorvidas
 
 # Nomes das ações de auditoria (``LogAuditoria.acao`` é String(80)).
 ACAO_ITEM = "leitura.data_restaurada"
@@ -69,7 +69,7 @@ _LOGS_DE_DESCARTE = {"aluno.fundido": "eventos_descartados_detalhe",
 
 
 def _descartes_anteriores(db: Session, escola_id: int, item: "ItemRestauracao",
-                          evento: EventoAluno) -> list[tuple[datetime, dict]]:
+                          evento: EventoAluno) -> tuple[list[tuple[datetime, dict]], bool]:
     """As ocorrências ANTERIORES do livro na ficha de origem que a deduplicação
     apagou e que só o log guarda: mesmo livro, instante anterior ao da evidência e
     a chave que prova a MESMA ficha de origem (o hash é refeito aqui, como na regra
@@ -78,11 +78,16 @@ def _descartes_anteriores(db: Session, escola_id: int, item: "ItemRestauracao",
     log diz que a releitura não é a primeira."""
     limite = _sem_tz(evento.ocorrido_em)
     achados: list[tuple[datetime, dict]] = []
-    for acao, detalhes in db.execute(
-            select(LogAuditoria.acao, LogAuditoria.detalhes).where(
+    fichas_com_prova_expurgada: set[int] = set()
+    for acao, entidade_id, detalhes in db.execute(
+            select(LogAuditoria.acao, LogAuditoria.entidade_id, LogAuditoria.detalhes).where(
                 LogAuditoria.escola_id == escola_id,
                 LogAuditoria.acao.in_(sorted(_LOGS_DE_DESCARTE)))):
-        lista = (detalhes if isinstance(detalhes, dict) else {}).get(_LOGS_DE_DESCARTE[acao])
+        if not isinstance(detalhes, dict):
+            continue
+        if entidade_id is not None and detalhes.get(PROVA_ORDEM_LEITURA_EXPURGADA):
+            fichas_com_prova_expurgada.add(entidade_id)
+        lista = detalhes.get(_LOGS_DE_DESCARTE[acao])
         for d in lista if isinstance(lista, list) else ():
             if not isinstance(d, dict) or d.get("livro_id") != item.livro_id:
                 continue
@@ -94,7 +99,11 @@ def _descartes_anteriores(db: Session, escola_id: int, item: "ItemRestauracao",
                     evento.plataforma, evento.tipo_evento, item.aluno_origem_id,
                     evento.conteudo_titulo or "", quando):
                 achados.append((quando, d))
-    return achados
+    if not fichas_com_prova_expurgada:
+        return achados, False
+    origens = {item.aluno_id, item.aluno_origem_id}
+    origens.update(fichas_absorvidas(db, [item.aluno_id]).get(item.aluno_id, set()))
+    return achados, bool(origens & fichas_com_prova_expurgada)
 
 
 class RestauracaoInvalida(Exception):
@@ -277,7 +286,7 @@ def _conferir(db: Session, escola_id: int, item: ItemRestauracao,
             "que a fusão apagou é a da PRIMEIRA, porque a linha de leitura "
             "nasce na primeira importação e nunca é atualizada.")
     # ...e a anterior que a deduplicação apagou (só no log) também conta.
-    descartadas = _descartes_anteriores(db, escola_id, item, evento)
+    descartadas, prova_expurgada = _descartes_anteriores(db, escola_id, item, evento)
     if descartadas:
         quando, primeiro = min(descartadas, key=lambda par: par[0])
         raise recusar(
@@ -288,6 +297,11 @@ def _conferir(db: Session, escola_id: int, item: ItemRestauracao,
             "duplicados — está no log de auditoria. A data que a fusão apagou é a "
             "da PRIMEIRA, porque a linha de leitura nasce na primeira importação e "
             "nunca é atualizada.")
+    if prova_expurgada:
+        raise recusar(
+            "O prazo de retenção removeu uma prova de leitura desta ficha. A auditoria "
+            "restante não confirma que este evento foi a primeira leitura. "
+            "A data não foi alterada.")
 
     # --- 10: nada a fazer é RECUSA, não sucesso silencioso. É esta regra que
     # protege os livros em que as duas fichas tinham a MESMA data: lá a fusão
