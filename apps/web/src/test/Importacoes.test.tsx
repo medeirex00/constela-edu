@@ -217,10 +217,13 @@ describe("Importacoes", () => {
     expect(screen.queryByRole("dialog", { name: "Gravar esta importação?" })).toBeNull();
   });
 
-  async function previaComCorrespondencia(corr: Analise["linhas"][number]["correspondencia"]) {
+  async function previaComCorrespondencia(
+    corr: Analise["linhas"][number]["correspondencia"], falharTurmas = false,
+  ) {
     const u = userEvent.setup();
     responder("GET", URL_HIST, []);
-    responder("GET", URL_TURMAS, [turmaFake()]);
+    if (falharTurmas) responderErro("GET", URL_TURMAS, 403, "Turmas indisponíveis.");
+    else responder("GET", URL_TURMAS, [turmaFake()]);
     const analise = analiseFake();
     analise.linhas[0].correspondencia = corr;
     responder("UPLOAD", URL_ANALISAR, analise);
@@ -232,6 +235,21 @@ describe("Importacoes", () => {
     await screen.findByText("Prévia da importação");
     return u;
   }
+
+  it("na prévia individual, a falha das turmas permite tentar carregar a lista de novo", async () => {
+    const u = await previaComCorrespondencia({
+      status: "nao_encontrado", aluno_id: null, aluno_nome: null, similaridade: null,
+      alternativas: [],
+    }, true);
+    expect(await screen.findByText(/as turmas não carregaram\. Tente/i)).toBeInTheDocument();
+    expect(screen.queryByText(/Crie uma turma primeiro/)).not.toBeInTheDocument();
+    await u.selectOptions(screen.getByRole("combobox", { name: /Destino de/ }), "criar");
+    expect(screen.getByRole("option", { name: "As turmas não carregaram" })).toBeInTheDocument();
+
+    responder("GET", URL_TURMAS, [turmaFake({ nome: "3º Ano Inventado" })]);
+    await u.click(screen.getByRole("button", { name: "Tentar de novo" }));
+    expect(await screen.findAllByRole("option", { name: "3º Ano Inventado" })).not.toHaveLength(0);
+  });
 
   it("'nome parecido' (revisar) NÃO vem pré-selecionado como vínculo", async () => {
     await previaComCorrespondencia({

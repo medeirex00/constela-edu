@@ -549,9 +549,15 @@ export default function Importacoes() {
     erro: erroHistorico,
     recarregar: recarregarHistorico,
   } = useApi<Importacao[]>(escolaId ? `/escolas/${escolaId}/importacoes` : null);
-  const { dados: turmasApi, erro: erroTurmasApi } = useApi<Turma[]>(
+  const { dados: turmasApi, erro: erroTurmasApi, carregando: turmasCarregando,
+    recarregar: recarregarTurmas } = useApi<Turma[]>(
     escolaId ? `/escolas/${escolaId}/turmas` : null);
-  const turmas = turmasApi ?? [];
+  const turmas = erroTurmasApi ? [] : turmasApi ?? [];
+  const semTurmas = turmasApi?.length === 0 && !turmasCarregando && !erroTurmasApi;
+  const opcaoDeTurma = erroTurmasApi ? "As turmas não carregaram"
+    : turmasCarregando ? "Carregando turmas…"
+    : semTurmas ? "Crie uma turma primeiro"
+    : "Escolha a turma";
 
   /** "Deixar para a Revisão": uma instrução ao backend (``deixar_para_revisao``), com
    *  a turma do relatório pelo nome — a da linha, senão a do cabeçalho — como contexto
@@ -654,7 +660,7 @@ export default function Importacoes() {
       });
       if (linhas.length === 0) {
         setErro(
-          naoEncontrados.length > 0 && turmas.length === 0
+          naoEncontrados.length > 0 && semTurmas
             ? "Os alunos deste relatório ainda não estão cadastrados e não há turmas. Crie uma turma primeiro."
             : "Nenhum aluno marcado para importar. Escolha um destino para cada aluno.",
         );
@@ -1252,7 +1258,13 @@ export default function Importacoes() {
                     </Botao>
                   </>
                 )}
-                {turmas.length === 0 && turmasNovas.length === 0 && (
+                {erroTurmasApi && (
+                  <span className="flex flex-wrap items-center gap-2">
+                    <span role="status">As turmas não carregaram. Tente de novo para escolher uma turma cadastrada.</span>
+                    <Botao variante="secundario" tamanho="sm" onClick={recarregarTurmas}>Tentar de novo</Botao>
+                  </span>
+                )}
+                {semTurmas && turmasNovas.length === 0 && (
                   <span className="text-zinc-800 dark:text-zinc-100">
                     Crie uma turma primeiro em{" "}
                     <Link to="/turmas" className="font-semibold text-indigo-700 underline dark:text-indigo-300">Turmas</Link>.
@@ -1407,7 +1419,7 @@ export default function Importacoes() {
                                   }
                                 >
                                   <option value="">
-                                    {turmas.length === 0 ? "Crie uma turma primeiro" : "Escolha a turma"}
+                                    {opcaoDeTurma}
                                   </option>
                                   {turmas.map((turma) => (
                                     <option key={turma.id} value={turma.id}>{turma.nome}</option>
