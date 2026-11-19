@@ -39,7 +39,28 @@ function adiada<T>() {
 
 beforeEach(() => {
   quest.trocarAvatar.mockReset();
+  quest.escolherNome.mockReset();
   sessao.atualizarPerfil.mockReset();
+});
+
+it("salvar o apelido espera a troca da roupa e mantém as duas mudanças no perfil", async () => {
+  const troca = adiada<unknown>();
+  const roupaNova = { ...PERFIL, avatar: { ...PERFIL.avatar, top: "moletom" } };
+  const perfilNovo = { ...roupaNova, nome: "Lumi" };
+  quest.trocarAvatar.mockReturnValueOnce(troca.promessa);
+  quest.escolherNome.mockResolvedValueOnce(perfilNovo);
+  render(<Vestiario />);
+
+  fireEvent.click(screen.getByRole("button", { name: "Moletom" }));
+  await waitFor(() => expect(quest.trocarAvatar).toHaveBeenCalledTimes(1));
+  fireEvent.change(screen.getByRole("textbox", { name: "Meu apelido" }), { target: { value: "Lumi" } });
+  fireEvent.click(screen.getByRole("button", { name: "Salvar" }));
+  expect(quest.escolherNome).not.toHaveBeenCalled();
+
+  troca.resolver(roupaNova);
+  await waitFor(() => expect(quest.escolherNome).toHaveBeenCalledWith("Lumi"));
+  await waitFor(() => expect(sessao.atualizarPerfil).toHaveBeenCalledTimes(2));
+  expect(sessao.atualizarPerfil.mock.calls.map(([perfil]) => perfil)).toEqual([roupaNova, perfilNovo]);
 });
 
 it("o 2º toque só envia depois da resposta do 1º, e as respostas entram na ordem", async () => {

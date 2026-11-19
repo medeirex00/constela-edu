@@ -80,10 +80,8 @@ export function Vestiario() {
   const [salvando, setSalvando] = useState(false);
   const [erro, setErro] = useState("");
   const [invocandoSkate, setInvocandoSkate] = useState(false);
-  // Toques rápidos: um PATCH por vez, na ordem dos toques. Em paralelo, a resposta
-  // que chegasse por último (não necessariamente a do último toque) ficava na
-  // tela sem a troca seguinte e o item "voltava"; na fila, a última resposta
-  // aplicada já traz todas as trocas.
+  // Apelido e roupas devolvem o perfil inteiro. Aplicar as respostas na ordem
+  // das ações evita voltar ao apelido ou à roupa que aparecia antes.
   const fila = useRef<Promise<void>>(Promise.resolve());
 
   useEffect(() => { setApelido(perfil?.nome ?? ""); }, [perfil?.nome]);
@@ -115,10 +113,15 @@ export function Vestiario() {
   function equipar(slot: string, valor: string) { if (eq(slot) !== valor) definir(slot, valor); }
   function alternar(slot: string, valor: string) { definir(slot, eq(slot) === valor ? "nenhum" : valor); }
 
-  async function salvarApelido() {
+  function salvarApelido() {
     const novo = apelido.trim();
-    if (salvando || novo === perfil?.nome) return;
-    setSalvando(true); setErro("");
+    if (salvando || novo.length < 2 || novo === perfil?.nome) return;
+    setSalvando(true);
+    fila.current = fila.current.then(() => enviarApelido(novo)).catch(() => undefined);
+  }
+
+  async function enviarApelido(novo: string) {
+    setErro("");
     try { atualizarPerfil(await escolherNome(novo)); tocar("sucesso"); narrar(`Agora você é ${novo}!`); }
     catch (e) {
       setErro(e instanceof ApiError && e.status !== 0 ? e.message
