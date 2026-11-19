@@ -180,8 +180,13 @@ async function lerCorpo<T>(resposta: Response): Promise<T> {
   return (texto.trim() ? JSON.parse(texto) : undefined) as T;
 }
 
-export async function api<T>(caminho: string, opcoes: RequestInit = {}): Promise<T> {
+export async function api<T>(
+  caminho: string, opcoes: RequestInit = {}, tokenDaSessao?: string,
+): Promise<T> {
   const token = await obterToken();
+  if (tokenDaSessao !== undefined && token !== tokenDaSessao) {
+    throw new ApiError(401, "Esta operação pertence a uma sessão encerrada.");
+  }
   const resposta = await buscar(`${base}${caminho}`, {
     ...opcoes,
     headers: {

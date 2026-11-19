@@ -118,4 +118,20 @@ describe("401 e troca de sessão", () => {
     expect(remover).toHaveBeenCalledTimes(1);
     expect(expirar).toHaveBeenCalledTimes(1);
   });
+
+  it("uma ação vinculada a outro token é recusada antes de acessar a rede", async () => {
+    const remover = vi.fn();
+    const expirar = vi.fn();
+    configurarApi({
+      armazenamento: { obter: async () => "token-atual", guardar: () => undefined, remover },
+      aoExpirarSessao: expirar,
+    });
+    const fetchFalso = vi.fn();
+    vi.stubGlobal("fetch", fetchFalso);
+
+    await expect(api("/acao", { method: "POST" }, "token-anterior")).rejects.toMatchObject({ status: 401 });
+    expect(fetchFalso).not.toHaveBeenCalled();
+    expect(remover).not.toHaveBeenCalled();
+    expect(expirar).not.toHaveBeenCalled();
+  });
 });
