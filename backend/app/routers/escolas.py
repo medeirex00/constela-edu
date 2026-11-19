@@ -1,16 +1,16 @@
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import delete, func, select
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, aliased
 
 from app.core import tempo
-from app.core.database import get_db, leitura_sem_transacao
+from app.core.database import bloquear_escola_para_importacao, get_db, leitura_sem_transacao
 from app.core.deps import (
     exigir_admin_global,
     exigir_papeis,
     get_usuario_atual,
     negar_secretaria,
 )
-from app.models import Escola, Nota, Usuario
+from app.models import Aluno, Escola, Matricula, Nota, Usuario
 from app.schemas import EscolaCreate, EscolaOut, EscolaUpdate
 from app.schemas.comum import EscolaItemOut
 from app.services import modulos as svc_modulos
@@ -135,6 +135,9 @@ def atualizar(
         alteracoes["nome"] = nome
     novo_ano = alteracoes.get("ano_letivo_ativo")
     notas_descartadas: dict[str, int] = {}
+    if novo_ano is not None and usuario.is_global:
+        bloquear_escola_para_importacao(db, escola_id)
+        db.refresh(escola)
     if novo_ano is not None and novo_ano != escola.ano_letivo_ativo:
         # HISTÓRICO PROTEGIDO: o recálculo grava as Notas do ANO ATIVO com os
         # snapshots/leituras ATUAIS. Voltar o ano ativo para antes de um ano com
@@ -160,6 +163,26 @@ def atualizar(
                 f"Voltar o ano letivo ativo para {novo_ano} reescreveria o histórico de "
                 f"notas de {max(historico)}. O histórico é protegido.")
         if novo_ano < escola.ano_letivo_ativo:
+            if novo_ano <= ano_hoje:
+                destino = aliased(Matricula)
+                preparadas = db.scalar(
+                    select(Matricula.ano_letivo)
+                    .join(Aluno, Aluno.id == Matricula.aluno_id)
+                    .join(destino, destino.aluno_id == Matricula.aluno_id)
+                    .where(Matricula.escola_id == escola_id, Aluno.escola_id == escola_id,
+                           destino.escola_id == escola_id, destino.ano_letivo == novo_ano,
+                           Matricula.ano_letivo > novo_ano, Aluno.da_lista_piloto.is_(True))
+                    .order_by(Matricula.ano_letivo.desc()).limit(1))
+                if preparadas is not None:
+                    # A situação da ficha é compartilhada por todos os anos. A
+                    # Lista Piloto do ano seguinte pode tê-la mudado, inclusive
+                    # em registros antigos sem trilha de reativação.
+                    raise HTTPException(
+                        status.HTTP_409_CONFLICT,
+                        f"A Lista Piloto já preparou matrículas de {preparadas} para alunos "
+                        f"de {novo_ano}. Voltar para {novo_ano} poderia recalcular o histórico "
+                        "com a situação das fichas do ano novo. Para consultas e premiações, "
+                        f"selecione o período de {novo_ano}.")
             # As notas dos anos DEPOIS do novo ano ativo (só as do ano que não
             # começou, pela regra acima) saem: são o cache do motor, refeito pelo
             # recálculo se a escola chegar a esse ano — e não ficam como um ano

@@ -18,6 +18,7 @@ from datetime import date, datetime
 import openpyxl
 from sqlalchemy import func, select
 
+from app.core import tempo
 from app.models import (Aluno, Escola, Importacao, LogAuditoria, Matricula, Nota,
                         SnapshotElefante, Turma)
 
@@ -108,6 +109,26 @@ def _ano_2026_com_ranking(cliente, db, escola_id):
     for nome, livros in ((ANA[0], 12), (BETO[0], 8), (DORA[0], 20)):
         _retrato(db, escola_id, _ficha(db, escola_id, nome).id, livros)
     assert cliente.post(f"/api/v1/escolas/{escola_id}/importacoes/recalcular").status_code == 200
+
+
+def test_volta_do_ano_e_recusada_depois_de_mudar_fichas_na_lista_piloto(
+        cliente_global, db, escola_completa, monkeypatch):
+    monkeypatch.setattr(tempo, "hoje_br", lambda: date(2026, 12, 5))
+    eid = escola_completa["escola"].id
+    _ano_2026_com_ranking(cliente_global, db, eid)
+    url = f"/api/v1/escolas/{eid}"
+    assert cliente_global.patch(url, json={"ano_letivo_ativo": 2027}).status_code == 200
+    for alunos in ([ANA, BETO], [BETO]):
+        lista = _planilha(2027, ("5º Ano A", alunos))
+        resposta = _enviar(cliente_global, eid, lista)
+        assert resposta.status_code == 200, resposta.text
+    assert _ficha(db, eid, ANA[0]).status == "fora_lista_piloto"
+    antes = _foto(db, cliente_global, eid)
+    resposta = cliente_global.patch(url, json={"ano_letivo_ativo": 2026})
+    assert resposta.status_code == 409, resposta.text
+    assert "Lista Piloto" in resposta.json()["detail"]
+    assert _foto(db, cliente_global, eid) == antes
+    assert db.get(Escola, eid).ano_letivo_ativo == 2027
 
 
 def test_lista_de_2027_com_a_escola_em_2026_e_recusada_e_2026_fica_intacto(

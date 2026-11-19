@@ -71,7 +71,7 @@ from app.schemas.importacao import (
 )
 from app.services import elegibilidade, identidade_aluno as ida
 from app.services import importacao as svc
-from app.services import lista_piloto, matching, matriculas, perfis_pdf, planilhas
+from app.services import lista_piloto, matching, matific_destaque, matriculas, perfis_pdf, planilhas
 from app.services import dificuldade_livro, livros_homonimos_saneamento
 from app.services import professores, push, scoring
 from app.services import identidade_efetiva, politica_sync, triagem_revisoes
@@ -194,12 +194,15 @@ def _arquivar_original(origem: Path, destino: Path) -> bool:
         return False
 
 
-def _snapshot_atual(db: Session, escola_id: int, aluno_id: int, modelo, *, ate=None):
+def _snapshot_atual(db: Session, escola_id: int, aluno_id: int, modelo, *,
+                    desde=None, ate=None):
     # Ordena por data_referencia (id desempata): importar um relatório de um
     # período ANTIGO (backfill mensal do Matific) não pode virar o "estado
     # atual" só por ter id maior. ``ate`` (UTC naive): ignora retratos datados
     # depois dele — ver ``_teto_retrato_valido``.
     consulta = select(modelo).where(modelo.escola_id == escola_id, modelo.aluno_id == aluno_id)
+    if desde is not None:
+        consulta = consulta.where(modelo.data_referencia >= desde)
     if ate is not None:
         consulta = consulta.where(modelo.data_referencia <= ate)
     return db.execute(
@@ -422,7 +425,7 @@ _SEM_PRECARGA = object()
 
 
 def _mapa_snapshot_atual(db: Session, escola_id: int, aluno_ids, modelo, *,
-                         ate=None) -> dict:
+                         desde=None, ate=None) -> dict:
     """Último snapshot (por data_referencia, id) de CADA aluno, numa ÚNICA
     consulta. Equivale a chamar _snapshot_atual por aluno, sem o N+1: ordena
     ascendente e o último visto por aluno é o mais recente. Como a sessão usa
@@ -433,6 +436,8 @@ def _mapa_snapshot_atual(db: Session, escola_id: int, aluno_ids, modelo, *,
         return {}
     mapa: dict = {}
     consulta = select(modelo).where(modelo.escola_id == escola_id, modelo.aluno_id.in_(ids))
+    if desde is not None:
+        consulta = consulta.where(modelo.data_referencia >= desde)
     if ate is not None:
         consulta = consulta.where(modelo.data_referencia <= ate)
     for snap in db.execute(
@@ -453,7 +458,7 @@ def _retrodatado(atual, data_referencia) -> bool:
 
 
 def _mapa_retrato_na_data(db: Session, escola_id: int, aluno_ids, modelo,
-                          data_referencia, *, ate=None) -> dict:
+                          data_referencia, *, desde=None, ate=None) -> dict:
     """O retrato que VALIA na data do relatório, de cada aluno, numa ÚNICA consulta:
     o do MESMO DIA (de Brasília) — que o relatório complementa no lugar, como faz
     com o retrato atual do dia — ou, sem ele, o último ANTES dessa data. Aluno sem
@@ -467,13 +472,14 @@ def _mapa_retrato_na_data(db: Session, escola_id: int, aluno_ids, modelo,
     limite = ref + timedelta(days=1)
     if ate is not None:
         limite = min(limite, ate)
+    consulta = select(modelo).where(modelo.escola_id == escola_id, modelo.aluno_id.in_(ids),
+                                   modelo.data_referencia <= limite)
+    if desde is not None:
+        consulta = consulta.where(modelo.data_referencia >= desde)
     antes: dict = {}
     do_dia: dict = {}
     for snap in db.execute(
-        select(modelo)
-        .where(modelo.escola_id == escola_id, modelo.aluno_id.in_(ids),
-               modelo.data_referencia <= limite)
-        .order_by(modelo.data_referencia.asc(), modelo.id.asc())
+        consulta.order_by(modelo.data_referencia.asc(), modelo.id.asc())
     ).scalars():
         if _mesmo_dia(snap.data_referencia, data_referencia):
             do_dia[snap.aluno_id] = snap
@@ -2085,6 +2091,8 @@ def _sincronizar_turma_matific(db: Session, escola_id: int, ano: int,
 
 def _importar_matific(db, escola_id, importacao, aluno, dados, data_referencia,
                       anterior=_SEM_PRECARGA):
+    # O recorte do contador e a data persistida usam o mesmo instante UTC.
+    data_referencia = _instante_utc(data_referencia)
     # Cada relatório do Matific traz um subconjunto das métricas: o PDF de
     # estrelas tem "estrelas"; o Excel por turma NÃO tem. Preservamos o valor
     # anterior de cada campo AUSENTE — assim os dois relatórios se COMPLEMENTAM
@@ -2093,7 +2101,10 @@ def _importar_matific(db, escola_id, importacao, aluno, dados, data_referencia,
     # num relatório RETRODATADO, é o retrato que valia NA DATA dele
     # (``_mapa_retrato_na_data``), nunca o mais novo.
     if anterior is _SEM_PRECARGA:
-        anterior = _snapshot_atual(db, escola_id, aluno.id, SnapshotMatific)
+        inicio_ano, fim_ano = matific_destaque.janela_ano_letivo(
+            data_referencia.year)
+        anterior = _snapshot_atual(db, escola_id, aluno.id, SnapshotMatific,
+                                   desde=inicio_ano, ate=fim_ano)
     atividades = (_num(dados["atividades"], int) if "atividades" in dados
                   else (anterior.atividades if anterior else 0))
     estrelas = (_num(dados["estrelas"], int) if "estrelas" in dados
@@ -2191,14 +2202,15 @@ def _importar_matific_periodo(db, escola_id, importacao, aluno, dados,
 
     Os números do relatório são o que o aluno fez DENTRO do intervalo — nada
     de substituir o acumulado. Regras:
-      * base = último snapshot ANTERIOR ao início do intervalo;
+      * base = último snapshot do ano ANTERIOR ao início do intervalo;
       * candidato = base + valores do relatório (média PONDERADA por
         atividades);
       * PISO anti-regressão: o novo snapshot nunca fica abaixo do maior
         acumulado já registrado ATÉ o fim do intervalo — um relatório
         acumulado antigo datado dentro do período (a migração do fluxo
         antigo para o mensal) jamais derruba o estado atual;
-      * sem base: nasce um snapshot-base na véspera do início valendo
+      * sem base: para intervalos que começam depois da virada do ano, nasce
+        um snapshot-base na véspera do início valendo
         exatamente (novo − ganhos) — premiações e evolução do período
         enxergam o ganho do relatório, nunca zero nem o acumulado de
         outra época;
@@ -2254,7 +2266,8 @@ def _importar_matific_periodo(db, escola_id, importacao, aluno, dados,
     # Mudou = nasce um retrato do período (não havia um datado neste fim) ou o
     # que havia muda de valor (ver "mudou" em ``_importar_matific``).
     mudou = True
-    if base is None:
+    inicio_ano, _ = matific_destaque.janela_ano_letivo(inicio.year)
+    if base is None and inicio > inicio_ano:
         # Snapshot-base na véspera do início valendo (novo − ganhos): o delta
         # do período é exatamente o ganho do relatório, e um acumulado antigo
         # que caiu dentro do intervalo não é atribuído a este período.
@@ -2286,9 +2299,8 @@ def _importar_matific_periodo(db, escola_id, importacao, aluno, dados,
         # com a data acompanhando.
         mesmo_fim = ultimo_ate_fim
     if mesmo_fim is not None:
-        mudou = base is None or (mesmo_fim.atividades, mesmo_fim.estrelas,
-                                 mesmo_fim.pontuacao_media) != (novo_ativ, novo_estrelas,
-                                                                novo_media)
+        mudou = (mesmo_fim.atividades, mesmo_fim.estrelas, mesmo_fim.pontuacao_media) != (
+            novo_ativ, novo_estrelas, novo_media)
         mesmo_fim.atividades = novo_ativ
         mesmo_fim.estrelas = novo_estrelas
         mesmo_fim.pontuacao_media = novo_media
@@ -3429,11 +3441,16 @@ def _confirmar_sem_commit(
     # regras do total acumulado (a recusa sem data olha o formato "resumo").
     if dados.plataforma == "matific" and dados.formato == "leituras":
         raise HTTPException(422, "O Matific não tem relatório individual de leituras.")
+    if not dados.linhas:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Nenhuma linha para importar.")
+
+    # Serializa importações, fusões e a troca do ano letivo. A escola pode ter
+    # entrado na sessão antes da espera pela trava, então releia o ano ativo.
+    bloquear_escola_para_importacao(db, escola_id)
     escola = db.get(Escola, escola_id)
     if escola is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Escola não encontrada.")
-    if not dados.linhas:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Nenhuma linha para importar.")
+    db.refresh(escola, ["ano_letivo_ativo"])
     agora_utc = _agora_utc()
     # DATA DO RELATÓRIO (upload manual): no futuro, o retrato viraria o "atual" até
     # lá, por cima de toda coleta; de 1990 (ou do ano 1, que estourava em 500),
@@ -3444,13 +3461,6 @@ def _confirmar_sem_commit(
             data_informada = _conferir_data_do_relatorio(data_informada, escola, agora_utc,
                                                          com_piso=piso_da_data)
         _conferir_periodo_do_relatorio(dados, escola, agora_utc, com_piso=piso_da_data)
-
-    # Serializa importações concorrentes desta escola. A trava (Postgres; no-op
-    # em SQLite) garante que o 2º envio sobreposto leia o que o 1º commitou;
-    # combinada com o re-casamento contra o banco — turma via índice único +
-    # _inserir_turma, aluno via _aluno_existente_na_turma — um double-click/retry
-    # do MESMO relatório reaproveita em vez de duplicar turmas/alunos.
-    bloquear_escola_para_importacao(db, escola_id)
 
     data_referencia = data_informada or agora_utc.replace(tzinfo=timezone.utc)
     avisos: list[str] = []
@@ -3484,6 +3494,10 @@ def _confirmar_sem_commit(
         periodo_fim = dados.periodo_fim.replace(tzinfo=None)
         if periodo_fim.time() == hora_zero(0, 0):
             periodo_fim -= timedelta(seconds=1)
+        if periodo_fim.year != periodo_inicio.year:
+            raise HTTPException(
+                422, "O contador do Matific reinicia na virada do ano. Importe um relatório "
+                "de cada ano separadamente. Nada foi gravado.")
         # Período EM ANDAMENTO (relatório do mês corrente): o snapshot é
         # datado agora, nunca no futuro — uma data futura ficaria acima de
         # qualquer edição manual feita depois, escondendo-a dos rankings.
@@ -3698,11 +3712,16 @@ def _confirmar_sem_commit(
     # numa ÚNICA consulta (212 alunos = 1 ida ao banco, não 212).
     series: dict[int, list] = {}
     contadores = {"reimportados": 0, "historico": 0, "preservados": 0}
+    inicio_ano_matific = fim_ano_matific = None
+    if dados.plataforma == "matific":
+        inicio_ano_matific, fim_ano_matific = matific_destaque.janela_ano_letivo(
+            _instante_utc(data_referencia).year)
     if periodo_inicio is not None and resolvidos:
         for snap in db.execute(
             select(SnapshotMatific)
             .where(SnapshotMatific.escola_id == escola_id,
-                   SnapshotMatific.aluno_id.in_(list(resolvidos)))
+                   SnapshotMatific.aluno_id.in_(list(resolvidos)),
+                   SnapshotMatific.data_referencia.between(inicio_ano_matific, fim_ano_matific))
             .order_by(SnapshotMatific.data_referencia, SnapshotMatific.id)
         ).scalars():
             series.setdefault(snap.aluno_id, []).append(snap)
@@ -3717,7 +3736,8 @@ def _confirmar_sem_commit(
     if resolvidos:
         if dados.plataforma == "matific" and periodo_inicio is None:
             anteriores = _mapa_snapshot_atual(db, escola_id, resolvidos.keys(), SnapshotMatific,
-                                              ate=teto_retrato)
+                                              desde=inicio_ano_matific,
+                                              ate=min(teto_retrato, fim_ano_matific))
         elif dados.plataforma != "matific" and dados.formato != "leituras":
             anteriores = _mapa_snapshot_atual(db, escola_id, resolvidos.keys(), SnapshotElefante,
                                               ate=teto_retrato)
@@ -3776,7 +3796,9 @@ def _confirmar_sem_commit(
     if retro:
         modelo_retrato = SnapshotMatific if dados.plataforma == "matific" else SnapshotElefante
         na_data = _mapa_retrato_na_data(db, escola_id, retro, modelo_retrato, data_referencia,
-                                        ate=teto_retrato)
+                                        desde=inicio_ano_matific,
+                                        ate=(min(teto_retrato, fim_ano_matific)
+                                             if fim_ano_matific else teto_retrato))
         sem_base: set[int] = set()
         campos_sem_base: set[str] = set()
         for aid in retro:
@@ -4693,9 +4715,13 @@ def confirmar_matriculas(
     if not analise.turmas:
         raise HTTPException(status.HTTP_400_BAD_REQUEST,
                             "Nenhuma turma reconhecida na planilha.")
+    # A trava é compartilhada com a virada do ano. Valide o ano e carregue o
+    # estado depois dela, para o envio não gravar matrículas no ano anterior.
+    bloquear_escola_para_importacao(db, escola_id)
     escola = db.get(Escola, escola_id)
     if escola is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Escola não encontrada.")
+    db.refresh(escola, ["ano_letivo_ativo"])
     ano = escola.ano_letivo_ativo
     if matriculas.ano_da_lista_diverge(analise.ano_letivo, ano, analise.anos_por_aba):
         # A lista de OUTRO ano letivo não é aplicada ao ano ativo: moveria as
@@ -4708,10 +4734,6 @@ def confirmar_matriculas(
             anos_por_aba=analise.anos_por_aba))
     avisos = list(analise.avisos)
 
-    # Serializa importações concorrentes desta escola ANTES de ler o estado: o
-    # casamento roda contra o estado carregado uma vez, então dois envios
-    # sobrepostos duplicariam turmas/alunos sem esta trava (no-op em SQLite).
-    bloquear_escola_para_importacao(db, escola_id)
     estado = _carregar_estado(db, escola_id, ano)
     resolvidas, turmas_criadas, profs_criados = _resolver_turmas(
         db, escola_id, ano, analise.turmas, avisos)
