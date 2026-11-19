@@ -66,7 +66,15 @@ def _slides_limpos(slides) -> list[str]:
     return limpos
 
 
-def _config_row(db: Session, escola_id: int) -> Configuracao | None:
+def _config_row(db: Session, escola_id: int, *, para_gravar: bool = False) -> Configuracao | None:
+    if para_gravar:
+        # A linha da escola existe também na primeira configuração do painel.
+        # Serializa as duas escritas sem bloquear leituras nem chaves estrangeiras.
+        escola = db.execute(
+            select(Escola.id).where(Escola.id == escola_id).with_for_update(key_share=True)
+        ).scalar_one_or_none()
+        if escola is None:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "Escola não encontrada.")
     return db.execute(
         select(Configuracao).where(
             Configuracao.escola_id == escola_id,
@@ -281,7 +289,7 @@ def salvar_config(
     if not slides:
         raise HTTPException(status.HTTP_400_BAD_REQUEST,
                             "Escolha pelo menos um slide para o painel.")
-    row = _config_row(db, escola_id)
+    row = _config_row(db, escola_id, para_gravar=True)
     anterior = dict((row.valor or {}) if row else {})
     estava_ativo = bool(anterior.get("ativo"))
     # Barreira de SERVIDOR: só passa de protegido→exposto (nome completo de
@@ -324,7 +332,7 @@ def trocar_token(
     db: Session = Depends(get_db),
 ):
     """Gera um novo endereço público — o link antigo deixa de funcionar."""
-    row = _config_row(db, escola_id)
+    row = _config_row(db, escola_id, para_gravar=True)
     valores = dict((row.valor or {}) if row else dict(PADRAO))
     valores["token"] = secrets.token_urlsafe(9)
     if row is None:
