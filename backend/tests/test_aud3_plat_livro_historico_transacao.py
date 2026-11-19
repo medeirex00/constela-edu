@@ -9,8 +9,8 @@ não rodava e a resposta dizia "Aplicar ao histórico não mudou nada".
 
 Agora a correção do livro continua na trava da escola (4711) e é confirmada primeiro —
 ela vale para as próximas leituras, um estado coerente por si. O retroativo (reescrever
-o nível das leituras, a auditoria e o recálculo) é UMA transação, sem a 4711 (a
-hierarquia das travas: nunca recalcular segurando a 4711). Falha no recálculo desfaz o
+o nível das leituras, a auditoria e o recálculo) é UMA transação sob a trava da
+escola (4711 antes das escritas e do recálculo). Falha no recálculo desfaz o
 retroativo inteiro, e a retentativa encontra as leituras ainda no nível velho e aplica
 tudo. Dados fictícios.
 """

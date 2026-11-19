@@ -5361,9 +5361,8 @@ def resolver_revisao(
                 herdadas[r.id] = herdaram
 
     # Recálculo DENTRO da transação (uma vez só, no fim das irmãs, e não a cada
-    # uma): `commit=False` deixa o fechamento para o commit único lá embaixo. É a
-    # exceção registrada da hierarquia das travas (pede a 4713 segurando a 4711:
-    # ``core.database.bloquear_escola_para_recalculo``).
+    # uma): `commit=False` mantém o fechamento no commit único. A trava da
+    # escola (4711) já está tomada antes da aplicação dos dados.
     if com_dados:
         scoring.recalcular_escola(db, escola_id, commit=False)
 

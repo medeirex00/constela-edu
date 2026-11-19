@@ -369,8 +369,7 @@ def bloquear_fonte_para_coleta(db, fonte_id: int) -> None:
                    {"ns": _NS_COLETA_AVALIACAO, "fonte": int(fonte_id)})
 
 
-# Namespace dos advisory locks do RECÁLCULO de notas (separado dos de
-# importação e coleta — travas distintas não podem se bloquear entre si).
+# Namespace dos advisory locks do RECÁLCULO de notas.
 _NS_RECALCULO = 4713
 
 
@@ -397,22 +396,12 @@ def bloquear_escola_para_recalculo(db, escola_id: int) -> None:
     fim do recálculo), então deve ser adquirido ANTES de qualquer leitura que
     participe do cálculo e sem commit no meio.
 
-    HIERARQUIA (regra de ouro contra deadlock ENTRE travas): nunca adquirir
-    esta segurando ``_NS_IMPORTACAO`` (4711). Todos os chamadores de
-    ``recalcular_escola`` comitam antes de chamá-lo — inclusive os dois
-    endpoints de importação, que soltam 4711 no commit e só então recalculam.
-    ``tests/test_recalculo_concorrencia.py`` guarda essa ordem.
-
-    EXCEÇÃO, de propósito: ``importacoes.resolver_revisao`` pega a 4711 e recalcula
-    dentro da mesma transação (``recalcular_escola(commit=False)``), para a resolução
-    da pendência, os dados aplicados e as notas caírem num commit só (falhar no meio
-    deixa tudo pendente). Não há deadlock porque a regra INVERSA é absoluta: nenhum
-    caminho pede a 4711 segurando a 4713 — o recálculo nunca pede a trava de
-    importação, e quem chama ``recalcular_escola(commit=False)`` fora do resolver
-    (``plataformas._aplicar_nivel_ao_historico``) já soltou a 4711. Enquanto a
-    exceção existir, nenhum caminho novo pode pedir a 4711 depois da 4713; um novo
-    aninhamento 4711 → 4713 é registrado aqui.
-    ``tests/test_aud3_costura_hierarquia_travas.py`` guarda as duas coisas.
+    A trava de importação (4711) é tomada primeiro, em modo compartilhado.
+    Ela protege a população do cálculo contra fusão, exclusão e outras
+    mudanças de identidade que tomam 4711 exclusiva. A ordem é sempre
+    4711 → 4713. Quem precisa escrever e recalcular no mesmo commit, como
+    ``importacoes.resolver_revisao``, toma 4711 exclusiva antes das escritas,
+    e mantém a trava até confirmar o trabalho.
 
     SQLite (dev/testes): no-op — banco de um único escritor; produção é
     Postgres. A defesa cross-DB é a própria ``uq_nota_aluno_ano``, que impede a
@@ -422,8 +411,11 @@ def bloquear_escola_para_recalculo(db, escola_id: int) -> None:
     if db.get_bind().dialect.name == "postgresql":
         from sqlalchemy import text
         _exigir_transacao(db, "bloquear_escola_para_recalculo")
+        escola_id = int(escola_id)
+        db.execute(text("SELECT pg_advisory_xact_lock_shared(:ns, :escola)"),
+                   {"ns": _NS_IMPORTACAO, "escola": escola_id})
         db.execute(text("SELECT pg_advisory_xact_lock(:ns, :escola)"),
-                   {"ns": _NS_RECALCULO, "escola": int(escola_id)})
+                   {"ns": _NS_RECALCULO, "escola": escola_id})
 
 
 # Namespace dos advisory locks da REVOGAÇÃO dos cartões do Quest por turma

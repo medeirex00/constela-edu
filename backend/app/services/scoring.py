@@ -1590,10 +1590,8 @@ def recalcular_escola(db: Session, escola_id: int, *, commit: bool = True) -> in
     confirma. Chamador que não passa nada continua com o commit de sempre, e a
     trava de recálculo cai junto com a transação do chamador."""
     # PRIMEIRA linha, antes de QUALQUER leitura que entre no cálculo: daqui até
-    # o `db.commit()` do fim, esta escola é só desta transação. Sem isso, dois
-    # recálculos sobrepostos leem o mesmo estado e gravam um por cima do outro
-    # — 500 por uq_nota_aluno_ano quando inserem, e nota errada em silêncio
-    # quando atualizam. Transacional: cai sozinha no commit (no-op no SQLite).
+    # o commit final, a população fica estável e só este recálculo escreve
+    # as notas da escola. As travas caem com a transação (no-op no SQLite).
     bloquear_escola_para_recalculo(db, escola_id)
     contexto = _carregar_contexto(db, escola_id)
     if contexto is None:

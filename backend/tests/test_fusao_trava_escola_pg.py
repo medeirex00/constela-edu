@@ -28,7 +28,8 @@ from sqlalchemy.orm import Session
 from app.core.database import (Base, _NS_IMPORTACAO, _NS_RECALCULO,
                                bloquear_escola_para_importacao)
 from app.models import (Aluno, Configuracao, Escola, IdentidadeExterna, Importacao, Matricula,
-                        NivelDificuldade, ReferenciaNormalizacao, SnapshotMatific, Turma, Usuario)
+                        NivelDificuldade, Nota, ReferenciaNormalizacao, SnapshotMatific, Turma,
+                        Usuario)
 from app.routers import academico
 from app.schemas.comum import CorrigirDuplicadosAlunos, FusaoAlunos
 from app.services import alunos_dedup, alunos_fusao, scoring
@@ -223,16 +224,15 @@ def test_duas_fusoes_do_mesmo_stub_uma_espera_e_a_outra_recebe_404(motor_pg, cen
             Aluno.escola_id == cena["escola"])).scalar_one() == 1
 
 
-def test_a_trava_cai_no_commit_e_o_recalculo_nao_a_segura(motor_pg, cena, monkeypatch):
-    """Hierarquia contra deadlock ENTRE travas: o recálculo (4713) nunca é pedido
-    por quem ainda segura a de importação (4711), e a fusão não vaza a trava."""
-    segurados: list[list[int]] = []
+def test_fusao_confirma_e_recalcula_com_trava_compartilhada(motor_pg, cena, monkeypatch):
+    """Depois de a fusão comitar, o recálculo tem proteção até seu próprio commit."""
+    segurados: list[dict[int, str]] = []
     contexto_real = scoring._carregar_contexto
 
     def _contexto(db, eid):
-        segurados.append(sorted(db.execute(text(
-            "SELECT DISTINCT classid FROM pg_locks WHERE locktype='advisory' "
-            "AND pid = pg_backend_pid()")).scalars()))
+        segurados.append(dict(db.execute(text(
+            "SELECT classid, mode FROM pg_locks WHERE locktype='advisory' "
+            "AND granted AND pid = pg_backend_pid()")).all()))
         return contexto_real(db, eid)
 
     monkeypatch.setattr(scoring, "_carregar_contexto", _contexto)
@@ -241,10 +241,50 @@ def test_a_trava_cai_no_commit_e_o_recalculo_nao_a_segura(motor_pg, cena, monkey
     t.join(60)
     assert erros == [], erros
     assert segurados, "o recálculo da fusão nem rodou"
-    for travas in segurados:
-        assert _NS_RECALCULO in travas
-        assert _NS_IMPORTACAO not in travas, "4713 pedida ainda segurando 4711"
+    assert segurados == [{_NS_IMPORTACAO: "ShareLock", _NS_RECALCULO: "ExclusiveLock"}]
     with motor_pg.connect() as espia:
         assert espia.execute(text(
             "SELECT count(*) FROM pg_locks WHERE locktype='advisory' AND classid=:c AND objid=:o"),
             {"c": _NS_IMPORTACAO, "o": cena["escola"]}).scalar_one() == 0, "a trava vazou"
+
+
+def test_fusao_espera_o_recalculo_concluir(motor_pg, cena, monkeypatch):
+    com_contexto, concluir = threading.Event(), threading.Event()
+    carregar = scoring._carregar_contexto
+
+    def pausar_depois_da_leitura(db, escola_id):
+        contexto = carregar(db, escola_id)
+        if threading.current_thread() is recalc:
+            com_contexto.set()
+            assert concluir.wait(30)
+        return contexto
+
+    erros: list[Exception] = []
+
+    def recalcular():
+        try:
+            with Session(motor_pg, autoflush=False) as db:
+                scoring.recalcular_escola(db, cena["escola"])
+        except Exception as erro:  # noqa: BLE001 — devolve a falha da thread ao teste
+            erros.append(erro)
+
+    recalc = threading.Thread(target=recalcular)
+    monkeypatch.setattr(scoring, "_carregar_contexto", pausar_depois_da_leitura)
+    recalc.start()
+    fusao = None
+    try:
+        assert com_contexto.wait(30)
+        fusao = _fundir_rota(motor_pg, cena, erros)
+        assert _ate_esperar(motor_pg, cena["escola"])
+    finally:
+        concluir.set()
+        recalc.join(30)
+        if fusao is not None:
+            fusao.join(30)
+
+    assert not recalc.is_alive() and fusao is not None and not fusao.is_alive()
+    assert erros == []
+    with Session(motor_pg) as db:
+        notas = db.execute(select(Nota.aluno_id).where(
+            Nota.escola_id == cena["escola"])).scalars().all()
+        assert notas == [cena["oficial"]]

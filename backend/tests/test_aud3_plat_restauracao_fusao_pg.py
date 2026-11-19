@@ -179,18 +179,16 @@ def test_restauracao_primeiro_a_fusao_espera_e_registra_a_data_restaurada(
         f"{descartes}")
 
 
-def test_o_recalculo_da_restauracao_nao_segura_a_trava_da_escola(motor_pg, cena,
-                                                                 monkeypatch):
-    """Hierarquia contra deadlock ENTRE travas: 4713 nunca pedida segurando 4711, e a
-    restauração não vaza a trava."""
+def test_o_recalculo_da_restauracao_tem_trava_compartilhada(motor_pg, cena, monkeypatch):
+    """A restauração comita antes de calcular com a trava compartilhada."""
     m = _montar(motor_pg, cena)
-    segurados: list[list[int]] = []
+    segurados: list[dict[int, str]] = []
     contexto_real = scoring._carregar_contexto
 
     def _contexto(db, eid):
-        segurados.append(sorted(db.execute(text(
-            "SELECT DISTINCT classid FROM pg_locks WHERE locktype='advisory' "
-            "AND pid = pg_backend_pid()")).scalars()))
+        segurados.append(dict(db.execute(text(
+            "SELECT classid, mode FROM pg_locks WHERE locktype='advisory' "
+            "AND granted AND pid = pg_backend_pid()")).all()))
         return contexto_real(db, eid)
 
     monkeypatch.setattr(scoring, "_carregar_contexto", _contexto)
@@ -200,9 +198,7 @@ def test_o_recalculo_da_restauracao_nao_segura_a_trava_da_escola(motor_pg, cena,
     t.join(TETO_S)
     assert erros == [] and respostas and respostas[0]["leituras_restauradas"] == 1, erros
     assert segurados, "o recálculo da restauração nem rodou"
-    for travas in segurados:
-        assert _NS_RECALCULO in travas
-        assert _NS_IMPORTACAO not in travas, "4713 pedida ainda segurando 4711"
+    assert segurados == [{_NS_IMPORTACAO: "ShareLock", _NS_RECALCULO: "ExclusiveLock"}]
     with motor_pg.connect() as espia:
         assert espia.execute(text(
             "SELECT count(*) FROM pg_locks WHERE locktype='advisory' AND classid=:c "

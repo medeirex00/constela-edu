@@ -113,7 +113,7 @@ def test_trava_adquirida_antes_de_qualquer_leitura_do_calculo(
 
 def test_trava_do_recalculo_e_advisory_lock_so_no_postgres():
     """A trava existe de verdade (e é no-op no SQLite de dev/testes)."""
-    executados: list[str] = []
+    executados: list[tuple[str, int]] = []
 
     class _Sessao:
         def __init__(self, dialeto):
@@ -130,10 +130,13 @@ def test_trava_do_recalculo_e_advisory_lock_so_no_postgres():
                 connection=SimpleNamespace(dbapi_connection=SimpleNamespace(autocommit=False)))
 
         def execute(self, sql, params=None):
-            executados.append(str(sql))
+            executados.append((str(sql), params["ns"]))
 
     core_db.bloquear_escola_para_recalculo(_Sessao("postgresql"), 7)
-    assert len([s for s in executados if "pg_advisory_xact_lock" in s]) == 1
+    assert executados == [
+        ("SELECT pg_advisory_xact_lock_shared(:ns, :escola)", core_db._NS_IMPORTACAO),
+        ("SELECT pg_advisory_xact_lock(:ns, :escola)", core_db._NS_RECALCULO),
+    ]
 
     executados.clear()
     core_db.bloquear_escola_para_recalculo(_Sessao("sqlite"), 7)
@@ -149,7 +152,7 @@ def test_namespaces_das_travas_nao_colidem():
 
 
 # --------------------------------------------------------------------------
-# 2. HIERARQUIA: nunca pegar 4713 segurando 4711 (senão dá deadlock cruzado).
+# 2. As importações confirmam as alterações antes do recálculo independente.
 # --------------------------------------------------------------------------
 @pytest.fixture()
 def vigia_hierarquia(monkeypatch):

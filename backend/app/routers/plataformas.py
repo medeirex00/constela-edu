@@ -955,8 +955,8 @@ def _aplicar_nivel_ao_historico(db: Session, escola_id: int, livro: Livro,
     (``recalcular_escola(commit=False)``) são confirmadas JUNTAS por quem chama. Com
     commits separados, uma falha no recálculo deixava o histórico no nível novo e as
     notas no velho — e a retentativa não achava leitura a reescrever, não recalculava
-    e dizia que nada tinha mudado. Quem chama já soltou a trava da escola (4711): o
-    recálculo pega a dele, e nunca segurando aquela (hierarquia das travas)."""
+    e dizia que nada tinha mudado. Quem chama toma a trava da escola (4711)
+    antes da reescrita e do recálculo (4713)."""
     novo = livro.nivel_codigo
     versao = dificuldade_livro.versao_catalogo().get("versao")
     de = {
@@ -1027,13 +1027,12 @@ def atualizar_livro(
 
     DUAS TRANSAÇÕES, nesta ordem. (1) A correção do livro, na trava da escola, é
     confirmada primeiro — ela vale para as próximas leituras, um estado coerente
-    por si — e o commit solta a trava (nunca pegar a trava do recálculo segurando
-    esta). (2) O retroativo é UMA transação: reescrever o nível das leituras,
+    por si. (2) O retroativo é UMA transação sob a mesma trava da escola:
+    reescrever o nível das leituras,
     auditar e recalcular a escola caem juntos. Se o recálculo falha, nada do
     retroativo fica; a retentativa encontra as leituras ainda no nível velho e
-    aplica tudo. A reescrita não precisa da trava: é um UPDATE condicional (o
-    banco trava as linhas e reconfere a condição), e o livro já está no nível
-    novo para quem gravar leitura depois do commit (1)."""
+    aplica tudo. A trava vem antes das linhas de leitura e das notas, na
+    mesma ordem usada pela coleta e pela fusão de fichas."""
     bloquear_escola_para_importacao(db, escola_id)
     livro = db.get(Livro, livro_id)
     if livro is None or livro.escola_id != escola_id:
@@ -1087,12 +1086,14 @@ def atualizar_livro(
                             "vale_para_proximas_leituras": nivel_muda or titulo_muda,
                             "aplicar_ao_historico": aplicar_ao_historico})
         db.commit()                  # (1) a correção; solta a trava da escola
-        db.refresh(livro)
-    elif aplicar_ao_historico:
-        db.commit()                  # nada a corrigir: só solta a trava antes do (2)
 
     atualizadas = 0
     if aplicar_ao_historico:
+        if mudancas:
+            bloquear_escola_para_importacao(db, escola_id)
+            livro = db.get(Livro, livro_id, populate_existing=True)
+            if livro is None or livro.escola_id != escola_id:
+                raise HTTPException(status.HTTP_404_NOT_FOUND, "Livro não encontrado.")
         # (2) reescrita + auditoria + notas: um commit só (ver o docstring).
         atualizadas = _aplicar_nivel_ao_historico(db, escola_id, livro, usuario, motivo)
         db.commit()
@@ -1134,6 +1135,7 @@ def excluir_livro(
     escola_id: int = Depends(escola_autorizada),
     db: Session = Depends(get_db),
 ):
+    bloquear_escola_para_importacao(db, escola_id)
     livro = db.get(Livro, livro_id)
     if livro is None or livro.escola_id != escola_id:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Livro não encontrado.")
