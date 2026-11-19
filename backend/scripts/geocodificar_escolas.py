@@ -26,6 +26,7 @@ from app.services.geocodificacao import (  # noqa: E402
     INTERVALO_PADRAO,
     geocodificar_escola,
     montar_consulta,
+    salvar_coordenadas,
 )
 from scripts._saida import forcar_saida_utf8  # noqa: E402
 
@@ -41,36 +42,39 @@ def main() -> None:
     args = parser.parse_args()
     intervalo = max(1.0, args.intervalo)  # nunca abaixo do limite do OSM
 
-    db = SessionLocal()
-    try:
+    with SessionLocal() as db:
         consulta = select(Escola).order_by(Escola.nome)
         if not args.forcar:
             consulta = consulta.where(Escola.latitude.is_(None))
         if args.rede is not None:
             consulta = consulta.where(Escola.rede_id == args.rede)
         escolas = db.execute(consulta).scalars().all()
+        db.expunge_all()
 
-        if not escolas:
-            print("Nada a geocodificar (todas já têm coordenada ou filtro vazio).")
-            return
+    if not escolas:
+        print("Nada a geocodificar (todas já têm coordenada ou filtro vazio).")
+        return
 
-        print(f"Geocodificando {len(escolas)} escola(s) — intervalo {intervalo:.1f}s...\n")
-        encontradas = falhas = 0
-        for i, escola in enumerate(escolas):
-            if i:
-                time.sleep(intervalo)  # rate-limit entre chamadas
-            coord = geocodificar_escola(escola)
-            if coord:
-                escola.latitude, escola.longitude = coord
-                db.commit()  # persiste uma a uma (uma falha depois não perde as anteriores)
-                encontradas += 1
-                print(f"  [OK] {escola.nome} -> {coord[0]:.5f}, {coord[1]:.5f}")
-            else:
-                falhas += 1
-                print(f"  [--] {escola.nome}: não encontrada  ({montar_consulta(escola)})")
-        print(f"\nConcluído: {encontradas} localizada(s), {falhas} não encontrada(s).")
-    finally:
-        db.close()
+    print(f"Geocodificando {len(escolas)} escola(s) — intervalo {intervalo:.1f}s...\n")
+    encontradas = falhas = alteradas = 0
+    for i, escola in enumerate(escolas):
+        if i:
+            time.sleep(intervalo)  # rate-limit entre chamadas
+        coord = geocodificar_escola(escola)
+        if coord is None:
+            falhas += 1
+            print(f"  [--] {escola.nome}: não encontrada  ({montar_consulta(escola)})")
+            continue
+        with SessionLocal.begin() as db:
+            gravada = salvar_coordenadas(db, escola, coord)
+        if gravada:
+            encontradas += 1
+            print(f"  [OK] {escola.nome} -> {coord[0]:.5f}, {coord[1]:.5f}")
+        else:
+            alteradas += 1
+            print(f"  [--] {escola.nome}: cadastro mudou durante a consulta")
+    print(f"\nConcluído: {encontradas} localizada(s), {falhas} não encontrada(s), "
+          f"{alteradas} com cadastro alterado.")
 
 
 if __name__ == "__main__":

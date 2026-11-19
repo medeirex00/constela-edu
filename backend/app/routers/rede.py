@@ -483,14 +483,22 @@ def geocodificar(
     lote = db.execute(
         pendentes_apos(depois_de).order_by(Escola.id).limit(limite)
     ).scalars().all()
-    resultado = svc_geo.geocodificar_lote(lote, geocoder, intervalo)
     ultimo_id = lote[-1].id if lote else depois_de
+    usuario_id = usuario.id
+    for escola in lote:
+        db.expunge(escola)
+    db.rollback()  # devolve a conexão antes do intervalo e das chamadas ao OSM
+
+    coordenadas = svc_geo.geocodificar_lote(lote, geocoder, intervalo)
+    encontradas = sum(svc_geo.salvar_coordenadas(db, escola, coord)
+                      for escola, coord in coordenadas)
+    resultado = {"encontradas": encontradas, "falhas": len(lote) - encontradas}
     # Quantas ainda faltam ALÉM deste lote — contadas por id (falha ou sucesso já
     # ficaram para trás do cursor), então este número decresce a cada lote.
     restantes = db.execute(
         select(func.count()).select_from(pendentes_apos(ultimo_id).subquery())
     ).scalar() or 0
-    registrar(db, "rede.geocodificada", usuario_id=usuario.id, entidade="rede",
+    registrar(db, "rede.geocodificada", usuario_id=usuario_id, entidade="rede",
               entidade_id=rede_id,
               detalhes={"processadas": len(lote), "ultimo_id": ultimo_id, **resultado})
     db.commit()

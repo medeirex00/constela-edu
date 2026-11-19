@@ -6,11 +6,16 @@ global, processa em lotes (idempotente — só as sem coordenada, salvo ?forcar)
 """
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy import update
+from sqlalchemy.orm import Session
 
+from app.core.database import Base
 from app.core.security import hash_senha
 from app.main import app
 from app.models import Escola, Rede, Usuario
+from app.routers import rede as rota_rede
 from app.services import geocodificacao as svc
+from tests.test_migracoes_postgres import engine_postgres  # noqa: F401 — fixture
 
 
 # --- Serviço (sem app, geocoder falso) --------------------------------------
@@ -52,7 +57,7 @@ def test_geocodificar_escola_chama_geocoder_com_a_consulta():
     assert vistos == ["EM Centro, Caraguatatuba, SP, Brasil"]
 
 
-def test_geocodificar_lote_preenche_coords_e_conta():
+def test_geocodificar_lote_devolve_resultados_sem_escrever():
     achavel = Escola(nome="A", cidade="Caraguatatuba")
     nao_achavel = Escola(nome="B", cidade="Nárnia")
     sem_cidade = Escola(nome="C")
@@ -61,9 +66,8 @@ def test_geocodificar_lote_preenche_coords_e_conta():
         return (-23.6, -45.4) if "Caraguatatuba" in q else None
 
     res = svc.geocodificar_lote([achavel, nao_achavel, sem_cidade], fake, intervalo=0)
-    assert res == {"encontradas": 1, "falhas": 2}
-    assert (achavel.latitude, achavel.longitude) == (-23.6, -45.4)
-    assert nao_achavel.latitude is None and sem_cidade.latitude is None
+    assert res == [(achavel, (-23.6, -45.4))]
+    assert all(escola.latitude is None for escola in (achavel, nao_achavel, sem_cidade))
 
 
 class _FakeResp:
@@ -236,3 +240,33 @@ def test_geocodificar_exige_admin_global(db, geocoder_falso):
 def test_geocodificar_rede_inexistente_404(db, geocoder_falso):
     root = _root(db)
     assert root.post("/api/v1/redes/9999/geocodificar").status_code == 404
+
+
+@pytest.mark.postgres
+@pytest.mark.parametrize("alteracao", [{"latitude": -23.1, "longitude": -44.1},
+                                      {"endereco": "Rua Nova, 42"}],
+                         ids=["coordenada-manual", "endereco"])
+def test_geocodificar_libera_conexao_e_preserva_edicao_concorrente(
+        engine_postgres, alteracao):
+    Base.metadata.create_all(engine_postgres)
+    with Session(engine_postgres, autoflush=False) as db:
+        rede, (escola,) = _rede_com_escolas(db, ["Cidade Fictícia"])
+        usuario = Usuario(nome="Admin de Teste", email="geo@teste.local",
+                          senha_hash="x", cargo="admin", is_global=True)
+        db.add(usuario)
+        db.commit()
+        rede_id, escola_id = rede.id, escola.id
+
+        def geocoder(_consulta):
+            assert not db.in_transaction()
+            assert engine_postgres.pool.checkedout() == 0
+            with engine_postgres.begin() as outra:
+                outra.execute(update(Escola).where(Escola.id == escola_id).values(**alteracao))
+            return (-23.62, -45.41)
+
+        resultado = rota_rede.geocodificar(rede_id, False, 6, 0, usuario, geocoder, 0, db)
+        atual = db.get(Escola, escola_id)
+        assert resultado["encontradas"] == 0 and resultado["falhas"] == 1
+        assert (atual.latitude, atual.longitude) == (alteracao.get("latitude"),
+                                                     alteracao.get("longitude"))
+        assert atual.endereco == alteracao.get("endereco")
