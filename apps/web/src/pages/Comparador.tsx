@@ -184,11 +184,11 @@ const NOTAS: { chave: "matific" | "elefante" | "geral"; rotulo: string; icone: L
 /** Duas barras (A e B) de um indicador, na mesma escala (o maior dos dois). */
 function BarrasLado({ rotulo, a, b, formato = (valor: number) => valor.toLocaleString("pt-BR") }: {
   rotulo: string;
-  a: { nome: string; valor: number };
-  b: { nome: string; valor: number };
+  a: { nome: string; valor: number | null };
+  b: { nome: string; valor: number | null };
   formato?: (valor: number) => string;
 }) {
-  const maximo = Math.max(a.valor, b.valor, 1);
+  const maximo = Math.max(a.valor ?? 0, b.valor ?? 0, 1);
   return (
     <div className="py-2.5">
       <p className="mb-2 text-[13px] font-semibold text-zinc-700 dark:text-zinc-200">{rotulo}</p>
@@ -198,13 +198,15 @@ function BarrasLado({ rotulo, a, b, formato = (valor: number) => valor.toLocaleS
             <span className={`font-bold ${LADOS[lado].texto}`}>{lado}</span> · {barra.nome}
           </span>
           <span aria-hidden className="h-2.5 flex-1 overflow-hidden rounded-full bg-zinc-100 dark:bg-zinc-800">
-            <span
-              className={`block h-full rounded-full bg-gradient-to-r ${LADOS[lado].barra}`}
-              style={{ width: `${Math.max(2, (barra.valor / maximo) * 100)}%` }}
-            />
+            {barra.valor !== null && (
+              <span
+                className={`block h-full rounded-full bg-gradient-to-r ${LADOS[lado].barra}`}
+                style={{ width: `${Math.max(2, (barra.valor / maximo) * 100)}%` }}
+              />
+            )}
           </span>
           <span className="w-20 shrink-0 text-right text-sm font-semibold tabular-nums text-zinc-900 dark:text-white">
-            {formato(barra.valor)}
+            {barra.valor === null ? <span aria-label="Sem dado">—</span> : formato(barra.valor)}
           </span>
         </div>
       ))}
@@ -378,8 +380,8 @@ export default function Comparador() {
                     <BarrasLado
                       key={indicador.chave}
                       rotulo={indicador.rotulo}
-                      a={{ nome: comparacao.a.nome, valor: comparacao.a.indicadores[indicador.chave] ?? 0 }}
-                      b={{ nome: comparacao.b.nome, valor: comparacao.b.indicadores[indicador.chave] ?? 0 }}
+                      a={{ nome: comparacao.a.nome, valor: comparacao.a.indicadores[indicador.chave] ?? null }}
+                      b={{ nome: comparacao.b.nome, valor: comparacao.b.indicadores[indicador.chave] ?? null }}
                       formato={indicador.formato}
                     />
                   ))}

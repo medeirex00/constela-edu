@@ -62,5 +62,9 @@ describe("Comparador e o contrato da rede", () => {
     expect(within(cartao).getByText("—")).toBeInTheDocument();
     expect(within(cartao).getByText("100,0")).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "Matemática · Matific" })).toBeInTheDocument();
+    const atividades = screen.getByText("Atividades (Matific)").parentElement as HTMLElement;
+    expect(within(atividades).getByLabelText("Sem dado")).toHaveTextContent("—");
+    expect(within(atividades).getByText("30")).toBeInTheDocument();
+    expect(within(atividades).queryByText("0")).not.toBeInTheDocument();
   });
 });
