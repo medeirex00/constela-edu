@@ -1,4 +1,4 @@
-"""PATCH /livros pede a trava da escola e a solta antes de recalcular (REV2-PLAT-1).
+"""PATCH /livros serializa a edição e o recálculo com a importação da escola.
 
 O congelamento de níveis do script (``vincular_livros_catalogo --congelar-niveis``) e
 a coleta seguram a trava de importação da escola (4711) enquanto gravam leituras com o
@@ -8,9 +8,8 @@ que o script congelava no nível velho ao comitar (a cena real, com duas sessõe
 em ``test_aud2_plat_congelar_patch_espera_pg.py``).
 
 No SQLite a trava não emite SQL, então aqui ela é observada por um espião: o PATCH a
-pede antes de ler o livro e, no caminho que recalcula (``aplicar_ao_historico``),
-comita antes do recálculo — nunca pegar 4713 segurando 4711
-(``core.database.bloquear_escola_para_recalculo``). Dados fictícios.
+pede antes de ler o livro e mantém a transação até o recálculo. O recálculo usa
+a ordem 4711 → 4713 e deixa o commit a cargo de quem aplica a edição. Dados fictícios.
 """
 from sqlalchemy.orm import Session
 
@@ -23,7 +22,7 @@ API = "/api/v1"
 
 
 def _vigia(monkeypatch) -> dict:
-    estado = {"travas": [], "trava_ativa": False, "violacoes": [], "recalculos": 0,
+    estado = {"travas": [], "trava_ativa": False, "recalculos": [],
               "leu_livro_com_trava": None}
     trava_real = core_db.bloquear_escola_para_importacao
 
@@ -60,9 +59,7 @@ def _vigia(monkeypatch) -> dict:
     recalcular_real = scoring.recalcular_escola
 
     def _recalcular(sessao, eid, *a, **k):
-        estado["recalculos"] += 1
-        if estado["trava_ativa"]:
-            estado["violacoes"].append(eid)
+        estado["recalculos"].append((estado["trava_ativa"], k.get("commit", True)))
         return recalcular_real(sessao, eid, *a, **k)
 
     monkeypatch.setattr(scoring, "recalcular_escola", _recalcular)
@@ -94,7 +91,7 @@ def test_correcao_de_nivel_pede_a_trava_da_escola_antes_de_ler_o_livro(
     assert estado["leu_livro_com_trava"] is True, "o livro foi lido antes da trava"
 
 
-def test_aplicar_ao_historico_solta_a_trava_antes_de_recalcular(
+def test_aplicar_ao_historico_recalcula_na_mesma_transacao(
         cliente_global, db, escola_completa, monkeypatch):
     """Os dois caminhos que recalculam: só retroagir, e corrigir + retroagir."""
     escola_id, livro_id = _livro_com_leituras(db, escola_completa)
@@ -109,7 +106,6 @@ def test_aplicar_ao_historico_solta_a_trava_antes_de_recalcular(
                    "motivo": "nível errado desde a importação"})
     assert corrigir_e_retroagir.status_code == 200, corrigir_e_retroagir.text
 
-    assert estado["travas"] == [escola_id, escola_id]
-    assert estado["recalculos"] == 2, "o recálculo nem rodou"
-    assert estado["violacoes"] == [], (
-        "recálculo (4713) pedido ainda segurando a trava de importação (4711)")
+    # Só retroagir usa uma trava. Corrigir e retroagir usa uma por transação.
+    assert estado["travas"] == [escola_id, escola_id, escola_id]
+    assert estado["recalculos"] == [(True, False), (True, False)]
