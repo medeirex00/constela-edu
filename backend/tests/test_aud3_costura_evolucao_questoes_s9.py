@@ -16,12 +16,15 @@ acertos; o suporte corrige para 50/40 em 03/09; coleta S9 em 05/09 (livro novo, 
 herdadas: 50/40); coleta em 07/09 com 105/84. Questões de 06/09 a 08/09: 5 tentativas e
 4 acertos (de coleta a coleta: 100/80 → 105/84). Antes: 55 e 44.
 """
-from datetime import datetime
+from datetime import datetime, timezone
+
+import pytest
 
 from app.models import Importacao, SnapshotElefante
 from app.models.plataformas import IMPORTACAO_SEM_QUESTOES
-from app.services import evolucao
+from app.services import evolucao, gamificacao
 from app.services.evolucao import IMPORTACAO_AJUSTE_MANUAL
+from tests._relogio import prender
 
 
 def _retrato(db, escola_id, aluno_id, quando, *, tentativas, acertos, livros,
@@ -73,3 +76,28 @@ def test_controle_sem_s9_o_ajuste_desmentido_sai_da_serie(db, escola_completa):
     ganhos = _ganhos(db, escola, aluno)
     assert ganhos["acertos"] == 4
     assert ganhos["livros"] == 2
+
+
+def test_resumo_de_evolucao_compara_coletas_que_medem_questoes(db, escola_completa, monkeypatch):
+    escola, aluno = _cenario(db, escola_completa, com_s9=True)
+    prender(monkeypatch, datetime(2026, 9, 8, 15, tzinfo=timezone.utc))
+    resumo = evolucao.resumo_evolucao(db, escola.id, aluno.id, dias=2)
+    ganhos = {i["indicador"]: i["variacao"] for i in resumo["indicadores"]}
+    assert ganhos["questoes_tentativas"] == 5
+    assert ganhos["questoes_acertos"] == 4
+    assert ganhos["livros_unicos"] == 1
+
+
+@pytest.mark.parametrize(("acertos", "semanas"), [(80, 1), (84, 2)])
+def test_sequencia_so_conta_ganho_real_de_questoes(db, escola_completa, acertos, semanas):
+    escola = escola_completa["escola"]
+    aluno = escola_completa["alunos"][0]
+    _retrato(db, escola.id, aluno.id, datetime(2026, 9, 1, 15), tentativas=100, acertos=80, livros=10)
+    _retrato(db, escola.id, aluno.id, datetime(2026, 9, 3, 15), tentativas=50, acertos=40,
+             livros=10, tipo=IMPORTACAO_AJUSTE_MANUAL)
+    _retrato(db, escola.id, aluno.id, datetime(2026, 9, 5, 15), tentativas=50, acertos=40,
+             livros=10, status=IMPORTACAO_SEM_QUESTOES)
+    _retrato(db, escola.id, aluno.id, datetime(2026, 9, 7, 15), tentativas=105, acertos=acertos,
+             livros=10)
+    db.commit()
+    assert gamificacao.gamificacao_do_aluno(db, escola.id, aluno.id)["sequencia_semanas"] == semanas

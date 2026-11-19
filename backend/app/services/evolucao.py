@@ -183,7 +183,7 @@ def _series_por_aluno(db: Session, escola_id: int, modelo) -> dict[int, list]:
 
     Ordem por data_referencia (id desempata): o import por período do Matific
     pode gravar um mês ANTIGO depois (backfill) — por id, a série ficaria fora
-    de ordem e _janela/_baseline elegeriam o passado como "atual".
+    de ordem e _janela elegeria o passado como "atual".
 
     Sai da série o ajuste manual que uma coleta posterior já desmentiu — no
     MATIFIC, a coleta do mesmo ano (``sem_ajustes_superados_matific``); no
@@ -200,7 +200,8 @@ def _series_por_aluno(db: Session, escola_id: int, modelo) -> dict[int, list]:
 
 
 def series_das_questoes_elefante(db: Session, escola_id: int,
-                                 serie_e: dict[int, list]) -> dict[int, list]:
+                                 serie_e: dict[int, list], *,
+                                 series_brutas: dict[int, list] | None = None) -> dict[int, list]:
     """A série das QUESTÕES do Elefante por aluno: só os retratos que medem as
     questões, sem o ajuste manual que uma coleta das questões desmentiu — a regra
     das Questões do período do Relatório (``relatorios_periodo._retratos_das_questoes``).
@@ -215,31 +216,25 @@ def series_das_questoes_elefante(db: Session, escola_id: int,
 
     Escola sem nenhuma coleta S9 (o comum): devolve ``serie_e`` como veio (uma
     consulta só). Dentro de ``scoring.leituras_da_requisicao`` sai do banco uma vez
-    por requisição."""
-    memoria = scoring.memoria_da_requisicao(db, "series_das_questoes_elefante")
+    por requisição. Um chamador que só lê um aluno pode fornecer sua série bruta
+    para dispensar a varredura da escola e o cache compartilhado."""
+    memoria = (scoring.memoria_da_requisicao(db, "series_das_questoes_elefante")
+               if series_brutas is None else None)
     if memoria is not None and escola_id in memoria:
         return memoria[escola_id]
     manuais, s9 = _importacoes_especiais_elefante(db, escola_id)
     if not s9:
         series = serie_e
     else:
+        if series_brutas is None:
+            series_brutas = _series_brutas(db, escola_id, SnapshotElefante)
         series = {
             aluno_id: sem_ajustes_superados_vitalicio(
                 [s for s in serie if s.importacao_id not in s9], manuais)
-            for aluno_id, serie in _series_brutas(db, escola_id, SnapshotElefante).items()}
+            for aluno_id, serie in series_brutas.items()}
     if memoria is not None:
         memoria[escola_id] = series
     return series
-
-
-def _baseline(serie: list, inicio: datetime):
-    """Último snapshot ANTERIOR ao início do período (None = começou do zero)."""
-    inicio = _sem_fuso(inicio)
-    anterior = None
-    for snap in serie:
-        if _sem_fuso(snap.data_referencia) < inicio:
-            anterior = snap
-    return anterior
 
 
 def _delta(atual, anterior, campo: str) -> float:
@@ -448,7 +443,7 @@ def linha_do_tempo(db: Session, escola_id: int, aluno_id: int,
             {
                 "data": snap.data_referencia,
                 "atividades": snap.atividades,
-                "estrelas": snap.estrelas,
+                "estrelas": int(scoring.estrelas_que_contam(snap)),
                 "pontuacao_media": snap.pontuacao_media,
             }
             for snap in matific
@@ -470,7 +465,8 @@ def resumo_evolucao(db: Session, escola_id: int, aluno_id: int, dias: int, *,
                     plataformas_fora: frozenset[str] | set[str] = frozenset()) -> dict:
     """Variação de cada indicador no período, com percentual quando possível.
     Os indicadores das ``plataformas_fora`` (módulo fora do plano) não entram."""
-    inicio = datetime.now(timezone.utc) - timedelta(days=dias)
+    agora = datetime.now(timezone.utc).replace(tzinfo=None)
+    inicio = agora - timedelta(days=dias)
     indicadores = []
     for modelo, campos in ((SnapshotMatific, CAMPOS_MATIFIC), (SnapshotElefante, CAMPOS_ELEFANTE)):
         if _PLATAFORMA_DO_MODELO[modelo] in plataformas_fora:
@@ -486,14 +482,24 @@ def resumo_evolucao(db: Session, escola_id: int, aluno_id: int, dias: int, *,
         if modelo is SnapshotMatific:
             serie = sem_ajustes_superados_matific(
                 db, escola_id, {aluno_id: serie})[aluno_id]
+            atual, anterior = _janela(serie, inicio, agora, ano_letivo=agora.year)
         else:
-            serie = sem_ajustes_superados_elefante(
-                db, escola_id, {aluno_id: serie})[aluno_id]
-        atual = serie[-1] if serie else None
-        anterior = _baseline(serie, inicio)
+            series_brutas = {aluno_id: serie}
+            series_e = sem_ajustes_superados_elefante(db, escola_id, series_brutas)
+            series_q = series_das_questoes_elefante(
+                db, escola_id, series_e, series_brutas=series_brutas)
+            atual, anterior = _janela(series_e[aluno_id], inicio, agora)
+            atual_q, anterior_q = _janela(series_q[aluno_id], inicio, agora)
         for campo in campos:
-            valor_inicial = float(getattr(anterior, campo, 0) or 0) if anterior else 0.0
-            valor_atual = float(getattr(atual, campo, 0) or 0) if atual else 0.0
+            if campo == "estrelas":
+                valor_inicial = scoring.estrelas_que_contam(anterior) if anterior else 0.0
+                valor_atual = scoring.estrelas_que_contam(atual) if atual else 0.0
+            elif campo in {"questoes_tentativas", "questoes_acertos"}:
+                valor_inicial = float(getattr(anterior_q, campo, 0) or 0)
+                valor_atual = float(getattr(atual_q, campo, 0) or 0)
+            else:
+                valor_inicial = float(getattr(anterior, campo, 0) or 0)
+                valor_atual = float(getattr(atual, campo, 0) or 0)
             variacao = round(valor_atual - valor_inicial, 2)
             indicadores.append({
                 "indicador": campo,
@@ -974,16 +980,16 @@ def ranking_evolucao(db: Session, escola_id: int, inicio: datetime | None = None
             p_geral, {DIMENSOES[d] for d, tem in marcas.items() if tem})
         nota = round(nota_m * pesos_aluno.get("matific", 0)
                      + nota_e * pesos_aluno.get("elefante", 0), 2)
-        ganhos = {
-            "atividades": ganhos_m[aluno_id].atividades,
-            "estrelas": ganhos_m[aluno_id].estrelas,
-            "livros": ganhos_e[aluno_id].livros_unicos,
-            "tempo_leitura_min": ganhos_e[aluno_id].tempo_leitura_min,
-            "acertos": ganhos_e[aluno_id].questoes_acertos,
-            # Qualidade da leitura no período (nível dos livros lidos): é o
-            # primeiro desempate da dimensão Leitura, então precisa viajar junto.
-            "pontos_dificuldade": round(pontos_dif[aluno_id], 2),
-        }
+        ganhos = {}
+        if "matematica" in contratadas:
+            ganhos.update(atividades=ganhos_m[aluno_id].atividades,
+                          estrelas=ganhos_m[aluno_id].estrelas)
+        if "leitura" in contratadas:
+            ganhos.update(livros=ganhos_e[aluno_id].livros_unicos,
+                          tempo_leitura_min=ganhos_e[aluno_id].tempo_leitura_min,
+                          acertos=ganhos_e[aluno_id].questoes_acertos,
+                          # Primeiro desempate da dimensão Leitura.
+                          pontos_dificuldade=round(pontos_dif[aluno_id], 2))
         itens.append(ItemEvolucao(
             aluno_id=aluno_id, nome=matricula.aluno.nome, turma=turma.nome,
             ano_escolar=turma.ano_escolar, nota_evolucao=nota, ganhos=ganhos,
@@ -1263,32 +1269,41 @@ def resumo_turma(db: Session, escola_id: int, turma_id: int,
     if turma is None or turma.escola_id != escola_id:
         return None
     escola = db.get(Escola, escola_id)
+    ano_turma = turma.ano_letivo
     matriculas = db.execute(
         select(Matricula)
         .join(Aluno, Matricula.aluno_id == Aluno.id)
         .where(Matricula.turma_id == turma_id,
-               Matricula.ano_letivo == escola.ano_letivo_ativo,
+               Matricula.ano_letivo == ano_turma,
+               Aluno.escola_id == escola_id,
                Aluno.status == "ativo")
     ).scalars().all()
     aluno_ids = [m.aluno_id for m in matriculas]
 
     notas = db.execute(
         select(Nota).where(Nota.escola_id == escola_id,
-                           Nota.ano_letivo == escola.ano_letivo_ativo,
+                           Nota.ano_letivo == ano_turma,
                            Nota.aluno_id.in_(aluno_ids or [0]))
     ).scalars().all()
     # Uma carga só dos snapshots, usada pelos indicadores E pelo corte de
     # aferido — o discriminante é a EXISTÊNCIA do snapshot (a definição), não a
     # coluna `Nota.aferido_*` (o cache carimbado pelo recálculo). Enquanto uma
     # escola não é recalculada, o número certo é o do dado.
-    if matific is None:
-        matific = scoring._snapshots_atuais(db, escola_id, SnapshotMatific)
-    if elefante is None:
-        elefante = scoring._snapshots_atuais(db, escola_id, SnapshotElefante)
+    _, fim_ano = matific_destaque.janela_ano_letivo(ano_turma)
+    if ano_turma < escola.ano_letivo_ativo:
+        # Os indicadores do histórico não incorporam coletas posteriores à turma.
+        janela = (datetime.min, fim_ano)
+        matific = scoring._snapshots_atuais(db, escola_id, SnapshotMatific, janela=janela)
+        elefante = scoring._snapshots_atuais(db, escola_id, SnapshotElefante, janela=janela)
+    else:
+        if matific is None:
+            matific = scoring._snapshots_atuais(db, escola_id, SnapshotMatific)
+        if elefante is None:
+            elefante = scoring._snapshots_atuais(db, escola_id, SnapshotElefante)
     # Aferido em Matemática = snapshot do Matific DO ANO (a definição do motor):
     # quem só tem coleta do ano anterior não entra na média como o 0,0 que o
     # motor gravou. A cobertura segue com `matific` (qualquer época).
-    matific_ano = scoring.snapshots_matific_do_ano(db, escola_id, escola.ano_letivo_ativo)
+    matific_ano = scoring.snapshots_matific_do_ano(db, escola_id, ano_turma)
     indicadores = _indicadores_atuais(db, escola_id, aluno_ids, matific_ano, elefante)
     aferidos = {"leitura": set(elefante), "matematica": set(matific_ano)}
     contratadas = scoring.dimensoes_contratadas(db, escola)

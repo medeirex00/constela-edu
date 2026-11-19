@@ -61,7 +61,7 @@ from app.schemas import (
     NiveisLeituraEdicao,
     RestauracaoLeituras,
 )
-from app.services import (dificuldade_livro, leituras_restauracao,
+from app.services import (dificuldade_livro, leituras_restauracao, matific_destaque,
                           permissoes, scoring)
 from app.services.audit import registrar
 
@@ -150,7 +150,9 @@ def _linhas_modulo(db: Session, escola_id: int, modelo,
     escola = db.get(Escola, escola_id)
     if escola is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Escola não encontrada.")
-    ids = scoring.ids_snapshots_atuais(modelo, escola_id)
+    janela = (matific_destaque.janela_ano_letivo(escola.ano_letivo_ativo)
+              if modelo is SnapshotMatific else None)
+    ids = scoring.ids_snapshots_atuais(modelo, escola_id, janela=janela)
     consulta = (
         select(Aluno, Turma, modelo)
         .join(Matricula, (Matricula.aluno_id == Aluno.id)
@@ -256,9 +258,14 @@ def editar_matific(
     aluno = _ficha_do_ajuste(db, escola_id, aluno_id)
     _exigir_governanca_ajuste_manual(db, escola_id, usuario, "matific")
     _exigir_aluno_ativo(aluno)
+    data_referencia = agora()
+    inicio_ano, _ = matific_destaque.janela_ano_letivo(data_referencia.year)
     anterior = db.execute(
         select(SnapshotMatific)
-        .where(SnapshotMatific.aluno_id == aluno_id)
+        .where(SnapshotMatific.escola_id == escola_id,
+               SnapshotMatific.aluno_id == aluno_id,
+               SnapshotMatific.data_referencia >= inicio_ano,
+               SnapshotMatific.data_referencia <= data_referencia.replace(tzinfo=None))
         .order_by(SnapshotMatific.data_referencia.desc(),
                   SnapshotMatific.id.desc()).limit(1)
     ).scalar_one_or_none()
@@ -275,7 +282,7 @@ def editar_matific(
     snap = SnapshotMatific(
         escola_id=escola_id, aluno_id=aluno_id, importacao_id=importacao.id,
         atividades=dados.atividades, estrelas=dados.estrelas,
-        pontuacao_media=media,
+        pontuacao_media=media, data_referencia=data_referencia,
     )
     db.add(snap)
     registrar(db, "matific.editado", escola_id=escola_id, usuario_id=usuario.id,

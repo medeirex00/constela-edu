@@ -266,12 +266,13 @@ def nivel_do_xp(xp: int, base: float) -> tuple[int, int]:
     return nivel, faltam
 
 
-def sequencia_semanas(serie_m: list, serie_e: list) -> int:
+def sequencia_semanas(serie_m: list, serie_e: list, serie_q: list) -> int:
     """Semanas ISO consecutivas (terminando na mais recente com dado) em que
     o aluno registrou algum ganho em qualquer plataforma."""
     semanas: set[tuple[int, int]] = set()
     for serie, campos in ((serie_m, ("atividades", "estrelas")),
-                          (serie_e, ("livros_unicos", "questoes_acertos", "tempo_leitura_min"))):
+                          (serie_e, ("livros_unicos", "tempo_leitura_min")),
+                          (serie_q, ("questoes_acertos",))):
         anterior = None
         for snap in serie:
             ganhou = any(
@@ -296,7 +297,7 @@ def sequencia_semanas(serie_m: list, serie_e: list) -> int:
     return sequencia
 
 
-def _computar_gamificacao(aluno_id: int, serie_m: list, serie_e: list,
+def _computar_gamificacao(aluno_id: int, serie_m: list, serie_e: list, serie_q: list,
                           pesos_xp: dict, base: float, conquistas_cfg: list,
                           ano_letivo: int | None = None) -> dict:
     """Núcleo do cálculo a partir de séries JÁ carregadas — sem tocar o banco.
@@ -340,7 +341,7 @@ def _computar_gamificacao(aluno_id: int, serie_m: list, serie_e: list,
         "xp_conquistas": xp_conquistas,
         "nivel": nivel,
         "xp_para_proximo": faltam,
-        "sequencia_semanas": sequencia_semanas(serie_m, serie_e),
+        "sequencia_semanas": sequencia_semanas(serie_m, serie_e, serie_q),
         "conquistas": conquistas,
         "total_conquistas": sum(1 for c in conquistas if c["atingida"]),
     }
@@ -359,7 +360,7 @@ def gamificacao_do_aluno(db: Session, escola_id: int, aluno_id: int) -> dict:
         if plataforma in fora:
             return []
         return db.execute(
-            select(modelo).where(modelo.aluno_id == aluno_id)
+            select(modelo).where(modelo.escola_id == escola_id, modelo.aluno_id == aluno_id)
             .order_by(modelo.data_referencia, modelo.id)
         ).scalars().all()
 
@@ -368,9 +369,11 @@ def gamificacao_do_aluno(db: Session, escola_id: int, aluno_id: int) -> dict:
     # `_series_por_aluno`).
     serie_m = evolucao.sem_ajustes_superados_matific(
         db, escola_id, {aluno_id: _serie(SnapshotMatific, "matific")})[aluno_id]
-    serie_e = evolucao.sem_ajustes_superados_elefante(
-        db, escola_id, {aluno_id: _serie(SnapshotElefante, "elefante")})[aluno_id]
-    return _computar_gamificacao(aluno_id, serie_m, serie_e,
+    brutas_e = {aluno_id: _serie(SnapshotElefante, "elefante")}
+    series_e = evolucao.sem_ajustes_superados_elefante(db, escola_id, brutas_e)
+    series_q = evolucao.series_das_questoes_elefante(
+        db, escola_id, series_e, series_brutas=brutas_e)
+    return _computar_gamificacao(aluno_id, serie_m, series_e[aluno_id], series_q[aluno_id],
                                  pesos_xp, base, conquistas_cfg,
                                  ano_letivo=escola.ano_letivo_ativo if escola else None)
 
@@ -606,9 +609,10 @@ def mural(db: Session, escola_id: int,
     else:
         series_m = serie_m if serie_m is not None else evolucao._series_por_aluno(db, escola_id, SnapshotMatific)
     if "elefante" in fora:
-        series_e = {}
+        series_e, series_q = {}, {}
     else:
         series_e = serie_e if serie_e is not None else evolucao._series_por_aluno(db, escola_id, SnapshotElefante)
+        series_q = evolucao.series_das_questoes_elefante(db, escola_id, series_e)
     if mapa_dif is None:   # a REGRA de dificuldade (fonte única)
         mapa_dif = dificuldade_livro.regra_da_escola(db, escola_id)
     # COORTE do mural = a MESMA de todas as outras superfícies: aluno ATIVO e
@@ -643,6 +647,7 @@ def mural(db: Session, escola_id: int,
     for aluno_id in (set(series_m) | set(series_e)) & set(nomes):
         detalhe = _computar_gamificacao(
             aluno_id, series_m.get(aluno_id, []), series_e.get(aluno_id, []),
+            series_q.get(aluno_id, []),
             pesos_xp, base, conquistas_cfg,
             ano_letivo=escola.ano_letivo_ativo if escola is not None else None)
         for conquista in detalhe["conquistas"]:
@@ -668,7 +673,7 @@ def mural(db: Session, escola_id: int,
     def _destaque(dias: int):
         melhor = _melhor_do_ranking(evolucao.ranking_evolucao(
             db, escola_id, dias=dias,
-            serie_m=series_m, serie_e=series_e, mapa_dif=mapa_dif,
+            serie_m=series_m, serie_e=series_e, serie_q=series_q, mapa_dif=mapa_dif,
             base_no_periodo=base_no_periodo, turma_ids=turma_ids))
         if melhor and anonimizar:
             # k-anonimato no PÓDIO: além do nome reduzido, a TURMA também some —

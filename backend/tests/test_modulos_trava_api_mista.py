@@ -204,6 +204,15 @@ def test_evolucao_com_tudo_ligado_segue_igual(db, tudo_ligado, cliente):
     assert {"atividades", "estrelas", "livros_unicos"} <= indicadores
 
 
+def test_ranking_de_evolucao_omite_ganhos_de_matematica_fora_do_plano(sem_matematica, cliente):
+    escola, aluno = sem_matematica
+    resposta = cliente.get(f"{API}/escolas/{escola.id}/ranking-evolucao?dias=30")
+    assert resposta.status_code == 200, resposta.text
+    item = next(i for i in resposta.json() if i["aluno_id"] == aluno.id)
+    assert set(item["ganhos"]) == {"livros", "tempo_leitura_min", "acertos", "pontos_dificuldade"}
+    assert item["dimensoes"]["matematica"]["contratada"] is False
+
+
 def test_linha_do_tempo_sem_matematica(db, sem_matematica, cliente):
     escola, aluno = sem_matematica
     base = f"{API}/escolas/{escola.id}/alunos/{aluno.id}/linha-do-tempo"
