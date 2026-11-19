@@ -52,6 +52,20 @@ describe("cifra AES-256 do cache em repouso (LGPD: dados no aparelho)", () => {
     expect(await decifrar(b)).toBe("igual");
   });
 
+  it("as primeiras gravações simultâneas usam a mesma chave do cofre", async () => {
+    const [sessao, cache] = await Promise.all([cifrar("sessão fictícia"), cifrar("cache fictício")]);
+
+    expect(await decifrar(sessao)).toBe("sessão fictícia");
+    expect(await decifrar(cache)).toBe("cache fictício");
+  });
+
+  it("apagar a chave antes da primeira gravação terminar invalida o conteúdo antigo", async () => {
+    const gravacao = cifrar("cache fictício da sessão encerrada");
+    await esquecerChave();
+
+    expect(await decifrar(await gravacao)).toBeNull();
+  });
+
   it("gera a chave de 256 bits no SecureStore (nunca no AsyncStorage claro)", async () => {
     expect(cofre.size).toBe(0);
     await cifrar("x");
