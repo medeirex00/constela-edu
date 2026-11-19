@@ -327,17 +327,8 @@ def test_preset_padrao_da_matematica_bate_com_o_todo_o_historico_das_premiacoes(
 
     O que cada uma faz com ``periodo=tudo``: toma o ÚLTIMO snapshot DENTRO do ano
     letivo, a partir do zero (``base = None``, porque não há período a recortar).
-    O teste compara as duas em vez de fixar um número mágico: é a CONCORDÂNCIA
-    que o ajuste comprou, e ela continua valendo se a régua do acumulado mudar.
-
-    CAVEAT DELIBERADO (fica registrado porque surpreende): o filtro por ano
-    descarta os SNAPSHOTS de 2025, mas não limpa o que está DENTRO de um snapshot
-    de 2026 — a importação por período acumula sobre o último snapshot anterior
-    ao intervalo, mesmo que ele seja de dezembro do ano passado
-    (``importacoes._importar_matific_periodo``). Por isso o acumulado de 2025
-    (300) segue embutido no valor de 2026. Isso é da IMPORTAÇÃO, não destas
-    telas, e as duas carregam o mesmo embutido — que é exatamente por que este
-    teste afirma a igualdade entre elas, e não um total "limpo" do ano.
+    Os retratos de 2026 nunca herdam o acumulado de 2025. Além da concordância,
+    o teste confirma que as duas telas somam apenas as duas importações de 2026.
     """
     esc = escola_completa["escola"]
     ana = escola_completa["alunos"][0]
@@ -353,8 +344,7 @@ def test_preset_padrao_da_matematica_bate_com_o_todo_o_historico_das_premiacoes(
     item = next(i for i in podio if i["nome"] == ana.nome)
     assert (linha["estrelas"], linha["atividades"]) == (item["estrelas"],
                                                         item["atividades"])
-    # Última coleta DE 2026 (a de maio), nunca a de dez/2025 — que tem menos.
-    assert linha["estrelas"] > 300 and linha["atividades"] > 80
+    assert (linha["estrelas"], linha["atividades"]) == (200 + 90, 50 + 30)
 
 
 def test_matematica_empatada_desempata_pelo_id_do_aluno(

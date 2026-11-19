@@ -3757,14 +3757,23 @@ def _confirmar_sem_commit(
     # dia complementa o retrato no lugar e apaga a primeira — uma execução da sync
     # iniciada no dia do retrato atual, ou depois (``_alunos_com_sincronizacao_desde_o_retrato``).
     if (dados.data_referencia is None and not da_sincronizacao and periodo_inicio is None
-            and (dados.formato == "resumo" or dados.plataforma == "matific") and anteriores):
+            and (dados.formato == "resumo" or dados.plataforma == "matific")):
+        anteriores_para_conferir = anteriores
+        if dados.plataforma == "matific":
+            # Sem a data não sabemos se o relatório é do ano corrente. Um retrato
+            # de outro ano ainda prova a necessidade da data, sem emprestar o seu
+            # acumulado ao ano novo.
+            sem_retrato_do_ano = resolvidos.keys() - anteriores.keys()
+            anteriores_para_conferir = {**_mapa_snapshot_atual(
+                db, escola_id, sem_retrato_do_ano, SnapshotMatific, ate=teto_retrato),
+                **anteriores}
         da_sync = _importacoes_da_sincronizacao(
             db, escola_id, dados.plataforma,
-            {snap.importacao_id for snap in anteriores.values() if snap is not None})
-        cobertos = {aid for aid, snap in anteriores.items()
+            {snap.importacao_id for snap in anteriores_para_conferir.values() if snap is not None})
+        cobertos = {aid for aid, snap in anteriores_para_conferir.items()
                     if snap is not None and snap.importacao_id in da_sync}
         cobertos |= _alunos_com_sincronizacao_desde_o_retrato(
-            db, escola_id, dados.plataforma, anteriores)
+            db, escola_id, dados.plataforma, anteriores_para_conferir)
         if cobertos:
             raise HTTPException(
                 422,
