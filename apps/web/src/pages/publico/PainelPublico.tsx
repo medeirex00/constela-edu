@@ -366,7 +366,8 @@ function ColunaPodio({
       <div
         className={`mx-2 flex items-center justify-center gap-3 rounded-b-3xl ${campeao ? "painel-podio-base-campeao h-16" : "painel-podio-base h-11"}`}
         style={{
-          background: `linear-gradient(180deg, ${cor}66, ${cor}1e)`,
+          // O número mantém contraste mesmo quando o brilho do céu passa atrás do pódio.
+          background: `linear-gradient(180deg, ${cor}66, ${cor}1e), #0F1626`,
           boxShadow: `inset 0 3px 0 0 ${cor}AA, inset 0 -8px 16px -8px rgba(0,0,0,0.5)`,
         }}
       >
