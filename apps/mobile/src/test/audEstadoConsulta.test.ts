@@ -35,4 +35,14 @@ describe("estadoDaConsulta", () => {
     expect(estadoDaConsulta({ ...base, data: [1], isError: true, error: new ApiError(500, "Erro interno.") }))
       .toEqual({ tipo: "dados", dados: [1], aviso: "Erro interno." });
   });
+
+  it.each([401, 403, 404, 410])("oculta os dados salvos quando o servidor responde %i", (status) => {
+    const estado = estadoDaConsulta({
+      ...base,
+      data: [{ nome: "Aluna Fictícia" }],
+      isError: true,
+      error: new ApiError(status, "Ficha indisponível."),
+    });
+    expect(estado).toEqual({ tipo: "erro", mensagem: "Ficha indisponível." });
+  });
 });

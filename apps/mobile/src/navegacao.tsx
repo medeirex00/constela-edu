@@ -15,7 +15,7 @@ import { cores, espacos } from "./tema";
 
 export type PilhaPrincipal = {
   Abas: undefined;
-  PerfilAluno: { alunoId: number; nome: string };
+  PerfilAluno: { alunoId: number };
 };
 
 const Abas = createBottomTabNavigator();
@@ -85,7 +85,7 @@ export function NavegacaoPrincipal() {
       <Pilha.Screen
         name="PerfilAluno"
         component={PerfilAluno}
-        options={({ route }) => ({ title: route.params.nome })}
+        options={{ title: "Ficha do aluno" }}
       />
     </Pilha.Navigator>
   );

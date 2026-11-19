@@ -101,7 +101,7 @@ export default function Ranking() {
         renderItem={({ item }) => (
           <TouchableOpacity
             style={estilos.linha}
-            onPress={() => navegacao.navigate("PerfilAluno", { alunoId: item.chave, nome: item.nome })}
+            onPress={() => navegacao.navigate("PerfilAluno", { alunoId: item.chave })}
           >
             <Etiqueta texto={`${item.posicao}º`} tom={item.destaque ? "destaque" : "neutro"} />
             <View style={{ flex: 1 }}>

@@ -60,7 +60,7 @@ function montar(tela: React.ReactElement) {
   return render(React.createElement(QueryClientProvider, { client: cliente }, tela));
 }
 
-const perfilProps = { route: { params: { alunoId: 7, nome: "Aluna Ficticia" } } } as never;
+const perfilProps = { route: { params: { alunoId: 7 } } } as never;
 
 const PACOTE: PacoteSincronizacao = {
   gerado_em: "2026-11-10T12:00:00Z",
@@ -152,6 +152,20 @@ describe("os outros estados continuam como eram", () => {
     });
     await screen.findByText(/Erro interno\. Tente novamente em instantes\./);
     expect(container.textContent).toContain("Aluna Ficticia");
+  });
+
+  it("com ranking salvo, o acesso revogado oculta os nomes já carregados", async () => {
+    apiMock.mockResolvedValueOnce(PACOTE);
+    montar(React.createElement(Ranking));
+    await screen.findByText("Aluna Ficticia");
+    apiMock.mockRejectedValue(new ApiError(403, "Acesso negado aos dados desta escola."));
+
+    await act(async () => {
+      await cliente.refetchQueries({ queryKey: ["sincronizacao", 1] });
+    });
+
+    await screen.findByText("Acesso negado aos dados desta escola.");
+    expect(screen.queryByText("Aluna Ficticia")).toBeNull();
   });
 
   it("lista vazia de verdade continua 'Sem dados no período.'", async () => {

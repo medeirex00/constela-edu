@@ -31,6 +31,11 @@ export function estadoDaConsulta<T>(consulta: {
   isError: boolean;
   error: unknown;
 }): EstadoConsulta<T> {
+  if (consulta.isError && consulta.error instanceof ApiError &&
+      [401, 403, 404, 410].includes(consulta.error.status)) {
+    // O servidor confirmou que esta sessão não pode mais abrir o recurso.
+    return { tipo: "erro", mensagem: mensagemDoErro(consulta.error) };
+  }
   if (consulta.data !== undefined) {
     return {
       tipo: "dados",
