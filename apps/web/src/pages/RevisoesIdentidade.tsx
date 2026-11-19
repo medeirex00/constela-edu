@@ -847,8 +847,9 @@ function ContasDaPlataforma({
         <Card className="mt-2 space-y-2 p-3">
           <p className="text-sm">
             Usar só <span className="font-mono text-xs">{escolhida}</span> e aposentar
-            as demais. Os dados das outras continuam guardados, mas deixam de aparecer
-            no retrato de {alunoNome}. Nada muda no {rotulo}.
+            as demais. Só a conta escolhida envia dados novos ao Constela. Os dados que
+            já entraram ficam na ficha de {alunoNome} e {oQueFica}. O retrato atual só
+            muda quando uma coleta da conta escolhida for aplicada.
           </p>
           <label className="block text-xs">
             Por que esta conta?
@@ -876,10 +877,8 @@ function ContasDaPlataforma({
 /** A ficha já tem OUTRA conta da mesma plataforma.
  *
  * Aqui vincular não é só "dizer de quem é a linha": é escolher qual das duas
- * contas vai alimentar a ficha. A sincronização aplica UMA por vez, então a
- * conta que não for vinculada deixa de aparecer no retrato do aluno — e o
- * gestor precisa saber disso ANTES de clicar, não depois. Nada é bloqueado: a
- * decisão continua sendo dele.
+ * contas vai alimentar a ficha a partir de agora. Os dados já importados
+ * permanecem, pois a ficha não guarda de qual conta vieram.
  *
  * Só aparece quando a ficha TEM outra conta (``fichaJaTemOutraConta``): o motivo
  * "outra conta leva ao mesmo aluno" também nasce com a outra conta no mesmo
@@ -894,8 +893,8 @@ function AvisoDuasContas({ plataforma }: { plataforma: string }) {
       <p className="font-semibold">Atenção: esta ficha tem duas contas no {plataforma}.</p>
       <ul className="mt-2 list-disc space-y-1 pl-5 text-xs">
         <li>
-          Vincular esta conta faz os dados <strong>dela</strong> valerem para o aluno. Os
-          da outra conta continuam guardados, mas deixam de aparecer no retrato.
+          Depois do vínculo, só esta conta envia dados novos à ficha. Os dados já
+          importados da outra conta permanecem no histórico do aluno.
         </li>
         <li>
           Confirme na própria plataforma que esta conta é <strong>desta criança</strong> —

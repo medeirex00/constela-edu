@@ -835,7 +835,7 @@ describe("Revisões de identidade — aviso de duas contas na mesma ficha", () =
 
     expect(within(aviso).getByText(/esta ficha tem duas contas no Matific/i)).toBeInTheDocument();
     // 1. a consequência de vincular
-    expect(within(aviso).getByText(/deixam de aparecer no retrato/i)).toBeInTheDocument();
+    expect(within(aviso).getByText(/já importados da outra conta permanecem no histórico/i)).toBeInTheDocument();
     // 2. o que o gestor precisa confirmar, e onde
     expect(within(aviso).getByText(/pelo nome completo e pelo login/i)).toBeInTheDocument();
     // 3. volume não é identidade
@@ -984,6 +984,8 @@ describe("Revisões de identidade — contas do aluno na plataforma", () => {
     });
 
     await u.click(within(bloco).getAllByRole("button", { name: "Usar só esta conta" })[0]);
+    expect(bloco).toHaveTextContent(/só a conta escolhida envia dados novos ao Constela/i);
+    expect(bloco).not.toHaveTextContent(/deixam de aparecer no retrato/i);
     const confirmar = within(bloco).getByRole("button", { name: "Confirmar" });
     expect(confirmar).toBeDisabled();                 // sem motivo, não envia
 
