@@ -377,3 +377,31 @@ def test_confirmar_recalcula_com_a_trava_compartilhada(motor_pg, escola_pg, monk
 
     assert segurados, "o recálculo do /confirmar nem rodou"
     assert segurados == [{_NS_IMPORTACAO: "ShareLock", _NS_RECALCULO: "ExclusiveLock"}]
+
+
+def test_recalcular_rele_o_ano_armazenado_apos_a_autorizacao(motor_pg, escola_pg):
+    escola_id = escola_pg["escola_id"]
+    with Session(motor_pg, autoflush=False) as calculo:
+        escola_em_memoria = calculo.get(Escola, escola_id)
+        assert escola_em_memoria.ano_letivo_ativo == 2026
+        with Session(motor_pg) as virada:
+            virada.get(Escola, escola_id).ano_letivo_ativo = 2027
+            virada.commit()
+
+        assert scoring.recalcular_escola(calculo, escola_id, commit=False) == 0
+        assert escola_em_memoria.ano_letivo_ativo == 2027
+        assert calculo.scalar(select(func.count()).select_from(Nota).where(
+            Nota.escola_id == escola_id)) == 0
+
+
+def test_recalcular_preserva_o_ano_alterado_na_propria_transacao(motor_pg, escola_pg):
+    escola_id = escola_pg["escola_id"]
+    with Session(motor_pg, autoflush=False) as calculo:
+        escola = calculo.get(Escola, escola_id)
+        escola.ano_letivo_ativo = 2027
+
+        assert scoring.recalcular_escola(calculo, escola_id, commit=False) == 0
+        assert escola.ano_letivo_ativo == 2027
+        calculo.commit()
+    with Session(motor_pg) as leitura:
+        assert leitura.get(Escola, escola_id).ano_letivo_ativo == 2027

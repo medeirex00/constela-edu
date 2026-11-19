@@ -42,7 +42,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import time
 
-from sqlalchemy import func, select, update
+from sqlalchemy import func, inspect, select, update
 from sqlalchemy.orm import Session, selectinload
 
 from app.core.database import bloquear_escola_para_recalculo
@@ -1593,6 +1593,13 @@ def recalcular_escola(db: Session, escola_id: int, *, commit: bool = True) -> in
     # o commit final, a população fica estável e só este recálculo escreve
     # as notas da escola. As travas caem com a transação (no-op no SQLite).
     bloquear_escola_para_recalculo(db, escola_id)
+    # A autorização pode ter guardado a escola antes de esperar pela trava.
+    # Releia o ano após a espera, preservando alterações ainda não gravadas.
+    escola_em_memoria = db.identity_map.get(db.identity_key(Escola, escola_id))
+    if escola_em_memoria is not None:
+        ano_em_memoria = inspect(escola_em_memoria).attrs.ano_letivo_ativo
+        if not ano_em_memoria.history.has_changes():
+            db.expire(escola_em_memoria, ["ano_letivo_ativo"])
     contexto = _carregar_contexto(db, escola_id)
     if contexto is None:
         return 0
