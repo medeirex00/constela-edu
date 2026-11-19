@@ -89,6 +89,17 @@ def test_arquivo_antigo_sem_o_autor_continua_aceito(db, escola_completa, cliente
     assert _autores(db, eid) == [None]
 
 
+def test_autor_do_arquivo_precisa_ter_a_mesma_data_de_criacao(
+        db, escola_completa, cliente, cliente_global):
+    eid = escola_completa["escola"].id
+    _importar(cliente, escola_completa)
+    dados = svc_backup.exportar(db, eid)
+    uid = escola_completa["admin"].id
+    dados["usuarios_referenciados"][str(uid)] = "2000-01-01T00:00:00"
+    _restaurar(cliente_global, eid, json.dumps(dados).encode("utf-8"))
+    assert _autores(db, eid) == [None]
+
+
 def test_autoria_da_importacao_esta_entre_as_referencias_a_usuario():
     assert svc_backup.REFERENCIAS_A_USUARIO["importacoes"] == ("usuario_id",)
     assert "usuario_id" not in svc_backup.IGNORADAS

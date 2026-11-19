@@ -28,6 +28,7 @@ from app.models import (
     Aluno, Escola, IdentidadeExterna, Importacao, Leitura, Livro, Matricula,
     SnapshotMatific,
 )
+from app.services import backup
 
 API = "/api/v1"
 AVISO = ("excluída(s) permanentemente (nesta ou em outra escola) depois deste backup "
@@ -98,6 +99,49 @@ def test_backup_antigo_nao_ressuscita_a_crianca_excluida_e_avisa(
         f"1 criança(s) {AVISO} (direito de eliminação, LGPD art. 18)."]
     assert nome not in json.dumps(corpo, ensure_ascii=False)
     assert isinstance(json.loads(conteudo)["log_ate"], int)
+
+
+def test_arquivo_de_outro_banco_nao_exclui_crianca_que_so_tem_o_mesmo_id(
+        cliente, cliente_global, db, escola_completa):
+    escola, nome, outros, conteudo = _cena(db, cliente, cliente_global, escola_completa)
+    dados = json.loads(conteudo)
+    dados["escola"]["criada_em"] = "1990-01-01T00:00:00"
+    aluno = next(a for a in dados["tabelas"]["alunos"] if a["nome"] == nome)
+    aluno["nome"] = "Criança Sintética de Outro Banco"
+    aluno["created_at"] = "2000-01-01T00:00:00"
+    corpo = _restaurar(cliente_global, escola.id, json.dumps(dados).encode("utf-8"))
+    assert not any(AVISO in aviso for aviso in corpo["avisos"])
+    db.expire_all()
+    nomes = set(db.scalars(select(Aluno.nome).where(Aluno.escola_id == escola.id)))
+    assert nomes == {*outros, aluno["nome"]}
+
+
+def test_linhagem_externa_respeita_esquecimento_sem_reservar_id_local(
+        cliente_global, db, escola_completa):
+    escola = escola_completa["escola"]
+    destino = _outra_escola(db)
+    dados_locais = backup.exportar(db, escola.id)
+    dados_externos = backup.exportar(db, escola.id)
+    dados_externos["escola"]["criada_em"] = "1990-01-01T00:00:00"
+    aluno = dados_externos["tabelas"]["alunos"][0]
+    aluno["nome"] = "Outra Criança Sintética"
+    aluno["created_at"] = "2000-01-01T00:00:00"
+    conteudo = json.dumps(dados_externos).encode("utf-8")
+    _restaurar(cliente_global, destino.id, conteudo)
+    id_externo_restaurado = db.scalar(select(Aluno.id).where(
+        Aluno.escola_id == destino.id, Aluno.nome == aluno["nome"]))
+    resposta = cliente_global.post(f"{API}/escolas/{destino.id}/alunos/excluir-permanente",
+                                   json={"aluno_ids": [id_externo_restaurado],
+                                         "confirmacao": "EXCLUIR"})
+    assert resposta.status_code == 200, resposta.text
+
+    local = _restaurar(cliente_global, escola.id, json.dumps(dados_locais).encode("utf-8"))
+    assert local["avisos"] == []
+    assert _contar(db, Aluno, escola.id) == len(dados_locais["tabelas"]["alunos"])
+    externo = _restaurar(cliente_global, destino.id, conteudo)
+    assert any(AVISO in aviso for aviso in externo["avisos"])
+    assert db.scalar(select(Aluno.id).where(
+        Aluno.escola_id == destino.id, Aluno.nome == aluno["nome"])) is None
 
 
 def test_arquivo_antigo_sem_a_marca_do_log_tambem_respeita_a_exclusao(

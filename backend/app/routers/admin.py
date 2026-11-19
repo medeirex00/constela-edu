@@ -982,8 +982,11 @@ def restaurar_backup(
     # turmas e importações reaponta a fila de revisões numa restauração seguinte; e
     # ``referencias_reapontadas`` conta o que, fora do arquivo, foi ligado às linhas
     # recriadas ou ficou sem equivalente (só contagens).
+    origem_externa = svc_backup.origem_externa_do_arquivo(db, dados)
     registrar(db, "backup.restaurado", escola_id=escola_id, usuario_id=usuario.id,
               detalhes={"tabelas": contagem,
+                        **({svc_backup.CHAVE_ORIGEM_EXTERNA: origem_externa}
+                           if origem_externa else {}),
                         **{chave: {str(novo): antigo for novo, antigo in mapa.items()}
                            for chave, mapa in linhagem.items()},
                         "referencias_reapontadas": reapontadas})

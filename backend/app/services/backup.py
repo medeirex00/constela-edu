@@ -8,7 +8,7 @@ pertencer a outra escola no mesmo banco.
 Usuários NÃO entram no backup de dados: restaurar um arquivo antigo não
 pode reverter senhas nem reativar contas desligadas (segurança > conveniência).
 A referência a um usuário que viaja no arquivo (``REFERENCIAS_A_USUARIO``) volta
-como veio se ele ainda existe, e vira NULL se não existe mais.
+quando o id e a data de criação confirmam a conta. Sem essa prova, fica nula.
 
 Pelo mesmo motivo, as configurações de SEGREDO e de ACESSO
 (``SEGREDOS_DE_CONFIGURACAO``: o link do painel público, a chave de IA cifrada e a
@@ -190,6 +190,7 @@ CANDIDATOS_DA_REVISAO = "revisoes_identidade.candidatos"
 # OUTRO banco o mesmo número é outra criança (REV2-BACKUP-1). Toda tabela de
 # ``CHAVES_DE_LINHAGEM`` a tem (``test_aud2_backup_restauracao_outro_banco.py``).
 PROVA_DA_MESMA_LINHA = "created_at"
+CHAVE_ORIGEM_EXTERNA = "origem_externa_do_backup"
 
 
 def _referencias_a_usuario(modelo) -> tuple[str, ...]:
@@ -205,10 +206,9 @@ def _referencias_a_usuario(modelo) -> tuple[str, ...]:
 # Referências a USUÁRIO que viajam no arquivo (hoje ``importacoes.usuario_id``, quem
 # fez a importação, e ``identidades_externas.aposentada_por_id``, quem aposentou a
 # conta duplicada).
-# Usuários não entram no backup, então elas não são remapeadas: voltam como vieram
-# quando o usuário ainda existe e viram NULL quando ele não existe mais — removido
-# em definitivo depois do backup (DELETE /usuarios/{id}/permanente; na linha viva
-# a FK é SET NULL) ou arquivo levado para outro banco. Antes o INSERT violava a FK
+# Usuários não entram no backup. A atribuição só volta se o id e a data de criação
+# provarem que a conta do arquivo ainda existe. Sem prova, a referência fica nula.
+# Antes o INSERT violava a FK
 # e a restauração inteira voltava 400 "dados inconsistentes ou duplicados": o
 # backup antigo, justamente o motivo de restaurar, deixava de ser restaurável (4ª
 # revisão de integração do e97). O resto da linha (status, aposentada_em, motivo)
@@ -397,7 +397,8 @@ def exportar(db: Session, escola_id: int) -> dict:
     dados: dict[str, Any] = {
         "versao": VERSAO_BACKUP,
         "gerado_em": datetime.now(timezone.utc).isoformat(),
-        "escola": {"nome": escola.nome, "ano_letivo_ativo": escola.ano_letivo_ativo},
+        "escola": {"nome": escola.nome, "ano_letivo_ativo": escola.ano_letivo_ativo,
+                   "origem_id": escola.id, "criada_em": _serializar(escola.created_at)},
         # Marca do log no momento do arquivo: a restauração não traz de volta quem foi
         # excluído de vez DEPOIS dele (``_excluidos_depois_do_backup``). A régua é a
         # do log INTEIRO (``_ultimo_log``), a mesma das exclusões e da linhagem.
@@ -423,6 +424,14 @@ def exportar(db: Session, escola_id: int) -> dict:
         limpa for linha in dados["tabelas"]["configuracoes"]
         if (limpa := _configuracao_sem_segredo(linha)) is not None
     ]
+    ids_de_usuarios = {
+        linha[campo] for nome, campos in REFERENCIAS_A_USUARIO.items()
+        for linha in dados["tabelas"][nome] for campo in campos if linha.get(campo) is not None
+    }
+    dados["usuarios_referenciados"] = {
+        str(i): _serializar(criado_em) for i, criado_em in
+        _nascimentos(db, Usuario.__table__, ids_de_usuarios).items()
+    }
     return dados
 
 
@@ -457,6 +466,7 @@ def _ultimo_log(db: Session) -> int:
 
 
 def _ligacoes_entre_restauracoes(db: Session, chave: str = CHAVE_MAPA_ALUNOS,
+                                 *, origem_externa: str | None = None,
                                  ) -> dict[int, set[int]]:
     """Linhagem das fichas, pelas restaurações de QUALQUER escola: cada restauração
     recria a ficha com id NOVO e grava em ``backup.restaurado`` o mapa {id novo:
@@ -475,7 +485,12 @@ def _ligacoes_entre_restauracoes(db: Session, chave: str = CHAVE_MAPA_ALUNOS,
     ligacoes: dict[int, set[int]] = {}
     for detalhes in db.execute(select(LogAuditoria.detalhes).where(
             LogAuditoria.acao == "backup.restaurado")).scalars():
-        mapa = detalhes.get(chave) if isinstance(detalhes, dict) else None
+        if not isinstance(detalhes, dict):
+            continue
+        origem = detalhes.get(CHAVE_ORIGEM_EXTERNA)
+        if origem and origem != origem_externa:
+            continue  # os ids do arquivo pertencem a outra base
+        mapa = detalhes.get(chave)
         if not isinstance(mapa, dict):
             continue
         for novo, antigo in mapa.items():
@@ -524,7 +539,7 @@ def _ligar_fusoes(ligacoes: dict[int, set[int]], pares: list[tuple[int, int]],
     return ligacoes
 
 
-def _mesma_crianca(db: Session) -> dict[int, set[int]]:
+def _mesma_crianca(db: Session, *, origem_externa: str | None = None) -> dict[int, set[int]]:
     """As ligações entre fichas da MESMA criança, nos dois sentidos: a linhagem das
     restaurações (``_ligacoes_entre_restauracoes``) e as fusões (``_fusoes``) — a
     duplicata absorvida é a criança que ficou, e a cópia que um arquivo levou para
@@ -533,7 +548,8 @@ def _mesma_crianca(db: Session) -> dict[int, set[int]]:
     absorvidas = sorted({absorvida for _, absorvida in pares})
     vivas = set(db.execute(select(Aluno.id).where(
         Aluno.id.in_(absorvidas))).scalars()) if absorvidas else set()
-    return _ligar_fusoes(_ligacoes_entre_restauracoes(db), pares, vivas)
+    ligacoes = _ligacoes_entre_restauracoes(db, origem_externa=origem_externa)
+    return _ligar_fusoes(ligacoes, pares, vivas)
 
 
 def _quantas_criancas(fichas: set[int], ligacoes: dict[int, set[int]]) -> int:
@@ -613,9 +629,52 @@ def _instante(valor: Any) -> datetime | None:
             return None
     if not isinstance(valor, datetime):
         return None
-    if valor.utcoffset() is not None:
-        valor = valor.astimezone(timezone.utc).replace(tzinfo=None)
+    try:
+        if valor.utcoffset() is not None:
+            valor = valor.astimezone(timezone.utc).replace(tzinfo=None)
+    except (OverflowError, ValueError):
+        return None
     return valor
+
+
+def origem_externa_do_arquivo(db: Session, dados: dict) -> str | None:
+    """Identifica a escola de origem quando o arquivo veio de outra base.
+
+    A origem fica no log para não misturar ids externos com os ids locais."""
+    origem = dados.get("escola")
+    if not isinstance(origem, dict):
+        return None
+    origem_id, criada_em = origem.get("origem_id"), _instante(origem.get("criada_em"))
+    if type(origem_id) is not int or not 0 < origem_id < 2**31 or criada_em is None:
+        return None  # arquivo legado: preserva a regra de esquecimento conservadora
+    escola = db.get(Escola, origem_id)
+    if escola is None or _instante(escola.created_at) != criada_em:
+        return f"{origem_id}/{criada_em.isoformat()}"
+    return None
+
+
+def _excluidos_do_arquivo_externo(db: Session, alunos: Any, origem: str) -> set[int]:
+    """O contador do log e os ids de fora não identificam fichas deste banco.
+    Se o arquivo já foi restaurado aqui e a ficha excluída, a linhagem e a
+    data de criação ainda permitem identificar a mesma criança."""
+    if not isinstance(alunos, list):
+        return set()
+    no_arquivo = _nascimentos_no_arquivo(
+        alunos, {linha["_id"]: linha["_id"] for linha in alunos
+                 if isinstance(linha, dict) and type(linha.get("_id")) is int})
+    if not no_arquivo:
+        return set()
+    ligacoes = _mesma_crianca(db, origem_externa=origem)
+    excluidos = set()
+    for aid, detalhes in db.execute(
+        select(LogAuditoria.entidade_id, LogAuditoria.detalhes).where(
+            LogAuditoria.acao == "aluno.excluido_permanente",
+            LogAuditoria.entidade_id.is_not(None))
+    ):
+        nascimento = _instante(detalhes.get("ficha_criada_em")) if isinstance(detalhes, dict) else None
+        if (antigo := _id_no_arquivo(aid, nascimento, no_arquivo, ligacoes)) is not None:
+            excluidos.add(antigo)
+    return excluidos
 
 
 def _id_no_arquivo(atual: int, nascimento: datetime | None,
@@ -715,7 +774,8 @@ def _nascimentos_no_arquivo(linhas: Any, recriadas: dict[int, int],
 
 
 def _reapontar(db: Session, referencias: dict, mapas: dict[str, dict[int, int]],
-               tabelas: dict) -> dict[str, dict[str, int]]:
+               tabelas: dict, *, origem_externa: str | None = None
+               ) -> dict[str, dict[str, int]]:
     """DEPOIS dos INSERTs: liga cada referência capturada por ``_referencias_atuais`` à
     linha recriada (id atual → ``_id`` do arquivo → id novo: ``_id_no_arquivo``), quando
     a linha do arquivo (``tabelas``) prova que é a mesma: o mesmo ``created_at``
@@ -736,7 +796,8 @@ def _reapontar(db: Session, referencias: dict, mapas: dict[str, dict[int, int]],
     def _novo(alvo: str, atual: int) -> int | None:
         if alvo not in ligacoes:
             chave = CHAVES_DE_LINHAGEM.get(alvo)
-            ligacoes[alvo] = _ligacoes_entre_restauracoes(db, chave) if chave else {}
+            ligacoes[alvo] = (_ligacoes_entre_restauracoes(db, chave, origem_externa=origem_externa)
+                              if chave else {})
             no_arquivo[alvo] = _nascimentos_no_arquivo(tabelas.get(alvo),
                                                        mapas.get(alvo, {}))
         antigo = _id_no_arquivo(atual, nascimentos.get(alvo, {}).get(atual),
@@ -840,7 +901,9 @@ def restaurar(db: Session, escola_id: int, dados: dict,
     perdas = perdas_da_restauracao(db, escola_id, set(tabelas))
     if perdas:
         raise RestauracaoBloqueada(perdas)
-    excluidos = _excluidos_depois_do_backup(db, escola_id, dados.get("log_ate"))
+    externo = origem_externa_do_arquivo(db, dados)
+    excluidos = (_excluidos_do_arquivo_externo(db, tabelas.get("alunos", []), externo) if externo
+                 else _excluidos_depois_do_backup(db, escola_id, dados.get("log_ate")))
     nao_restaurados: set[int] = set()
     # Quem fica FORA do arquivo e aponta para o que vai ser recriado: lido antes do
     # DELETE, que zera essas referências (``ON DELETE SET NULL``).
@@ -868,13 +931,15 @@ def restaurar(db: Session, escola_id: int, dados: dict,
 
     contagem: dict[str, int] = {}
     mapas: dict[str, dict[int, int]] = {}  # tabela -> {id antigo: id novo}
-    usuarios_existentes: dict[int, bool] = {}   # 1 consulta por usuário citado
-
-    def _usuario_existe(valor: Any) -> bool:
-        chave = int(valor)
-        if chave not in usuarios_existentes:
-            usuarios_existentes[chave] = db.get(Usuario, chave) is not None
-        return usuarios_existentes[chave]
+    usuarios_do_arquivo = dados.get("usuarios_referenciados")
+    if not isinstance(usuarios_do_arquivo, dict):
+        usuarios_do_arquivo = {}
+    usuarios_confirmados = set()
+    ids_validos = {int(i) for i in usuarios_do_arquivo if str(i).isascii() and str(i).isdigit()
+                   and len(str(i)) < 19}
+    for uid, criada_em in _nascimentos(db, Usuario.__table__, ids_validos).items():
+        if criada_em is not None and _instante(usuarios_do_arquivo.get(str(uid))) == criada_em:
+            usuarios_confirmados.add(uid)
 
     for nome, modelo in MODELOS:
         mapas[nome] = {}
@@ -919,11 +984,10 @@ def restaurar(db: Session, escola_id: int, dados: dict,
                             f"registro inexistente ({antigo})."
                         )
                     campos[campo_fk] = novo
-            # Usuário que não existe mais (``REFERENCIAS_A_USUARIO``): só a
-            # referência some; a linha volta inteira.
+            # Sem prova da autoria, só a referência some; a linha volta inteira.
             for campo_usuario in REFERENCIAS_A_USUARIO.get(nome, ()):
-                if campos.get(campo_usuario) is not None and not _usuario_existe(
-                        campos[campo_usuario]):
+                if campos.get(campo_usuario) is not None and int(
+                        campos[campo_usuario]) not in usuarios_confirmados:
                     campos[campo_usuario] = None
             objeto = modelo(escola_id=escola_id, **campos)
             db.add(objeto)
@@ -938,7 +1002,7 @@ def restaurar(db: Session, escola_id: int, dados: dict,
     # de outra (como _excluidos_depois_do_backup).
     from app.services import exclusao_aluno  # noqa: E402  (evita ciclo no import)
     exclusao_aluno.tirar_contas_esquecidas_do_cursor(db, escola_id, todas_as_escolas=True)
-    religadas = _reapontar(db, referencias, mapas, tabelas)
+    religadas = _reapontar(db, referencias, mapas, tabelas, origem_externa=externo)
     if reapontadas is not None:
         reapontadas.update(religadas)
     if mapa_alunos is not None:

@@ -1236,9 +1236,11 @@ def _apagar_alunos_e_dados(db: Session, escola_id: int, usuario: Usuario,
     from app.quest.models import QuestPerfil  # noqa: E402
     from app.services import exclusao_aluno  # noqa: E402
 
-    nomes = {a.id: a.nome for a in db.execute(
+    alunos = list(db.execute(
         select(Aluno).where(Aluno.escola_id == escola_id, Aluno.id.in_(aluno_ids))
-    ).scalars()}
+    ).scalars())
+    nomes = {a.id: a.nome for a in alunos}
+    criacoes = {a.id: a.created_at.isoformat() for a in alunos}
     ids = list(nomes)
     if not ids:
         return 0
@@ -1278,7 +1280,7 @@ def _apagar_alunos_e_dados(db: Session, escola_id: int, usuario: Usuario,
     # esquecimento, a marca das contas dela (plataforma + HMAC do id externo), que a
     # porta única de identidade lê para ignorar a conta na coleta seguinte.
     for aid in ids:
-        detalhes = {"tipo": "exclusao_permanente"}
+        detalhes = {"tipo": "exclusao_permanente", "ficha_criada_em": criacoes[aid]}
         if contas_dela.get(aid):
             detalhes[exclusao_aluno.CHAVE_CONTAS_ESQUECIDAS] = (
                 exclusao_aluno.marcas_para_o_log(contas_dela[aid]))

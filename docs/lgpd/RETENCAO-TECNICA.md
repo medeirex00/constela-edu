@@ -279,8 +279,13 @@ a exclusão de turma com alunos não grava a marca)
   criança excluída de vez (a duplicata absorvida é a mesma criança): nos dois sentidos da
   fusão e também em outra escola, pela ligação do `aluno.fundido` no log; o aviso conta
   **crianças**, não fichas (a duplicata fundida e a oficial do mesmo arquivo são uma só).
+  Backups recentes registram a escola de origem e a data de criação dela. Ao restaurar
+  um arquivo de outro banco, a restauração usa essa origem para separar os ids da
+  linhagem e só aplica exclusões comprovadas pela data de criação da ficha.
   O arquivo leva `importacoes.usuario_id` (o id de quem importou): volta como veio se o
-  usuário existe e vira NULL se não existe mais, como `identidades_externas.aposentada_por_id`.
+  usuário tem o mesmo id e a mesma data de criação registrada no arquivo. Sem essa prova,
+  inclusive em backups legados, a referência fica nula, como em
+  `identidades_externas.aposentada_por_id`.
   O texto que o
   arquivo guarda fora das tabelas da criança (ex.: `importacoes.arquivo_original` de um
   relatório individual antigo) volta como estava no arquivo;
