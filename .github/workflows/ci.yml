@@ -25,23 +25,12 @@ concurrency:
 permissions:
   contents: read
 
-# O PR de auditoria valida o commit do ramo, antes da integração à main.
-env:
-  AUDIT_CHECKOUT_REF: ${{ github.event_name == 'pull_request' && github.base_ref == 'main' && github.head_ref == 'codex/auditoria-constela-edu' && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.head.sha || '' }}
-
 jobs:
   lint:
     name: Lint (ruff + typecheck)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-        with:
-          ref: ${{ env.AUDIT_CHECKOUT_REF }}
-      - name: Confirmar o commit auditado
-        if: ${{ env.AUDIT_CHECKOUT_REF != '' }}
-        run: |
-          test "$(git rev-parse HEAD)" = "$AUDIT_CHECKOUT_REF"
-          printf 'Revisão validada pelos jobs: %s\n' "$AUDIT_CHECKOUT_REF"
       - uses: actions/setup-python@v5
         with:
           python-version: "3.13"
@@ -69,8 +58,6 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-        with:
-          ref: ${{ env.AUDIT_CHECKOUT_REF }}
       - uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -90,8 +77,6 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-        with:
-          ref: ${{ env.AUDIT_CHECKOUT_REF }}
       - uses: actions/setup-python@v5
         with:
           python-version: "3.13"
@@ -150,8 +135,6 @@ jobs:
       DATABASE_URL: postgresql+psycopg://constela:constela@localhost:5432/constela_test
     steps:
       - uses: actions/checkout@v4
-        with:
-          ref: ${{ env.AUDIT_CHECKOUT_REF }}
       - uses: actions/setup-python@v5
         with:
           python-version: "3.13"
@@ -212,8 +195,6 @@ jobs:
       ENV: dev
     steps:
       - uses: actions/checkout@v4
-        with:
-          ref: ${{ env.AUDIT_CHECKOUT_REF }}
       - uses: actions/setup-python@v5
         with:
           python-version: "3.13"
@@ -342,8 +323,6 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-        with:
-          ref: ${{ env.AUDIT_CHECKOUT_REF }}
       - uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -372,8 +351,6 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-        with:
-          ref: ${{ env.AUDIT_CHECKOUT_REF }}
       - uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -390,8 +367,6 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-        with:
-          ref: ${{ env.AUDIT_CHECKOUT_REF }}
       - uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -406,8 +381,6 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-        with:
-          ref: ${{ env.AUDIT_CHECKOUT_REF }}
       - uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -424,8 +397,6 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-        with:
-          ref: ${{ env.AUDIT_CHECKOUT_REF }}
       - uses: actions/setup-python@v5
         with:
           python-version: "3.13"
@@ -522,8 +493,6 @@ jobs:
           --health-retries 5
     steps:
       - uses: actions/checkout@v4
-        with:
-          ref: ${{ env.AUDIT_CHECKOUT_REF }}
       - name: Build da imagem do backend
         run: docker build -t sgpe-backend ./backend
       - name: Build da imagem do web
