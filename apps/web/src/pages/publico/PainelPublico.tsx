@@ -916,6 +916,7 @@ export default function PainelPublico() {
           <div
             ref={palcoRef}
             data-palco
+            data-altura-palco={celular ? undefined : alturaPalco}
             className={celular ? "flex flex-1 flex-col" : "painel-sem-barra flex min-h-0 flex-1 flex-col overflow-y-auto"}
           >
             <div className="my-auto w-full py-1">
