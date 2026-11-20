@@ -25,15 +25,17 @@ class _ConectorQueEspera:
     """Segura a coleta até o teste soltar e conta quantas vezes ela começou (cada
     começo seria um navegador aberto)."""
 
-    def __init__(self):
+    def __init__(self, escola_bloqueada: int | None = None):
+        self.escola_bloqueada = escola_bloqueada
         self.comecos: list[int] = []
         self.comecou = threading.Event()
         self.soltar = threading.Event()
 
     async def diagnosticar_endpoints(self, cred, contexto):
         self.comecos.append(contexto.escola_id)
-        self.comecou.set()
-        assert self.soltar.wait(10), "o teste não soltou a coleta"
+        if self.escola_bloqueada is None or contexto.escola_id == self.escola_bloqueada:
+            self.comecou.set()
+            assert self.soltar.wait(10), "o teste não soltou a coleta"
         return {"ok": True, "turmas": 1, "endpoints": [{"nome": "a", "estrutura": "{x:num}"}]}
 
 
@@ -90,20 +92,23 @@ def test_segundo_pedido_da_mesma_escola_nao_abre_outro_navegador(db, duas_escola
 
 def test_outra_escola_roda_durante_o_diagnostico_de_uma(db, duas_escolas, monkeypatch):
     a, b = duas_escolas
-    con = _ConectorQueEspera()
+    con = _ConectorQueEspera(escola_bloqueada=a)
     monkeypatch.setattr(connectors, "obter", lambda p: con if p == "elefante" else None)
     saida: dict = {}
     primeiro = threading.Thread(target=_em_outra_thread, args=(db, a, saida))
     primeiro.start()
     try:
         assert con.comecou.wait(10)
-        con.soltar.set()          # a segunda (escola b) não espera
+        # A primeira escola segue no conector enquanto a segunda grava. A fixture
+        # usa uma única conexão SQLite em memória para as duas sessões.
         assert diag.executar(db, b)["inventario"]["ok"] is True
+        assert primeiro.is_alive()
     finally:
         con.soltar.set()
         primeiro.join(10)
     assert "erro" not in saida, saida
-    assert sorted(con.comecos) == sorted([a, b])
+    assert saida["resultado"]["inventario"]["ok"] is True
+    assert con.comecos == [a, b]
 
 
 def test_falha_na_coleta_solta_a_trava(db, duas_escolas, monkeypatch):
