@@ -159,6 +159,20 @@ for (const perfil of PERFIS) {
   });
 }
 
+test("celular: o histórico do ICA rola dentro do cartão", async ({ page }) => {
+  await page.setViewportSize({ width: 360, height: 800 });
+  await entrar(page, "global");
+  await page.goto("/rede/avaliacoes");
+
+  const historico = page.getByRole("table", { name: "Importações do ICA desta rede" });
+  await expect(historico.getByText(/arquivo_ficticio\.csv/)).toBeVisible();
+  await page.evaluate(() => document.fonts.ready);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(360);
+  const regiao = page.getByRole("region", { name: "Histórico de importações do ICA: tabela completa" });
+  await expect(regiao).toHaveAttribute("tabindex", "0");
+  await expect(regiao.getByRole("columnheader", { name: "Quando" })).toBeVisible();
+});
+
 test("tela baixa: o menu rola sozinho até o item ativo da última seção (sem roubar o 1º Tab)", async ({ page }) => {
   await page.setViewportSize({ width: 1366, height: 560 });
   await entrar(page, "coord");
