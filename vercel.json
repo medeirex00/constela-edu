@@ -1,10 +1,5 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
-  "git": {
-    "deploymentEnabled": {
-      "codex/auditoria-constela-edu": false
-    }
-  },
   "installCommand": "npm install --legacy-peer-deps",
   "buildCommand": "npm run build --workspace=@constela/web",
   "outputDirectory": "apps/web/dist",
