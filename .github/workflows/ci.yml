@@ -25,9 +25,9 @@ concurrency:
 permissions:
   contents: read
 
-# O PR de auditoria valida o mesmo conteúdo usado nas suítes locais.
+# O PR de auditoria valida o commit do ramo, antes da integração à main.
 env:
-  AUDIT_CHECKOUT_REF: ${{ github.event_name == 'pull_request' && github.base_ref == 'main' && github.head_ref == 'codex/auditoria-constela-edu' && github.event.pull_request.head.repo.full_name == github.repository && '4442930a0f334546cf5a5fb291ae40465cf8671d' || '' }}
+  AUDIT_CHECKOUT_REF: ${{ github.event_name == 'pull_request' && github.base_ref == 'main' && github.head_ref == 'codex/auditoria-constela-edu' && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.head.sha || '' }}
 
 jobs:
   audit-ref:
@@ -37,14 +37,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.pull_request.head.sha }}
-          fetch-depth: 2
+          ref: ${{ env.AUDIT_CHECKOUT_REF }}
           persist-credentials: false
-      - name: Confirmar o commit auditado e o escopo do preparo
+      - name: Confirmar o commit auditado
         run: |
-          test "$(git rev-parse HEAD^)" = "$AUDIT_CHECKOUT_REF"
-          test "$(git rev-list --parents -n 1 HEAD | wc -w)" -eq 2
-          git diff --quiet HEAD^ HEAD -- . ':(exclude)vercel.json' ':(exclude).github/workflows/ci.yml' ':(exclude).github/workflows/security.yml'
+          test "$(git rev-parse HEAD)" = "$AUDIT_CHECKOUT_REF"
           printf 'Revisão validada pelos jobs: %s\n' "$AUDIT_CHECKOUT_REF"
 
   lint:

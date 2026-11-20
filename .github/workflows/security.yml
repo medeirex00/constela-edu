@@ -36,9 +36,9 @@ permissions:
   contents: read
   security-events: write # para o upload do SARIF do Trivy
 
-# O PR de auditoria valida o mesmo conteúdo usado nas suítes locais.
+# O PR de auditoria valida o commit do ramo, antes da integração à main.
 env:
-  AUDIT_CHECKOUT_REF: ${{ github.event_name == 'pull_request' && github.base_ref == 'main' && github.head_ref == 'codex/auditoria-constela-edu' && github.event.pull_request.head.repo.full_name == github.repository && '4442930a0f334546cf5a5fb291ae40465cf8671d' || '' }}
+  AUDIT_CHECKOUT_REF: ${{ github.event_name == 'pull_request' && github.base_ref == 'main' && github.head_ref == 'codex/auditoria-constela-edu' && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.head.sha || '' }}
 
 jobs:
   pip-audit:
