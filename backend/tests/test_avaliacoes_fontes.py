@@ -40,11 +40,12 @@ def _escola(db, rede_id, nome, inep):
     return e
 
 
-def _fonte(db, *, cadencia="manual", proxima=None, ativo=True, mapeamento=None):
+def _fonte(db, *, cadencia="manual", proxima=None, ativo=True, mapeamento=None,
+           url="https://download.inep.gov.br/ideb/x.csv"):
     av = svc.obter_avaliacao(db, "ideb")
     f = FonteAvaliacao(
         avaliacao_id=av.id, nome="IDEB AI 2023",
-        url="https://download.inep.gov.br/ideb/x.csv", edicao=2023,
+        url=url, edicao=2023,
         indicador="ideb", unidade="indice", cadencia=cadencia, ativo=ativo,
         mapeamento=mapeamento or dict(_MAPEAMENTO), proxima_coleta=proxima)
     db.add(f); db.commit(); db.refresh(f)
@@ -97,11 +98,11 @@ def test_coletar_fonte_aceita_zip(db):
     with zipfile.ZipFile(buf, "w") as zf:
         zf.writestr("divulgacao/planilha.csv", _PLANILHA.decode("utf-8"))
     conteudo = buf.getvalue()
-    f = _fonte(db)
+    f = _fonte(db, url="https://download.inep.gov.br/ideb/x.zip")
 
-    svc.coletar_fonte(db, f, baixador=lambda url: conteudo)
+    resumo = svc.coletar_fonte(db, f, baixador=lambda url: conteudo)
     db.commit()
-    assert f.ultimo_status == "ok"
+    assert f.ultimo_status == "ok", resumo
     assert db.scalar(select(func.count(ResultadoAvaliacao.id))) == 1
 
 
