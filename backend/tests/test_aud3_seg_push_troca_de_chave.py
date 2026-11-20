@@ -159,6 +159,23 @@ def test_aparelho_gravado_sem_marca_continua_recebendo(db, escola_completa, mens
     assert marca == impressao_da_chave_de_sessao()
 
 
+def test_limpeza_sem_marca_e_gravacao_da_impressao_revertem_juntas(db, escola_completa):
+    eid = escola_completa["escola"].id
+    db.add(DispositivoMovel(escola_id=eid, usuario_id=escola_completa["admin"].id,
+                           plataforma="android", token_push=TOKEN_ANTIGO))
+    db.commit()
+
+    assert push.conferir_chave_de_sessao(db, eid, sem_marca_apaga=True) == (1, True)
+    db.rollback()
+
+    assert _tokens(db) == {TOKEN_ANTIGO}
+    marca = db.execute(select(Configuracao.valor).where(
+        Configuracao.escola_id == eid,
+        Configuracao.namespace == push.NAMESPACE_CHAVE_DE_SESSAO,
+    )).scalar_one_or_none()
+    assert marca is None
+
+
 def test_troca_sem_ninguem_para_avisar_tambem_grava(db, escola_completa, monkeypatch):
     """A limpeza vale mesmo quando o envio não tem destino: os aparelhos saem e a
     impressão nova fica gravada (o commit não depende de haver push)."""

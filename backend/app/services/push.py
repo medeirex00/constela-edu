@@ -11,7 +11,7 @@ from __future__ import annotations
 import logging
 import re
 
-from sqlalchemy import delete, select
+from sqlalchemy import delete, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -141,30 +141,50 @@ def conferir_chave_de_sessao(db: Session, escola_id: int, *,
     chave foram registrados.
 
     Devolve ``(aparelhos removidos, gravou algo)``. Não comita: vai na transação de
-    quem chama. Dois pedidos gravando a primeira impressão ao mesmo tempo: o segundo
-    acha a linha do primeiro (a mesma impressão) e segue."""
+    quem chama. Só quem grava a nova impressão limpa os aparelhos da escola."""
     atual = impressao_da_chave_de_sessao()
-    marca = db.execute(select(Configuracao).where(
+    filtros = (
         Configuracao.escola_id == escola_id,
         Configuracao.namespace == NAMESPACE_CHAVE_DE_SESSAO,
-        Configuracao.chave == CHAVE_IMPRESSAO)).scalar_one_or_none()
+        Configuracao.chave == CHAVE_IMPRESSAO,
+    )
+    consulta = select(Configuracao).where(*filtros).execution_options(populate_existing=True)
+    marca = db.execute(consulta).scalar_one_or_none()
     if marca is not None and marca.valor == atual:
         return 0, False
-    removidos = 0
-    if marca is not None or sem_marca_apaga:
-        removidos = db.execute(
-            delete(DispositivoMovel).where(DispositivoMovel.escola_id == escola_id)
-        ).rowcount or 0
-    if marca is not None:
-        marca.valor = atual
-    else:
+
+    # Outra transação pode ter trocado a impressão entre a leitura e a limpeza.
+    # Confira novamente sob a trava para preservar os aparelhos que ela registrou.
+    if db.get_bind().dialect.name == "sqlite":
+        # SQLite ignora FOR UPDATE. Uma instrução de escrita sem alterar a marca
+        # abre a transação de escrita antes da releitura e do SAVEPOINT.
+        db.execute(update(Configuracao).where(*filtros)
+                   .values(updated_at=Configuracao.updated_at))
+    consulta_travada = consulta.with_for_update()
+    marca = db.execute(consulta_travada).scalar_one_or_none()
+    apagar = sem_marca_apaga
+    if marca is None:
         try:
             with db.begin_nested():
                 db.add(Configuracao(escola_id=escola_id,
                                     namespace=NAMESPACE_CHAVE_DE_SESSAO,
                                     chave=CHAVE_IMPRESSAO, valor=atual))
         except IntegrityError:
-            pass  # outro pedido gravou a mesma impressão agora
+            # A restrição única decide quem pode gravar a primeira impressão.
+            marca = db.execute(consulta_travada).scalar_one_or_none()
+            if marca is None:
+                raise
+    if marca is not None:
+        if marca.valor == atual:
+            return 0, False
+        marca.valor = atual
+        apagar = True
+
+    removidos = 0
+    if apagar:
+        removidos = db.execute(
+            delete(DispositivoMovel).where(DispositivoMovel.escola_id == escola_id)
+        ).rowcount or 0
     if removidos:
         registrar(db, "dispositivo.chave_de_sessao_trocada", escola_id=escola_id,
                   detalhes={"removidos": removidos})
@@ -179,7 +199,8 @@ def conferir_chave_de_sessao_no_boot(db: Session) -> int:
     registrados com outra chave — ou sem impressão gravada, de antes desta conferência
     existir (``conferir_chave_de_sessao(sem_marca_apaga=True)``). Comita. Devolve quantos
     aparelhos saíram."""
-    escolas = db.execute(select(DispositivoMovel.escola_id).distinct()).scalars().all()
+    escolas = db.execute(select(DispositivoMovel.escola_id).distinct()
+                         .order_by(DispositivoMovel.escola_id)).scalars().all()
     removidos = 0
     for escola_id in escolas:
         removidos += conferir_chave_de_sessao(db, escola_id, sem_marca_apaga=True)[0]

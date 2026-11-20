@@ -13,9 +13,9 @@ import threading
 
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import create_engine, func, select
+from sqlalchemy import create_engine, event, func, select
 from sqlalchemy.engine import make_url
-from sqlalchemy.orm import sessionmaker
+from sqlalchemy.orm import Session, sessionmaker
 
 from app.core.config import settings
 from app.core.database import Base, get_db
@@ -55,6 +55,9 @@ def db():
 
 
 from tests.test_aud3_seg_push_troca_de_chave import (  # noqa: E402,F401
+    TOKEN_ANTIGO,
+    TOKEN_NOVO,
+    _chave,
     mensagens,
     test_aparelho_da_sessao_antiga_nao_recebe_depois_da_troca as test_pg_sessao_antiga,
     test_boot_apaga_os_aparelhos_sem_marca_ou_de_outra_chave as test_pg_boot,
@@ -132,3 +135,30 @@ def test_pg_registros_simultaneos_depois_da_troca_ficam_e_os_antigos_saem(
     tokens = set(db.execute(select(DispositivoMovel.token_push)).scalars())
     assert tokens == {f"ExponentPushToken[novo-{i:04d}]" for i in range(QUANTOS)}
     assert _marcas(db, eid) == [impressao_da_chave_de_sessao()]
+
+
+def test_pg_leitura_atrasada_da_impressao_preserva_novo_aparelho(db, escola_completa,
+                                                                monkeypatch):
+    eid = escola_completa["escola"].id
+    uid = escola_completa["admin"].id
+    monkeypatch.setattr(settings, "SECRET_KEY", _chave("antiga"))
+    push.conferir_chave_de_sessao(db, eid)
+    db.add(DispositivoMovel(escola_id=eid, usuario_id=uid, plataforma="android",
+                           token_push=TOKEN_ANTIGO))
+    db.commit()
+
+    monkeypatch.setattr(settings, "SECRET_KEY", _chave("nova"))
+    with Session(bind=db.get_bind()) as atrasada:
+        @event.listens_for(atrasada, "do_orm_execute", once=True)
+        def concluir_outro_cadastro(execucao):
+            leitura = execucao.invoke_statement()
+            # Outra transação conclui a troca e o registro depois desta leitura.
+            assert push.conferir_chave_de_sessao(db, eid) == (1, True)
+            db.add(DispositivoMovel(escola_id=eid, usuario_id=uid, plataforma="android",
+                                   token_push=TOKEN_NOVO))
+            db.commit()
+            return leitura
+
+        assert push.conferir_chave_de_sessao(atrasada, eid) == (0, False)
+
+    assert set(db.execute(select(DispositivoMovel.token_push)).scalars()) == {TOKEN_NOVO}
