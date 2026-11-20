@@ -11,7 +11,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import Premiacoes from "../pages/Premiacoes";
 import type { CategoriaPremiacao } from "../lib/types";
-import { api, ApiError, renderComApp, responder, screen, turmaFake, userEvent, usuarioFake, waitFor, within } from "./utils";
+import { act, api, ApiError, fireEvent, renderComApp, responder, screen, turmaFake, userEvent, usuarioFake, waitFor, within } from "./utils";
 
 const URL_TURMAS = "/escolas/1/turmas";
 const URL_PREM = "/escolas/1/premiacoes";
@@ -764,37 +764,51 @@ describe("Premiações", () => {
     responder("GET", URL_TURMAS, turmasManhaTarde);
     // Premiação maior que o teto: a janela tem de parar em 500, não estourar em
     // 422 e virar tela de erro.
-    responder("GET", URL_PREM, respostaPorLimite(600));
+    const ranking = respostaPorLimite(600);
+    responder("GET", URL_PREM, (caminho) => {
+      const resposta = ranking(caminho);
+      // Os outros testes verificam a lista de cada lote. Neste caso, exercite
+      // a sequência dos limites com listas pequenas e todas as linhas no teto.
+      const leitores = resposta.categorias[0];
+      if (leitores.podio.length < 500) leitores.podio = leitores.podio.slice(0, 5);
+      return resposta;
+    });
     responder("GET", URL_EVOL, evolucaoPorDimensao);
     const u = userEvent.setup();
     renderComApp(<Premiacoes />);
     await screen.findByText("Melhor Leitor");
 
-    const janela = await abrirRanking(u, "Melhor Leitor");
+    const caixa = within(await abrirRanking(u, "Melhor Leitor"));
 
     // Já na abertura a janela DIZ que mostra só o começo, e o total REAL
     // continua no cabeçalho, em separado.
-    expect(await within(janela).findByText(/600 alunos no período/)).toBeInTheDocument();
-    expect(within(janela).getByRole("note"))
+    expect(await caixa.findByText(/600 alunos no período/)).toBeInTheDocument();
+    expect(caixa.getByRole("note"))
       .toHaveTextContent("Esta janela mostra as 500 primeiras posições.");
 
-    let botao = within(janela).queryByRole("button", { name: "Carregar mais" });
-    for (let i = 0; i < 12 && botao; i += 1) {
-      await u.click(botao);
-      botao = within(janela).queryByRole("button", { name: "Carregar mais" });
+    const seletorBotao = { selector: "button" };
+    await caixa.findByText("Carregar mais", seletorBotao);
+    // A interação por ponteiro já é coberta em "Carregar mais pede o próximo limite".
+    // Aqui basta disparar o clique e deixar React concluir a resposta simulada a cada lote.
+    for (let limite = 100; limite <= 500; limite += 50) {
+      const botao = caixa.getByText("Carregar mais", seletorBotao);
+      expect(botao).toBeEnabled();
+      await act(async () => { fireEvent.click(botao); });
+      expect(limitesPedidos().at(-1)).toBe(String(limite));
     }
 
     // Parou no teto: 500 linhas, sem botão e sem nenhum pedido acima de 500.
-    expect(within(janela).getAllByRole("listitem")).toHaveLength(500);
-    expect(within(janela).queryByRole("button", { name: "Carregar mais" })).not.toBeInTheDocument();
+    const linhas = caixa.getByRole("list").querySelectorAll<HTMLLIElement>(":scope > li");
+    expect(linhas).toHaveLength(500);
+    expect(caixa.queryByText("Carregar mais", seletorBotao)).not.toBeInTheDocument();
     const pedidos = limitesPedidos().filter(Boolean).map(Number);
     expect(Math.max(...pedidos)).toBe(500);
-    expect(within(janela).queryByText("Não foi possível carregar o ranking.")).not.toBeInTheDocument();
+    expect(caixa.queryByText("Não foi possível carregar o ranking.")).not.toBeInTheDocument();
     // A 500ª posição existe, a 501ª não é inventada, e o aviso continua à vista.
-    expect(within(janela).getByText("Aluno 500")).toBeInTheDocument();
-    expect(within(janela).getByText("500º")).toBeInTheDocument();
-    expect(within(janela).queryByText("Aluno 501")).not.toBeInTheDocument();
-    expect(within(janela).getByRole("note")).toBeInTheDocument();
+    expect(within(linhas[499]).getByText("Aluno 500")).toBeInTheDocument();
+    expect(within(linhas[499]).getByText("500º")).toBeInTheDocument();
+    expect(caixa.queryByText("Aluno 501")).not.toBeInTheDocument();
+    expect(caixa.getByRole("note")).toBeInTheDocument();
   });
 
   it("exatamente 500 premiáveis: sem aviso de limite", async () => {
