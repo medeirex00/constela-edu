@@ -39,7 +39,7 @@ describe("Gestão de redes — o código INEP tem 8 dígitos", () => {
     responder("PATCH", "/redes/escolas/14", { id: 14, codigo_inep: "35990004" });
     const u = userEvent.setup();
     renderComApp(<RedeGestao />, { usuario: adminGlobal });
-    await screen.findByText("Códigos INEP das escolas");
+    await screen.findByDisplayValue("35990001");
     const [alfa, beta, gama, delta] = screen.getAllByPlaceholderText("código INEP");
     await u.clear(alfa);
     await u.type(alfa, "INEP?");

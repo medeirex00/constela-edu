@@ -13,7 +13,7 @@ import { describe, expect, it } from "vitest";
 
 import { ApiError } from "../lib/api";
 import RedeGestao from "../pages/rede/RedeGestao";
-import { api, renderComApp, responder, responderErro, screen, userEvent, usuarioFake, within } from "./utils";
+import { api, renderComApp, responder, responderErro, screen, userEvent, usuarioFake, waitFor, within } from "./utils";
 
 const adminGlobal = usuarioFake({ nome: "Admin Global", cargo: "admin", is_global: true, escola_id: null });
 
@@ -39,7 +39,8 @@ describe("Gestão de redes — códigos INEP", () => {
     const u = userEvent.setup();
     renderComApp(<RedeGestao />, { usuario: adminGlobal });
 
-    await screen.findByText("Códigos INEP das escolas");
+    // Os códigos salvos entram juntos no formulário, depois de o título aparecer.
+    await screen.findByDisplayValue("35990001");
     const campos = screen.getAllByPlaceholderText("código INEP");        // Alfa, Gama, Delta
     await u.type(campos[1], "35990001");
     await u.type(campos[2], "35990004");
@@ -89,7 +90,7 @@ describe("Gestão de redes — códigos INEP", () => {
     const fake = backendInep({ 11: null, 12: "35990002" });
     const u = userEvent.setup();
     renderComApp(<RedeGestao />, { usuario: adminGlobal });
-    await screen.findByText("Códigos INEP das escolas");
+    await screen.findByDisplayValue("35990002");
     const [alfa, beta] = screen.getAllByPlaceholderText("código INEP");
     await u.type(alfa, "35990002");
     await u.clear(beta);
@@ -104,7 +105,7 @@ describe("Gestão de redes — códigos INEP", () => {
     const fake = backendInep({ 11: null, 12: "35990002" });
     const u = userEvent.setup();
     renderComApp(<RedeGestao />, { usuario: adminGlobal });
-    await screen.findByText("Códigos INEP das escolas");
+    await screen.findByDisplayValue("35990002");
     const [alfa, beta] = screen.getAllByPlaceholderText("código INEP");
     await u.type(alfa, "35990002");
     await u.clear(beta);
@@ -120,7 +121,7 @@ describe("Gestão de redes — códigos INEP", () => {
     const fake = backendInep({ 11: "35990001", 12: "35990002" });
     const u = userEvent.setup();
     renderComApp(<RedeGestao />, { usuario: adminGlobal });
-    await screen.findByText("Códigos INEP das escolas");
+    await screen.findByDisplayValue("35990001");
     const [alfa, beta] = screen.getAllByPlaceholderText("código INEP");
     await u.clear(alfa);
     await u.type(alfa, "35990002");
@@ -142,7 +143,7 @@ describe("Gestão de redes — códigos INEP", () => {
     const fake = backendInep({ 11: "35990001", 12: "35990002", 13: "35990003" });
     const u = userEvent.setup();
     renderComApp(<RedeGestao />, { usuario: adminGlobal });
-    await screen.findByText("Códigos INEP das escolas");
+    await screen.findByDisplayValue("35990001");
     const [a, b, c] = screen.getAllByPlaceholderText("código INEP");
     await u.clear(a); await u.type(a, "35990002");
     await u.clear(b); await u.type(b, "35990003");
@@ -166,9 +167,17 @@ describe("Gestão de redes — códigos INEP", () => {
     const u = userEvent.setup();
     renderComApp(<RedeGestao />, { usuario: adminGlobal });
     await screen.findByText("Códigos INEP das escolas");
-    const [alfa, beta] = screen.getAllByPlaceholderText("código INEP");
+    const alfa = screen.getByRole("textbox", { name: "Código INEP de EMEF Sintética Alfa" });
+    const beta = screen.getByRole("textbox", { name: "Código INEP de EMEF Sintética Beta" });
+    // O título aparece antes de o efeito preencher os campos com os códigos da rede.
+    await waitFor(() => {
+      expect(alfa).toHaveValue("35990001");
+      expect(beta).toHaveValue("35990002");
+    });
     await u.clear(alfa); await u.type(alfa, "35990002");
     await u.clear(beta); await u.type(beta, "35990009");
+    expect(alfa).toHaveValue("35990002");
+    expect(beta).toHaveValue("35990009");
     await u.click(screen.getByRole("button", { name: /Salvar códigos/ }));
     expect(await screen.findByText(/0 código\(s\) salvo\(s\); 2 com erro:/)).toBeInTheDocument();
     expect(fake.ordem).toEqual([11, 12]);
@@ -185,7 +194,7 @@ describe("Gestão de redes — códigos INEP", () => {
     const fake = backendInep({ 11: "35990001", 12: "35990002", 13: null });
     const u = userEvent.setup();
     renderComApp(<RedeGestao />, { usuario: adminGlobal });
-    await screen.findByText("Códigos INEP das escolas");
+    await screen.findByDisplayValue("35990001");
     const [a, b, d] = screen.getAllByPlaceholderText("código INEP");
     await u.clear(a); await u.type(a, "35990002");
     await u.clear(b); await u.type(b, "35990001");
