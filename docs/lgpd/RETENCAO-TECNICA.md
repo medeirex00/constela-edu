@@ -33,6 +33,8 @@ produção.
 | Erros | Sentry (EUA) | **do provedor** (a confirmar) | — |
 | Push | Expo Push (EUA) → FCM/APNs | trânsito | — |
 
+Decisão de 20/11/2026. O prazo aprovado para os arquivos originais gerados pelas coletas é de 90 dias. O descarte automático ainda precisa ser implementado e validado, incluindo a recuperação de cópias e o tratamento das exceções. A tabela descreve o comportamento do código atual.
+
 ## 2. O que esta rodada criou
 
 ### 2.1 Minimização no log de auditoria — `AUDITORIA_MINIMIZAR_NOMES` (padrão `false`)

@@ -2,6 +2,8 @@
 
 O agendador automático (Elefante Letrado e Matific) está **desligado em produção desde 17/09/2026**. Ele continua desligado por padrão: `SYNC_SCHEDULER_ENABLED=false`.
 
+Decisão de 20/11/2026. Manter só as coletas manuais até depois de 01/12/2026. A data abre a possibilidade de avaliar o piloto. A reativação requer o checklist, a estabilidade medida e autorização explícita. Mantêm-se os 15 minutos sem sinal e o monitoramento atual.
+
 Este documento lista o que precisa estar pronto para religá-lo, com autorização do dono. O código não executa nenhum passo daqui: cada passo é uma ação humana. A mudança de variável de ambiente e o reinício do serviço são feitos pelo dono.
 
 Por que não basta ligar a variável: o diagnóstico de 22/10 mostrou que, sem as correções, o agendador amplia os defeitos que hoje ficam escondidos.
@@ -75,11 +77,11 @@ Atenção: credencial **legível** não é credencial **válida**. A validade é
 
 Por quê: na última anotação nenhuma das escolas tinha vínculo (`docs/SINCRONIZACAO.md`, "Implantação e as 5 escolas atuais"). Sem ele, a 1ª coleta aprende o vínculo sozinha quando a conta enxerga uma escola só; a conta que enxerga duas para em `conta_multiescola` até alguém escolher, e um nome que não confere deixa a escola sem vínculo aprendido. Com o vínculo gravado antes, nenhuma escola depende do aprendizado automático.
 
-### Passo 3. Uma semana de coletas manuais com status honesto (≥ 5 dias úteis)
+### Passo 3. Medir a estabilidade das coletas manuais por 14 dias
 
 **Faça as coletas manuais fora da janela do backup privado: 07:30 a 10:30 de Brasília (10:30 a 13:30 UTC).** O "Sincronizar agora" não confere essa janela (só as agendas passam pelo `horario_fora_do_backup`), e uma coleta pode levar até o teto de 45 min: comece até 06:45 ou a partir de 10:30.
 
-**Critério em aberto (decisão do dono):** este passo pede ≥ 5 dias úteis; `docs/operacao/COLETA-PLATAFORMAS.md` §11 pede 14 dias consecutivos com ≥ 95% de sucesso. Qual vale é escolha do dono, ainda não registrada.
+O critério aprovado é de **14 dias consecutivos com pelo menos 95% de sucesso por dia** nos pares escola × plataforma configurados. Depois de **cinco dias úteis**, confira os resultados como checagem intermediária. Use a mesma contagem de [Coleta de plataformas](../operacao/COLETA-PLATAFORMAS.md#11-critérios-para-religar-o-agendador-critérios-não-resultados).
 
 - [ ] Em todo dia útil, houve coleta manual ("Sincronizar agora") nas escolas com credencial, acompanhada, fora da janela do backup.
 - [ ] Toda execução terminou num estado do contrato, e nenhuma ficou em `executando` (`execucoes_presas` ok).

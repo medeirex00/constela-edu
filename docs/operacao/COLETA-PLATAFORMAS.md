@@ -294,11 +294,11 @@ Religar (`SYNC_SCHEDULER_ENABLED=true`) só quando, medido no próprio sistema:
 4. backup diário privado verde no período;
 5. decisão explícita do dono (custo/ janela de horário).
 
-**Critério em aberto (decisão do dono):** o item 1 pede 14 dias consecutivos com
-≥ 95%; o Passo 3 de `docs/sync/REATIVAR-AGENDADOR.md` pede ≥ 5 dias úteis de
-coletas manuais acompanhadas. Os dois documentos são de momentos diferentes e o
-código não decide entre eles: qual vale (14 dias × 5 dias úteis) é escolha do dono,
-ainda não registrada.
+**Decisão de 20/11/2026.** Manter o agendador desligado até depois de 01/12/2026.
+O item 1 define a aprovação. Após cinco dias úteis, fazer uma checagem intermediária
+e seguir até completar os 14 dias. Fazer as coletas manuais fora de 07h30–10h30 de
+Brasília. Manter os 15 minutos sem sinal e o monitoramento atual. Concluídos os
+pré-requisitos e autorizado o piloto, começar com uma escola.
 
 Ao religar: `AVALIACOES_ROBO_HABILITADO` continua `false`. As agendas vencidas há
 mais que a cadência (paradas em setembro) não entram de uma vez: só ganham a
