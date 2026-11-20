@@ -47,10 +47,12 @@ def copia(tmp_path_factory) -> Path:
 
 
 def _ambiente(**extra: str) -> dict:
+    # O subprocesso usa uma cópia de app. Remova a configuração de cobertura
+    # herdada para que essa cópia não entre como uma segunda árvore no relatório.
     env = {k: v for k, v in os.environ.items()
            if k not in ("DATABASE_URL", "TEST_DATABASE_URL_PG", "ENV", "SENTRY_DSN",
                         "ADMIN_INITIAL_PASSWORD", "COORD_PASSWORD", "PROF_PASSWORD")
-           and not k.startswith(("RAILWAY", "SUPABASE"))}
+           and not k.startswith(("RAILWAY", "SUPABASE", "COV_CORE_", "COVERAGE_PROCESS_"))}
     env.update(SECRET_KEY=secrets.token_urlsafe(48), AUTOMACAO_VERIFICAR_NO_BOOT="false",
                SYNC_SCHEDULER_ENABLED="false", PYTHONIOENCODING="utf-8",
                PYTHONWARNINGS="ignore")
