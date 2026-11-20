@@ -30,20 +30,6 @@ env:
   AUDIT_CHECKOUT_REF: ${{ github.event_name == 'pull_request' && github.base_ref == 'main' && github.head_ref == 'codex/auditoria-constela-edu' && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.head.sha || '' }}
 
 jobs:
-  audit-ref:
-    name: Revisão auditada
-    if: ${{ github.event_name == 'pull_request' && github.base_ref == 'main' && github.head_ref == 'codex/auditoria-constela-edu' && github.event.pull_request.head.repo.full_name == github.repository }}
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ env.AUDIT_CHECKOUT_REF }}
-          persist-credentials: false
-      - name: Confirmar o commit auditado
-        run: |
-          test "$(git rev-parse HEAD)" = "$AUDIT_CHECKOUT_REF"
-          printf 'Revisão validada pelos jobs: %s\n' "$AUDIT_CHECKOUT_REF"
-
   lint:
     name: Lint (ruff + typecheck)
     runs-on: ubuntu-latest
@@ -51,6 +37,11 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: ${{ env.AUDIT_CHECKOUT_REF }}
+      - name: Confirmar o commit auditado
+        if: ${{ env.AUDIT_CHECKOUT_REF != '' }}
+        run: |
+          test "$(git rev-parse HEAD)" = "$AUDIT_CHECKOUT_REF"
+          printf 'Revisão validada pelos jobs: %s\n' "$AUDIT_CHECKOUT_REF"
       - uses: actions/setup-python@v5
         with:
           python-version: "3.13"
