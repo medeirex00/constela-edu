@@ -2,10 +2,10 @@
 adversarial, REV-AUTH-3; achado de origem AUTH-6).
 
 Antes: a espera anunciada era ``segundos // 60``, arredondada para baixo. Com o
-relógio real, o 429 logo depois de 8 erros mandava "Aguarde 4 minuto(s)" para um
-bloqueio de 299 s: quem voltava em 4 minutos levava outro 429. O teste do AUTH-6
-só via "5" porque congelava o relógio no instante das falhas. O mesmo valia no
-teto por IP e global do login e na reautenticação (trocar a própria senha).
+relógio real, um 429 podia mandar "Aguarde 4 minuto(s)" para um bloqueio
+de 299 s: quem voltava em 4 minutos levava outro 429. O teste do AUTH-6 só via
+"5" porque congelava o relógio no instante das falhas. Os avisos de espera
+valem para os tetos públicos do login e a reautenticação (REV3-SEG-1).
 
 Agora os três textos usam o mesmo arredondamento para cima
 (``rate_limit.minutos_de_espera``). Dados 100% fictícios.
@@ -47,26 +47,17 @@ def _relogio(monkeypatch, *limitadores):
     return agora
 
 
-def test_relogio_real_8_erros_anunciam_os_5_minutos(professora):
-    """Sem congelar o relógio: entre o 8º erro e o 429 passa uma fração de
-    segundo, o bloqueio dura 299 s e a mensagem tem de dizer 5 minutos."""
-    for i in range(8):
-        assert _login(EMAIL, f"errada-{i}").status_code == 401
-    r = _login(EMAIL, SENHA)
-    assert r.status_code == 429
-    assert r.json()["detail"] == "Muitas tentativas. Aguarde 5 minuto(s) e tente novamente."
-
-
 @pytest.mark.parametrize(("depois_s", "minutos"), [
     (0.5, 5),      # faltam 299 s
     (60.0, 4),     # faltam 240 s: minutos inteiros não sobem
     (61.0, 4),     # faltam 239 s
     (299.0, 1),    # falta 1 s
 ])
-def test_espera_do_login_arredonda_para_cima(professora, monkeypatch, depois_s, minutos):
-    agora = _relogio(monkeypatch, rate_limit.limitador_login, rate_limit.limitador_conta)
-    for i in range(8):
-        assert _login(EMAIL, f"errada-{i}").status_code == 401
+def test_teto_por_ip_arredonda_para_cima(professora, monkeypatch, depois_s, minutos):
+    monkeypatch.setattr(rate_limit.limitador_ip_falha_login, "max_tentativas", 2)
+    agora = _relogio(monkeypatch, rate_limit.limitador_ip_falha_login)
+    for i in range(2):
+        assert _login(f"ninguem-ip-{i}@teste.local", "errada").status_code == 401
     agora[0] += depois_s
     r = _login(EMAIL, SENHA)
     assert r.status_code == 429
@@ -88,17 +79,6 @@ def test_teto_global_arredonda_para_cima(db, escola_completa, monkeypatch):
     assert r.json()["detail"] == (
         "O acesso está temporariamente limitado por excesso de tentativas na "
         "plataforma. Aguarde 5 minuto(s) e tente novamente.")
-
-
-def test_teto_por_ip_arredonda_para_cima(db, escola_completa, monkeypatch):
-    monkeypatch.setattr(rate_limit.limitador_ip_falha_login, "max_tentativas", 2)
-    agora = _relogio(monkeypatch, rate_limit.limitador_ip_falha_login)
-    for i in range(2):
-        assert _login(f"ninguem-ip-{i}@teste.local", "errada").status_code == 401
-    agora[0] += 0.5
-    r = _login("outra.pessoa@teste.local", "qualquer")
-    assert r.status_code == 429
-    assert r.json()["detail"] == "Muitas tentativas. Aguarde 5 minuto(s) e tente novamente."
 
 
 def test_reautenticacao_arredonda_para_cima(professora, monkeypatch):

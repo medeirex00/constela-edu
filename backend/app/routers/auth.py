@@ -100,11 +100,12 @@ ERRO_MUITAS_GLOBAL = ("O acesso está temporariamente limitado por excesso de "
 # O portão de logins simultâneos (``portao_login``) está cheio: recusado na hora.
 ERRO_LOGIN_OCUPADO = ("Muitas pessoas estão entrando ao mesmo tempo. Aguarde alguns "
                       "segundos e tente novamente.")
+ERRO_CREDENCIAIS = ("Não foi possível entrar. Confira o e-mail ou usuário e a senha. "
+                    "Se precisar, peça um link de redefinição à administração.")
 
 
 def _erro_muitas(espera_s: int) -> str:
-    """O texto do 429 por (conta, IP), por conta e por IP (o mesmo de sempre),
-    com os minutos arredondados para cima (``minutos_de_espera``)."""
+    """O texto do 429 por IP, com os minutos arredondados para cima."""
     return (f"Muitas tentativas. Aguarde {minutos_de_espera(espera_s)} minuto(s) e "
             "tente novamente.")
 
@@ -121,8 +122,7 @@ class _TetosDoPedido:
     """A tentativa deste login nos tetos de falha por IP e global, já reservada no
     banco (``reserva``; None quando o banco não respondeu a tempo e só a memória
     vale). Termina de UM jeito: ``falhou`` (a reserva fica: é a falha contada) ou
-    ``devolver`` (login certo, ou recusa que não é palpite errado: a vaga volta, e só
-    falhas contam, como antes)."""
+    ``devolver`` (login certo, conta desativada ou erro inesperado)."""
 
     def __init__(self, db: Session, rede: str, reserva) -> None:
         self._db = db
@@ -131,8 +131,8 @@ class _TetosDoPedido:
         self._resolvida = False
 
     def falhou(self) -> None:
-        """Palpite errado: conta na memória (no banco, a reserva já é a contagem) e
-        alerta se o teto global foi atingido."""
+        """Falha pública de login: conta na memória (no banco, a reserva já é a
+        contagem) e alerta se o teto global foi atingido."""
         from app.quest.services import limites
 
         self._resolvida = True
@@ -287,9 +287,8 @@ def _login(request: Request, form: OAuth2PasswordRequestForm, db: Session) -> Lo
     try:
         return _avaliar(form, db, entrada, ip, ip_log, tetos)
     except Exception:
-        # Recusa que não é palpite errado (429 por conta, conta desativada) ou erro
-        # inesperado: a vaga reservada volta. O rollback solta a conexão da sessão
-        # antes (a devolução é fora da transação); depois de um commit, não faz nada.
+        # A devolução só opera se ainda houver vaga pendente (conta desativada
+        # ou erro inesperado). O rollback libera a conexão antes da devolução.
         db.rollback()
         tetos.devolver()
         raise
@@ -298,8 +297,8 @@ def _login(request: Request, form: OAuth2PasswordRequestForm, db: Session) -> Lo
 def _avaliar(form: OAuth2PasswordRequestForm, db: Session, entrada: str, ip: str,
              ip_log: str, tetos: _TetosDoPedido) -> LoginOut:
     """O login depois dos tetos de falha: procura a conta, confere os limites por
-    conta e a senha. Toda falha de palpite chama ``tetos.falhou()``; o login certo
-    devolve a vaga (``tetos.devolver()``) depois do commit."""
+    conta e a senha. A recusa por conta e as falhas de palpite chamam
+    ``tetos.falhou()``. O login certo devolve a vaga depois do commit."""
     usuario = db.execute(
         select(Usuario).where(Usuario.email == entrada)
     ).scalar_one_or_none()
@@ -320,10 +319,6 @@ def _avaliar(form: OAuth2PasswordRequestForm, db: Session, entrada: str, ip: str
     # versão e libera o login em todos os processos da API. Conta inexistente conta
     # pelo texto digitado, noutro espaço de nomes (``identidade_digitada``): texto
     # que não acha conta nunca soma falhas na chave de uma conta (``u:`` × ``t:``).
-    # LIMITE conhecido (REV3-SEG-1): como o e-mail e o @ da MESMA conta somam juntos
-    # e, sem conta, são duas chaves, quem já conhece o par confirma que a conta
-    # existe em 9 pedidos do mesmo IP (429 na que existe, 401 na que não existe).
-    # Fechar isso pede travamento silencioso (401 em vez de 429): decisão do dono.
     identidade = (identidade_da_conta(usuario) if usuario is not None
                   else identidade_digitada(entrada))
     # Para o LOG: o e-mail da conta, sem a versão; conta inexistente nunca grava
@@ -334,13 +329,15 @@ def _avaliar(form: OAuth2PasswordRequestForm, db: Session, entrada: str, ip: str
 
     # Duas camadas: por (conta, IP) — freio fino — e por CONTA (sem IP) —
     # freio contra força-bruta distribuída (vários IPs) contra a mesma conta.
-    # A espera é a do bloqueio que vale: o limitador que não bloqueia dá 0.
     if limitador_login.bloqueado(chave) or limitador_conta.bloqueado(identidade):
-        espera = max(limitador_login.segundos_restantes(chave),
-                     limitador_conta.segundos_restantes(identidade))
+        # A recusa é indistinguível de um erro de credencial no status, no texto
+        # e na contagem dos tetos públicos. O bcrypt descartável preserva o custo
+        # de verificação sem conferir a senha real nem renovar o bloqueio da conta.
+        verificar_senha_dummy()
         registrar(db, "login.bloqueado", detalhes={"email": identidade_log, "ip": ip_log})
+        tetos.falhou()
         db.commit()
-        raise HTTPException(status.HTTP_429_TOO_MANY_REQUESTS, _erro_muitas(espera))
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, ERRO_CREDENCIAIS)
 
     if usuario is None:
         # Equaliza o tempo de resposta para não revelar se a conta existe.
@@ -352,8 +349,7 @@ def _avaliar(form: OAuth2PasswordRequestForm, db: Session, entrada: str, ip: str
                             "motivo": "conta_inexistente"})
         tetos.falhou()
         db.commit()
-        raise HTTPException(status.HTTP_401_UNAUTHORIZED,
-                            "E-mail/usuário ou senha incorretos.")
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, ERRO_CREDENCIAIS)
 
     senha_hash = usuario.senha_hash
     versao_autenticada = usuario.token_version
@@ -365,8 +361,7 @@ def _avaliar(form: OAuth2PasswordRequestForm, db: Session, entrada: str, ip: str
                             "motivo": "senha_incorreta"})
         tetos.falhou()
         db.commit()
-        raise HTTPException(status.HTTP_401_UNAUTHORIZED,
-                            "E-mail/usuário ou senha incorretos.")
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, ERRO_CREDENCIAIS)
 
     if _senha_da_convencao_antiga(form.password, usuario):
         # A senha confere, mas é a da convenção abolida (nome/@ + "123"): quem
@@ -403,8 +398,7 @@ def _avaliar(form: OAuth2PasswordRequestForm, db: Session, entrada: str, ip: str
         .execution_options(synchronize_session=False)
     )
     if acesso.rowcount != 1:
-        raise HTTPException(status.HTTP_401_UNAUTHORIZED,
-                            "E-mail/usuário ou senha incorretos.")
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, ERRO_CREDENCIAIS)
     token = criar_token(usuario.id, versao_autenticada)
     registrar(db, "login", escola_id=usuario.escola_id, usuario_id=usuario.id)
     db.commit()

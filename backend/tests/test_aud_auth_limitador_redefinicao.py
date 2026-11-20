@@ -43,7 +43,7 @@ def _professora(db, eid: int, email: str = EMAIL) -> Usuario:
 def _travar_por_conta_e_ip(email: str = EMAIL, ip: str = "198.51.100.10") -> None:
     for i in range(8):
         assert _login(email, f"tentativa-errada-{i}", ip).status_code == 401
-    assert _login(email, "qualquer-outra-9", ip).status_code == 429
+    assert _login(email, "qualquer-outra-9", ip).status_code == 401
 
 
 def _redefinir_pelo_link(cliente, eid: int, usuario_id: int, senha: str = NOVA):
@@ -103,7 +103,7 @@ def test_redefinicao_libera_o_teto_por_conta_de_varios_ips(cliente, db, escola_c
         for i in range(n):
             assert _login(EMAIL, f"errada-{ip}-{i}", ip).status_code == 401
     assert rate_limit.limitador_conta.bloqueado(rate_limit.identidade_da_conta(prof))
-    assert _login(EMAIL, "senha-esquecida-77", "198.51.100.99").status_code == 429
+    assert _login(EMAIL, "senha-esquecida-77", "198.51.100.99").status_code == 401
 
     _redefinir_pelo_link(cliente, eid, prof.id)
 
@@ -124,7 +124,7 @@ def test_redefinicao_nao_libera_outra_conta(cliente, db, escola_completa):
     _redefinir_pelo_link(cliente, eid, prof.id)
 
     assert _login(EMAIL, NOVA).status_code == 200
-    assert _login("outra.limite@teste.local", "senha-esquecida-77").status_code == 429
+    assert _login("outra.limite@teste.local", "senha-esquecida-77").status_code == 401
 
 
 def test_link_recusado_nao_libera_o_login(cliente, db, escola_completa):
@@ -137,7 +137,7 @@ def test_link_recusado_nao_libera_o_login(cliente, db, escola_completa):
                              json={"token": "token-que-nao-existe", "nova_senha": NOVA})
     assert r.status_code == 400, r.text
 
-    assert _login(EMAIL, "senha-esquecida-77").status_code == 429
+    assert _login(EMAIL, "senha-esquecida-77").status_code == 401
 
 
 def test_limpar_prefixo_zera_so_as_chaves_da_conta():

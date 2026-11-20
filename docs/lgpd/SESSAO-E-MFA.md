@@ -57,8 +57,8 @@ foi implementado, porque as duas mudanças alteram o login de todos os usuários
   falha ser gravada seguiam até a conferência da senha (108 palpites avaliados, com 2
   workers). Agora a tentativa é **reservada** no banco antes de procurar a conta, numa
   instrução atômica que confere o teto e soma 1 (no IP e no global, as duas ou
-  nenhuma); se ela não virar falha (login certo, conta desativada, 429 por conta, erro
-  inesperado), a vaga volta. Enquanto uma tentativa está em andamento ela ocupa a vaga
+  nenhuma); se ela não virar falha (login certo, conta desativada com senha válida ou
+  erro inesperado), a vaga volta. Enquanto uma tentativa está em andamento ela ocupa a vaga
   dela: com o IP a uma falha do teto, outra tentativa que chegue no mesmo instante pode
   receber o 429 (a espera anunciada é a do bloqueio, a que vale se a tentativa em
   andamento virar falha). A recusa vista no banco vale também na memória do processo
@@ -71,6 +71,13 @@ foi implementado, porque as duas mudanças alteram o login de todos os usuários
 - As variáveis são lidas no boot (mudar exige reiniciar o serviço); teto ≥ 1 e janela
   de 60 s a 1 h. Os limites por conta e por (conta, IP) seguem fixos e só em memória
   (zeram no restart e não valem entre réplicas).
+- **Resposta uniforme no login (REV3-SEG-1).** Os limites por conta e por (conta, IP)
+  devolvem o mesmo 401 de credencial inválida, com orientação para pedir um link de
+  redefinição à administração. A recusa conta como falha nos tetos públicos e mantém
+  a janela original do bloqueio da conta. E-mail e nome de usuário da mesma conta
+  compartilham o limite. A redefinição da senha troca a versão da sessão e libera o
+  limite da conta. Os tetos públicos por IP e global e o portão de concorrência exibem
+  429 com orientação de espera.
 - O teto por IP tem de ficar **abaixo** do global: com `EDU_LOGIN_TETO_IP_FALHAS` ≥
   `EDU_LOGIN_TETO_GLOBAL_FALHAS`, um IP só travaria o login de todos — o boot avisa em dev
   e recusa com `ENV=producao` (desde 01/11/2026).

@@ -138,7 +138,7 @@ def test_falhas_contam_no_limitador_da_conta_e_nao_abrem_oraculo(db, escola_comp
     for _ in range(3):
         assert _link(sessao, e.id, p.id, senha_atual="chute-errado-1").status_code == 403
     assert _link(sessao, e.id, p.id, senha_atual=SENHA).status_code == 429
-    assert _login("prof.x@teste.local", SENHA).status_code == 429
+    assert _login("prof.x@teste.local", SENHA).status_code == 401
     logs = db.execute(select(LogAuditoria).where(
         LogAuditoria.acao == "usuario.reautenticacao_falhou")).scalars().all()
     assert len(logs) == 3

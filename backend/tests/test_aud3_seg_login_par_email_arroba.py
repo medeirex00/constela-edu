@@ -1,25 +1,9 @@
-"""O limite que os limitadores do login NÃO cobrem: o par e-mail + @ da MESMA
-conta (REV3-SEG-1, sobre REG_SEGURANCA-2).
-
-O e-mail e o @ de uma conta que existe somam falhas na mesma chave
-(``identidade_da_conta``), de propósito: dois identificadores não podem dobrar o
-orçamento de força bruta contra a mesma vítima. Numa conta que NÃO existe, os dois
-textos são duas chaves separadas (``identidade_digitada``). Por isso quem já conhece
-o par (e-mail e @) de uma conta confirma que ela existe em 9 pedidos: na que existe
-o 9º dá 429; na que não existe, 401. No professor com e-mail gerado (@ em
-minúsculas + domínio), o par sai só do nome.
-
-Este arquivo prende as duas coisas: a soma do par na mesma conta (comportamento
-escolhido) e o limite (``xfail`` estrito). Se um dia o login deixar de revelar a
-conta pelo par (por exemplo, com o travamento silencioso que está com o dono), o
-``xfail`` vira XPASS e falha: é a hora de tirar a marca e reescrever os textos de
-``auth._avaliar`` e de ``rate_limit.identidade_digitada``, que hoje declaram o
-limite.
-
-Dados fictícios; senha errada sempre.
-"""
+"""O e-mail e o @ compartilham o limite interno da conta. O status e o texto
+de erro do login são uniformes, inclusive depois do limite (REV3-SEG-1).
+Dados fictícios."""
 import pytest
 from fastapi.testclient import TestClient
+from httpx import Response
 
 from app.core import rate_limit
 from app.main import app
@@ -30,26 +14,22 @@ ADMIN = "admin@teste.local"
 ARROBA = "AdminFicticio"
 INEXISTENTE = "ninguem.ficticio@teste.local"
 ARROBA_INEXISTENTE = "NinguemFicticio"
+MENSAGEM = ("Não foi possível entrar. Confira o e-mail ou usuário e a senha. "
+            "Se precisar, peça um link de redefinição à administração.")
 
 
-def _tentar(cli: TestClient, login: str):
-    return cli.post(f"{API}/auth/login", data={"username": login, "password": ERRADA})
+def _tentar(cli: TestClient, login: str, senha: str = ERRADA) -> Response:
+    return cli.post(f"{API}/auth/login", data={"username": login, "password": senha})
 
 
-def _par_alternado(email: str, arroba: str) -> tuple[list[int], int]:
-    """4 palpites com o e-mail e 4 com o @, alternados; depois o e-mail de novo."""
-    cli = TestClient(app)
-    respostas = []
-    for _ in range(4):
-        respostas.append(_tentar(cli, email).status_code)
-        respostas.append(_tentar(cli, f"@{arroba}").status_code)
-    return respostas, _tentar(cli, email).status_code
+def _par_alternado(cli: TestClient, email: str, arroba: str) -> list[Response]:
+    return [_tentar(cli, login) for login in (email, f"@{arroba}") * 4]
 
 
-def _zerar_limitadores() -> None:
-    for lim in (rate_limit.limitador_login, rate_limit.limitador_conta,
-                rate_limit.limitador_ip_falha_login):
-        lim._eventos.clear()
+def _assert_erro_uniforme(r: Response) -> None:
+    assert r.status_code == 401
+    assert r.json() == {"detail": MENSAGEM}
+    assert "retry-after" not in r.headers
 
 
 @pytest.fixture()
@@ -61,35 +41,43 @@ def admin_com_arroba(db, escola_completa):
 
 
 def test_email_e_arroba_da_mesma_conta_somam_no_mesmo_orcamento(admin_com_arroba):
-    """Escolha registrada no código: alternar e-mail e @ não dá 16 palpites, dá 8."""
-    respostas, nono = _par_alternado(ADMIN, ARROBA)
-    assert respostas == [401] * 8, respostas
-    assert nono == 429
-    # Travada pelos dois caminhos: o @ cai na mesma chave do e-mail.
-    assert _tentar(TestClient(app), f"@{ARROBA}").status_code == 429
+    cli = TestClient(app)
+    for r in _par_alternado(cli, ADMIN, ARROBA):
+        _assert_erro_uniforme(r)
+    identidade = rate_limit.identidade_da_conta(admin_com_arroba)
+    assert rate_limit.limitador_conta.falhas_na_janela(identidade) == 8
+    for login in (ADMIN, f"@{ARROBA}"):
+        _assert_erro_uniforme(_tentar(cli, login, "s3nh4"))
+    assert rate_limit.limitador_conta.falhas_na_janela(identidade) == 8
 
 
 def test_par_de_textos_sem_conta_nao_soma_na_chave_de_conta_nenhuma(admin_com_arroba):
     """O que os textos novos prometem e vale: texto que não acha conta nunca soma
     na chave de uma conta. O par inexistente fica em duas chaves ``t:`` e a conta
     real segue livre."""
-    respostas, nono = _par_alternado(INEXISTENTE, ARROBA_INEXISTENTE)
-    assert respostas == [401] * 8, respostas
-    assert nono == 401
+    cli = TestClient(app)
+    for r in _par_alternado(cli, INEXISTENTE, ARROBA_INEXISTENTE):
+        _assert_erro_uniforme(r)
     chaves = set(rate_limit.limitador_conta._eventos)
     assert chaves == {rate_limit.identidade_digitada(INEXISTENTE),
                       rate_limit.identidade_digitada(ARROBA_INEXISTENTE.lower())}, chaves
     assert rate_limit.identidade_da_conta(admin_com_arroba) not in chaves
-    assert _tentar(TestClient(app), ADMIN).status_code == 401
+    assert _tentar(cli, ADMIN, "s3nh4").status_code == 200
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "REV3-SEG-1: limite documentado. O e-mail e o @ da mesma conta somam juntos (não "
-    "dobram o orçamento); sem conta, são duas chaves. Quem conhece o par confirma a "
-    "conta em 9 pedidos. Fechar isso (travamento silencioso) é decisão do dono."))
-def test_par_email_arroba_responde_igual_com_e_sem_conta(admin_com_arroba):
-    """O limite (a sonda do revisor): conta que existe 429, que não existe 401."""
-    _, existente = _par_alternado(ADMIN, ARROBA)
-    _zerar_limitadores()
-    _, inexistente = _par_alternado(INEXISTENTE, ARROBA_INEXISTENTE)
-    assert existente == inexistente, (existente, inexistente)
+@pytest.mark.parametrize("existe", [True, False])
+@pytest.mark.parametrize("teto_publico", ["ip", "global"])
+def test_par_email_arroba_responde_igual_com_e_sem_conta(
+        admin_com_arroba, existe, teto_publico, monkeypatch):
+    """A diferença entre chaves também não altera quando sai o 429 público."""
+    limitador = (rate_limit.limitador_ip_falha_login if teto_publico == "ip"
+                 else rate_limit.limitador_global_falha_login)
+    monkeypatch.setattr(limitador, "max_tentativas", 10)
+    email, arroba = (ADMIN, ARROBA) if existe else (INEXISTENTE, ARROBA_INEXISTENTE)
+    cli = TestClient(app)
+    for r in _par_alternado(cli, email, arroba):
+        _assert_erro_uniforme(r)
+    _assert_erro_uniforme(_tentar(cli, email))
+    _assert_erro_uniforme(_tentar(cli, f"@{arroba}"))
+    r = _tentar(cli, INEXISTENTE)
+    assert r.status_code == 429

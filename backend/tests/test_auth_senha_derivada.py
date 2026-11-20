@@ -108,7 +108,7 @@ def test_recusa_fica_na_auditoria_e_conta_no_limitador(db, escola_completa):
     # Conta como falha: o limitador por conta+IP (8 em 5 min) acaba barrando.
     for _ in range(7):
         assert _login("zuleicatal", "zuleicatal123").status_code == 403
-    assert _login("zuleicatal", "zuleicatal123").status_code == 429
+    assert _login("zuleicatal", "zuleicatal123").status_code == 401
     # Nenhum login bem-sucedido foi registrado nem o último acesso gravado.
     db.expire_all()
     assert db.get(Usuario, u.id).ultimo_acesso is None

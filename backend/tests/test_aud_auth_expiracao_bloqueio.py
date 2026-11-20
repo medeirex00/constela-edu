@@ -1,15 +1,8 @@
-"""O 429 do login diz o tempo do bloqueio que de fato vale (auditoria técnica,
-achado AUTH-6).
+"""Janelas dos limites por conta e por conta+IP (AUTH-6 e REV3-SEG-1).
 
-Antes: a espera do "Aguarde N minuto(s)" era o MAIOR ``segundos_restantes`` dos
-dois limitadores da conta — inclusive o que NÃO estava bloqueando, porque
-``segundos_restantes`` devolvia "janela − idade do evento mais antigo" mesmo
-abaixo do teto. Com 8 erros só o teto por conta+IP (5 min) bloqueia, mas o por
-conta (20 em 15 min, com os mesmos 8 eventos) dominava: a tela mandava esperar
-15 minutos e o acesso voltava em 5.
-
-Agora ``segundos_restantes`` é o tempo até a chave deixar de estar bloqueada (0
-quando não está). Relógio dos limitadores controlado; dados 100% fictícios.
+O login usa a falha genérica de credenciais enquanto qualquer janela estiver
+bloqueada e volta a aceitar a senha válida quando libera. Relógio controlado
+e dados fictícios.
 """
 import pytest
 from fastapi.testclient import TestClient
@@ -45,14 +38,13 @@ def _login(senha: str, ip: str = "198.51.100.40"):
                                 headers={"X-Forwarded-For": ip})
 
 
-def test_bloqueio_por_conta_e_ip_anuncia_os_5_minutos(professora, relogio):
+def test_bloqueio_por_conta_e_ip_expira_em_5_minutos(professora, relogio):
     for i in range(8):
         assert _login(f"errada-{i}").status_code == 401
-    r = _login(SENHA)
-    assert r.status_code == 429
-    assert r.json()["detail"] == "Muitas tentativas. Aguarde 5 minuto(s) e tente novamente."
+    relogio[0] += 299
+    assert _login(SENHA).status_code == 401
 
-    relogio[0] += 301                     # o teto por conta (20) nunca estourou
+    relogio[0] += 2                       # o teto por conta (20) nunca estourou
     assert _login(SENHA).status_code == 200
 
 
@@ -62,26 +54,21 @@ def test_espera_conta_do_primeiro_erro_que_ainda_trava(professora, relogio):
     relogio[0] += 120
     for i in range(1, 8):
         assert _login(f"errada-{i}").status_code == 401
-    r = _login(SENHA)
-    assert r.status_code == 429
-    assert r.json()["detail"] == "Muitas tentativas. Aguarde 3 minuto(s) e tente novamente."
+    assert _login(SENHA).status_code == 401
 
     relogio[0] += 181
     assert _login(SENHA).status_code == 200
 
 
-def test_bloqueio_por_conta_anuncia_os_15_minutos(professora, relogio):
-    """20 erros somando três IPs: o teto POR CONTA bloqueia (15 min) — é ele
-    que a mensagem anuncia, num IP que nunca errou."""
+def test_bloqueio_por_conta_expira_em_15_minutos(professora, relogio):
+    """O teto por conta também bloqueia num IP novo."""
     for ip, n in (("198.51.100.41", 8), ("198.51.100.42", 8), ("198.51.100.43", 4)):
         for i in range(n):
             assert _login(f"errada-{ip}-{i}", ip).status_code == 401
-    r = _login(SENHA, "198.51.100.44")
-    assert r.status_code == 429
-    assert r.json()["detail"] == "Muitas tentativas. Aguarde 15 minuto(s) e tente novamente."
+    assert _login(SENHA, "198.51.100.44").status_code == 401
 
     relogio[0] += 301                     # o de conta+IP já saiu; o por conta não
-    assert _login(SENHA, "198.51.100.44").status_code == 429
+    assert _login(SENHA, "198.51.100.44").status_code == 401
     relogio[0] += 600
     assert _login(SENHA, "198.51.100.44").status_code == 200
 

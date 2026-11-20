@@ -117,17 +117,38 @@ def test_so_falhas_ficam_contadas_no_banco(db, contas):
     assert _falhas(db) == {"edu_login_ip_falha": 2, "edu_login_global_falha": 2}
 
 
-def test_recusas_que_nao_sao_palpite_devolvem_a_vaga(db, contas, monkeypatch):
+def test_conta_desativada_com_senha_certa_devolve_a_vaga(db, contas):
     # Conta desativada: a senha confere, não é palpite errado.
     db.execute(Usuario.__table__.update().where(Usuario.email == contas[1])
                .values(status="inativo"))
     db.commit()
     assert _login(contas[1], SENHA).status_code == 403
-    # 429 do limite por (conta, IP): não chega a avaliar a senha.
+    assert _falhas(db) == {"edu_login_ip_falha": 0, "edu_login_global_falha": 0}
+
+
+def test_recusa_por_conta_e_ip_conta_nos_tetos_publicos(db, contas, monkeypatch):
     monkeypatch.setattr(rate_limit.limitador_login, "max_tentativas", 1)
     assert _login(contas[2], ERRADA).status_code == 401
-    assert _login(contas[2], ERRADA).status_code == 429
-    assert _falhas(db) == {"edu_login_ip_falha": 1, "edu_login_global_falha": 1}
+
+    def senha_real_nao_deve_ser_conferida(*_args):
+        pytest.fail("A senha real foi conferida com o limite da conta ativo")
+
+    monkeypatch.setattr(auth_router, "verificar_senha", senha_real_nao_deve_ser_conferida)
+    assert _login(contas[2], SENHA).status_code == 401
+    assert _falhas(db) == {"edu_login_ip_falha": 2, "edu_login_global_falha": 2}
+    assert rate_limit.limitador_login.falhas_na_janela(
+        rate_limit.chave_conta_ip(f"u:{contas[2]}#0", IP)) == 1
+
+
+def test_conta_desativada_com_limite_responde_com_o_mesmo_401(db, contas, monkeypatch):
+    db.execute(Usuario.__table__.update().where(Usuario.email == contas[1])
+               .values(status="inativo"))
+    db.commit()
+    monkeypatch.setattr(rate_limit.limitador_login, "max_tentativas", 1)
+    antes = _login(contas[1], ERRADA)
+    depois = _login(contas[1], SENHA)
+    assert antes.status_code == depois.status_code == 401
+    assert antes.json() == depois.json()
 
 
 def test_erro_inesperado_devolve_a_vaga(db, contas, monkeypatch):

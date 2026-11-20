@@ -55,7 +55,7 @@ def _professora(db, eid: int, email: str = EMAIL) -> Usuario:
 def _travar(usuario: str = EMAIL, ip: str = IP) -> None:
     for i in range(8):
         assert _login(usuario, f"tentativa-errada-{i}", ip).status_code == 401
-    assert _login(usuario, "qualquer-outra-9", ip).status_code == 429
+    assert _login(usuario, "qualquer-outra-9", ip).status_code == 401
 
 
 class _OutroProcesso:
@@ -141,7 +141,7 @@ def test_teto_por_conta_de_varios_ips_libera_no_outro_processo(
     for ip, n in zip(ips, (8, 8, 4)):
         for i in range(n):
             assert _login(EMAIL, f"errada-{ip}-{i}", ip).status_code == 401
-    assert _login(EMAIL, ANTIGA, "198.51.100.69").status_code == 429
+    assert _login(EMAIL, ANTIGA, "198.51.100.69").status_code == 401
     outro = _OutroProcesso()
 
     token = _link(cliente, eid, prof.id)
@@ -173,7 +173,7 @@ def test_sem_troca_de_senha_o_travamento_continua_no_outro_processo(
     assert r.status_code == 200, r.text
 
     outro.atende_o_proximo_pedido()
-    assert _login(EMAIL, ANTIGA).status_code == 429
+    assert _login(EMAIL, ANTIGA).status_code == 401
 
 
 def test_reautenticacao_e_login_seguem_no_mesmo_teto_por_conta(
@@ -194,7 +194,7 @@ def test_reautenticacao_e_login_seguem_no_mesmo_teto_por_conta(
     for _ in range(3):
         assert sessao.post(url, json={"senha_atual": "chute-errado-1"}).status_code == 403
     assert sessao.post(url, json={"senha_atual": ANTIGA}).status_code == 429
-    assert _login(EMAIL, ANTIGA, "198.51.100.74").status_code == 429
+    assert _login(EMAIL, ANTIGA, "198.51.100.74").status_code == 401
 
 
 def test_log_do_login_continua_com_o_email(db, escola_completa):

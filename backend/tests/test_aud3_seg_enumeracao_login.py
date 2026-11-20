@@ -9,15 +9,17 @@ Depois de 8 palpites, o login com o e-mail verdadeiro dava 429 só se a conta
 existia — e 401 se não existia. Agora o texto digitado e a conta têm chaves de
 espaços diferentes: texto que não acha conta nunca cai na chave de uma conta.
 
-O limite que sobra, o par e-mail + @ da MESMA conta (REV3-SEG-1), está preso em
+O caso do par e-mail + @ da mesma conta (REV3-SEG-1) é coberto em
 ``test_aud3_seg_login_par_email_arroba.py``.
 
 Dados fictícios; senha errada sempre (menos no controle do login certo).
 """
 from fastapi.testclient import TestClient
+from passlib.hash import bcrypt as bcrypt_rapido
 
 from app.core import rate_limit
 from app.main import app
+from app.models import Usuario
 
 API = "/api/v1"
 ERRADA = "Senha-Errada-Ficticia-1"
@@ -79,20 +81,37 @@ def test_texto_com_cara_de_chave_nao_cai_na_conta(db, escola_completa):
 def test_conta_que_existe_ainda_trava_pelos_proprios_palpites(db, escola_completa):
     """O limitador da conta continua valendo: 8 palpites com o e-mail travam."""
     cli = TestClient(app)
-    for _ in range(8):
+    primeira = _tentar(cli, ADMIN)
+    assert primeira.status_code == 401
+    for _ in range(7):
         assert _tentar(cli, ADMIN).status_code == 401
-    r = _tentar(cli, ADMIN)
-    assert r.status_code == 429, r.text
-    # Travada, nem a senha certa entra até o fim da janela (o 429 vem antes da senha).
-    assert _tentar(cli, ADMIN, "s3nh4").status_code == 429
+    r = _tentar(cli, ADMIN, "s3nh4")
+    assert r.status_code == 401, r.text
+    assert r.json() == primeira.json()
 
 
 def test_conta_inexistente_ainda_trava_pelos_proprios_palpites(db, escola_completa):
     cli = TestClient(app)
+    identidade = rate_limit.identidade_digitada(INEXISTENTE)
+    chave = rate_limit.chave_conta_ip(identidade, "testclient")
     for _ in range(8):
         assert _tentar(cli, INEXISTENTE).status_code == 401
+    assert rate_limit.limitador_login.bloqueado(chave)
     r = _tentar(cli, INEXISTENTE)
-    assert r.status_code == 429, r.text
+    assert r.status_code == 401, r.text
+    assert rate_limit.limitador_login.falhas_na_janela(chave) == 8
+
+
+def test_conta_nova_nao_herda_bloqueio_do_texto_digitado(db, escola_completa):
+    cli = TestClient(app)
+    for _ in range(8):
+        assert _tentar(cli, INEXISTENTE).status_code == 401
+    senha = "Senha-Primeiro-Login-Ficticia"
+    db.add(Usuario(escola_id=escola_completa["escola"].id, nome="Novo cadastro fictício",
+                   email=INEXISTENTE, senha_hash=bcrypt_rapido.using(rounds=4).hash(senha),
+                   cargo="professor"))
+    db.commit()
+    assert _tentar(cli, INEXISTENTE, senha).status_code == 200
 
 
 def test_liberar_conta_limpa_as_chaves_da_conta_em_qualquer_versao(db, escola_completa):
