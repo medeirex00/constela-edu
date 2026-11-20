@@ -1,32 +1,15 @@
-"""O XP do ano letivo não usa o contador do Matific de OUTRO ano.
+"""Ranking de XP, regra de 2026 e virada para XP do ano letivo em 2027.
 
-O Matific informa contadores DO ANO; o motor, o dashboard, o telão e as
-premiações só aceitam retrato do ano letivo (`scoring.snapshots_matific_do_ano`).
-O XP da gamificação (Ranking de XP da página Conquistas, ficha do aluno, perfil
-público, Quest) usava o ÚLTIMO retrato de qualquer ano: antes da 1ª coleta do
-ano novo, o XP de 2026 vinha do contador de dez/2025 — e a criança sem nenhum
-dado de matemática em 2026 liderava o Ranking de XP. Achado RANKINGS-7.
-
-Só a parte do XP que vem dos INDICADORES (atividades e estrelas) é recortada
-pelo ano. A regra das CONQUISTAS de matemática (valem por ano ou pela vida
-toda?) é decisão do dono e fica como está — o bônus delas entra no XP como
-sempre. Dados fictícios.
-
-O QUE AINDA NÃO ESTÁ RESOLVIDO (REV-RANK-2): a correção tira só a parte dos
-indicadores. A criança que só tem o contador de dez/2025 continua com o bônus
-das conquistas de matemática avaliadas naquele retrato (1.150 XP no exemplo, em
-vez de 2.150) e continua podendo liderar o Ranking de XP de 2026 sem nenhum dado
-de matemática em 2026. Isso só muda com a decisão do dono RANKINGS-7-conquistas;
-``test_sem_dado_de_matematica_no_ano_nao_lidera_o_ranking_de_xp`` registra esse
-efeito como falha conhecida (xfail estrito).
+Matific parte de zero no ano novo. Elefante traz contadores vitalícios e o
+ganho é medido entre retratos. Conquistas da ficha permanecem no histórico.
+Todos os dados são fictícios.
 """
 from datetime import datetime
 
-import pytest
-
-from app.models import Importacao, SnapshotMatific
+from app.models import Importacao, Matricula, SnapshotElefante, SnapshotMatific, Turma
 from app.services import gamificacao as svc_gami
 from app.services import scoring
+from app.services.evolucao import IMPORTACAO_SEM_QUESTOES
 
 API = "/api/v1"
 
@@ -35,6 +18,16 @@ def _retrato(db, esc, imp, aluno, quando, atividades, estrelas):
     db.add(SnapshotMatific(escola_id=esc.id, aluno_id=aluno.id, importacao_id=imp.id,
                            data_referencia=quando, atividades=atividades,
                            estrelas=estrelas, pontuacao_media=3.0))
+
+
+def _virar_para_2027(db, escola, alunos):
+    turma = Turma(escola_id=escola.id, nome="4º Ano A", ano_escolar="4º Ano", ano_letivo=2027)
+    db.add(turma)
+    db.flush()
+    for aluno in alunos:
+        db.add(Matricula(escola_id=escola.id, aluno_id=aluno.id, turma_id=turma.id, ano_letivo=2027))
+    escola.ano_letivo_ativo = 2027
+    db.commit()
 
 
 def test_xp_de_2026_nao_usa_o_contador_do_matific_de_2025(cliente, db, escola_completa):
@@ -71,9 +64,7 @@ def test_xp_de_2026_nao_usa_o_contador_do_matific_de_2025(cliente, db, escola_co
     assert ranking[joao.id]["nivel"] == ficha_joao["nivel"]
 
 
-def test_regra_das_conquistas_de_matematica_nao_muda(db, escola_completa):
-    """A correção é só do XP dos indicadores: as conquistas de matemática seguem a
-    regra de hoje (o último retrato), à espera da decisão do dono."""
+def test_regra_das_conquistas_de_matematica_em_2026_nao_muda(db, escola_completa):
     esc = escola_completa["escola"]
     ana = escola_completa["alunos"][0]
     imp = Importacao(escola_id=esc.id, plataforma="matific", tipo="seed")
@@ -88,42 +79,79 @@ def test_regra_das_conquistas_de_matematica_nao_muda(db, escola_completa):
     assert ficha["xp_conquistas"] == 50 + 100 + 250 + 500 + 250
 
 
-@pytest.mark.xfail(strict=True, raises=AssertionError, reason=(
-    "Decisão do dono RANKINGS-7-conquistas: até ela, a criança que só tem o "
-    "contador do Matific do ano anterior mantém o bônus de XP das conquistas de "
-    "matemática avaliadas nele (1.150 XP aqui) e pode liderar o Ranking de XP do "
-    "ano novo. Quando a regra das conquistas mudar, este teste passa e o xfail "
-    "estrito quebra a suíte: tire o marcador."))
-def test_sem_dado_de_matematica_no_ano_nao_lidera_o_ranking_de_xp(cliente, db,
-                                                                  escola_completa):
-    """O cenário do achado RANKINGS-7 (a sonda do auditor
-    ``test_xp_de_2026_nao_usa_o_contador_de_2025``), que 46de969c NÃO resolve por
-    inteiro: Ana só tem o acumulado de dez/2025 e nenhum dado de matemática em
-    2026 para o motor; João tem 30 atividades em 2026."""
-    esc = escola_completa["escola"]          # ano letivo ativo: 2026
-    ana, joao, _ = escola_completa["alunos"]
+def test_virada_para_2027_separa_xp_do_ano_e_conquistas_historicas(cliente, db, escola_completa):
+    esc = escola_completa["escola"]
+    alunos = escola_completa["alunos"]
+    ana, joao, _ = alunos
     imp = Importacao(escola_id=esc.id, plataforma="matific", tipo="seed")
     db.add(imp)
     db.flush()
-    _retrato(db, esc, imp, ana, datetime(2025, 12, 10), atividades=200, estrelas=600)
-    _retrato(db, esc, imp, joao, datetime(2026, 10, 10), atividades=30, estrelas=90)
+    _retrato(db, esc, imp, ana, datetime(2026, 12, 10), atividades=200, estrelas=600)
+    db.commit()
+    base = f"{API}/escolas/{esc.id}/gamificacao"
+    r_2026 = cliente.get(f"{base}/ranking-xp")
+    assert r_2026.status_code == 200, r_2026.text
+    assert r_2026.json()[0]["aluno_id"] == ana.id
+    assert r_2026.json()[0]["xp"] == 2_150
+
+    _virar_para_2027(db, esc, alunos)
+    _retrato(db, esc, imp, joao, datetime(2027, 1, 10), atividades=30, estrelas=90)
+    _retrato(db, esc, imp, joao, datetime(2028, 1, 1), atividades=200, estrelas=600)
     db.commit()
     scoring.recalcular_escola(db, esc.id)
-    base = f"{API}/escolas/{esc.id}"
+    r_2027 = cliente.get(f"{base}/ranking-xp")
+    assert r_2027.status_code == 200, r_2027.text
+    xp = {item["aluno_id"]: item for item in r_2027.json()}
+    assert xp[ana.id]["xp"] == 0
+    assert xp[ana.id]["conquistas"] == 0
+    assert (xp[joao.id]["posicao"], xp[joao.id]["xp"], xp[joao.id]["nivel"]) == (1, 300, 4)
+    assert xp[joao.id]["conquistas"] == 2
 
-    r_xp = cliente.get(f"{base}/gamificacao/ranking-xp")
-    r_mat = cliente.get(f"{base}/ranking", params={"dimensao": "matematica"})
-    # Pré-condições com pytest.fail (não AssertionError): se o cenário quebrar,
-    # o teste FALHA de verdade em vez de passar como "falha conhecida".
-    if r_xp.status_code != 200 or r_mat.status_code != 200:
-        pytest.fail(f"rotas: {r_xp.status_code} {r_xp.text} | {r_mat.status_code} {r_mat.text}")
-    if ana.id in {i["aluno_id"] for i in r_mat.json()}:
-        pytest.fail("cenário inválido: o motor deu dado de matemática de 2026 à Ana")
-    xp = {i["aluno_id"]: i for i in r_xp.json()}
+    # Repetir o limiar de uma conquista antiga no ano novo não paga outro bônus.
+    _retrato(db, esc, imp, ana, datetime(2027, 1, 11), atividades=10, estrelas=30)
+    db.commit()
+    r_2027 = cliente.get(f"{base}/ranking-xp")
+    assert r_2027.status_code == 200, r_2027.text
+    xp_ana = next(item for item in r_2027.json() if item["aluno_id"] == ana.id)
+    assert (xp_ana["xp"], xp_ana["conquistas"]) == (50, 0)
 
-    # O que deveria valer: sem dado de matemática no ano, nenhum XP de matemática
-    # no ano e nada de 1º lugar no Ranking de XP.
-    assert xp[ana.id]["xp"] == 0, (
-        f"bônus das conquistas de 2025 no XP de 2026: {xp[ana.id]['xp']} XP")
-    assert r_xp.json()[0]["aluno_id"] != ana.id, (
-        "sem dado de matemática em 2026 e 1º no Ranking de XP")
+    ficha = cliente.get(f"{base}/alunos/{ana.id}")
+    assert ficha.status_code == 200, ficha.text
+    assert ficha.json()["xp_conquistas"] == 1_150
+    assert ficha.json()["xp"] == 1_200
+    ouro = next(c for c in ficha.json()["conquistas"] if c["codigo"] == "matematico_ouro")
+    assert ouro["atingida"]
+    assert ouro["data"].startswith("2026-12-10")
+
+
+def test_ranking_2027_soma_so_ganho_medido_do_elefante_e_conquista_nova(cliente, db, escola_completa):
+    esc = escola_completa["escola"]
+    alunos = escola_completa["alunos"]
+    ana, joao, sofia = alunos
+    _virar_para_2027(db, esc, alunos)
+    imp = Importacao(escola_id=esc.id, plataforma="elefante", tipo="seed")
+    imp_sem_questoes = Importacao(escola_id=esc.id, plataforma="elefante", tipo="seed",
+                                  status=IMPORTACAO_SEM_QUESTOES)
+    db.add_all([imp, imp_sem_questoes])
+    db.flush()
+
+    def _leitura(aluno, quando, livros, minutos, acertos, tentativas, importacao=imp):
+        db.add(SnapshotElefante(escola_id=esc.id, aluno_id=aluno.id, importacao_id=importacao.id,
+                                data_referencia=quando, livros_unicos=livros, tempo_leitura_min=minutos,
+                                questoes_acertos=acertos, questoes_tentativas=tentativas))
+
+    _leitura(ana, datetime(2026, 12, 31, 23, 59), 9, 200, 12, 20)
+    _leitura(ana, datetime(2027, 1, 10), 11, 210, 16, 25)
+    # A próxima coleta mediu livros, mas não mediu questões. Não é borda de questões.
+    _leitura(ana, datetime(2027, 1, 11), 11, 210, 40, 40, imp_sem_questoes)
+    _leitura(joao, datetime(2026, 12, 31), 30, 120, 20, 30)
+    # A primeira coleta da Sofia trouxe um acumulado sem data. Só o ganho observado depois conta.
+    _leitura(sofia, datetime(2027, 1, 10), 30, 600, 20, 25)
+    _leitura(sofia, datetime(2027, 1, 11), 32, 610, 24, 30)
+    db.commit()
+    r = cliente.get(f"{API}/escolas/{esc.id}/gamificacao/ranking-xp")
+    assert r.status_code == 200, r.text
+    xp = {item["aluno_id"]: item for item in r.json()}
+    assert (xp[ana.id]["xp"], xp[ana.id]["conquistas"]) == (134, 1)  # 20 + 2 + 12 + 100
+    assert (xp[joao.id]["xp"], xp[joao.id]["conquistas"]) == (0, 0)
+    assert (xp[sofia.id]["xp"], xp[sofia.id]["conquistas"]) == (34, 0)

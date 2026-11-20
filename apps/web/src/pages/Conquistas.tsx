@@ -168,7 +168,8 @@ function LinhasEsqueleto({ quantas }: { quantas: number }) {
 }
 
 export default function Conquistas() {
-  const { escolaId } = useApp();
+  const { escolaId, escolaAtual } = useApp();
+  const anoLetivo = escolaAtual?.ano_letivo_ativo;
   const {
     dados: mural,
     erro: erroMural,
@@ -280,7 +281,9 @@ export default function Conquistas() {
         <Card className="overflow-hidden xl:col-span-3">
           <CabecalhoSecao
             icone={Flame} tom="ambar" titulo="Ranking de XP"
-            apoio="Nível e conquistas de cada aluno — separado das notas"
+            apoio={anoLetivo != null && anoLetivo >= 2027
+              ? `XP, nível e novas conquistas do ano letivo ${anoLetivo}`
+              : "Nível e conquistas de cada aluno — separado das notas"}
           />
           {carregandoRanking ? (
             <LinhasEsqueleto quantas={5} />
