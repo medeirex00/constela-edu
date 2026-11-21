@@ -122,7 +122,16 @@ docker compose exec backend python scripts/seed.py
 
 > **Anote a senha exibida no console.** O seed gera uma senha aleatória para
 > o administrador inicial e a imprime uma única vez. (Para automatizar, defina
-> `ADMIN_INITIAL_PASSWORD` no ambiente antes de rodar o seed.)
+> `ADMIN_INITIAL_PASSWORD` no ambiente antes de rodar o seed. Nesse caso a senha
+> segue a mesma regra das outras senhas do sistema — 8 caracteres ou mais, nada
+> de senha comum —, o seed recusa uma senha fraca e não mostra a senha na tela,
+> para ela não ficar gravada no log.)
+>
+> **O seed é só para banco novo.** Num banco que já tem escolas ou contas de
+> administração global que não vieram dele, o seed se recusa e não grava nada:
+> confira se está apontando para o banco certo. (`--forcar` passa por cima, só
+> se tiver certeza.) Os dados de demonstração (`--demo`) nunca entram com
+> `ENV=producao`.
 
 ## Passo 6 — Primeiro acesso e segurança
 
@@ -232,7 +241,8 @@ docker compose exec backend python -m scripts.purgar_ia
 
 No Railway, crie um **Cron Job** (ou uma segunda "service" agendada) executando
 `python -m scripts.purgar_ia`. O prazo é configurável pela variável
-`IA_RETENCAO_DIAS` (padrão `90`). Além disso, ao **excluir permanentemente um
+`IA_RETENCAO_DIAS` (padrão `90`, mínimo `1`; `0` não desliga a purga: ela recusa sem
+apagar nada). Além disso, ao **excluir permanentemente um
 aluno**, as conversas do assistente que citam o nome completo dele são removidas
 na mesma operação (direito ao esquecimento).
 

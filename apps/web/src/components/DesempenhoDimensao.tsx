@@ -82,10 +82,19 @@ export function DesempenhoDimensao({ dimensao, filtros, recolhivel = false, avis
   // Visão OPERACIONAL: quem ainda NÃO foi aferido na matéria. Não é ranking (não
   // tem nota nem posição de propósito) — é a contrapartida obrigatória do corte
   // "ausência não é zero": ao sair da lista, a criança não pode sumir da tela.
-  const { dados: naoAferidos } = useApi<NaoAferidos>(
+  // O useApi guarda a resposta da URL ANTERIOR enquanto a nova carrega e quando ela
+  // falha: a lista só vale sem busca em andamento e sem erro — senão, trocando a turma,
+  // as crianças da turma de antes apareceriam como "não aferidas" da nova. No erro, a
+  // tela avisa (sumir em silêncio faria parecer que todas foram aferidas).
+  const {
+    dados: naoAferidos, erro: erroNaoAferidos, carregando: carregandoNaoAferidos,
+    recarregar: recarregarNaoAferidos,
+  } = useApi<NaoAferidos>(
     escolaId ? `/escolas/${escolaId}/nao-aferidos?${parametros}` : null,
   );
-  const semDado = naoAferidos?.dimensoes.find((d) => d.dimensao === dimensao);
+  const semDado = carregandoNaoAferidos || erroNaoAferidos
+    ? undefined
+    : naoAferidos?.dimensoes.find((d) => d.dimensao === dimensao);
   const lista = itens ?? [];
 
   // O cartaz é sempre da escola inteira: com turma, série ou turno aplicado ele
@@ -200,6 +209,16 @@ export function DesempenhoDimensao({ dimensao, filtros, recolhivel = false, avis
           foi alcançado deixou de aparecer em último lugar com 0,0 (a leitura
           mais injusta que o sistema produzia) e passa a aparecer aqui, sem nota
           e sem posição — porque não há o que medir, não porque foi mal. */}
+      {!carregandoNaoAferidos && erroNaoAferidos && (
+        <div className="mt-5 space-y-3">
+          <Mensagem tipo="erro">
+            Não foi possível carregar quem ainda não foi aferido em {materia.rotulo}: {erroNaoAferidos.message}
+          </Mensagem>
+          <Botao variante="secundario" tamanho="sm" onClick={recarregarNaoAferidos}>
+            Tentar de novo
+          </Botao>
+        </div>
+      )}
       {semDado && semDado.alunos.length > 0 && (
         <Card className="mt-5 overflow-hidden bg-zinc-50/70 shadow-none dark:bg-zinc-800/30">
           <div className="flex items-start gap-3 border-b border-zinc-200/80 px-4 py-3 dark:border-zinc-800">

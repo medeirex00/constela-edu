@@ -4,6 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import delete, func, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
+from sqlalchemy.orm.exc import StaleDataError
 
 from app.core.config import email_reservado_ao_dono
 from app.core.database import bloquear_escola_para_importacao, get_db
@@ -46,6 +47,7 @@ from app.schemas import (
 from app.services import (
     alunos_dedup,
     alunos_fusao,
+    elegibilidade,
     identidade_aluno,
     identidade_efetiva,
     matching,
@@ -56,6 +58,7 @@ from app.services import (
     turmas_dedup,
 )
 from app.services import dificuldade_livro
+from app.services import dimensoes as svc_dimensoes
 from app.services import modulos as svc_modulos
 from app.services.audit import registrar
 # A trava do destino mora em ``services.turma_arquivada`` (o /resolver de
@@ -144,6 +147,106 @@ def listar_alunos(
     return {"total": total, "pagina": pagina, "por_pagina": por_pagina, "itens": itens}
 
 
+# Situação de uma ficha que não está ativa, como o cadastro manual a descreve.
+_SITUACAO_INATIVA = {"arquivado": "arquivado", "transferido": "marcado como transferido",
+                     "fora_lista_piloto": "fora da Lista Piloto", "excluido": "excluído"}
+# O caminho para trazer de volta uma ficha que não está ativa (o mesmo que a recusa
+# do certificado ensina): a lista de Alunos e o painel da turma só mostram os ativos.
+_CAMINHO_REATIVAR = ("em Minha Escola › Turmas, abra esta turma, ligue “Mostrar "
+                     "arquivados” e use “Reativar” no cadastro.")
+
+
+def _parecidos_inativos(db: Session, escola_id: int, ano: int, turma: Turma,
+                        dados: AlunoCreate, ra: str | None) -> list[Aluno]:
+    """Os cadastros NÃO ATIVOS da turma que o motor de identidade achou parecidos
+    com o nome digitado (correspondência insegura: os ``candidatos`` do REVISAR).
+
+    Mesma pergunta que ``importacoes._casar_no_roster`` acabou de fazer — o mesmo
+    roster (que não filtra situação) e o mesmo ``matching.classificar_linha`` —,
+    refeita só no caminho da recusa para saber QUEM eram os candidatos."""
+    from app.routers import importacoes as imp
+    roster, por_id = imp._roster_identidades(db, escola_id, ano, turma.id)
+    res = matching.classificar_linha(
+        matching.Identidade(nome=dados.nome, chamada=dados.numero_chamada,
+                            nascimento=dados.data_nascimento, ra=imp._ra_forte(ra)),
+        roster)
+    return [por_id[i] for i in res.candidatos
+            if i in por_id and por_id[i].status != "ativo"]
+
+
+def _mesma_crianca_na_escola(db: Session, escola_id: int, dados: AlunoCreate,
+                             ra_informado: str | None) -> tuple[Aluno, str] | None:
+    """A ficha que esta criança JÁ tem na escola, em qualquer turma e ano (não
+    excluída), e o critério: ``"ra"`` (o mesmo RA, normalizado por ``ra_util``) ou
+    ``"nome_nascimento"`` (o mesmo nome normalizado E o mesmo nascimento, sem RA
+    divergente — RA diferente prova outra criança).
+
+    A busca da turma de destino (``_aluno_existente_na_turma``/``_casar_no_roster``)
+    não basta: na virada a turma do ano novo está vazia e a ficha do ano anterior
+    nunca era candidata — nascia uma segunda ficha (no ranking com 0) e a coleta
+    seguinte gravava o dado na antiga, fora de qualquer ranking. Só o nome igual não
+    prova nada (homônimo é legítimo); o nº de chamada muda de um ano para o outro e
+    não entra. Duas fichas achadas: a que está no ano/turma mais recente, a ativa."""
+    from app.services._nomes import chave_nome
+    from app.services.lista_piloto import ra_util
+    ra = ra_util(ra_informado)
+    alvo = chave_nome(dados.nome)
+    nascimento = dados.data_nascimento
+    achados: list[tuple[int, str]] = []
+    for aluno_id, nome, nasc, ficha in db.execute(
+        select(Aluno.id, Aluno.nome, Aluno.data_nascimento, Aluno.ficha)
+        .where(Aluno.escola_id == escola_id, Aluno.status != "excluido")
+    ).all():
+        ra_dele = ra_util((ficha or {}).get("ra"))
+        if ra and ra_dele == ra:
+            achados.append((aluno_id, "ra"))
+        elif (nascimento is not None and nasc == nascimento and chave_nome(nome) == alvo
+              and not (ra and ra_dele)):
+            achados.append((aluno_id, "nome_nascimento"))
+    if not achados:
+        return None
+    ultimo_ano = dict(db.execute(
+        select(Matricula.aluno_id, func.max(Matricula.ano_letivo))
+        .where(Matricula.aluno_id.in_([i for i, _ in achados]))
+        .group_by(Matricula.aluno_id)).all())
+    fichas = {i: db.get(Aluno, i) for i, _ in achados}
+    aluno_id, criterio = max(achados, key=lambda a: (
+        a[1] == "ra", ultimo_ano.get(a[0]) or 0, fichas[a[0]].status == "ativo", -a[0]))
+    return fichas[aluno_id], criterio
+
+
+def _texto_ja_tem_ficha(db: Session, ja: Aluno, criterio: str, ano: int) -> str:
+    """A recusa do cadastro quando a criança já tem ficha em OUTRA turma ou ano: onde
+    a ficha está, a situação dela e o caminho para matriculá-la sem duplicar. A
+    lista de Alunos só mostra quem tem matrícula ativa do ano: depois da virada, a
+    ficha de 2026 se acha pela turma de 2026 (Turmas, com as de outros anos)."""
+    ultima = db.execute(
+        select(Turma.nome, Matricula.ano_letivo)
+        .join(Turma, Turma.id == Matricula.turma_id)
+        .where(Matricula.aluno_id == ja.id)
+        .order_by(Matricula.ano_letivo.desc(), Matricula.id.desc())).first()
+    inativa = ja.status != "ativo"
+    deste_ano = ultima is not None and ultima[1] == ano
+    onde = f"{ultima[0]}, {ultima[1]}" if ultima else "sem turma"
+    por = "com o mesmo RA" if criterio == "ra" else "com o mesmo nome e nascimento"
+    texto = f"Esta criança já tem ficha nesta escola: “{ja.nome}” ({onde}), {por}."
+    if inativa:
+        texto += f" O cadastro dela está {_SITUACAO_INATIVA.get(ja.status, ja.status)}."
+    if ultima is None or (deste_ano and not inativa):
+        caminho = "abra a ficha dela"
+    else:
+        caminho = "em Minha Escola › Turmas, "
+        if not deste_ano:
+            caminho += "ligue “Mostrar arquivadas e de outros anos”, "
+        caminho += f"abra a turma {ultima[0]}" + ("" if deste_ano else f" de {ultima[1]}")
+        caminho += (", ligue “Mostrar arquivados”" if inativa else "") + ", abra a ficha dela"
+    if inativa:
+        caminho += ", use “Reativar”"
+    meta = "mudar de turma" if deste_ano else f"matriculá-la em {ano}"
+    return (f"{texto} Não cadastre de novo: {caminho} e use ⋮ › Editar dados › Turma "
+            f"para {meta}. Se for outra criança, confira o RA e a data de nascimento.")
+
+
 @router.post("/alunos", response_model=AlunoOut, status_code=status.HTTP_201_CREATED)
 def criar_aluno(
     dados: AlunoCreate,
@@ -187,12 +290,25 @@ def criar_aluno(
         ja, confianca = imp._casar_no_roster(db, escola_id, ano, dados.nome, turma,
                                              dados.numero_chamada,
                                              dados.data_nascimento, ra_informado)
+    # A porta única reconhece de propósito as fichas ARQUIVADAS, transferidas e fora
+    # da Lista Piloto da turma (não duplicar a criança). Mas a lista de Alunos e o
+    # painel da turma só mostram os ativos: a recusa diz a situação da ficha e o
+    # caminho para trazê-la de volta, em vez de mandar "usar o cadastro existente"
+    # que o gestor não encontra.
     if ja is not None:
         registrar(db, "aluno.criacao_recusada", escola_id=escola_id, usuario_id=usuario.id,
                   entidade="aluno", entidade_id=ja.id,
                   detalhes={"nome": dados.nome, "decisao": "EXACT_MATCH",
                             "motivo": "aluno_ja_cadastrado_na_turma"})
         db.commit()
+        if ja.status != "ativo":
+            raise HTTPException(
+                status.HTTP_409_CONFLICT,
+                f"“{ja.nome}” já tem cadastro nesta turma, mas ele está "
+                f"{_SITUACAO_INATIVA.get(ja.status, ja.status)} — por isso não aparece "
+                f"na lista de Alunos. Não cadastre de novo: {_CAMINHO_REATIVAR} Se for "
+                "outra criança de mesmo nome, informe o nº de chamada ou a data de "
+                "nascimento para diferenciar.")
         raise HTTPException(
             status.HTTP_409_CONFLICT,
             f"“{ja.nome}” já está cadastrado nesta turma. Use o cadastro existente. "
@@ -204,11 +320,37 @@ def criar_aluno(
                   detalhes={"nome": dados.nome, "decisao": "REVIEW_REQUIRED",
                             "motivo": "correspondencia_insegura"})
         db.commit()
+        inativos = _parecidos_inativos(db, escola_id, ano, turma, dados, ra_informado)
+        if inativos:
+            nomes = ", ".join(
+                f"“{a.nome}” ({_SITUACAO_INATIVA.get(a.status, a.status)})" for a in inativos)
+            raise HTTPException(
+                status.HTTP_409_CONFLICT,
+                f"“{dados.nome}” é muito parecido com um cadastro desta turma que não "
+                f"aparece na lista de Alunos: {nomes}. Confira antes de cadastrar. Se "
+                f"for a mesma criança, não cadastre de novo: {_CAMINHO_REATIVAR} Se for "
+                "outra criança, informe o nº de chamada ou a data de nascimento para "
+                "diferenciar.")
         raise HTTPException(
             status.HTTP_409_CONFLICT,
             f"“{dados.nome}” é muito parecido com um aluno já cadastrado nesta turma. "
             "Confira a lista da turma antes de cadastrar. Se for outra criança, informe "
             "o nº de chamada ou a data de nascimento para diferenciar.")
+
+    # A MESMA criança em outra turma ou outro ano (G_VIRADA-3): a rematrícula do ano
+    # novo pelo cadastro abria uma 2ª ficha, e a coleta seguinte gravava o dado na
+    # antiga, fora do ranking. A ficha certa ganha a turma por Editar dados › Turma.
+    outra = _mesma_crianca_na_escola(db, escola_id, dados, ra_informado)
+    if outra is not None:
+        ja, criterio = outra
+        registrar(db, "aluno.criacao_recusada", escola_id=escola_id, usuario_id=usuario.id,
+                  entidade="aluno", entidade_id=ja.id,
+                  detalhes={"nome": dados.nome, "decisao": "EXACT_MATCH",
+                            "motivo": "aluno_ja_cadastrado_na_escola",
+                            "criterio": criterio})
+        db.commit()
+        raise HTTPException(status.HTTP_409_CONFLICT,
+                            _texto_ja_tem_ficha(db, ja, criterio, ano))
 
     aluno = Aluno(
         escola_id=escola_id,
@@ -290,15 +432,32 @@ def perfil_aluno(
     # (mesma regra de ``rankings._ranking``), e o passo a passo / a distribuição
     # de leitura daquela plataforma não saem. A nota geral já vem do motor com os
     # pesos só dos módulos contratados.
-    fora = svc_modulos.plataformas_fora_do_plano(
-        svc_modulos.modulos_da_escola(db, db.get(Escola, escola_id)))
+    escola = db.get(Escola, escola_id)
+    fora = svc_modulos.plataformas_fora_do_plano(svc_modulos.modulos_da_escola(db, escola))
+    # CONTRATO com as telas: o desempenho POR DIMENSÃO (só as contratadas) é o que
+    # separa "sem dado" de "zero". As notas de plataforma acima saem 0,0 para quem
+    # não tem snapshot; é o `aferido` de cada bloco que faz a tela mostrar "—"
+    # (``notaDaMateria``). Sem os blocos, a ficha afirmava 0,0 em Matemática para
+    # a criança que nunca abriu o Matific. Quem TEM dado não muda: a nota do bloco
+    # é a mesma coluna da Nota. A posição do bloco é a da ESCOLA inteira naquela
+    # dimensão — não é a perspectiva do professor (ver ``_posicao_exibida``), então
+    # ele não a recebe. Quem está FORA do ranking vigente (ficha inativa, sem
+    # matrícula do ano, turma de Fase) também não: a posição gravada na Nota é de
+    # um cálculo antigo e hoje pertence a outra criança (``_no_ranking_vigente``).
+    no_ranking = _no_ranking_vigente(aluno, matricula)
+    blocos_dimensao = svc_dimensoes.blocos(db, escola, nota)
+    if superficial or not no_ranking:
+        blocos_dimensao = [b.model_copy(update={"posicao": None}) for b in blocos_dimensao]
     return AlunoPerfilOut(
         aluno=saida,
         nota_matific=None if "matific" in fora else (nota.nota_matific if nota else 0.0),
         nota_elefante=(None if "elefante" in fora
                        else (nota.nota_elefante if nota else 0.0)),
         nota_geral=nota.nota_geral if nota else 0.0,
-        posicao=_posicao_exibida(db, escola_id, ano, usuario, aluno_id, nota),
+        posicao=_posicao_exibida(db, escola_id, ano, usuario, aluno_id, nota,
+                                 no_ranking=no_ranking),
+        dimensoes=blocos_dimensao,
+        adocao=svc_dimensoes.adocao(db, escola, nota),
         # O professor também vê o PASSO A PASSO do cálculo (liberado pelo dono) —
         # só das crianças das turmas dele (exigir_aluno_permitido acima barra as
         # de fora). A ficha cadastral (dados pessoais) e as leituras seguem só p/
@@ -311,13 +470,34 @@ def perfil_aluno(
     )
 
 
+def _no_ranking_vigente(aluno: Aluno, matricula) -> bool:
+    """A criança está na POPULAÇÃO do ranking do ano — a mesma do motor
+    (``scoring._carregar_contexto``) e da guarda do certificado de mérito
+    (``relatorios.exigir_merito``): ficha ativa, com matrícula no ano letivo ativo,
+    numa turma que concorre (1º ao 5º ano, ``elegibilidade``). ``matricula`` é o
+    par (Matricula, Turma) do ano letivo ativo, ou None.
+
+    Fora dela, a Nota continua no banco (o recálculo não apaga a linha de quem
+    sai: arquivado, transferido, excluído, Fase) com a posição de um cálculo
+    antigo — que hoje pertence a outra criança.
+
+    A regra é UMA só, ``scoring.no_ranking_vigente`` (a do Comparador); aqui só o
+    par (Matricula, Turma) vira a turma do ano."""
+    return scoring.no_ranking_vigente(aluno, matricula[1] if matricula is not None else None)
+
+
 def _posicao_exibida(db: Session, escola_id: int, ano: int, usuario: Usuario,
-                     aluno_id: int, nota: Nota | None) -> int | None:
+                     aluno_id: int, nota: Nota | None, *,
+                     no_ranking: bool = True) -> int | None:
     """A posição do "Nº no ranking" do perfil, na MESMA perspectiva do ranking
     de onde o usuário veio (o toque na linha do Ranking abre este perfil, no app
     e na web — os dois leem esta rota).
 
-    Gestão (sem recorte): a posição carimbada da escola (``Nota.posicao``).
+    Gestão (sem recorte): a posição carimbada da escola (``Nota.posicao``) — só
+    para quem está no ranking vigente (``no_ranking``, de ``_no_ranking_vigente``).
+    A ficha arquivada, transferida, excluída, sem matrícula do ano ou de turma de
+    Fase fica sem posição (``None``), como no ranking, que também não a mostra:
+    antes a ficha arquivada dizia "1º no ranking" enquanto o 1º era outra criança.
 
     Professor (``turmas_permitidas`` não é None): a posição RELATIVA às turmas
     dele, com a mesma lista e a mesma ordem do ranking renumerado 1..N
@@ -325,13 +505,17 @@ def _posicao_exibida(db: Session, escola_id: int, ano: int, usuario: Usuario,
     o pacote ``/sincronizacao`` do app). Sem isso a aba dizia 1º e o perfil da
     mesma criança, para o mesmo professor, dizia 100º. Quem não está na lista
     (a Nota antiga de quem saiu da população, como a fase fora da premiação) fica
-    sem posição (``None``), como no ranking, que também não o mostra."""
+    sem posição (``None``), como no ranking, que também não o mostra.
+
+    Nas duas perspectivas, a criança SEM NENHUM DADO (nem Leitura nem Matemática
+    aferidas) fica sem posição e não entra na numeração: o Ranking Geral e o Top 10
+    não a listam (``_ranking(so_com_dado=True)``, DEC-19 — ausência não é zero)."""
     permitidas = permissoes.turmas_permitidas(db, escola_id, usuario)
-    if permitidas is None:
-        return nota.posicao if nota else None
-    if nota is None:
+    if nota is None or not (nota.aferido_leitura or nota.aferido_matematica):
         return None
-    lista = _ranking(db, escola_id, ano, turma_ids=permitidas)
+    if permitidas is None:
+        return nota.posicao if no_ranking else None
+    lista = _ranking(db, escola_id, ano, turma_ids=permitidas, so_com_dado=True)
     for posicao, item in enumerate(lista, start=1):
         if item.aluno_id == aluno_id:
             return posicao
@@ -514,6 +698,28 @@ def _alunos_selecionados(db: Session, escola_id: int, aluno_ids: list[int]) -> l
     return alunos
 
 
+# O que "nada foi …" diz, por ação, quando uma ficha selecionada sumiu.
+_FEITO_NA_ACAO = {"transferir": "transferido", "arquivar": "arquivado",
+                  "reativar": "reativado", "excluir": "excluído",
+                  "marcar_transferido": "marcado como transferido"}
+
+
+def _exigir_fichas_selecionadas(ids: list[int], pedidos: list[int],
+                                acao: str = "transferir") -> None:
+    """Em toda ação em massa, cada ficha selecionada precisa existir nesta escola: a
+    que sumiu (fundida em outra por outro gestor, com a lista ainda aberta) é 409
+    para o pedido inteiro, sem mudar ninguém pela metade — o gestor recarrega e
+    escolhe de novo (a criança agora está na ficha que ficou)."""
+    faltam = set(pedidos) - set(ids)
+    if not faltam:
+        return
+    raise HTTPException(
+        status.HTTP_409_CONFLICT,
+        f"{len(faltam)} aluno(s) selecionado(s) não existe(m) mais nesta escola — a ficha "
+        "pode ter sido fundida com outra enquanto a lista estava aberta. Nada foi "
+        f"{_FEITO_NA_ACAO.get(acao, 'alterado')}: recarregue a lista e tente de novo.")
+
+
 def _recalcular_escola(db: Session, escola_id: int) -> None:
     """Recalcula notas/rankings e invalida o cache do painel — dashboards,
     estatísticas e gráficos se atualizam sem recarregar a página."""
@@ -530,7 +736,17 @@ def atualizar_aluno(
     usuario: Usuario = Depends(exigir_papeis("admin", "coordenador")),
     db: Session = Depends(get_db),
 ):
-    """Edita o cadastro (nome, nº de chamada, nascimento, observações)."""
+    """Edita o cadastro (nome, nº de chamada, nascimento, observações).
+
+    FICHA FUNDIDA NO MEIO (auditoria, ALUNOS-5): toma a trava da escola ANTES de
+    ler a ficha, como as ações em massa. A fusão toma a mesma trava e apaga a ficha
+    absorvida; no PostgreSQL a edição agora espera a fusão terminar e responde 404
+    (a ficha não existe mais). Antes ela lia a ficha por fora da trava: ou o UPDATE
+    batia em 0 linhas (``StaleDataError``, 500 "Erro interno"), ou gravava na ficha
+    que a fusão já tinha copiado e a edição se perdia calada. Se a ficha sumir
+    mesmo assim entre a leitura e a gravação (no SQLite a trava não existe), a
+    resposta é 409, sem gravar nada."""
+    bloquear_escola_para_importacao(db, escola_id)
     aluno = _aluno_da_escola(db, escola_id, aluno_id)
     campos = dados.model_dump(exclude_unset=True)
     if not campos:
@@ -542,7 +758,18 @@ def atualizar_aluno(
     registrar(db, "aluno.atualizado", escola_id=escola_id, usuario_id=usuario.id,
               entidade="aluno", entidade_id=aluno.id,
               detalhes={"nome": aluno.nome, "campos": sorted(campos.keys())})
-    db.commit()
+    try:
+        db.commit()
+    except StaleDataError:
+        # O UPDATE bateu em 0 linhas: a ficha foi apagada (fundida em outra) entre a
+        # leitura e a gravação. Nada fica gravado; o gestor recebe o 409 que diz o
+        # que houve, não um 500.
+        db.rollback()
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            "Este aluno não existe mais nesta escola — a ficha pode ter sido fundida "
+            "com outra enquanto “Editar dados” estava aberto. Nada foi alterado: "
+            "recarregue a página e edite a ficha que ficou.") from None
     db.refresh(aluno)
     ano = _ano_ativo(db, escola_id)
     turma = db.execute(
@@ -569,7 +796,8 @@ def acoes_em_alunos(
 ):
     """Ações em massa (ou individual): arquivar, reativar, excluir (lógico),
     marcar como transferido (saiu da escola) e transferir de turma. Ao final
-    recalcula notas/rankings e invalida o cache.
+    recalcula notas/rankings e invalida o cache — inclusive na transferência,
+    que muda a população do ranking (ver ``test_transferir_recalcula_posicao``).
 
     Nenhuma delas apaga histórico: matrículas, leituras, eventos e snapshots
     continuam no banco. O que muda é o status da ficha, e todo filtro de visão
@@ -610,19 +838,33 @@ def acoes_em_alunos(
     muda (``_exigir_destino_do_ano_ativo``). A matrícula que se move (ou nasce)
     é a do ano ativo; numa turma de outro ano ela continuava contando na escola
     e sumia das turmas do ano, e a diferença entregava a criança à Secretaria
-    por subtração (revisão do grupo pequeno, rodada 4)."""
+    por subtração (revisão do grupo pequeno, rodada 4).
+
+    FICHA QUE SUMIU NO MEIO (revisão de integração, 10/11): a transferência toma a
+    trava da escola ANTES de ler os alunos. A fusão toma a mesma trava e apaga a
+    ficha absorvida; lidos antes, os alunos incluíam essa ficha, e a matrícula
+    criada para ela no destino estourava a FK (500). Agora, se alguma ficha
+    selecionada não existe mais nesta escola, é 409 e ninguém é transferido.
+    Revisão final: o mesmo vale para arquivar, reativar, excluir e marcar como
+    transferido — elas também tomam a trava antes de ler e dão 409 ("Nada foi
+    arquivado…"); antes gravavam o status da lista lida e, com a ficha apagada no
+    meio, o UPDATE batia em menos linhas (StaleDataError, 500). Se a ficha sumir
+    mesmo assim entre a leitura e a gravação (fusão que não passou pela trava; no
+    SQLite ela não existe), a resposta é o mesmo 409, sem mudar ninguém."""
+    if dados.acao == "transferir" and not dados.turma_id:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST,
+                            "Selecione a turma de destino.")
+    # Mesma trava do arquivamento (D17) e da fusão, ANTES de ler os alunos e o
+    # status da turma: nenhum dos dois muda entre a leitura e a ação (no-op no
+    # SQLite).
+    bloquear_escola_para_importacao(db, escola_id)
     alunos = _alunos_selecionados(db, escola_id, dados.aluno_ids)
     ids = [a.id for a in alunos]
+    _exigir_fichas_selecionadas(ids, dados.aluno_ids, dados.acao)
     ano = _ano_ativo(db, escola_id)
     avisos: list[str] = []
 
     if dados.acao == "transferir":
-        if not dados.turma_id:
-            raise HTTPException(status.HTTP_400_BAD_REQUEST,
-                                "Selecione a turma de destino.")
-        # Mesma trava do arquivamento (D17), ANTES de ler o status da turma: ela
-        # não é arquivada entre a leitura e a transferência (no-op no SQLite).
-        bloquear_escola_para_importacao(db, escola_id)
         origem: Turma | None = None
         if dados.turma_origem_id is not None:
             origem = _turma_da_escola(db, escola_id, dados.turma_origem_id)
@@ -661,7 +903,6 @@ def acoes_em_alunos(
         mensagem = (f"{len(ids)} aluno(s) transferido(s) de {origem.nome} para "
                     f"{turma.nome}." if origem is not None
                     else f"{len(ids)} aluno(s) transferido(s) para {turma.nome}.")
-        recalcular = False  # a nota não muda; só a turma/contagem
     else:
         novo_status = _STATUS_ACAO[dados.acao]
         if novo_status == "ativo":
@@ -685,14 +926,25 @@ def acoes_em_alunos(
                    "excluir": "excluído(s)",
                    "marcar_transferido": "marcado(s) como transferido(s)"}
         mensagem = f"{len(ids)} aluno(s) {rotulos[dados.acao]}."
-        recalcular = True  # muda o conjunto de alunos ativos → rankings mudam
 
-    db.commit()
-    if recalcular:
-        _recalcular_escola(db, escola_id)
-    else:
-        from app.routers.publico import invalidar_cache_painel
-        invalidar_cache_painel(escola_id)
+    try:
+        db.commit()
+    except StaleDataError:
+        # O UPDATE do status bateu em menos linhas que as lidas: uma ficha sumiu
+        # entre a leitura e a gravação. Nada fica gravado; o gestor recebe o 409 da
+        # ficha fundida, não um 500.
+        db.rollback()
+        restantes = db.execute(select(Aluno.id).where(
+            Aluno.id.in_(ids), Aluno.escola_id == escola_id)).scalars().all()
+        _exigir_fichas_selecionadas(restantes, dados.aluno_ids, dados.acao)
+        raise
+    # Toda ação recalcula, porque todas mudam quem está no ranking: o status muda
+    # o conjunto de alunos ativos, e a transferência dá (ou tira) a matrícula do
+    # ano numa turma do 1º ao 5º ano. Sem o recálculo na transferência, a posição
+    # guardada na Nota era a do cálculo de antes — que hoje pode ser de outra
+    # criança —, e o Mérito emitido logo depois saía com ela; é justamente o
+    # caminho que a recusa do Mérito manda seguir (perfil › "Editar dados" › Turma).
+    _recalcular_escola(db, escola_id)
     return {"mensagem": mensagem, "afetados": len(ids), "avisos": avisos}
 
 
@@ -722,18 +974,87 @@ _CHAVES_SO_DE_NOME = _CHAVES_COM_NOME_DE_PESSOA - {"origem", "origem_linha"}
 # procedência não compartilha nenhum pedaço do nome e sobrevive intacta.
 _PARTICULAS_DE_NOME = frozenset({"de", "da", "do", "dos", "das", "e"})
 
+# Dado pessoal da criança que NÃO é nome e que algumas entradas guardam: a foto da
+# ficha absorvida na fusão (``aluno.fundido`` → ``foto_pre_fusao``: nascimento,
+# observações — campo livre, sensível — e foto), as duas datas de
+# ``aluno.nascimento_divergente`` e o RA da linha da Lista Piloto em
+# ``aluno.identidade_vinculada`` (``routers/importacoes``: gravado em TODO vínculo
+# que troca o nome, qualquer que seja o motivo — o log não guarda a via do
+# casamento, então o número não é "o motivo da decisão"; o ``motivo`` fica). Nas
+# entradas da própria criança, caem pela chave.
+_CHAVES_DE_DADO_PESSOAL = frozenset({
+    "data_nascimento", "observacoes", "foto_url", "na_ficha", "na_planilha", "ra",
+})
+
 _MARCA_REMOVIDO = "[removido]"
+
+# ``aluno.fundido_com_conflito`` guarda em ``divergencias``, em texto, os sinais
+# de serem crianças diferentes que a gestão aceitou passar por cima
+# (``_divergencias_de_identidade``): "nascimento 2017-04-10 × 2017-04-09", "RA … ×
+# …", o nº de chamada. Nas entradas da própria criança, os itens de nascimento e de
+# RA perdem os valores e ficam "nascimento [removido]" / "RA [removido]": o porquê
+# técnico (houve conflito de nascimento, de RA) continua; a data e o número, não.
+_CHAVES_DE_DIVERGENCIA = frozenset({"divergencias"})
+_PREFIXO_NASCIMENTO = "nascimento "
+_PREFIXO_RA = "RA "
+_PREFIXOS_DE_DADO_NA_DIVERGENCIA = (_PREFIXO_NASCIMENTO, _PREFIXO_RA)
+
+# ``aluno.fundido`` → ``foto_pre_fusao`` → ``ficha``: o retrato do cadastro da
+# ficha absorvida (pela minimização da Lista Piloto, hoje só o RA). Não é o motivo
+# de nenhuma decisão: nas entradas da própria criança, todo valor dela vira
+# "[removido]" (as chaves ficam). Os outros RAs que o código grava hoje nas
+# entradas dela também caem: o de ``aluno.identidade_vinculada`` pela chave
+# (``_CHAVES_DE_DADO_PESSOAL``), o das ``divergencias`` pelo prefixo.
+_CHAVES_DE_RETRATO = frozenset({"foto_pre_fusao"})
+_CAMPO_FICHA_DO_RETRATO = "ficha"
+
+# A aparência da criança no Quest (``quest.avatar``): até a minimização do
+# vestiário, cada troca gravava o avatar INTEIRO (tom de pele, cabelo...) no log
+# permanente. Hoje a entrada guarda só os ``slots`` trocados; nas entradas antigas
+# da própria criança, o ``avatar`` inteiro vira "[removido]" (o fato e a data ficam).
+_CHAVES_DE_APARENCIA = frozenset({"avatar"})
+
+
+def _divergencia_sem_dado(texto):
+    """"RA 123 × 456" → "RA [removido]"; "nascimento A × B" → "nascimento [removido]"."""
+    if isinstance(texto, str):
+        for prefixo in _PREFIXOS_DE_DADO_NA_DIVERGENCIA:
+            if texto.startswith(prefixo):
+                return prefixo + _MARCA_REMOVIDO
+    return texto
+
+
+def _retrato_sem_ficha(retrato: dict) -> dict:
+    """A foto pré-fusão com os valores da ``ficha`` trocados por "[removido]"."""
+    ficha = retrato.get(_CAMPO_FICHA_DO_RETRATO)
+    if not isinstance(ficha, dict):
+        return retrato
+    return {**retrato, _CAMPO_FICHA_DO_RETRATO: {
+        chave: _MARCA_REMOVIDO if valor not in (None, "") else valor
+        for chave, valor in ficha.items()}}
 
 
 def _anonimizar_logs_do_aluno(db: Session, escola_id: int,
-                              aluno_ids: list[int], nomes: set[str]) -> None:
+                              aluno_ids: list[int], nomes: set[str],
+                              absorvidas: dict[int, set[str]] | None = None) -> None:
     """Redige o nome civil das entradas ANTERIORES do log de auditoria que se
     referem ao aluno excluído (LGPD/direito ao esquecimento).
 
     Anonimiza, NÃO apaga: o "quê/quando/por quem/sobre qual registro" — e o
-    porquê técnico (decisão, motivo, turma, RA) — continuam intactos; só o nome
-    de pessoa vira ``"[removido]"``. O ``entidade_id`` fica como referência
-    anônima. ``logs_auditoria`` é permanente por design (``models/nota.py``).
+    porquê técnico (decisão, motivo, turma, a origem de um vínculo) — continuam
+    intactos; só o nome de pessoa (e o dado pessoal de ``_CHAVES_DE_DADO_PESSOAL``
+    — com o RA do ``aluno.identidade_vinculada`` —, os valores dos itens de
+    nascimento e de RA de ``divergencias``, a ``ficha`` da ``foto_pre_fusao``, com
+    o RA dela, e o ``avatar`` do Quest — ``_CHAVES_DE_APARENCIA``) vira
+    ``"[removido]"``. O ``entidade_id`` fica como referência
+    anônima.
+    ``logs_auditoria`` é permanente por design (``models/nota.py``).
+
+    ``absorvidas`` ({id: {nomes}}, de ``exclusao_aluno.fichas_absorvidas``): as
+    fichas que a criança absorveu por fusão. São ELA: as entradas com o id delas
+    contam como "do aluno excluído" (critério 2), e os nomes delas entram no
+    critério 2 e — quando nenhuma criança que continua na escola tem o mesmo
+    nome — no critério 1.
 
     A varredura é por ESCOLA, sem filtrar ``entidade``/``entidade_id`` (C-07):
     o caminho de importação — que é o normal — grava ``entidade_id=None``, e
@@ -777,11 +1098,23 @@ def _anonimizar_logs_do_aluno(db: Session, escola_id: int,
                 if len(parte.strip(".")) > 1
                 and parte.strip(".") not in _PARTICULAS_DE_NOME}
 
+    absorvidas = absorvidas or {}
+    nomes_absorvidos = {n for ns in absorvidas.values() for n in ns if n and n.strip()}
     alvos = {normalizar_nome(n) for n in nomes if n and n.strip()}
-    if not alvos:
+    if nomes_absorvidos:
+        # O nome da ficha absorvida (muitas vezes abreviado: "ANA B. SOUZA",
+        # "JOAO PEDRO") só vale no critério por valor se não for também o nome —
+        # ou parte do nome — de quem continua na escola.
+        vivos = [normalizar_nome(n) for n in db.execute(select(Aluno.nome).where(
+            Aluno.escola_id == escola_id, Aluno.id.not_in(list(aluno_ids)))).scalars()
+            if n]
+        alvos |= {a for a in map(normalizar_nome, nomes_absorvidos)
+                  if not any(re.search(rf"\b{re.escape(a)}\b", v) for v in vivos)}
+    if not alvos and not absorvidas:
         return
-    tokens_alvo = set().union(*(_tokens(n) for n in nomes if n and n.strip()))
-    ids_alvo = set(aluno_ids)
+    tokens_alvo = set().union(*(_tokens(n) for n in (*nomes, *nomes_absorvidos)
+                                if n and n.strip()))
+    ids_alvo = set(aluno_ids) | set(absorvidas)
     # Nomes com 2+ partes são específicos o bastante para serem procurados
     # DENTRO de um texto maior sem risco de falso positivo. Um nome de uma
     # palavra só ("Ana") não entra aqui: casaria "Susana", "Ananias".
@@ -807,21 +1140,28 @@ def _anonimizar_logs_do_aluno(db: Session, escola_id: int,
         "matific"), que não tem nenhum token em comum."""
         return bool(_tokens(valor) & tokens_alvo)
 
+    def _redigir_campo(chave: str, item, *, por_chave: bool):
+        if isinstance(item, str) and (
+                (chave in _CHAVES_COM_NOME_DE_PESSOA
+                 and (_e_nome_de_alvo(item)
+                      or (por_chave and (chave in _CHAVES_SO_DE_NOME
+                                         or _parece_nome_do_alvo(item)))))
+                or (por_chave and chave in _CHAVES_DE_DADO_PESSOAL and item.strip())):
+            return _MARCA_REMOVIDO
+        if por_chave and chave in _CHAVES_DE_APARENCIA and isinstance(item, dict) and item:
+            return _MARCA_REMOVIDO
+        redigido = _redigir(item, por_chave=por_chave)
+        if por_chave and chave in _CHAVES_DE_DIVERGENCIA and isinstance(redigido, list):
+            return [_divergencia_sem_dado(texto) for texto in redigido]
+        if por_chave and chave in _CHAVES_DE_RETRATO and isinstance(redigido, dict):
+            return _retrato_sem_ficha(redigido)
+        return redigido
+
     def _redigir(valor, *, por_chave: bool):
         """``por_chave``: a entrada é comprovadamente do aluno excluído."""
         if isinstance(valor, dict):
-            return {
-                chave: (
-                    _MARCA_REMOVIDO
-                    if isinstance(item, str)
-                    and chave in _CHAVES_COM_NOME_DE_PESSOA
-                    and (_e_nome_de_alvo(item)
-                         or (por_chave and (chave in _CHAVES_SO_DE_NOME
-                                            or _parece_nome_do_alvo(item))))
-                    else _redigir(item, por_chave=por_chave)
-                )
-                for chave, item in valor.items()
-            }
+            return {chave: _redigir_campo(chave, item, por_chave=por_chave)
+                    for chave, item in valor.items()}
         if isinstance(valor, list):
             return [_redigir(item, por_chave=por_chave) for item in valor]
         if isinstance(valor, str) and _e_nome_de_alvo(valor):
@@ -870,7 +1210,8 @@ def _apagar_avisos_do_aluno(db: Session, escola_id: int,
 
 
 def _apagar_alunos_e_dados(db: Session, escola_id: int, usuario: Usuario,
-                           aluno_ids: list[int], contagens: dict | None = None) -> int:
+                           aluno_ids: list[int], contagens: dict | None = None, *,
+                           esquecer_contas: bool = False) -> int:
     """Exclusão FÍSICA de alunos + TODOS os dados vinculados (leituras, snapshots
     Matific/Elefante, notas, matrículas, eventos, identidades externas) e — LGPD/
     direito ao esquecimento — as conversas da IA que citem o nome e o que guarda
@@ -882,14 +1223,24 @@ def _apagar_alunos_e_dados(db: Session, escola_id: int, usuario: Usuario,
 
     ``contagens`` (opcional): dicionário que recebe, SEM nome nenhum, quantas
     linhas de cada tipo saíram — para o chamador auditar e mostrar o que apagou
-    (a exclusão de turma com alunos usa; nada muda para quem não passa)."""
+    (a exclusão de turma com alunos usa; nada muda para quem não passa).
+
+    ``esquecer_contas`` (a exclusão permanente — o pedido de esquecimento): grava
+    no ``aluno.excluido_permanente`` de cada criança a MARCA das contas dela nas
+    plataformas (HMAC, sem nome nem id em claro — ``exclusao_aluno.contas_da_crianca``)
+    para a coleta seguinte ignorá-las, em vez de recriar a ficha ou devolver o nome
+    à fila de revisões. A exclusão de turma com alunos não passa: limpar uma turma
+    não é pedido de esquecimento, e a conta de quem continua estudando voltaria a
+    ser ignorada para sempre."""
     from app.models import EventoAluno, IdentidadeExterna  # noqa: E402
     from app.quest.models import QuestPerfil  # noqa: E402
     from app.services import exclusao_aluno  # noqa: E402
 
-    nomes = {a.id: a.nome for a in db.execute(
+    alunos = list(db.execute(
         select(Aluno).where(Aluno.escola_id == escola_id, Aluno.id.in_(aluno_ids))
-    ).scalars()}
+    ).scalars())
+    nomes = {a.id: a.nome for a in alunos}
+    criacoes = {a.id: a.created_at.isoformat() for a in alunos}
     ids = list(nomes)
     if not ids:
         return 0
@@ -899,6 +1250,10 @@ def _apagar_alunos_e_dados(db: Session, escola_id: int, usuario: Usuario,
     identidades = {(p, i) for p, i in db.execute(
         select(IdentidadeExterna.plataforma, IdentidadeExterna.id_externo)
         .where(IdentidadeExterna.aluno_id.in_(ids)))}
+    # As contas de cada criança — as vinculadas e as das revisões dela — também
+    # antes de apagar identidades e revisões: viram a marca de esquecimento.
+    contas_dela = (exclusao_aluno.contas_da_crianca(db, escola_id, nomes)
+                   if esquecer_contas else {})
     if contagens is not None:
         # O perfil do Quest (com a telemetria) sai pelo ON DELETE CASCADE do
         # banco: contado ANTES, para a auditoria não omitir o que a cascata leva.
@@ -921,20 +1276,31 @@ def _apagar_alunos_e_dados(db: Session, escola_id: int, usuario: Usuario,
         delete(Matricula).where(Matricula.aluno_id.in_(ids))).rowcount
     # LGPD/esquecimento: NÃO gravar o nome da criança no log permanente (o
     # entidade_id basta como referência; o nome, uma vez apagado, não deve
-    # sobreviver em texto claro). Guarda só a contagem por lote.
+    # sobreviver em texto claro). Guarda só a contagem por lote — e, no pedido de
+    # esquecimento, a marca das contas dela (plataforma + HMAC do id externo), que a
+    # porta única de identidade lê para ignorar a conta na coleta seguinte.
     for aid in ids:
-        registrar(db, "aluno.excluido_permanente", escola_id=escola_id,
+        detalhes = {"tipo": "exclusao_permanente", "ficha_criada_em": criacoes[aid]}
+        if contas_dela.get(aid):
+            detalhes[exclusao_aluno.CHAVE_CONTAS_ESQUECIDAS] = (
+                exclusao_aluno.marcas_para_o_log(contas_dela[aid]))
+        registrar(db, exclusao_aluno.ACAO_EXCLUSAO_PERMANENTE, escola_id=escola_id,
                   usuario_id=usuario.id, entidade="aluno", entidade_id=aid,
-                  detalhes={"tipo": "exclusao_permanente"})
+                  detalhes=detalhes)
+    # As fichas que ele absorveu por fusão (o stub da importação, a foto pré-fusão)
+    # são dele: lidas UMA vez, ANTES de anonimizar o log — é do log ``aluno.fundido``
+    # que vêm os nomes delas — e usadas no log, fora do cadastro e nas conversas.
+    absorvidas = exclusao_aluno.fichas_absorvidas(db, escola_id, ids)
     # E anonimiza as entradas ANTERIORES do log que citam o nome deste aluno
     # (criação/edição/fusão/importação) — sem isso o nome civil do menor
     # persistiria para sempre no histórico de auditoria.
-    _anonimizar_logs_do_aluno(db, escola_id, ids, set(nomes.values()))
+    _anonimizar_logs_do_aluno(db, escola_id, ids, set(nomes.values()), absorvidas)
     # Avisos que apontam para a criança não têm FK e não somem no cascade.
     _apagar_avisos_do_aluno(db, escola_id, ids)
     # O que guarda o nome/id fora do cadastro (ANTES do DELETE em alunos: a
     # revisão resolvida para ela ainda aponta o id). Só contagens no log.
-    fora = exclusao_aluno.esquecer_fora_do_cadastro(db, escola_id, nomes, identidades)
+    fora = exclusao_aluno.esquecer_fora_do_cadastro(db, escola_id, nomes, identidades,
+                                                    absorvidas)
     conta["identidades_externas"] = db.execute(
         delete(IdentidadeExterna).where(IdentidadeExterna.aluno_id.in_(ids))).rowcount
     db.execute(delete(Aluno).where(Aluno.id.in_(ids)))
@@ -946,8 +1312,10 @@ def _apagar_alunos_e_dados(db: Session, escola_id: int, usuario: Usuario,
     # LGPD: esquecimento das conversas da IA que citem algum aluno excluído (a
     # cascata da 0003 apaga as mensagens). Por palavra inteira e sem contar o
     # nome maior de quem fica — regra em ``exclusao_aluno.conversas_ia_que_citam``.
+    # Também pelo nome das fichas absorvidas (o assistente citava o stub por ele).
     from app.models import ConversaIA
-    ids_conversas = exclusao_aluno.conversas_ia_que_citam(db, escola_id, nomes)
+    ids_conversas = exclusao_aluno.conversas_ia_que_citam(db, escola_id, nomes,
+                                                          absorvidas)
     if ids_conversas:
         db.execute(delete(ConversaIA).where(ConversaIA.id.in_(ids_conversas)))
         registrar(db, "ia.conversas_esquecimento", escola_id=escola_id,
@@ -982,8 +1350,13 @@ def excluir_alunos_permanente(
             status.HTTP_400_BAD_REQUEST,
             "Confirmação inválida. Digite EXCLUIR para confirmar a exclusão "
             "permanente e irreversível.")
+    # Mesma trava da fusão, da importação e da coleta (no-op no SQLite), ANTES de
+    # ler as fichas: nenhuma fusão grava no log da criança (nem lhe passa dados)
+    # entre a leitura do estado e a anonimização.
+    bloquear_escola_para_importacao(db, escola_id)
     alunos = _alunos_selecionados(db, escola_id, dados.aluno_ids)
-    n = _apagar_alunos_e_dados(db, escola_id, usuario, [a.id for a in alunos])
+    n = _apagar_alunos_e_dados(db, escola_id, usuario, [a.id for a in alunos],
+                               esquecer_contas=True)
     db.commit()
     _recalcular_escola(db, escola_id)
     return {"mensagem": f"{n} aluno(s) excluído(s) permanentemente, com "
@@ -993,28 +1366,70 @@ def excluir_alunos_permanente(
 _CONFIRMA_CONFLITO = "FUNDIR MESMO COM CONFLITO"
 
 
-def _divergencias_de_identidade(a: Aluno, b: Aluno) -> list[str]:
+def _divergencias_de_identidade(a: Aluno, b: Aluno) -> dict[str, str]:
     """Os sinais que o MOTOR ÚNICO trata como prova de serem crianças diferentes,
-    em português, para a mensagem e para o log.
+    em português, para a mensagem e para o log: ``{campo: texto}``, com ``campo``
+    em ``nascimento`` | ``ra`` | ``chamada`` | ``motor`` (na ordem da mensagem).
 
     Usa ``matching.conflito_identidade`` como juiz — a mesma função que decide
     isso em toda importação e sincronização — em vez de uma regra própria daqui.
     Com isso o RA passa pela normalização canônica (``ra_forte``), então dois
     RAs que só diferem na pontuação NÃO contam como divergência, e a decisão
     sobre nº de chamada (renumeração de sala não é outra criança) é herdada em
-    vez de reinventada. Devolve [] quando não há prova de conflito."""
+    vez de reinventada. Devolve {} quando não há prova de conflito."""
     ia, ib = identidade_aluno.identidade_do_aluno(a), identidade_aluno.identidade_do_aluno(b)
     if not matching.conflito_identidade(ia, ib):
-        return []
-    motivos = []
+        return {}
+    motivos: dict[str, str] = {}
     if ia.nascimento and ib.nascimento and ia.nascimento != ib.nascimento:
-        motivos.append(f"nascimento {ia.nascimento} × {ib.nascimento}")
+        motivos["nascimento"] = f"{_PREFIXO_NASCIMENTO}{ia.nascimento} × {ib.nascimento}"
     if ia.ra and ib.ra and ia.ra != ib.ra:
-        motivos.append(f"RA {ia.ra} × {ib.ra}")
+        motivos["ra"] = f"{_PREFIXO_RA}{ia.ra} × {ib.ra}"
     if (ia.chamada is not None and ib.chamada is not None
             and ia.chamada != ib.chamada):
-        motivos.append(f"nº de chamada {ia.chamada} × {ib.chamada}")
-    return motivos or ["o motor de identidade aponta conflito"]
+        motivos["chamada"] = f"nº de chamada {ia.chamada} × {ib.chamada}"
+    return motivos or {"motor": "o motor de identidade aponta conflito"}
+
+
+def _saida_do_conflito(divergencias: dict[str, str]) -> str:
+    """O que fazer quando não se tem certeza, dito só com caminhos que EXISTEM.
+
+    Nascimento e nº de chamada se corrigem em “Editar dados”; o RA NÃO — o modal e
+    ``AlunoUpdate`` não têm o campo (achado ALUNOS-10 da auditoria: a mensagem
+    mandava corrigir ali um RA que não se edita). Para o RA a saída real é a da
+    própria fusão: a ficha principal guarda o RA dela (``alunos_fusao`` só
+    preenche campos VAZIOS da ficha que fica)."""
+    ra = ("deixe como principal a ficha com o RA certo antes de confirmar — a fusão "
+          "guarda o RA da ficha principal.")
+    if "ra" not in divergencias:
+        return ("Se não tiver certeza, não funda: corrija antes o dado divergente em "
+                "Alunos › Editar dados.")
+    if len(divergencias) == 1:
+        return f"Se só um dos RAs estiver errado, {ra} Se não tiver certeza, não funda."
+    return ("Se não tiver certeza, não funda: o nascimento e o nº de chamada se "
+            "corrigem antes em Alunos › Editar dados. O RA não se corrige ali: se só um "
+            f"dos RAs estiver errado, {ra}")
+
+
+@router.get("/alunos/fundir/previa", response_model=dict)
+def previa_fundir_alunos(
+    manter_id: int,
+    remover_id: int,
+    escola_id: int = Depends(escola_autorizada),
+    usuario: Usuario = Depends(exigir_papeis("admin", "coordenador")),
+    db: Session = Depends(get_db),
+):
+    """PRÉVIA da fusão manual (só leitura): o que acontece com os livros que estão
+    nas DUAS fichas, nesta direção (fica a data de ``manter_id``). Não grava nada e
+    não toma a trava. A Secretaria é barrada como em /alunos/duplicados: a resposta
+    traz nome de criança e os livros dela."""
+    permissoes.negar_dado_individual(db, escola_id, usuario)
+    if manter_id == remover_id:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST,
+                            "Escolha dois alunos diferentes para fundir.")
+    manter = _aluno_da_escola(db, escola_id, manter_id)
+    remover = _aluno_da_escola(db, escola_id, remover_id)
+    return alunos_dedup.previa_da_fusao(db, escola_id, manter, remover)
 
 
 @router.post("/alunos/fundir", response_model=dict)
@@ -1038,8 +1453,12 @@ def fundir_alunos(
       * matrícula no mesmo ano nos dois → mantém a do `manter` (a turma
         dele prevalece);
       * perfil/credencial Quest é único por aluno → migra (com toda a
-        telemetria) se o `manter` não tiver; se ambos tiverem, prevalece o do
-        `manter` e o do `remover` é descartado (contado no log);
+        telemetria) se o `manter` não tiver; se ambos tiverem, fica o que a
+        criança usa (``alunos_fusao.plano_quest``) e o outro é descartado (contado
+        no log); as duas fichas com jogo no Quest → 409, nada é fundido;
+      * conta da MESMA plataforma nas duas fichas (contas diferentes) → 409,
+        nada é fundido: o retrato não guarda a conta de origem e as duas séries
+        se misturariam (``alunos_fusao.contas_em_conflito``);
       * campos vazios do `manter` (foto, nº de chamada, nascimento,
         observações) são preenchidos com os do `remover`.
     Irreversível → exige confirmação textual "FUNDIR". Recalcula ao final."""
@@ -1049,6 +1468,14 @@ def fundir_alunos(
     if dados.manter_id == dados.remover_id:
         raise HTTPException(status.HTTP_400_BAD_REQUEST,
                             "Escolha dois alunos diferentes para fundir.")
+    # A MESMA trava da importação e da coleta, e pelo mesmo motivo. Sem ela, uma
+    # coleta em andamento gravava retrato ou vínculo na ficha que está sendo apagada,
+    # e o CASCADE levava junto (ou a coleta caía por FK). A ORDEM é a da importação:
+    # a trava vem ANTES de ler as duas fichas e de escrever qualquer linha — quem
+    # chega depois espera, e relê o que o outro gravou — e cai no commit, antes do
+    # recálculo (hierarquia de ``bloquear_escola_para_recalculo``). Travar depois de
+    # escrever daria deadlock com a coleta, que trava primeiro e escreve depois.
+    bloquear_escola_para_importacao(db, escola_id)
     manter = _aluno_da_escola(db, escola_id, dados.manter_id)
     remover = _aluno_da_escola(db, escola_id, dados.remover_id)
     # Só funde alunos ATIVOS: manter um arquivado/excluído absorvendo um ativo
@@ -1069,23 +1496,27 @@ def fundir_alunos(
         raise HTTPException(
             status.HTTP_409_CONFLICT,
             "Estes dois cadastros têm sinais de serem crianças DIFERENTES: "
-            + "; ".join(divergencias)
+            + "; ".join(divergencias.values())
             + f". Se ainda assim for a mesma criança, digite “{_CONFIRMA_CONFLITO}” "
-              "para confirmar. Se não tiver certeza, não funda: corrija antes o "
-              "dado divergente em Alunos › Editar dados.")
+              "para confirmar. " + _saida_do_conflito(divergencias))
 
 
     # Núcleo compartilhado com a fusão em lote (Fundir duplicatas): reatribui/
     # deduplica cada relação, funde a ficha, registra a auditoria (com a foto
     # pré-fusão) e apaga o `remover`. Não commita nem recalcula — isso é aqui.
-    r = alunos_fusao.fundir_par(db, escola_id, manter, remover, usuario.id)
+    # Recusa (contas diferentes da mesma plataforma, ou as duas fichas com jogo no
+    # Constela Quest) vem antes de qualquer escrita (``alunos_fusao.motivo_da_recusa``).
+    try:
+        r = alunos_fusao.fundir_par(db, escola_id, manter, remover, usuario.id)
+    except alunos_fusao.FusaoRecusada as recusa:
+        raise HTTPException(status.HTTP_409_CONFLICT, recusa.motivo) from None
     if divergencias:
         # Fundiu APESAR da prova de conflito: o log tem de dizer o que o gestor
         # aceitou passar por cima, senão a decisão some.
         registrar(db, "aluno.fundido_com_conflito", escola_id=escola_id,
                   usuario_id=usuario.id, entidade="aluno", entidade_id=manter.id,
                   detalhes={"manter_id": manter.id, "remover_id": dados.remover_id,
-                            "divergencias": divergencias,
+                            "divergencias": list(divergencias.values()),
                             "confirmacao_especifica": _CONFIRMA_CONFLITO})
     db.commit()
     _recalcular_escola(db, escola_id)
@@ -1278,7 +1709,12 @@ def listar_alunos_da_turma(
 ):
     """Alunos da turma para o painel de gestão: com nota, posição e data de
     cadastro; busca por nome e ordenação. `incluir_inativos` traz também os
-    arquivados/excluídos (para restaurar ou apagar de vez)."""
+    arquivados/excluídos (para restaurar ou apagar de vez).
+
+    A posição só sai para quem está no ranking: ficha ativa numa turma que
+    concorre (1º ao 5º ano). A Nota de quem saiu (arquivado, transferido,
+    excluído) ou está numa turma de Fase é de um cálculo antigo, e a posição dela
+    hoje é de outra criança — o painel mostrava duas crianças em 1º."""
     turma = _turma_da_escola(db, escola_id, turma_id)
     permitidas = permissoes.turmas_permitidas(db, escola_id, usuario)
     if permitidas is not None and turma_id not in permitidas:
@@ -1303,13 +1739,16 @@ def listar_alunos_da_turma(
         consulta = consulta.where(Aluno.nome.ilike(f"%{busca}%"))
     consulta = consulta.order_by(*_ordem_alunos(ordenar), Aluno.nome.asc())
 
+    premiavel = elegibilidade.participa_de_premiacao(turma.ano_escolar)
     saida = []
     for aluno, nota in db.execute(consulta).all():
         item = AlunoGestaoOut.model_validate(aluno)
         item.turma = turma.nome
         item.ano_escolar = turma.ano_escolar
         item.nota_geral = nota.nota_geral if nota else None
-        item.posicao = nota.posicao if nota else None
+        # Só quem está no ranking (turma premiável, ficha ativa) mostra posição.
+        no_ranking = nota is not None and premiavel and aluno.status == "ativo"
+        item.posicao = nota.posicao if no_ranking else None
         saida.append(item)
     return saida
 
@@ -1468,6 +1907,13 @@ def _exigir_alunos_na_origem(db: Session, ids: list[int], origem: Turma, ano: in
         "recarregue a turma e tente de novo.")
 
 
+# Campos da turma que entram no ranking: a série (elegibilidade e fator de série,
+# no motor e na leitura), o turno (bônus de leitura na escola, no motor) e o ano
+# letivo (a leitura do ranking só considera as turmas do ano ativo; o recálculo
+# também invalida o cache do painel, que já mostrava a lista de antes).
+_CAMPOS_DA_TURMA_NO_CALCULO = ("ano_escolar", "turno", "ano_letivo")
+
+
 @router.put("/turmas/{turma_id}", response_model=TurmaOut)
 def atualizar_turma(
     turma_id: int,
@@ -1488,9 +1934,22 @@ def atualizar_turma(
     turma de outro ano. Toma antes a trava da escola (no-op no SQLite), a mesma das
     portas que gravam matrícula: um cadastro, uma transferência ou um /resolver não
     grava, entre a contagem e a troca do ano, uma matrícula do ano que a turma está
-    deixando (ela ficaria numa turma de outro ano)."""
+    deixando (ela ficaria numa turma de outro ano).
+
+    Mudar a SÉRIE, o TURNO ou o ANO LETIVO recalcula a escola depois do commit,
+    como toda outra porta que mexe na população do ranking (ações em massa, fusão,
+    exclusões, consolidar turmas). A série decide quem concorre (1º ao 5º ano; as
+    Fases não) e o fator de série da dificuldade; o turno, no perfil personalizado,
+    o bônus de livro lido na escola. Sem o recálculo, a criança da turma que virava
+    "2º Ano" ficava sem nota e fora do ranking, a turma que virava Fase deixava
+    buraco nas posições dos outros, e a Nota congelada de quem voltava de Fase para
+    Ano repetia a posição de outra criança — no ranking e no certificado de mérito.
+    Os outros campos (nome, professor, capacidade, observações, situação) não
+    entram na conta e não recalculam."""
     turma = _turma_da_escola(db, escola_id, turma_id)
     campos = dados.model_dump(exclude_unset=True)
+    muda_a_conta = any(chave in campos and campos[chave] != getattr(turma, chave)
+                       for chave in _CAMPOS_DA_TURMA_NO_CALCULO)
     if campos.get("status") == "arquivada" and turma.status != "arquivada":
         _exigir_turma_sem_alunos_ativos(db, escola_id, turma)
     if campos.get("ano_letivo") is not None and campos["ano_letivo"] != turma.ano_letivo:
@@ -1514,6 +1973,8 @@ def atualizar_turma(
         db.rollback()
         raise HTTPException(status.HTTP_409_CONFLICT,
                             f"Já existe a turma “{nome}” no ano letivo {ano_letivo}.")
+    if muda_a_conta:
+        _recalcular_escola(db, escola_id)
     db.refresh(turma)
     return _turma_out(db, turma)
 
@@ -1793,7 +2254,11 @@ def corrigir_turmas_duplicadas(
 
     Duplicada de ano letivo diferente do da canônica: também 409 para o pedido
     inteiro, antes de mover qualquer matrícula
-    (``_exigir_duplicadas_do_ano_da_canonica``)."""
+    (``_exigir_duplicadas_do_ano_da_canonica``).
+
+    Duplicada com pontuação por nível própria (parâmetro do Admin Global),
+    diferente da canônica: 409 para o pedido inteiro, antes de mover — o CASCADE
+    apagava a configuração em silêncio (``turmas_dedup.motivo_da_recusa``)."""
     bloquear_escola_para_importacao(db, escola_id)
     for g in grupos:
         canonica = db.get(Turma, g.canonica_id)
@@ -1801,11 +2266,19 @@ def corrigir_turmas_duplicadas(
             turma_arquivada.exigir_turma_ativa(canonica)
             _exigir_duplicadas_do_ano_da_canonica(db, escola_id, canonica,
                                                   g.duplicada_ids)
+            duplicadas = [d for d in (db.get(Turma, i) for i in g.duplicada_ids
+                                      if i != canonica.id)
+                          if d is not None and d.escola_id == escola_id]
+            motivo = turmas_dedup.motivo_da_recusa(db, escola_id, canonica, duplicadas)
+            if motivo is not None:
+                raise HTTPException(status.HTTP_409_CONFLICT, motivo)
         # Canônica inexistente ou de outra escola: o 400 de sempre, de consolidar.
     resumos: list[dict] = []
     try:
         for g in grupos:
             resumos.append(turmas_dedup.consolidar(db, escola_id, g.canonica_id, g.duplicada_ids))
+    except turmas_dedup.ConsolidacaoRecusada as exc:
+        raise HTTPException(status.HTTP_409_CONFLICT, exc.motivo) from None
     except ValueError as exc:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc))
 

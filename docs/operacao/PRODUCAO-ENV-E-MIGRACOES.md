@@ -146,6 +146,40 @@ variável `PGCONNECT_TIMEOUT` da libpq também, quando definida e não vazia no 
 (inclusive `0`, que volta aos 130 s do driver). Não afeta o SQLite. Não muda o pool nem
 o tempo das consultas (só a abertura da conexão).
 
+`DB_POOL_AQUECIDO_S` e `DB_POOL_AQUECIDO_CONEXOES` (operacionais, **não obrigatórias**;
+padrões `20` e `8`): o mantenedor do pool (`app/core/mantenedor_do_pool.py`). Sem ele, a
+requisição do usuário pagava a conexão nova depois de um deploy ou reinício (~0,8 s cada,
+com o banco a ~195 ms), o ping da conexão parada há mais de `DB_PING_OCIOSO_S` (30 s;
+~0,2 s) e a reabertura da conexão com mais de `DB_POOL_RECYCLE` (1800 s; ~0,8 s). Como a
+Secretaria entra poucas vezes por dia, esse é o caso comum. O mantenedor é uma thread por
+worker, ligada no startup e parada no shutdown. No boot, e depois a cada
+`DB_POOL_AQUECIDO_S` segundos, ela retira ao mesmo tempo `DB_POOL_AQUECIDO_CONEXOES`
+conexões, roda `SELECT 1` em cada e devolve todas. A conexão perto do `DB_POOL_RECYCLE`
+(margem de 2 intervalos) é reaberta ali mesmo. Regras:
+
+- só PostgreSQL; `0` (ou negativo) em qualquer das duas desliga;
+- o intervalo precisa ficar **abaixo** do `DB_PING_OCIOSO_S` (se não ficar, o boot avisa
+  no log);
+- as conexões ficam limitadas ao `DB_POOL_SIZE` (10). O total mantido aberto é
+  `DB_POOL_AQUECIDO_CONEXOES` × workers: 8 com 1 worker, 16 com 2. **No pooler de sessão do
+  Supabase cada conexão ocupa uma vaga**: confira o *Pool Size* do projeto antes de
+  publicar. Se não couber com folga (o robô, os scripts e o backup também usam vagas),
+  baixe o número ou desligue com `0`;
+- 8 cobre as chamadas em voo do Panorama da Secretaria: 6 da página, mais o sinal de
+  presença e o contador de notificações. A Ficha e a Comparação têm 7;
+- erro do banco não derruba a API. Vira um aviso no log, no máximo um a cada 5 min e só
+  com o tipo do erro, e o ciclo seguinte tenta de novo;
+- não segura conexão entre ciclos: cada uma sai do pool só pelo tempo do `SELECT 1` e até as
+  outras retiradas do ciclo saírem do pool (não espera a conexão que uma delas esteja
+  abrindo devagar);
+- não compete com uma página carregando: antes de cada ciclo (menos o do boot) espera 2 s
+  sem requisição em andamento, por no máximo 5 s (com os padrões, o ciclo seguinte começa
+  em até 25 s, abaixo dos 30 s do ping);
+- **App Sleeping do Railway**: é uma opção do painel (não há arquivo de configuração do
+  serviço no repositório). Com ela ligada, o serviço que dorme volta frio e o primeiro
+  acesso paga o boot inteiro. Pela documentação do Railway, o `SELECT 1` a cada 20 s conta
+  como tráfego de saída e impede o serviço de dormir. Confira a opção no painel.
+
 **Configuração do serviço no Railway** (não são variáveis):
 
 | Campo | Valor | Passo |
@@ -225,18 +259,30 @@ Saída (números fictícios):
       indeterminadas: 2
       hash não conferível (fora da etapa): 1
     ATENÇÃO: há conta GLOBAL com senha derivada. ...
+    LIMITE: estas contas foram conferidas com o nome e o usuário + 123 em 4 caixas ...
 
 O que conferir:
 
-1. **`globais: 0`** → segue. Com `globais` acima de 0: troque a senha dessa conta **antes** do
+1. **`globais: 0`** e a **confirmação com cada administrador global** → segue. A contagem
+   confere o nome e o @ + "123" em 4 caixas (como está, minúsculas, MAIÚSCULAS e só a
+   primeira maiúscula: o bcrypt não deixa conferir todas), mas a trava do login recusa o
+   nome ou @ + "123" em **qualquer** combinação de maiúsculas e minúsculas (ex.:
+   `aNaSilva123`). Uma conta global com a senha do próprio nome numa combinação dessas sai
+   como `globais: 0` e recebe o 403 depois do deploy, sem volta garantida — a linha
+   `LIMITE` da saída lembra disso. Por isso pergunte a cada administrador global se a senha
+   dele é o próprio nome ou @ + 123, em qualquer combinação de maiúsculas e minúsculas; se
+   for, troque antes. Com `globais` acima de 0: troque a senha dessa conta **antes** do
    deploy (o código atual ainda aceita a senha derivada) e rode `--contagens` de novo até
    `globais: 0`. Depois do deploy a saída é manual.
-2. **`ativas`** e **`já usadas`** dizem quantas contas recebem o 403 no primeiro login depois do
-   deploy (as já usadas são as de quem entra hoje com essa senha). Combine com as escolas quem
-   gera os links (Usuários → Redefinir senha). O `--aplicar` do mesmo script continua
-   recomendado, só com autorização do dono e backup validado (ver o cabeçalho de
-   `backend/scripts/senhas_derivadas.py`): ele também derruba as sessões abertas com a senha
-   antiga (valem até 8 h) e cobre nomes e @ antigos que a trava do login não confere.
+2. **`ativas`** e **`já usadas`** dizem quantas contas, **no mínimo**, recebem o 403 no
+   primeiro login depois do deploy (as já usadas são as de quem entra hoje com essa senha;
+   a senha do nome em outra combinação de maiúsculas e minúsculas fica de fora da conta e
+   também recebe o 403). Combine com as escolas quem gera os links (Usuários → Redefinir
+   senha). O `--aplicar` do mesmo script continua recomendado, só com autorização do dono e
+   backup validado (ver o cabeçalho de `backend/scripts/senhas_derivadas.py`): ele também
+   derruba as sessões abertas com a senha antiga (valem até 8 h) e cobre nomes e @ antigos
+   que a trava do login não confere; e não invalida as senhas do nome nas outras
+   combinações de caixa, que só a trava do login recusa.
 3. A lista por conta (para quem vai gerar os links) é o diagnóstico **sem** `--contagens`: ele
    mostra id, @ e escola — essa saída não vai para chat.
 

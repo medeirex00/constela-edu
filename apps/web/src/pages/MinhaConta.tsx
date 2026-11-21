@@ -41,10 +41,14 @@ function estiloPerfil(u: { is_global: boolean; rede_id?: number | null; cargo: s
 }
 
 /** A quem pedir o link de redefinição de senha. É a MESMA régua do backend
- *  (`admin._usuario_alvo` e `deps.negar_secretaria`): conta da Secretaria (rede) ou
- *  global só o Admin Global da plataforma administra — o administrador da escola
- *  recebe 403 e a própria Secretaria não gera link. Os demais perfis pedem à escola. */
-function orientacaoSenha(u: { is_global: boolean; rede_id?: number | null }): string {
+ *  (`admin._usuario_alvo`, `admin._pode_redefinir_senha` e `deps.negar_secretaria`):
+ *  conta da Secretaria (rede) ou global só o Admin Global da plataforma administra — o
+ *  administrador da escola recebe 403 e a própria Secretaria não gera link. Na escola,
+ *  o link sai em Usuários: a coordenação gera o dos professores; o administrador, o de
+ *  todos; e cada um gera o próprio confirmando a senha atual (a professora não tem
+ *  Usuários no menu, então pede à coordenação). Corrigir dados da conta é só do
+ *  administrador (`PATCH /usuarios` exige admin). */
+function orientacaoSenha(u: { is_global: boolean; rede_id?: number | null; cargo?: string }): string {
   if (u.is_global) {
     return "A senha de uma conta global só pode ser redefinida por outro Administrador " +
       "Global da plataforma: peça a ele um link de redefinição (uso único). Precisa " +
@@ -56,9 +60,20 @@ function orientacaoSenha(u: { is_global: boolean; rede_id?: number | null }): st
       "de redefinição (uso único). O administrador da escola não tem acesso a esta conta. " +
       "Precisa corrigir algum dado? Fale também com o Administrador Global.";
   }
-  return "Para trocar a sua senha, peça ao administrador da escola um link de " +
-    "redefinição (uso único). Precisa corrigir algum dado desta conta? Fale " +
-    "também com o administrador.";
+  if (u.cargo === "coordenador" || u.cargo === "admin") {
+    const admin = u.cargo === "admin";
+    return "Você pode trocar a sua senha em Minha Escola › Usuários: nos três pontinhos da sua " +
+      "linha, use “Redefinir senha”, confirme a senha atual e abra o link gerado (uso único). " +
+      "Esqueceu a senha atual? Peça um link " +
+      (admin ? "a outro administrador da escola ou à administração do Constela. "
+        : "ao administrador da escola ou à administração do Constela. ") +
+      (admin
+        ? "Para corrigir algum dado desta conta, use “Editar” na mesma linha."
+        : "Precisa corrigir algum dado desta conta? Fale com eles também.");
+  }
+  return "Para trocar a sua senha, peça à coordenação da escola: em Usuários, ela gera um " +
+    "link de redefinição (uso único), e é você quem escolhe a senha nova ao abri-lo. Precisa " +
+    "corrigir algum dado desta conta? Fale com o administrador da escola.";
 }
 
 /** No fuso de Brasília (a API manda UTC sem marca de fuso; `new Date` adiantava 3 h). */

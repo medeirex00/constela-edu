@@ -280,6 +280,34 @@ def test_fila_de_nova_tentativa_com_disponivel_no_futuro_nao_e_presa(db, escola_
     assert _v(a, "sync_execucoes_ativas", plataforma="matific", status="fila") == 1
 
 
+def test_presa_em_execucao_segue_o_sinal_de_vida_e_nao_a_idade(db, escola_completa,
+                                                               monkeypatch):
+    """A 'executando' presa da métrica é a que o reaper liberaria (``_esta_travada``):
+    sem início nem log dentro de SYNC_SEM_SINAL_S. A coleta viva há 70 min (além de
+    SYNC_TRAVADA_S) que escreveu no log há 2 min não é presa; a morta há 16 min, sem
+    log, é. Pela idade (o critério antigo) as duas sairiam trocadas."""
+    monkeypatch.setattr(settings, "SYNC_SEM_SINAL_S", 900)
+    monkeypatch.setattr(settings, "SYNC_TRAVADA_S", 3600)
+    eid = escola_completa["escola"].id
+    viva = _exec(db, eid, "elefante", "executando", inicio=T - timedelta(minutes=70))
+    db.add(SincronizacaoLog(execucao_id=viva.id, escola_id=eid, etapa="download",
+                            nivel="info", mensagem="turma coletada (fake)",
+                            created_at=T - timedelta(minutes=2)))
+    _exec(db, eid, "matific", "executando", inicio=T - timedelta(minutes=16))
+    db.commit()
+
+    a = _amostras(_coletor(db))
+
+    presas = "sync_execucoes_presas"
+    assert _v(a, presas, plataforma="elefante", status="executando") == 0
+    assert _v(a, presas, plataforma="matific", status="executando") == 1
+    # A mesma decisão do reaper.
+    monkeypatch.setattr(service, "_agora", lambda: T)
+    assert [service._esta_travada(ex) for ex in db.query(SincronizacaoExecucao).filter(
+        SincronizacaoExecucao.status == "executando").order_by(
+        SincronizacaoExecucao.plataforma)] == [False, True]
+
+
 def test_rotulo_fora_do_padrao_vira_outro_e_series_iguais_sao_somadas(db, escola_completa):
     """Dois valores livres que viram 'outro' não podem gerar a MESMA série duas
     vezes: o Prometheus recusaria o scrape inteiro."""

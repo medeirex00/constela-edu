@@ -4,6 +4,7 @@ import pytest
 
 from app.models import Importacao, Leitura, Livro, Nota, SnapshotElefante, SnapshotMatific
 from app.services import importacao as svc
+from tests._ano_letivo import escola_no_ano_de_hoje  # noqa: F401 — fixture
 
 TEXTO_MATIFIC = """Relatório Matific — Turma 3º Ano A
 Nome do aluno\tAtividades finalizadas\tPontuação média\tEstrelas
@@ -238,8 +239,12 @@ def test_confirmar_cria_turma_pelo_nome_do_relatorio(cliente, db, escola_complet
     assert len(turmas) == 1
 
 
-def test_edicao_manual_matific_preserva_historico(cliente, db, escola_completa):
-    """Edição manual cria snapshot novo (imutável) e fica no log (PRD §68, §17)."""
+def test_edicao_manual_matific_preserva_historico(cliente, cliente_global, db,
+                                                  escola_completa):
+    """Edição manual cria snapshot novo (imutável) e fica no log (PRD §68, §17).
+
+    Depois de um relatório do Matific importado, o ajuste manual é do Admin
+    Global (a escola recebe 403: o dado já veio da plataforma)."""
     escola_id = escola_completa["escola"].id
     ana = escola_completa["alunos"][0]
     cliente.post(
@@ -249,7 +254,7 @@ def test_edicao_manual_matific_preserva_historico(cliente, db, escola_completa):
                           "dados": {"atividades": 10, "pontuacao_media": 50, "estrelas": 20},
                           "aluno_id": ana.id}]},
     )
-    resposta = cliente.put(
+    resposta = cliente_global.put(
         f"/api/v1/escolas/{escola_id}/matific/{ana.id}",
         # média na escala 0–5 do Matific (a edição manual recusa acima de 5)
         json={"atividades": 12, "pontuacao_media": 4.5, "estrelas": 25,

@@ -36,7 +36,10 @@ import { usePerfil } from "../../hooks/usePerfil";
 import { Aviso, Nota } from "../rede/IdebBlocos";
 import { textoSimples, textosDoFluxoPrincipal } from "../rede/secretaria/oQueMede";
 import DetalhesEFontes, { Recolhivel, type ItemDetalhe } from "./DetalhesFonte";
-import { FiltrosAplicados, SemPontoNaEdicao, TD, TH, TITULO_CARTAO, ValorOficial, useApiExata } from "./comum";
+import {
+  FiltrosAplicados, OpcoesDePeriodo, SemPontoNaEdicao, Seletor, TD, TH, TITULO_CARTAO, ValorOficial, useApiExata,
+  usePeriodoDaAnalise,
+} from "./comum";
 import {
   ROTULO_SITUACAO, casasDaDiferenca, diferencaComUnidade, legendaSemRegistro, rotuloComponente, rotuloEtapa,
   rotuloSerie, valorComUnidade,
@@ -432,7 +435,9 @@ export function ConteudoAnaliseEscola({ dados, serie, simples = false, soAvaliac
 /** Seção da Visão da Escola. O professor não vê e a API nem é chamada. */
 export default function AnaliseDaEscola({ escolaId }: { escolaId: number | null }) {
   const { gestor, secretaria } = usePerfil();
-  const { periodo, definirPeriodo } = useApp();
+  const { periodo: global, definirPeriodo } = useApp();
+  // A Secretaria pede o ano letivo ou um bimestre inteiro (`PRESETS_DA_REDE`).
+  const periodo = usePeriodoDaAnalise();
   const pode = gestor || secretaria;
   const url = pode && escolaId ? `/escolas/${escolaId}/analise?${periodoParaQuery(periodo)}` : null;
   const { dados, carregando, erro } = useApiExata<RespostaAnaliseEscola>(url);
@@ -452,7 +457,13 @@ export default function AnaliseDaEscola({ escolaId }: { escolaId: number | null 
               </p>
             )}
           </div>
-          <SeletorPeriodo valor={periodo} onChange={definirPeriodo} />
+          {secretaria ? (
+            <Seletor rotulo="Período" valor={periodo.preset} aoMudar={(v) => definirPeriodo({ preset: v })}>
+              <OpcoesDePeriodo />
+            </Seletor>
+          ) : (
+            <SeletorPeriodo valor={global} onChange={definirPeriodo} />
+          )}
         </div>
         {carregando && !daEscola ? (
           <Carregando texto="Carregando a análise da escola..." />

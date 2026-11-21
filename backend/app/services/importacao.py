@@ -36,16 +36,37 @@ from difflib import SequenceMatcher
 
 from sqlalchemy.orm import Session
 
+from app.schemas.comum import _nome_sem_controle
+from app.services.codificacao import ILEGIVEL
+
 # --------------------------------------------------------------------------
 # Normalização de texto e números
 # --------------------------------------------------------------------------
 
+# Espaço OU caractere de controle (C0 e DEL): para a comparação, o controle
+# invisível colado num nome separa palavras como um espaço — "Ana\x02Beatriz" é
+# "Ana Beatriz", a mesma leitura que ``sem_controle`` grava.
+_RE_ESPACO_OU_CONTROLE = re.compile(r"[\s\x00-\x1f\x7f]+")
+
+
+def sem_controle(texto: str) -> str:
+    """Nome SEM caractere de controle invisível (C0 e DEL): cada trecho com um deles
+    vira UM espaço, sem os das pontas — a MESMA regra do cadastro manual
+    (``schemas.comum._nome_sem_controle``). Entra pelas importações (nome colado de
+    PDF, planilha ou vindo da plataforma), e o ``' '.join(split())`` não o tira:
+    ``split()`` não separa em ``\\x01``–``\\x08``, ``\\x0e``–``\\x1b`` nem ``\\x7f``.
+    Um nome desses derruba a exportação Excel da escola. Texto sem controle passa
+    intacto."""
+    return _nome_sem_controle(texto)
+
+
 def normalizar_nome(texto: str) -> str:
-    """Remove acentos, caixa e espaços repetidos — base de toda comparação."""
+    """Remove acentos, caixa e espaços repetidos — base de toda comparação. Caractere
+    de controle conta como espaço (ver ``sem_controle``)."""
     sem_acento = "".join(
         c for c in unicodedata.normalize("NFD", texto) if unicodedata.category(c) != "Mn"
     )
-    return re.sub(r"\s+", " ", sem_acento).strip().casefold()
+    return _RE_ESPACO_OU_CONTROLE.sub(" ", sem_acento).strip().casefold()
 
 
 def _numero(celula: str) -> float:
@@ -58,6 +79,28 @@ def _numero(celula: str) -> float:
     elif re.fullmatch(r"\d{1,3}(\.\d{3})+", limpo):
         limpo = limpo.replace(".", "")  # 1.234 = milhar pt-BR
     return float(limpo)
+
+
+#: O maior número que uma coluna de CONTAGEM de relatório aceita (atividades,
+#: estrelas, livros, minutos, questões). Acima disso o valor não é de uma criança — é
+#: o RA ou o telefone caído na coluna errada — e o banco nem o guardaria (as colunas
+#: são ``integer``, até 2.147.483.647). Vale para a prévia e para o /confirmar.
+VALOR_MAXIMO = 10_000_000
+
+
+def valor_plausivel(valor) -> bool:
+    """Número finito e, em módulo, até ``VALOR_MAXIMO``. A comparação basta: é falsa
+    para NaN e infinito, e não converte um inteiro gigante para float (estouraria)."""
+    return -VALOR_MAXIMO <= valor <= VALOR_MAXIMO
+
+
+def _numero_plausivel(celula: str) -> float:
+    """``_numero`` que também recusa (ValueError) o valor não finito ou acima de
+    ``VALOR_MAXIMO`` — na prévia, ele vira "ilegível", como o negativo."""
+    valor = _numero(celula)
+    if not valor_plausivel(valor):
+        raise ValueError("fora da faixa")
+    return valor
 
 
 def _eh_numero(celula: str) -> bool:
@@ -241,6 +284,11 @@ class LinhaImportacao:
     avisos: list[str] = field(default_factory=list)
     correspondencia: dict | None = None
 
+    def __post_init__(self) -> None:
+        # Todo parser (texto, PDF, planilha, APIs das plataformas) passa por aqui:
+        # o nome da prévia e da sincronização já sai sem caractere de controle.
+        self.nome = sem_controle(self.nome)
+
 
 @dataclass
 class Analise:
@@ -270,6 +318,10 @@ class Analise:
     # a forma estruturada do aviso "Campos ausentes…" de ``erros_gerais``.
     descartadas: dict = field(default_factory=dict)
     campos_ausentes: dict = field(default_factory=dict)
+    # Dos ausentes, os que SUMIRAM da resposta ({campo: nº de linhas}): a chave não
+    # veio ou veio com valor ilegível. Valor nulo explícito é "sem dado" e não
+    # conta. Em TODAS as linhas é o sinal de campo renomeado na API.
+    campos_sumidos: dict = field(default_factory=dict)
 
 
 _RODAPES =("total", "media", "pagina", "page", "gerado em", "relatorio",
@@ -303,7 +355,7 @@ def _atribuir_campo(item: LinhaImportacao, campo: str, bruto: str) -> None:
         if campo.startswith("faixa:"):
             # Coluna de faixa: acumula em livros_por_nivel sob o slug da faixa.
             slug = campo.split(":", 1)[1]
-            valor = int(_numero(bruto))
+            valor = int(_numero_plausivel(bruto))
             if valor < 0:
                 raise ValueError("valor negativo")
             item.dados.setdefault("livros_por_nivel", {})[slug] = valor
@@ -314,7 +366,7 @@ def _atribuir_campo(item: LinhaImportacao, campo: str, bruto: str) -> None:
         elif campo == "nivel":
             item.dados[campo] = bruto.strip().upper()
         else:
-            valor = _numero(bruto)
+            valor = _numero_plausivel(bruto)
             if valor < 0:
                 raise ValueError("valor negativo")
             item.dados[campo] = valor
@@ -568,27 +620,43 @@ def detectar_tipo(conteudo: bytes, nome_arquivo: str = "",
     """Formato do arquivo: 'pdf' | 'xlsx' | 'texto'. FONTE ÚNICA de verdade,
     usada pelo upload manual (analisar) E pela sincronização (orchestrator) —
     para as duas detecções nunca divergirem. Reconhece PDF por magic bytes,
-    planilha por .xlsx/.xlsm/.xls, content-type de spreadsheet, ZIP ('PK') e o
-    OLE2 do .xls antigo."""
+    planilha por ZIP ('PK') e o OLE2 do .xls antigo, por .xlsx/.xlsm/.xls e por
+    content-type de spreadsheet. A assinatura do conteúdo vem antes da extensão de
+    texto (.csv/.txt/.tsv), e esta antes do content-type: o navegador do Windows com
+    o Excel instalado manda o .csv como "application/vnd.ms-excel", e o .csv ia para
+    o leitor de .xlsx (400 "Não foi possível abrir a planilha")."""
     nome = (nome_arquivo or "").lower()
     ct = content_type or ""
     if nome.endswith(".pdf") or ct == "application/pdf" or conteudo[:5] == b"%PDF-":
         return "pdf"
+    if conteudo[:2] == b"PK" or conteudo[:4] == b"\xd0\xcf\x11\xe0":
+        return "xlsx"
+    if nome.endswith((".csv", ".txt", ".tsv")):
+        return "texto"
     if (nome.endswith((".xlsx", ".xlsm", ".xls")) or "spreadsheet" in ct
-            or ct == "application/vnd.ms-excel" or conteudo[:2] == b"PK"
-            or conteudo[:4] == b"\xd0\xcf\x11\xe0"):
+            or ct == "application/vnd.ms-excel"):
         return "xlsx"
     return "texto"
+
+
+# Quem resolve a resposta da API que veio sem um campo, na língua de quem lê o log da
+# sincronização (o mesmo texto de ``app.sync.orchestrator.AJUSTE_DA_COLETA``, que não
+# é importado aqui: o orquestrador importa este módulo).
+_AJUSTE_DA_COLETA = "A equipe do Constela precisa ajustar a coleta dessa plataforma."
 
 
 def _int_api(v, ausente=0):
     """Inteiro tolerante (aceita int/float/str) — para os campos numéricos da API
     interna. Ausente/ilegível → ``ausente`` (passe ``None`` quando "não veio" NÃO
-    pode virar 0 e sobrescrever um snapshot válido)."""
+    pode virar 0 e sobrescrever um snapshot válido). Valor não finito ou acima de
+    ``VALOR_MAXIMO`` também é ilegível (o ``round`` do infinito estourava em 500)."""
     try:
-        return int(round(float(v)))
-    except (TypeError, ValueError):
+        numero = float(v)
+    except (TypeError, ValueError, OverflowError):
         return ausente
+    if not valor_plausivel(numero):
+        return ausente
+    return int(round(numero))
 
 
 def _id_livro_elefante(valor) -> int | None:
@@ -598,7 +666,7 @@ def _id_livro_elefante(valor) -> int | None:
         return None
     if isinstance(valor, float) and valor.is_integer():
         valor = int(valor)
-    if isinstance(valor, str) and valor.strip().isdigit():
+    if isinstance(valor, str) and valor.strip().isdecimal():   # "12²": isdigit, não int
         valor = int(valor.strip())
     return valor if isinstance(valor, int) and valor > 0 else None
 
@@ -720,6 +788,7 @@ def analisar_elefante_api(payload: dict, plataforma: str = "elefante") -> Analis
     alunos = payload.get("students")
     linhas: list[LinhaImportacao] = []
     ausentes: dict[str, int] = {}
+    sumidos: dict[str, int] = {}
     descartadas: dict[str, int] = {}
     for i, al in enumerate(alunos or [], start=1):
         if not isinstance(al, dict):
@@ -743,6 +812,9 @@ def analisar_elefante_api(payload: dict, plataforma: str = "elefante") -> Analis
         for k, v in campos.items():
             if v is None:
                 ausentes[k] = ausentes.get(k, 0) + 1
+                presentes = [c for c in _CHAVES_API_ELEFANTE[k] if c in al]
+                if not presentes or any(al[c] is not None for c in presentes):
+                    sumidos[k] = sumidos.get(k, 0) + 1
         # Desambigua HOMÔNIMOS na turma certa (mesmo campo que o parser de
         # PDF usa) — evita casar/duplicar aluno errado.
         dados["turma_relatorio"] = turma
@@ -760,13 +832,24 @@ def analisar_elefante_api(payload: dict, plataforma: str = "elefante") -> Analis
         erros_gerais.append(
             "Campos ausentes na resposta da API do Elefante ("
             + ", ".join(f"{k}: {n} aluno(s)" for k, n in sorted(ausentes.items()))
-            + ") — valores anteriores preservados, nada foi zerado. Verifique o conector.")
+            + ") — valores anteriores preservados, nada foi zerado. " + _AJUSTE_DA_COLETA)
     return Analise(
         plataforma=plataforma, formato="resumo", estrategia="api-elefante",
         mensagem_deteccao="Relatório de turma (API interna do Elefante Letrado).",
         linhas=linhas, erros_gerais=erros_gerais, turma_detectada=turma,
         escola_detectada=escola, professor_detectado=professor,
-        descartadas=descartadas, campos_ausentes=dict(ausentes))
+        descartadas=descartadas, campos_ausentes=dict(ausentes),
+        campos_sumidos=dict(sumidos))
+
+
+# Chaves da API do Elefante (relatório de turma) de cada campo do retrato, na ordem
+# em que ``analisar_elefante_api`` as lê.
+_CHAVES_API_ELEFANTE = {
+    "livros_unicos": ("totalBooksRead", "qtdBooksRead"),
+    "tempo_leitura_min": ("totalReadTime", "readTime"),
+    "questoes_tentativas": ("responses",),
+    "questoes_acertos": ("approvedResponses",),
+}
 
 
 def analisar_matific_api(payload) -> Analise:
@@ -839,7 +922,7 @@ def analisar_matific_api(payload) -> Analise:
         erros_gerais.append(
             "Campos ausentes na resposta do Placar do Matific ("
             + ", ".join(f"{k}: {n} aluno(s)" for k, n in sorted(ausentes.items()))
-            + ") — valores anteriores preservados, nada foi zerado. Verifique o conector.")
+            + ") — valores anteriores preservados, nada foi zerado. " + _AJUSTE_DA_COLETA)
     # Período personalizado (start_date/end_date do Placar) → import POR PERÍODO
     # (premiação por semana/mês). Sem período, cai no import cumulativo.
     pi = str(payload.get("periodo_inicio") or "").strip()
@@ -1001,6 +1084,31 @@ def nome_de_um_token(nome: str) -> bool:
     return len(tokens_nome(nome)) == 1
 
 
+def nome_abreviado(nome: str) -> bool:
+    """O nome não identifica a criança por si: UMA palavra de nome só ("Kauê",
+    "Ana de") ou uma INICIAL solta em qualquer posição ("ZEFA Q", "M. EDUARDA",
+    "JOÃO B SILVA") — o formato curto do Placar do Matific e das fichas que a
+    sincronização criou com ele. Partícula ("de", "da", "e") não conta como
+    palavra nem como inicial, e número ("… SOUZA 2", que a escola usa para separar
+    homônimos) não é inicial. Token com dígito também não é palavra de nome: o
+    sufixo de OUTRA sala ("KAUE 4B" na 3ºA), que o casamento não tira, não faz de
+    um nome de uma palavra só um nome completo.
+
+    É a régua de "nome abreviado" da porta de identidade: uma linha assim nunca
+    vira ficha nova sozinha (``identidade_aluno.decidir``), e a fusão avisa quando
+    a ficha que fica tem um nome assim. Associar por abreviação continua como era."""
+    from app.services._nomes import PARTICULAS
+
+    toks = tokens_nome(nome)
+    palavras = [t for t in toks
+                if t not in PARTICULAS and not any(c.isdigit() for c in t)]
+    if not toks:
+        return False
+    if len(palavras) <= 1:
+        return True
+    return any(len(t) == 1 and t.isalpha() for t in palavras)
+
+
 def chave_nome(nome: str) -> str:
     """A definição ÚNICA de "mesmo nome" de aluno: sem acento, sem caixa, espaços
     colapsados e SEM pontuação — "LIVIA* DE SOUZA", "Lívia de  Souza" e
@@ -1089,6 +1197,43 @@ def variante_ortografica(a_tokens: list[str], b_tokens: list[str]) -> bool:
     return 1 <= diferentes <= 2
 
 
+def texto_longo_demais(nome: str, id_externo: str = "", turma: str = "") -> str | None:
+    """O texto da linha que não cabe na coluna que o guardaria — o nome do aluno
+    (``alunos.nome``), a conta da plataforma (``identidades_externas.id_externo``) ou a
+    turma (``turmas.nome``) —, já em palavras para quem usa; None se tudo cabe. A
+    MESMA regra na prévia (a linha sai com erro) e no /confirmar (a linha é ignorada,
+    com aviso): antes, a prévia aceitava e a confirmação dava 500 no PostgreSQL."""
+    from app.models import Aluno, IdentidadeExterna, Turma
+
+    for texto, coluna, rotulo in (
+            (nome, Aluno.__table__.c.nome, "nome do aluno"),
+            (id_externo, IdentidadeExterna.__table__.c.id_externo,
+             "código da conta na plataforma"),
+            (turma, Turma.__table__.c.nome, "nome da turma")):
+        limite = coluna.type.length
+        if len((texto or "").strip()) > limite:
+            return f"{rotulo} com mais de {limite} caracteres"
+    return None
+
+
+def texto_ilegivel(nome: str, id_externo: str = "", turma: str = "") -> str | None:
+    """O texto da linha com letra que a leitura do arquivo não conseguiu ler (o "�"
+    que ``codificacao.decodificar_texto`` põe no byte que nem o UTF-8 nem o
+    Windows-1252 leem), já em palavras para quem usa; None se tudo foi lido.
+
+    Barra só a CRIAÇÃO da ficha (ela nasceria com o "�" no nome, no certificado e no
+    ranking): a linha que ASSOCIA — conta já vinculada, aluno escolhido pelo gestor,
+    nome que casa — não grava o nome em lugar nenhum e recebe os números. A MESMA
+    regra na prévia (``casar_nomes``: erro só na linha que criaria a ficha) e no
+    /confirmar (``routers.importacoes._resolver_aluno``, no CRIAR)."""
+    for texto, rotulo in ((nome, "nome do aluno"),
+                          (id_externo, "código da conta na plataforma"),
+                          (turma, "nome da turma")):
+        if ILEGIVEL in (texto or ""):
+            return f"{rotulo} com letra ilegível (“{ILEGIVEL}”, acento perdido no arquivo)"
+    return None
+
+
 def casar_nomes(db: Session, escola_id: int, linhas: list[LinhaImportacao], *,
                 plataforma: str | None = None, turma_padrao: str = "") -> None:
     """PRÉVIA = CONFIRMAÇÃO. Preenche ``correspondencia`` de cada linha com a decisão
@@ -1112,14 +1257,75 @@ def casar_nomes(db: Session, escola_id: int, linhas: list[LinhaImportacao], *,
     ctx = ida.carregar_contexto(db, escola_id)
     ida.marcar_ids_em_conflito(ctx, linhas, plataforma)   # a mesma marca do /confirmar
     ida.marcar_ids_de_outra_escola(db, ctx, linhas, plataforma)   # idem
-    ativos = [a for a in ctx.alunos.values() if a.status == "ativo"]
-    for linha in linhas:
-        dados = linha.dados or {}
-        ident = ida.linha_de_dados(
-            linha.nome, dados, plataforma=plataforma,
-            turma_nome=str(dados.get("turma_relatorio") or turma_padrao or ""))
+    parecidos = _ParecidosNaEscola(a for a in ctx.alunos.values() if a.status == "ativo")
+    idents = [ida.linha_de_dados(
+        linha.nome, linha.dados or {}, plataforma=plataforma,
+        turma_nome=str((linha.dados or {}).get("turma_relatorio") or turma_padrao or ""))
+        for linha in linhas]
+    # Texto maior que a coluna: o /confirmar ignora a linha (``_resolver_aluno``) e ela
+    # não disputa ficha com as outras — a prévia já mostra o erro.
+    longos = [texto_longo_demais(linha.nome, ident.id_externo, ident.turma_nome)
+              for linha, ident in zip(linhas, idents)]
+    ida.marcar_fichas_disputadas(
+        ctx, [ident for ident, longo in zip(idents, longos) if not longo])   # idem
+    for linha, ident, longo in zip(linhas, idents, longos):
+        decisao = ida.decidir(ctx, ident)
+        # Letra ilegível ("�"): erro só na linha que CRIARIA a ficha — a que associa
+        # (conta vinculada, nome que casa) ou vai para a revisão segue sem erro, como
+        # no /confirmar.
+        problema = longo or (texto_ilegivel(linha.nome, ident.id_externo, ident.turma_nome)
+                             if decisao.acao == ida.CRIAR else None)
+        if problema:
+            linha.erros.append(
+                f"{problema[:1].upper()}{problema[1:]} — confira o relatório.")
         linha.correspondencia = _correspondencia(
-            ctx, ida.decidir(ctx, ident), linha.nome, ativos)
+            ctx, decisao, linha.nome, parecidos, ident)
+
+
+class _ParecidosNaEscola:
+    """Os alunos ATIVOS da escola prontos para a busca dos nomes parecidos da linha
+    que criaria ficha (``_correspondencia``): os mesmos que ``_similaridade`` dá
+    (a maior das duas ``ratio``, direta e com os tokens em ordem), no mesmo corte
+    (``LIMIAR_ALTERNATIVA``, os 5 melhores) e na mesma ordem — só mais barato.
+
+    Antes, CADA linha calculava as duas ``ratio`` contra TODOS os ativos: o relatório
+    de leituras repete o nome numa linha por livro e pagava a varredura inteira em
+    cada uma (O(linhas × alunos); 600 linhas de 30 crianças ≈ 1 min). Agora:
+      * a chave de cada ativo e o ``SequenceMatcher`` com ela no lado ``b`` (onde
+        fica o índice que o difflib monta) saem uma vez só;
+      * a busca é memorizada por nome (a chave normalizada);
+      * ``real_quick_ratio`` e ``quick_ratio`` — tetos do ``ratio``, pela própria
+        documentação do difflib — descartam sem calcular o ``ratio`` quem não chega
+        ao limiar: o resultado é EXATAMENTE o da regra completa."""
+
+    def __init__(self, ativos) -> None:
+        self._itens = []
+        for aluno in ativos:
+            chave = chave_nome(aluno.nome)
+            direta = SequenceMatcher(None, "", chave)
+            por_tokens = SequenceMatcher(None, "", " ".join(sorted(chave.split())))
+            self._itens.append((aluno, direta, por_tokens))
+        self._memo: dict[str, list[tuple]] = {}
+
+    def de(self, nome: str) -> list[tuple]:
+        """(aluno, nota) dos até 5 ativos com nota >= ``LIMIAR_ALTERNATIVA``, da maior
+        nota para a menor (o id desempata)."""
+        alvo = chave_nome(nome)
+        achados = self._memo.get(alvo)
+        if achados is None:
+            alvo_tokens = " ".join(sorted(alvo.split()))
+            achados = []
+            for aluno, direta, por_tokens in self._itens:
+                direta.set_seq1(alvo)
+                por_tokens.set_seq1(alvo_tokens)
+                notas = [sm.ratio() for sm in (direta, por_tokens)
+                         if sm.real_quick_ratio() >= LIMIAR_ALTERNATIVA
+                         and sm.quick_ratio() >= LIMIAR_ALTERNATIVA]
+                if notas and max(notas) >= LIMIAR_ALTERNATIVA:
+                    achados.append((aluno, max(notas)))
+            achados.sort(key=lambda par: (-par[1], par[0].id))
+            achados = self._memo[alvo] = achados[:5]
+        return achados
 
 
 def _alternativas(ctx, ids, nome: str) -> list[dict]:
@@ -1131,9 +1337,37 @@ def _alternativas(ctx, ids, nome: str) -> list[dict]:
             for c in ida.descrever_candidatos(ctx, ids)]
 
 
-def _correspondencia(ctx, decisao, nome: str, ativos) -> dict:
+def _turma_da_ficha_nova(ctx, decisao, ident) -> dict:
+    """Onde a confirmação cria a ficha nova desta linha (CRIAR): a turma cadastrada
+    que a porta única decidiu; ou, quando a sala do relatório não tem turma no
+    cadastro, o nome da turma que a confirmação cria (``_turma_pelo_nome`` grava
+    ``nome_turma_exibicao`` da turma do relatório). Sem turma no relatório, nada —
+    quem confirma escolhe a turma."""
+    from app.services.matriculas import nome_turma_exibicao
+
+    turma = ctx.turmas.get(decisao.turma_id) if decisao.turma_id is not None else None
+    if turma is not None:
+        return {"turma_id": turma.id, "turma_nome": turma.nome, "turma_nova": None}
+    relatorio = (getattr(ident, "turma_nome", "") or "").strip()
+    nova = nome_turma_exibicao(relatorio) if decisao.chave_sala and relatorio else None
+    return {"turma_id": None, "turma_nome": None, "turma_nova": nova or None}
+
+
+def _correspondencia(ctx, decisao, nome: str, parecidos: "_ParecidosNaEscola",
+                     ident=None) -> dict:
     from app.services import identidade_aluno as ida
 
+    if decisao.acao == ida.IGNORAR:
+        # A confirmação IGNORA a linha (conta de criança excluída para sempre, conta
+        # aposentada pela escola; com aluno escolhido, aluno de outra escola ou ficha
+        # excluída): a prévia diz isso. Antes caía no ramo do CRIAR e a tela mostrava
+        # "Novo aluno" — "a confirmação cria a ficha" —, mas a confirmação ignorava a
+        # linha. Sem aluno nem alternativa: nenhuma escolha da tela a aplicaria
+        # (``identidade_aluno.decidir`` ignora a conta esquecida e a aposentada antes
+        # da escolha explícita — passos 00 e 0a).
+        return {"status": "ignorado", "via": decisao.via, "motivo": decisao.motivo,
+                "aluno_id": None, "aluno_nome": None, "similaridade": None,
+                "alternativas": []}
     alternativas = _alternativas(ctx, decisao.candidatos, nome)
     if decisao.acao == ida.ASSOCIAR:
         aluno = ctx.alunos[decisao.aluno_id]
@@ -1150,14 +1384,11 @@ def _correspondencia(ctx, decisao, nome: str, ativos) -> dict:
                 "alternativas": alternativas}
     # CRIAR: nenhum candidato plausível. Nomes só PARECIDOS continuam oferecidos
     # (o gestor pode escolher um explicitamente), mas nada é pré-selecionado.
-    alvo = chave_nome(nome)
-    parecidos = sorted(
-        ((a, _similaridade(alvo, chave_nome(a.nome))) for a in ativos),
-        key=lambda par: (-par[1], par[0].id))
     difusas = [{"aluno_id": a.id, "nome": a.nome,
                 "turma": (ctx.turma_do_aluno(a.id).nome if ctx.turma_do_aluno(a.id) else ""),
                 "status": a.status, "similaridade": round(nota * 100, 1)}
-               for a, nota in parecidos[:5] if nota >= LIMIAR_ALTERNATIVA]
+               for a, nota in parecidos.de(nome)]
     return {"status": "bloqueado" if decisao.vetados else "nao_encontrado",
             "motivo": "conflito" if decisao.vetados else "novo",
-            "alternativas": difusas}
+            "alternativas": difusas,
+            **_turma_da_ficha_nova(ctx, decisao, ident)}

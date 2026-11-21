@@ -171,7 +171,8 @@ describe("Exemplo de pontuação — Elefante Letrado", () => {
     // A conta fecha com os fatores com todas as casas da API.
     expect(screen.getByTestId("conta-elefante")).toHaveTextContent(
       "1,673639 (nível) × 0,982296 (tamanho) × 1,20 (série) = 1,9728 pontos");
-    expect(screen.getByText(/catálogo 78ca392a0a48/)).toBeInTheDocument();
+    // A versão do catálogo (hash) fica na dica; o texto diz só o tamanho (REV-MISC-1).
+    expect(screen.getByTitle("Versão do catálogo: 78ca392a0a48")).toHaveTextContent("catálogo de 752 livros");
   });
 
   it("mostra exatamente os números da API, sem refazer a conta", async () => {
@@ -303,7 +304,7 @@ describe("Exemplo de pontuação — Elefante Letrado", () => {
   it("escola com régua própria: o valor do ano (com o ajuste da série) e o padrão, sem fatores", async () => {
     responder("GET", URL_ELEFANTE, reguaPropriaFake());
     await pedirSoNivelD();
-    expect(await screen.findByText(/régua própria/)).toBeInTheDocument();
+    expect(await screen.findByText("Esta escola usa uma régua própria, autorizada pela Constela.")).toBeInTheDocument();
     // O valor que a premiação paga ao 3º ano (9), não o padrão (4).
     expect(screen.getByText(/para um aluno\s+do 3º ano/)).toHaveTextContent(
       "Um livro do nível D vale 9,00 pontos para um aluno do 3º ano.");

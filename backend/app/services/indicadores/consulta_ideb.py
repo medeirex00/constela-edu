@@ -22,9 +22,12 @@ O que a Secretaria e o admin global leem (plano, 2.2, 3.2, 4.6, 4.7, 4.8 e 5.1;
   data da gravação — e ``difere_do_oficial`` quando uma importação oficial recusou
   (resposta "não") trocá-los pelo número diferente do arquivo;
 * CADASTRO QUE MUDOU DEPOIS DA IMPORTAÇÃO (a regra do SARESP, ``consulta_saresp``):
-  um número oficial só vale se a importação aplicada da edição casou a escola com o
-  código INEP ATUAL dela; senão, nada dela nessa edição e o motivo pede a
-  reimportação;
+  um número oficial só vale se a importação aplicada da edição que traz a linha da
+  escola casou a escola com o código INEP ATUAL dela; senão, nada dela nessa edição e
+  o motivo pede a reimportação. O arquivo mais novo que não traz uma escola não apaga
+  o número dela (o pipeline não apaga): ele continua na tela, com a fonte da
+  importação que o gravou; "fora do arquivo" só quando nenhuma importação aplicada da
+  edição trouxe a escola;
 * COBERTURA por edição: escolas com Ideb e com Saeb, sem resultado (com o motivo),
   sem linha no arquivo, sem código INEP, e os códigos do arquivo sem escola no
   cadastro — sempre pelo CÓDIGO, nunca pelo nome;
@@ -67,8 +70,9 @@ from app.services.indicadores.consulta_ideb_rede import comparar_meta as _compar
 from app.services.indicadores.consulta_saresp import (MOTIVO_CADASTRADO_DEPOIS,
                                                       MOTIVO_FORA_DO_ARQUIVO,
                                                       MOTIVO_INEP_ALTERADO,
-                                                      MOTIVO_SEM_IMPORTACAO, _descarte)
-from app.services.indicadores.pipeline import codigo_ibge_da_rede
+                                                      MOTIVO_SEM_IMPORTACAO,
+                                                      _arquivo_da_escola, _descarte)
+from app.services.indicadores.pipeline import codigo_ibge_da_rede, feita_pela_rede
 
 # Campos por escola em `resultados_avaliacao` (componente gravado → campo da API).
 CAMPOS_RESULTADO = ("ideb", "saeb_lp", "saeb_mt")
@@ -194,21 +198,32 @@ def _mesmo_inep(r: ResultadoAvaliacao, inep: str | None) -> bool:
 
 # --- Importações -----------------------------------------------------------------
 
-def _aplicadas(db: Session, codigo: str | None) -> list[ImportacaoIndicador]:
-    """As importações APLICADAS do Ideb por escola para o município da rede."""
+def _aplicadas(db: Session, rede: Rede, codigo: str | None) -> list[ImportacaoIndicador]:
+    """As importações APLICADAS do Ideb por escola para o município da rede, feitas por
+    ESTA rede (``feita_pela_rede``): as escolas de outra rede com o mesmo código IBGE não
+    estão nas casadas da importação dela, e conferi-las contra ela esconderia o Ideb
+    oficial com o motivo falso "cadastrada depois da importação"."""
     if codigo is None:
         return []
-    return sorted(leituras.aplicadas_do_territorio(db, codigo, (ideb.PARSER,)),
+    return sorted((i for i in leituras.aplicadas_do_territorio(db, codigo, (ideb.PARSER,))
+                   if feita_pela_rede(i, rede)),
                   key=lambda i: (i.aplicado_em or datetime.min, i.id))
 
 
-def _arquivo_da_edicao(aplicadas: list[ImportacaoIndicador], edicao: int):
-    """O arquivo que VALE para a edição — a precedência do pipeline: a divulgação mais
-    nova; na mesma, a data interna mais nova; depois, a aplicada por último."""
+def _da_edicao(aplicadas: list[ImportacaoIndicador], edicao: int) -> list[ImportacaoIndicador]:
+    """As importações aplicadas que trazem a edição, na precedência do pipeline (a que
+    VALE primeiro): a divulgação mais nova; na mesma, a data interna mais nova; depois,
+    a aplicada por último."""
     candidatas = [i for i in aplicadas if edicao in ((i.resumo or {}).get("edicoes") or [])]
-    return max(candidatas, default=None,
-               key=lambda i: (i.edicao_arquivo, i.arquivo_data or datetime.min,
-                              i.aplicado_em or datetime.min, i.id))
+    return sorted(candidatas, reverse=True,
+                  key=lambda i: (i.edicao_arquivo, i.arquivo_data or datetime.min,
+                                 i.aplicado_em or datetime.min, i.id))
+
+
+def _arquivo_da_edicao(aplicadas: list[ImportacaoIndicador], edicao: int):
+    """O arquivo que VALE para a edição (o 1º de ``_da_edicao``); None sem importação."""
+    candidatas = _da_edicao(aplicadas, edicao)
+    return candidatas[0] if candidatas else None
 
 
 def _conteudo(imp: ImportacaoIndicador) -> dict:
@@ -331,39 +346,62 @@ def ideb_da_rede(db: Session, rede: Rede) -> dict:
     # resultados_avaliacao: o Ideb (anos iniciais) e o Saeb do 5º ano (LP e MT), por escola.
     resultados: dict[tuple[int, int, str], ResultadoAvaliacao] = {}
     sem_turma = or_(ResultadoAvaliacao.turma.is_(None), ResultadoAvaliacao.turma == "")
+    # Com a leitura única ligada, os mesmos filtros sobre o que a requisição já leu (os
+    # resultados sem turma das escolas da rede; as referências do município e das escolas).
+    lote = leituras.ativa(db)
     if escolas and av_ideb is not None:
-        for r in db.execute(select(ResultadoAvaliacao).where(
+        if lote:
+            lidos = [r for r in leituras.resultados_sem_turma(db, set(inep_de), av_ideb.id)
+                     if r.indicador == ideb.IND_IDEB and r.etapa == ideb.ETAPA_IDEB
+                     and r.componente in (None, "")]
+        else:
+            lidos = db.execute(select(ResultadoAvaliacao).where(
                 ResultadoAvaliacao.avaliacao_id == av_ideb.id,
                 ResultadoAvaliacao.escola_id.in_(set(inep_de)),
                 ResultadoAvaliacao.indicador == ideb.IND_IDEB,
                 ResultadoAvaliacao.etapa == ideb.ETAPA_IDEB,
                 or_(ResultadoAvaliacao.componente.is_(None), ResultadoAvaliacao.componente == ""),
-                sem_turma)).scalars():
+                sem_turma)).scalars()
+        for r in lidos:
             resultados[(r.escola_id, r.edicao, "ideb")] = r
     if escolas and av_saeb is not None:
-        for r in db.execute(select(ResultadoAvaliacao).where(
+        if lote:
+            lidos = [r for r in leituras.resultados_sem_turma(db, set(inep_de), av_saeb.id)
+                     if r.indicador == ideb.IND_PROFICIENCIA and r.etapa == ideb.ETAPA_SAEB
+                     and r.componente in tuple(_CAMPO_DO_COMPONENTE)]
+        else:
+            lidos = db.execute(select(ResultadoAvaliacao).where(
                 ResultadoAvaliacao.avaliacao_id == av_saeb.id,
                 ResultadoAvaliacao.escola_id.in_(set(inep_de)),
                 ResultadoAvaliacao.indicador == ideb.IND_PROFICIENCIA,
                 ResultadoAvaliacao.etapa == ideb.ETAPA_SAEB,
                 ResultadoAvaliacao.componente.in_(tuple(_CAMPO_DO_COMPONENTE)),
-                sem_turma)).scalars():
+                sem_turma)).scalars()
+        for r in lidos:
             resultados[(r.escola_id, r.edicao, _CAMPO_DO_COMPONENTE[r.componente])] = r
 
     # indicadores_referencia: N, P, aprovação e meta da escola, pelo código INEP.
     referencia: dict[tuple[str, int, str, str], IndicadorReferencia] = {}
     if codigo is not None and av_ideb is not None and ineps:
-        for ln in db.execute(select(IndicadorReferencia).where(
+        if lote:
+            linhas = [ln for ln in leituras.referencias(db, codigo, frozenset(ineps))
+                      if ln.avaliacao_id == av_ideb.id and ln.abrangencia == "escola"
+                      and ln.codigo_territorio == codigo and ln.rede_ensino == "municipal"
+                      and ln.localizacao == "total" and ln.codigo_inep in ineps
+                      and ln.indicador in _IND_REFERENCIA]
+        else:
+            linhas = db.execute(select(IndicadorReferencia).where(
                 IndicadorReferencia.avaliacao_id == av_ideb.id,
                 IndicadorReferencia.abrangencia == "escola",
                 IndicadorReferencia.codigo_territorio == codigo,
                 IndicadorReferencia.rede_ensino == "municipal",
                 IndicadorReferencia.localizacao == "total",
                 IndicadorReferencia.codigo_inep.in_(ineps),
-                IndicadorReferencia.indicador.in_(_IND_REFERENCIA))).scalars():
+                IndicadorReferencia.indicador.in_(_IND_REFERENCIA))).scalars()
+        for ln in linhas:
             referencia[(ln.codigo_inep, ln.edicao, ln.indicador, ln.etapa)] = ln
 
-    aplicadas = _aplicadas(db, codigo)
+    aplicadas = _aplicadas(db, rede, codigo)
     # A REDE MUNICIPAL, a UF e o Brasil (E8b): Ideb do território, Saeb da planilha e o
     # contexto amostral — pelo código IBGE, nunca pela média das escolas.
     nome_mun = _nome_do_municipio(db, codigo, aplicadas)
@@ -385,6 +423,10 @@ def ideb_da_rede(db: Session, rede: Rede) -> dict:
                        | {ed for (_, ed, ind, _) in referencia if ind == ideb.IND_META})
     arquivo_de = {ed: _arquivo_da_edicao(aplicadas, ed) for ed in edicoes}
     conteudos = {i.id: _conteudo(i) for i in aplicadas}
+    # Todas as aplicadas de cada edição, na precedência: a escola se confere contra a
+    # que traz a linha dela (``_arquivo_da_escola``), não só contra a mais nova.
+    arquivos_da_edicao = {ed: [conteudos[i.id] for i in _da_edicao(aplicadas, ed)]
+                          for ed in edicoes}
     recusadas = _recusadas(aplicadas)
 
     linhas = []
@@ -393,11 +435,11 @@ def ideb_da_rede(db: Session, rede: Rede) -> dict:
         serie = []
         for ed in edicoes:
             imp_arquivo = arquivo_de[ed]
-            arquivo = conteudos.get(imp_arquivo.id) if imp_arquivo is not None else None
             # O cadastro mudou depois da importação? Então nenhum número OFICIAL da
             # escola nesta edição (seria de outra linha do arquivo). Os números sem
-            # registro oficial (1 clique) valem pelo código com que foram gravados.
-            descarte = _descarte(arquivo, e.id, inep)
+            # registro oficial (1 clique) valem pelo código com que foram gravados. A
+            # conferência é contra a importação que traz a linha da escola.
+            descarte = _descarte(_arquivo_da_escola(arquivos_da_edicao[ed], inep), e.id, inep)
             numeros: dict[str, dict | None] = {}
             for campo in CAMPOS_RESULTADO:
                 r = resultados.get((e.id, ed, campo))

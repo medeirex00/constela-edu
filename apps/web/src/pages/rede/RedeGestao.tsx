@@ -78,9 +78,13 @@ interface Gerenciar {
   usuarios: UsuarioItem[];
 }
 
+/** Escola cujas notas não foram recalculadas depois de mudar de rede (o recálculo dela falhou). */
+type EscolaSemRecalculo = { escola_id: number; nome: string };
+
 // `detalhes`: uma linha por item que falhou, com a mensagem do backend (ex.: o 409 de
 // um código INEP que já é de outra escola) — "N com erro" sozinho não diz o que fazer.
-type Aviso = { tipo: "ok" | "erro"; texto: string; detalhes?: string[] } | null;
+// `recalcular`: as escolas com o recálculo pendente — o aviso oferece "Recalcular as notas".
+type Aviso = { tipo: "ok" | "erro"; texto: string; detalhes?: string[]; recalcular?: EscolaSemRecalculo[] } | null;
 
 // O mesmo código INEP em 8 dígitos que o backend compara (`normalizar_inep`): "035012345"
 // e "35012345" são o mesmo código.
@@ -88,6 +92,18 @@ function inepNormalizado(valor: string | null | undefined): string {
   const digitos = (valor ?? "").trim().replace(/\.0$/, "").replace(/\D/g, "");
   return digitos ? digitos.padStart(8, "0").slice(-8) : "";
 }
+
+// O código DIGITADO só vale com os seus 8 dígitos (o `inep_digitado` do backend): saem os
+// separadores (ponto, traço, barra, espaço), o ".0" do número colado do Excel e o "0" à
+// esquerda do cadastro antigo com 9 dígitos — nada é cortado, completado ou ignorado.
+// `null` = não é um código INEP (um dígito a mais ou a menos, uma letra).
+function inepDigitado(valor: string): string | null {
+  const s = valor.trim().replace(/\.0$/, "").replace(/[\s./-]/g, "");
+  const codigo = s.length === 9 && s.startsWith("0") ? s.slice(1) : s;
+  return /^[0-9]{8}$/.test(codigo) ? codigo : null;
+}
+
+const MSG_INEP_8_DIGITOS = "o código INEP tem 8 dígitos, só números (ex.: 35012345). Não foi salvo.";
 
 // Troca (A↔B) ou ciclo (A→B→C→A) dentro do MESMO lote: cada 409 diz "corrija primeiro a
 // outra escola", o que é circular — a outra também espera. O que resolve é liberar um código.
@@ -182,12 +198,70 @@ type RespostaContrato = {
   };
 };
 
+/** Resposta de "Salvar vínculos" (PUT /redes/{id}/escolas): o recálculo das escolas cujo plano
+ *  mudou com o vínculo (o mesmo formato do PUT de módulos). Ausente = API anterior. */
+type RespostaVinculo = { recalculo?: RespostaContrato["recalculo"] };
+
+const nomesDas = (escolas: EscolaSemRecalculo[]) => escolas.map((e) => e.nome).join(", ");
+
 /** Cargo em linguagem de gente (antes aparecia o valor cru do banco). */
 function rotuloCargo(u: { cargo: string; rede_id: number | null }): string {
   if (u.cargo === "admin") return "Administrador";
   if (u.cargo === "coordenador") return u.rede_id != null ? "Secretaria" : "Coordenador";
   if (u.cargo === "professor") return "Professor";
   return u.cargo;
+}
+
+/** O código IBGE do município da rede (7 dígitos): as importações dos indicadores oficiais
+ *  (Ideb, Saeb, SARESP, ICA) são recortadas por ele. Aqui ele se corrige ou se tira (campo
+ *  vazio): o backend recusa (409) o código que já é de outra rede e manda tirá-lo dela
+ *  primeiro — antes, nenhuma tela trocava nem limpava o código de uma rede que já tinha um.
+ *  Montado com `key` pela rede e pelo código gravado: trocar de rede ou salvar recomeça o
+ *  campo; uma recusa mantém o que foi digitado, para corrigir. */
+function CodigoIbgeDaRede({ rede, aoSalvar }: {
+  rede: RedeItem; aoSalvar: (aviso: NonNullable<Aviso>, gravou: boolean) => void;
+}) {
+  const atual = rede.codigo_ibge ?? "";
+  const [codigo, setCodigo] = useState(atual);
+  const [salvando, setSalvando] = useState(false);
+  const valido = codigo === "" || /^\d{7}$/.test(codigo);
+  const tirar = codigo === "" && atual !== "";
+
+  async function salvar() {
+    setSalvando(true);
+    try {
+      const salva = await api<RedeItem>(`/redes/${rede.id}`, {
+        method: "PATCH", body: JSON.stringify({ codigo_ibge: codigo }),
+      });
+      const gravado = salva?.codigo_ibge ?? null;
+      aoSalvar({
+        tipo: "ok",
+        texto: gravado
+          ? `Código IBGE ${gravado} gravado na rede “${rede.nome}”.`
+          : `Código IBGE tirado da rede “${rede.nome}”.`,
+      }, true);
+    } catch (e) {
+      aoSalvar({ tipo: "erro", texto: e instanceof ApiError ? e.message : "Não foi possível gravar o código." }, false);
+    } finally {
+      setSalvando(false);
+    }
+  }
+
+  return (
+    <div className="flex flex-wrap items-end gap-2">
+      <Campo rotulo="Código IBGE do município (7 dígitos)">
+        <input className={`${estiloInput} w-40`} inputMode="numeric" value={codigo} placeholder="sem código"
+               onChange={(e) => setCodigo(e.target.value.replace(/\D/g, "").slice(0, 7))} />
+      </Campo>
+      <Botao variante="neutro" disabled={salvando || !valido || codigo === atual} onClick={salvar}>
+        <Save size={14} /> {tirar ? "Tirar o código IBGE" : "Salvar código IBGE"}
+      </Botao>
+      <p className="w-full text-xs text-zinc-500">
+        Os indicadores oficiais (Ideb, Saeb, SARESP e ICA) são importados pelo município deste código.
+        Para tirar o código desta rede, apague o campo e clique em “Tirar o código IBGE”.
+      </p>
+    </div>
+  );
 }
 
 /** Interruptor visual sobre um checkbox de verdade (os testes e o leitor de tela
@@ -485,11 +559,23 @@ export default function RedeGestao() {
     if (redeSel === null) return;
     setOcupado(true);
     try {
-      await api(`/redes/${redeSel}/escolas`, {
+      const r = await api<RespostaVinculo>(`/redes/${redeSel}/escolas`, {
         method: "PUT",
         body: JSON.stringify({ escola_ids: [...escolasSel] }),
       });
-      setAviso({ tipo: "ok", texto: "Escolas da rede atualizadas." });
+      // O VÍNCULO foi gravado; o que pode ter faltado é recalcular as notas da escola que
+      // mudou de plano com ele. Reenviar o mesmo vínculo não refaz isso (nada mudou): a ação
+      // é o recálculo de cada escola que ficou para trás.
+      const falhas = (r?.recalculo?.falhas ?? []).map((f) => ({ escola_id: f.escola_id, nome: f.nome }));
+      setAviso(falhas.length
+        ? {
+          tipo: "erro",
+          texto: `Vínculos salvos, mas as notas de ${falhas.length} escola(s) não foram recalculadas com o `
+            + `plano da rede: ${nomesDas(falhas)}. Até lá, as notas delas seguem o plano anterior. `
+            + 'Use "Recalcular as notas" — nada é duplicado.',
+          recalcular: falhas,
+        }
+        : { tipo: "ok", texto: "Escolas da rede atualizadas." });
       recarregar();
       recarregarEscolas?.();
     } catch (e) {
@@ -497,6 +583,34 @@ export default function RedeGestao() {
     } finally {
       setOcupado(false);
     }
+  }
+
+  /** Refaz o recálculo das escolas que ficaram para trás ao salvar os vínculos (o recálculo de
+   *  cada escola com o plano de agora: idempotente). Quem falhar de novo continua no aviso. */
+  async function recalcularNotas(escolas: EscolaSemRecalculo[]) {
+    setOcupado(true);
+    const falharam: EscolaSemRecalculo[] = [];
+    const motivos: string[] = [];
+    for (const e of escolas) {
+      try {
+        await api(`/escolas/${e.escola_id}/recalcular`, { method: "POST" });
+      } catch (erro) {
+        falharam.push(e);
+        motivos.push(`${e.nome}: ${erro instanceof ApiError ? erro.message : "a conexão falhou."}`);
+      }
+    }
+    const feitas = escolas.filter((e) => !falharam.includes(e));
+    setAviso(falharam.length
+      ? {
+        tipo: "erro",
+        texto: (feitas.length ? `Notas recalculadas: ${nomesDas(feitas)}. ` : "")
+          + `As notas de ${falharam.length} escola(s) ainda não foram recalculadas: ${nomesDas(falharam)}. `
+          + "Tente de novo em instantes — nada é duplicado.",
+        detalhes: motivos,
+        recalcular: falharam,
+      }
+      : { tipo: "ok", texto: `Notas recalculadas: ${nomesDas(escolas)}.` });
+    setOcupado(false);
   }
 
   async function salvarUsuarios() {
@@ -672,15 +786,26 @@ export default function RedeGestao() {
       .sort((a, b) => Number(a.valor !== "") - Number(b.valor !== ""));
     let ok = 0;
     const erros: string[] = [];
+    // O que não tem 8 dígitos nem vai ao backend (que também o recusa): fica como erro,
+    // com o nome da escola, e o código de antes continua gravado.
+    fila = fila.filter(({ e, valor }) => {
+      if (valor === "" || inepDigitado(valor) !== null) return true;
+      erros.push(`${e.nome}: ${MSG_INEP_8_DIGITOS}`);
+      return false;
+    });
     while (fila.length > 0) {
       const conflitos: { item: (typeof fila)[number]; msg: string }[] = [];
       for (const item of fila) {
         try {
-          await api(`/redes/escolas/${item.e.id}`, {
+          const salvo = await api<{ codigo_inep?: string | null }>(`/redes/escolas/${item.e.id}`, {
             method: "PATCH", body: JSON.stringify({ codigo_inep: item.valor }),
           });
           ok += 1;
           atual.set(item.e.id, inepNormalizado(item.valor));
+          // O campo passa a mostrar o código GRAVADO (ex.: "035012345" vira "35012345").
+          if (salvo && "codigo_inep" in salvo) {
+            setInep((m) => ({ ...m, [item.e.id]: salvo.codigo_inep ?? "" }));
+          }
         } catch (err) {
           // A recusa do backend, como veio (o 409 diz de qual escola é o código).
           const msg = err instanceof ApiError ? err.message : "não foi possível salvar.";
@@ -726,6 +851,16 @@ export default function RedeGestao() {
       {aviso && (
         <Mensagem tipo={aviso.tipo}>
           {aviso.texto}
+          {aviso.recalcular && aviso.recalcular.length > 0 && (
+            <button
+              type="button"
+              className="ml-2 font-semibold underline underline-offset-2 disabled:opacity-50"
+              disabled={ocupado}
+              onClick={() => void recalcularNotas(aviso.recalcular ?? [])}
+            >
+              Recalcular as notas
+            </button>
+          )}
           {aviso.detalhes && aviso.detalhes.length > 0 && (
             <ul className="mt-1 list-disc space-y-0.5 pl-5" data-testid="aviso-detalhes">
               {aviso.detalhes.map((d) => <li key={d}>{d}</li>)}
@@ -769,6 +904,15 @@ export default function RedeGestao() {
               <Botao variante="secundario" tamanho="sm" className="sm:ml-auto" onClick={() => navegar("/rede")}>
                 Abrir painel da rede <ArrowRight size={14} aria-hidden />
               </Botao>
+            )}
+            {redeAtual && (
+              <div className="w-full border-t border-zinc-100 pt-3 dark:border-zinc-800">
+                <CodigoIbgeDaRede
+                  key={`${redeAtual.id}:${redeAtual.codigo_ibge ?? ""}`}
+                  rede={redeAtual}
+                  aoSalvar={(a, gravou) => { setAviso(a); if (gravou) recarregar(); }}
+                />
+              </div>
             )}
           </Card>
 

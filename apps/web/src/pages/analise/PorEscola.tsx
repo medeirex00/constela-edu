@@ -9,9 +9,8 @@ import { School } from "lucide-react";
 
 import { periodoParaQuery } from "../../components/SeletorPeriodo";
 import { Card, Carregando, IconePastel, Mensagem, Vazio } from "../../components/ui";
-import { useApp } from "../../context/AppContext";
 import { ConteudoAnaliseEscola } from "./AnaliseDaEscola";
-import { TITULO_CARTAO, useApiExata } from "./comum";
+import { TITULO_CARTAO, useApiExata, usePeriodoDaAnalise } from "./comum";
 import type { RespostaAnaliseEscola, RespostaIndicadoresRede } from "./tipos";
 
 export default function PorEscola({ base, escolaId, serie }: {
@@ -19,7 +18,7 @@ export default function PorEscola({ base, escolaId, serie }: {
   escolaId: number | null;
   serie: number | null;
 }) {
-  const { periodo } = useApp();
+  const periodo = usePeriodoDaAnalise();
   const escola = escolaId != null ? base.escolas.find((e) => e.id === escolaId) ?? null : null;
   const url = escola ? `/escolas/${escola.id}/analise?${periodoParaQuery(periodo)}` : null;
   const { dados, carregando, erro } = useApiExata<RespostaAnaliseEscola>(url);

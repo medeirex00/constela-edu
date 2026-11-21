@@ -41,6 +41,9 @@ export interface EscolaCartao {
   nome: string;
   cidade: string | null;
   status: string;
+  /** O ano letivo em que a escola é medida (o ano ativo DELA: coorte, notas e Matific). Na
+   *  virada do ano, as escolas da rede podem estar em anos diferentes. Ausente = API anterior. */
+  ano_letivo?: number;
   latitude: number | null;
   longitude: number | null;
   total_turmas: number;
@@ -76,10 +79,17 @@ export interface EscolaCartao {
   livros_por_aluno: number | null;
   // Per capita por MATRÍCULA (÷ total de alunos) — critério de ranking JUSTO entre
   // escolas de tamanhos diferentes (não favorece a escola grande pelo volume bruto).
+  // Arredondados para EXIBIR; para ordenar, `valorParaOrdenar` (a conta exata).
   livros_por_matricula: number | null;
   estrelas_por_matricula: number | null;
   atividades_por_matricula: number | null;
   tempo_por_matricula_min: number | null;
+  // Numerador e denominador do per capita (só quem concorre, 1º–5º ano).
+  alunos_premiaveis?: number;
+  livros_premiaveis?: number | null;
+  estrelas_premiaveis?: number | null;
+  atividades_premiaveis?: number | null;
+  tempo_premiaveis_min?: number | null;
   // Índice da REDE (0–1000): o per capita normalizado na régua da rede (melhor
   // escola = 1000). Comparável ENTRE escolas — ao contrário de media_* (0–100),
   // que é normalizada dentro da própria escola e serve ao ranking interno.
@@ -128,6 +138,9 @@ export interface DashboardRede {
   rede_id: number;
   /** Módulos CONTRATADOS pela rede — a interface se adapta a partir daqui. */
   modulos?: string[];
+  /** Os anos letivos em que as escolas da rede estão (cada cartão traz o seu `ano_letivo`).
+   *  Mais de um = a virada do ano em andamento. Ausente = API anterior. */
+  anos_letivos?: number[];
   totais: {
     escolas: number;
     escolas_ativas: number;
@@ -143,12 +156,14 @@ export interface DashboardRede {
     /** Índice 0–1000 da rede (média ponderada do índice das escolas). */
     pontuacao_geral: number | null;
     escolas_em_atencao: number;
+    // `null` também quando a rede não contratou o módulo da plataforma (o retrato antigo dela
+    // não é número da rede).
     livros: number | null;
     tempo_leitura_min: number | null;
     atividades: number | null;
     estrelas: number | null;
-    ativos_matific: number;
-    ativos_elefante: number;
+    ativos_matific: number | null;
+    ativos_elefante: number | null;
     livros_por_aluno: number | null;
     melhor_escola: { nome: string; pontuacao_geral: number | null; media_geral: number | null } | null;
     /** Só para a Secretaria: quantas escolas ficaram fora dos totais de cada matéria. */
@@ -173,6 +188,27 @@ export interface DashboardRede {
   ocultas?: { escola_id: number; nome: string; grupo_pequeno: boolean; oculto: OcultoPorMateria }[];
 }
 
+/** Numerador de cada per capita do cartão (o denominador é `alunos_premiaveis`). */
+const NUMERADOR_DO_PER_CAPITA: Record<string, string> = {
+  livros_por_matricula: "livros_premiaveis",
+  estrelas_por_matricula: "estrelas_premiaveis",
+  atividades_por_matricula: "atividades_premiaveis",
+  tempo_por_matricula_min: "tempo_premiaveis_min",
+};
+
+/** O valor de `chave` para ORDENAR cartões (de escola ou de rede). O per capita do cartão
+ *  vem arredondado para exibir (1 casa): ordenando por ele, 12,24 e 12,2 livros por aluno
+ *  empatavam e o desempate escolhia. Aqui ele é refeito pela conta exata (numerador ÷
+ *  `alunos_premiaveis`), a mesma ordem do Ranking da Rede no backend. Outra chave, ou
+ *  cartão sem o numerador (API anterior), = o próprio valor; ausente = 0. */
+export function valorParaOrdenar(cartao: object, chave: string): number {
+  const c = cartao as Record<string, unknown>;
+  const total = NUMERADOR_DO_PER_CAPITA[chave] ? c[NUMERADOR_DO_PER_CAPITA[chave]] : undefined;
+  const alunos = Number(c.alunos_premiaveis ?? 0);
+  if (typeof total === "number" && c[chave] !== null && alunos > 0) return total / alunos;
+  return Number(c[chave] ?? 0);
+}
+
 /** Os totais da rede vistos pela Secretaria deixam escolas de fora numa matéria (grupo
  *  pequeno): a tela diz isso junto dos números, com o texto do backend. */
 export function AvisoTotaisParciais({ totais }: { totais: DashboardRede["totais"] }) {
@@ -182,6 +218,36 @@ export function AvisoTotaisParciais({ totais }: { totais: DashboardRede["totais"
     <p className="flex items-start gap-1.5 rounded-xl bg-ouro-50 px-3 py-2 text-xs text-ouro-800 dark:bg-ouro-400/10 dark:text-ouro-200">
       <span aria-hidden>ⓘ</span>
       <span>{g.texto}</span>
+    </p>
+  );
+}
+
+/** Os anos letivos da rede quando há MAIS DE UM (a virada do ano em andamento: cada escola é
+ *  medida no ano letivo dela); `null` com a rede num ano só ou sem a informação (API anterior). */
+export function anosLetivosMistos(dados: Pick<DashboardRede, "anos_letivos"> | null | undefined): number[] | null {
+  const anos = dados?.anos_letivos ?? [];
+  return anos.length > 1 ? anos : null;
+}
+
+/** Rede com escolas em anos letivos DIFERENTES (`anosLetivosMistos`): a comparação entre elas
+ *  junta anos diferentes, e a tela diz isso junto dos números (o mesmo que a análise de
+ *  plataformas e o Boletim dizem). `escolas` (opcional): diz quem está em cada ano — sem elas,
+ *  quem chama marca o ano de cada escola na própria lista. Num ano só, nada. */
+export function AvisoAnosLetivos({ anos, escolas }: { anos: number[] | null; escolas?: EscolaCartao[] }) {
+  if (!anos) return null;
+  const porAno = escolas
+    ? anos.map((ano) => ({ ano, nomes: escolas.filter((e) => e.ano_letivo === ano).map((e) => e.nome) }))
+      .filter((grupo) => grupo.nomes.length > 0)
+    : [];
+  return (
+    <p data-testid="aviso-anos-letivos"
+       className="flex items-start gap-1.5 rounded-xl bg-ouro-50 px-3 py-2 text-xs text-ouro-800 dark:bg-ouro-400/10 dark:text-ouro-200">
+      <span aria-hidden>ⓘ</span>
+      <span>
+        As escolas da rede estão em anos letivos diferentes ({anos.join(", ")}): cada escola é medida no ano letivo
+        dela, e a comparação junta anos diferentes até todas passarem para o mesmo ano.
+        {porAno.map(({ ano, nomes }) => ` Em ${ano}: ${nomes.join(", ")}.`).join("")}
+      </span>
     </p>
   );
 }
@@ -311,6 +377,19 @@ const METRICAS_META_UI: { metrica: string; rotulo: string; modulo?: string }[] =
   { metrica: "atividades", rotulo: "Atividades Matific na rede", modulo: "matematica" },
 ];
 
+/** As metas que valem para a rede: sem as de uma plataforma cujo módulo ela não contratou
+ *  (`modulos`; sem eles, todas). O backend já as omite; aqui fica a mesma regra para a resposta
+ *  antiga (cache do PWA), que ainda trazia a meta gravada antes de o módulo sair do plano. */
+export function metasNoPlano<T extends { metrica: string }>(metas: T[] | null | undefined, modulos?: string[]): T[] | null {
+  if (!metas) return null;
+  if (!modulos) return metas;
+  const moduloDa = new Map(METRICAS_META_UI.map((o) => [o.metrica, o.modulo]));
+  return metas.filter((m) => {
+    const modulo = moduloDa.get(m.metrica);
+    return !modulo || modulos.includes(modulo);
+  });
+}
+
 /** A leitura das metas (`GET /redes/{id}/metas`). O progresso e o cadastro usam a MESMA
  *  leitura: salvar ou remover uma meta atualiza os dois cartões. */
 export type LeituraMetas = ResultadoUseApi<MetaProgresso[]>;
@@ -319,12 +398,15 @@ export type LeituraMetas = ResultadoUseApi<MetaProgresso[]>;
  *  (`semMeta` diz onde cadastrar, com o nome que quem lê vê na tela ou no menu).
  *  `notaDaMetrica` (opcional, por `metrica`): uma nota curta abaixo de cada meta — o Panorama a
  *  usa para dizer de quando é cada número (as metas não seguem todas o ano letivo); sem ela, o
- *  cartão fica como sempre (o Painel da Rede não passa nada). */
-export function ProgressoMetas({ leitura, titulo, semMeta, nivel = 2, notaDaMetrica }: {
+ *  cartão fica como sempre (o Painel da Rede não passa nada). `modulos` (opcional): só as metas
+ *  das plataformas contratadas (`metasNoPlano`). */
+export function ProgressoMetas({ leitura, titulo, semMeta, nivel = 2, notaDaMetrica, modulos }: {
   leitura: LeituraMetas; titulo: string; semMeta: ReactNode; nivel?: 2 | 3;
   notaDaMetrica?: Record<string, string>;
+  modulos?: string[];
 }) {
-  const { dados: metas, erro, carregando, recarregar } = leitura;
+  const { erro, carregando, recarregar } = leitura;
+  const metas = metasNoPlano(leitura.dados, modulos);
   // A meta sem dado medido não entra na conta (nem como "não atingida"): é dita à parte.
   const medidas = metas ? metas.filter((m) => m.medida !== false) : [];
   const atingidas = medidas.filter((m) => m.atingida).length;
@@ -454,6 +536,7 @@ export function MetasDaRede({ redeId, nivel = 2, tituloCadastro = "Metas da rede
         titulo="Progresso das metas"
         nivel={nivel}
         notaDaMetrica={notaDaMetrica}
+        modulos={modulos}
         semMeta={`Nenhuma meta definida ainda. Cadastre a primeira em “${tituloCadastro}”, nesta página — o progresso (dado real, sem número fictício) aparece aqui.`}
       />
       <GestaoMetas redeId={redeId} leitura={leitura} titulo={tituloCadastro} nivel={nivel} modulos={modulos} />
@@ -473,7 +556,8 @@ function GestaoMetas({ redeId, leitura, titulo, nivel, modulos }: {
     ? `em “Progresso das metas”, nesta página, e na ${INICIO_GLOBAL}, ao abrir esta rede`
     : "em “Progresso das metas”, nesta página";
   const opcoes = METRICAS_META_UI.filter((o) => !o.modulo || !modulos || modulos.includes(o.modulo));
-  const { dados: metas, erro, recarregar } = leitura;
+  const { erro, recarregar } = leitura;
+  const metas = metasNoPlano(leitura.dados, modulos);
   const [metrica, setMetrica] = useState(opcoes[0]?.metrica ?? "pontuacao_geral");
   const [alvo, setAlvo] = useState("");
   const [salvando, setSalvando] = useState(false);

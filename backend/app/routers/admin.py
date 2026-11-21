@@ -43,7 +43,12 @@ from app.core.deps import (
     get_usuario_atual,
     negar_secretaria,
 )
-from app.core.rate_limit import limitador_conta
+from app.core.rate_limit import (
+    identidade_da_conta,
+    liberar_conta,
+    limitador_conta,
+    minutos_de_espera,
+)
 from app.core.security import (
     gerar_token_reset,
     hash_senha,
@@ -253,16 +258,17 @@ def _exigir_senha_atual(db: Session, ator: Usuario, senha_atual: str | None) -> 
     transformava as 8 h do token em posse permanente da conta.
 
     As falhas contam no limitador da CONTA — o mesmo do /auth/login, pela mesma
-    chave (o e-mail) —, então a rota não vira um oráculo de força bruta fora do
-    teto do login: com o teto estourado responde 429 sem conferir a senha.
+    chave (``identidade_da_conta``: o e-mail e a versão da sessão) —, então a
+    rota não vira um oráculo de força bruta fora do teto do login: com o teto
+    estourado responde 429 sem conferir a senha.
 
     Chamar ANTES de qualquer alteração no alvo: a falha vai para a auditoria com
     commit."""
-    identidade = ator.email
+    identidade = identidade_da_conta(ator)
     if limitador_conta.bloqueado(identidade):
         espera = limitador_conta.segundos_restantes(identidade)
         raise HTTPException(status.HTTP_429_TOO_MANY_REQUESTS,
-                            f"Muitas tentativas. Aguarde {max(1, espera // 60)} "
+                            f"Muitas tentativas. Aguarde {minutos_de_espera(espera)} "
                             "minuto(s) e tente novamente.")
     if not senha_atual:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY,
@@ -305,7 +311,9 @@ def _invalidar_links_emitidos(db: Session, criador_id: int, agora: datetime) -> 
         .values(usado_em=agora)).rowcount
 
 
-def _revogar_acessos(db: Session, alvo: Usuario) -> dict:
+def _revogar_acessos(db: Session, alvo: Usuario, *,
+                     senha_substituida: bool = False,
+                     alcance_alterado: bool = False) -> dict:
     """Derruba as sessões abertas (``token_version``), os links de redefinição
     pendentes da conta e os que ela gerou para outras contas — na troca de senha
     pelo admin, em toda mudança de situação (desativar, reativar, restaurar) e na
@@ -315,18 +323,25 @@ def _revogar_acessos(db: Session, alvo: Usuario) -> dict:
     ou desativar a conta. Mesmas revogações da promoção a Secretaria
     (``rede.py``). Devolve as contagens para a auditoria.
 
-    Conta que SAI de "ativo" (desativada ou excluída — o status já vem trocado
-    por quem chama) perde também os aparelhos registrados para push
-    (``dispositivos_removidos``): sem isto, o celular de quem perdeu o acesso
-    seguia recebendo os avisos da escola, inclusive o primeiro nome da criança.
+    Os aparelhos registrados para push (``dispositivos_removidos``) saem junto
+    quando a conta SAI de "ativo" (desativada ou excluída — o status já vem
+    trocado por quem chama) e quando a senha é substituída
+    (``senha_substituida``; a redefinição pelo link faz o mesmo em
+    ``auth.consumir_link_reset``). Sem isto, o celular de quem perdeu o acesso —
+    ou o perdido/roubado, cuja sessão a troca de senha acabou de derrubar —
+    seguia recebendo os avisos da escola, inclusive o primeiro nome da criança:
+    a conta segue ativa, e o app, já em 401, não consegue se descadastrar.
     Reativar não traz o aparelho de volta; o app registra de novo no login."""
     agora = datetime.now(timezone.utc)
-    alvo.token_version = (alvo.token_version or 0) + 1
+    alvo.token_version = func.coalesce(Usuario.token_version, 0) + 1
+    # A sessão usa autoflush=False. Persiste a conta antes de tocar nos links,
+    # na mesma ordem usada por quem consome um link de redefinição.
+    db.flush([alvo])
     revogacao = {
         "sessoes_encerradas": True,
         "links_pendentes_invalidados": _invalidar_links_pendentes(db, alvo.id, agora),
         "links_emitidos_invalidados": _invalidar_links_emitidos(db, alvo.id, agora)}
-    if alvo.status != "ativo":
+    if alvo.status != "ativo" or senha_substituida or alcance_alterado:
         revogacao["dispositivos_removidos"] = svc_push.remover_aparelhos_da_conta(
             db, alvo.id)
     return revogacao
@@ -467,11 +482,12 @@ def atualizar_usuario(
         alteracoes["senha"] = "redefinida"
     revogacao: dict = {}
     if revogar:
-        revogacao = _revogar_acessos(db, alvo)
+        revogacao = _revogar_acessos(db, alvo, senha_substituida=dados.senha is not None)
     elif cargo_mudou:
         # O cargo é o que dava o poder de gerar os links (``_pode_redefinir_senha``):
         # mudou, os links que a conta gerou morrem de vez — senão voltavam a valer
         # quando o cargo antigo fosse devolvido.
+        db.flush([alvo])
         revogacao = {"links_emitidos_invalidados": _invalidar_links_emitidos(
             db, alvo.id, datetime.now(timezone.utc))}
 
@@ -501,6 +517,12 @@ def atualizar_usuario(
         raise HTTPException(status.HTTP_409_CONFLICT,
                             "E-mail ou nome de usuário já está em uso.")
     db.refresh(alvo)
+    if dados.senha is not None:
+        # A senha nova entra já, em qualquer processo da API: o ``token_version``
+        # que ``_revogar_acessos`` subiu muda a chave dos limitadores da conta
+        # (``identidade_da_conta``; o admin, ou a dona com a senha atual, provou a
+        # posse da conta). Aqui só se libera a memória deste processo.
+        liberar_conta(alvo.email)
     return alvo
 
 
@@ -854,8 +876,16 @@ def exigir_admin_global_para_restaurar(
         raise HTTPException(negado.status_code, MSG_RESTAURACAO_SO_ADMIN_GLOBAL) from None
 
 
+# Rotas de upload da administração (restaurar backup, logo): `def` e não
+# `async def`. A sessão do banco é síncrona e o Pillow é CPU; como `def`, o
+# FastAPI roda a rota numa thread do pool. Numa `async def`, o corpo inteiro
+# (restauração, recálculo das notas, commit, decodificação da imagem) rodava na
+# thread do event loop e o worker parava de atender todo mundo, até a sonda de
+# vida. Por isso o arquivo é lido pelo objeto síncrono (`arquivo.file.read`),
+# com teto, como em `avaliacoes.py`.
+
 @router.post("/restaurar")
-async def restaurar_backup(
+def restaurar_backup(
     arquivo: UploadFile = File(...),
     escola_id: int = Depends(escola_autorizada),
     usuario: Usuario = Depends(exigir_admin_global_para_restaurar),
@@ -887,14 +917,23 @@ async def restaurar_backup(
     inteiro, ``log_ate``).
     Ressalva: restauração registrada sem o mapa (anterior a ele) quebra a linhagem — a
     criança excluída depois dela pode voltar sem aviso; confira a exclusão à mão.
+    A fila de revisões de identidade e as execuções da sincronização, que não entram
+    no arquivo, passam a apontar para as fichas, turmas e importações recriadas
+    (``backup._reapontar``): a decisão humana da fila continua valendo. Só para a linha
+    que o arquivo prova ser a mesma (o mesmo ``created_at``, não só o mesmo número): no
+    arquivo de outro banco o vínculo fica vazio em vez de passar para outra criança.
     """
-    conteudo = await arquivo.read()
+    # No máximo o teto + 1 byte na memória: o resto fica no temporário.
+    conteudo = arquivo.file.read(TAMANHO_MAXIMO_BACKUP + 1)
     if len(conteudo) > TAMANHO_MAXIMO_BACKUP:
         raise HTTPException(status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
                             "Arquivo de backup acima do tamanho máximo (25 MB).")
     try:
         dados = json.loads(conteudo.decode("utf-8"))
-    except (UnicodeDecodeError, json.JSONDecodeError, RecursionError):
+    except (ValueError, RecursionError):
+        # ValueError cobre o UnicodeDecodeError, o JSONDecodeError e o número
+        # inteiro acima do limite de dígitos do Python (4.300), que o json.loads
+        # levanta como ValueError comum; RecursionError, o aninhamento profundo.
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "O arquivo não é um backup JSON válido.")
     if not isinstance(dados, dict):
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "O arquivo não é um backup JSON válido.")
@@ -907,10 +946,11 @@ async def restaurar_backup(
     # LGPD (art. 18): a criança excluída de vez depois do backup não volta; o aviso
     # (sem nome) vai em ``avisos``, ao lado do D10.
     avisos_lgpd: list[str] = []
-    mapa_alunos: dict[int, int] = {}
+    linhagem: dict[str, dict[int, int]] = {}
+    reapontadas: dict[str, dict[str, int]] = {}
     try:
         contagem = svc_backup.restaurar(db, escola_id, dados, avisos=avisos_lgpd,
-                                        mapa_alunos=mapa_alunos)
+                                        linhagem=linhagem, reapontadas=reapontadas)
     except svc_backup.RestauracaoBloqueada as bloqueio:
         # C-06: a operação destruiria dado que o arquivo não repõe (perfis do
         # Quest, responsáveis, ou tabelas ausentes num backup antigo). Recusar é
@@ -938,12 +978,33 @@ async def restaurar_backup(
     avisos = avisos_lgpd + list(identidade_efetiva.conferir_restauracao(
         db, escola_id, usuario_id=usuario.id))
     # A linhagem das fichas (só ids): sem ela, um arquivo anterior a ESTA restauração
-    # traria de volta a criança excluída de vez depois dela (LGPD art. 18).
+    # traria de volta a criança excluída de vez depois dela (LGPD art. 18). A das
+    # turmas e importações reaponta a fila de revisões numa restauração seguinte; e
+    # ``referencias_reapontadas`` conta o que, fora do arquivo, foi ligado às linhas
+    # recriadas ou ficou sem equivalente (só contagens).
+    origem_externa = svc_backup.origem_externa_do_arquivo(db, dados)
     registrar(db, "backup.restaurado", escola_id=escola_id, usuario_id=usuario.id,
-              detalhes={"tabelas": contagem, svc_backup.CHAVE_MAPA_ALUNOS: {
-                  str(novo): antigo for novo, antigo in mapa_alunos.items()}})
+              detalhes={"tabelas": contagem,
+                        **({svc_backup.CHAVE_ORIGEM_EXTERNA: origem_externa}
+                           if origem_externa else {}),
+                        **{chave: {str(novo): antigo for novo, antigo in mapa.items()}
+                           for chave, mapa in linhagem.items()},
+                        "referencias_reapontadas": reapontadas})
     db.commit()
-    scoring.recalcular_escola(db, escola_id)
+    # Os caches de 60 s que guardam o ranking e os ids das fichas de ANTES: o telão
+    # público (e o perfil público das fichas, que dava 404 nas recriadas) e o ao vivo
+    # do Matific, que liga cada linha a uma ficha. Sem isto o telão seguia mostrando,
+    # por até 1 minuto, a criança que o arquivo não traz (G_LGPD-8). Depois do
+    # recálculo, para descartar também o que um pedido montou no meio dele; no
+    # ``finally``, para valer mesmo se o recálculo falhar (a restauração já comitou).
+    # Cache por processo: os outros workers vencem no TTL, como na importação.
+    from app.routers.publico import invalidar_cache_painel
+    from app.sync import aovivo
+    try:
+        scoring.recalcular_escola(db, escola_id)
+    finally:
+        invalidar_cache_painel(escola_id)
+        aovivo.invalidar_cache(escola_id)
     total = sum(contagem.values())
     return {"mensagem": f"Backup restaurado: {total} registros. Notas recalculadas.",
             "tabelas": contagem, "avisos": avisos}
@@ -1053,7 +1114,7 @@ def _row_logos_aparencia(db: Session, escola_id: int) -> Configuracao:
 
 
 @router.post("/aparencia/logo")
-async def enviar_logo_aparencia(
+def enviar_logo_aparencia(  # `def`: Pillow e banco fora do event loop (ver /restaurar)
     tipo: str = Query(pattern="^(brasao|prefeitura)$"),
     arquivo: UploadFile = File(...),
     escola_id: int = Depends(escola_autorizada),
@@ -1064,7 +1125,7 @@ async def enviar_logo_aparencia(
     reduzida (máx. 400 px) e guardada como data URI, entrando no topo de
     certificados e relatórios em PDF. PNG com fundo transparente fica melhor."""
     # No máximo o teto + 1 byte na memória: o arquivo inteiro fica no temporário.
-    conteudo = await arquivo.read(_LOGO_MAX_BYTES + 1)
+    conteudo = arquivo.file.read(_LOGO_MAX_BYTES + 1)
     if len(conteudo) > _LOGO_MAX_BYTES:
         raise HTTPException(status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
                             "Imagem muito grande (máximo 3 MB).")

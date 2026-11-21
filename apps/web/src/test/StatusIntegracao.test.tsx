@@ -338,6 +338,33 @@ describe("situacaoIntegracao — estados do contrato (etapa 2)", () => {
       .toBe("sem atualização: linhas com defeito descartadas");
   });
 
+  it("tempo e questões que não vieram (S9) não são 'nada mudou' nem 'parte da coleta falhou'", () => {
+    const semCampos = terminada({ status: "sem_atualizacao", qtd_alunos: 0, motivo: "campos_nao_atualizados" });
+    const s = situacaoIntegracao(com(semCampos));
+    expect(s.rotulo).toBe("Sem atualização: tempo ou questões não vieram");
+    expect(s.tom).toBe("alerta");
+    expect(s.frase).toContain("valor da coleta anterior");
+    const parcial = situacaoIntegracao(com(terminada({
+      status: "parcial", qtd_alunos: 3, qtd_falhas: 0, motivo: "campos_nao_atualizados" })));
+    expect(parcial.frase).toContain("tempo de leitura ou questões");
+    expect(parcial.frase).not.toContain("parte da coleta falhou");
+    expect(descreverExecucao({ status: "sem_atualizacao", motivo: "campos_nao_atualizados" }).rotulo)
+      .toBe("sem atualização: tempo ou questões não vieram da plataforma");
+  });
+
+  it("S9: a frase não afirma QUAIS campos faltaram nem manda sincronizar de novo", () => {
+    // O motivo é o mesmo quando só 'responses' sumiu: a tela não sabe quais campos
+    // faltaram (o alerta crítico sabe), e um campo renomeado não volta com outra coleta.
+    for (const status of ["parcial", "sem_atualizacao"] as const) {
+      const s = situacaoIntegracao(com(terminada({
+        status, qtd_alunos: status === "parcial" ? 2 : 0, qtd_falhas: 0,
+        motivo: "campos_nao_atualizados" })));
+      expect(s.frase).not.toMatch(/o tempo de leitura e as questões/);
+      expect(s.frase).not.toMatch(/sincronize de novo/i);
+      expect(s.frase).toContain("não os traz de volta");
+    }
+  });
+
   it("total menor retido (queda do Matific) é verificação com estado próprio, sem link para revisões", () => {
     const retida = terminada({ status: "sem_atualizacao", qtd_alunos: 0, motivo: "queda_retida" });
     const s = situacaoIntegracao(com(retida));
@@ -373,6 +400,9 @@ describe("situacaoIntegracao — estados do contrato (etapa 2)", () => {
       ["falha_download", "Falhou: falha ao baixar o relatório", "indisponibilidade_externa", "respondeu com erro"],
       ["timeout", "Falhou: demorou demais", "indisponibilidade_externa", "tempo máximo"],
       ["parser_incompativel", "Falhou: formato do relatório mudou", "processamento", "formato que o Constela não reconhece"],
+      // N6: sem admin/coordenador ativo, a coleta nem começa (cadastro, não plataforma).
+      ["escola_sem_responsavel", "Falhou: escola sem administrador ou coordenador ativo",
+        "configuracao", "Cadastre ou reative um em Usuários"],
     ];
     for (const [codigo, rotulo, categoria, trecho] of casos) {
       const s = situacaoIntegracao(com(terminada({ status: "erro", qtd_alunos: 0, motivo: codigo }),

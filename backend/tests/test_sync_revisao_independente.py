@@ -32,12 +32,17 @@ from sqlalchemy import select
 from app.core.config import settings
 from app.models import Escola, Nota
 from app.models.plataformas import Leitura, SnapshotMatific
-from app.models.sincronizacao import SincronizacaoAlerta, SincronizacaoExecucao
+from app.models.sincronizacao import (
+    SincronizacaoAlerta,
+    SincronizacaoExecucao,
+    SincronizacaoLog,
+)
 from app.services import frescor_ranking
 from app.sync import orchestrator, service
 from tests._sync_nucleo_fakes import (
     API, NavElefante, PlacarFake, aluno_el, alertas_abertos, contar, credencial,
     execucoes, instalar, livro, rodar, snap_atual)
+from tests._ano_letivo import no_ano_de_hoje
 
 K = "3 ANO A (300396804)"
 CID_A = 511434
@@ -82,7 +87,9 @@ def test_leaderboard_falhando_sem_numero_mudado_e_parcial_nao_erro(db, escola_co
     assert service.ultimo_em_dia_em(db, eid, "matific") < ex.finalizada_em
 
 
-def test_leaderboard_falhando_com_total_retido_abre_o_alerta_de_queda(db, escola_completa,
+@no_ano_de_hoje
+def test_leaderboard_falhando_com_total_retido_abre_o_alerta_de_queda(relogio_no_ano_letivo, db,
+                                                                     escola_completa,
                                                                      monkeypatch):
     """Total do ano MENOR que o gravado (retido) + falha só do endpoint dos nomes: a
     execução é 'parcial' e a avaliação da queda roda (antes, no 'erro', não rodava)."""
@@ -281,13 +288,20 @@ def _reiniciar_servico(db, exid):
     db.expire_all()
     morta = db.get(SincronizacaoExecucao, exid)
     assert morta.status == "executando"
-    morta.iniciada_em = morta.iniciada_em - timedelta(seconds=settings.SYNC_TRAVADA_S + 60)
+    # O tempo passa sem nenhum sinal de vida: o início E o log dela ficam para trás
+    # (o critério de órfã é o último registro, não a idade).
+    atraso = timedelta(seconds=settings.SYNC_SEM_SINAL_S + 60)
+    morta.iniciada_em = morta.iniciada_em - atraso
+    for linha in db.execute(select(SincronizacaoLog).where(
+            SincronizacaoLog.execucao_id == exid)).scalars():
+        linha.created_at = linha.created_at - atraso
     db.commit()
     assert service.finalizar_orfas_no_boot(db) >= 1
     db.expire_all()
     return db.get(SincronizacaoExecucao, exid)
 
 
+@no_ano_de_hoje
 def test_morte_depois_de_gravar_um_arquivo_marca_recalculo_e_a_coleta_seguinte_recalcula(
         db, escola_completa, monkeypatch):
     eid, (a, b, c), placar = _matific_em_dia(db, escola_completa, monkeypatch)

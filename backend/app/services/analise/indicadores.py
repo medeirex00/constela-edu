@@ -39,11 +39,13 @@ from __future__ import annotations
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from app.models import AvaliacaoExterna, Escola, Rede, ResultadoAvaliacao
+from app.models import (Aluno, AvaliacaoExterna, Escola, Matricula, Rede,
+                        ResultadoAvaliacao, Turma)
 from app.services.analise import K_MINIMO, N_MINIMO, AnaliseInvalida
 from app.services.avaliacoes import CATALOGO, _EXIBICAO, nome_exibicao, normalizar_inep
 from app.services.indicadores import (consulta, consulta_ideb, consulta_ideb_rede,
                                       consulta_saresp, seduc)
+from app.services.indicadores import leituras_da_requisicao as leituras
 from app.services.indicadores.pipeline import codigo_ibge_da_rede
 
 PRINCIPAL, REFERENCIA, CONTEXTO = "principal", "referencia", "contexto"
@@ -857,7 +859,10 @@ def estimativas(db: Session, rede: Rede) -> list[dict]:
     calculadas pelo Constela): só a lista — o nome deixa claro que não é o indicador
     oficial, e nenhuma delas entra numa série oficial nem na relação. O Ideb e o Saeb sem
     registro do arquivo NÃO estão aqui (``sem_registro_oficial``)."""
-    ids = [eid for (eid,) in db.execute(select(Escola.id).where(Escola.rede_id == rede.id))]
+    if leituras.ativa(db):                       # as escolas já lidas nesta requisição
+        ids = [e.id for e in leituras.escolas_da_rede(db, rede.id)]
+    else:
+        ids = [eid for (eid,) in db.execute(select(Escola.id).where(Escola.rede_id == rede.id))]
     if not ids:
         return []
     chaves = sorted(set(_EXIBICAO) | {"saresp"})
@@ -916,8 +921,11 @@ def sem_registro_oficial(L: Leituras) -> list[dict]:
 
 
 def escolas_da_rede(db: Session, rede: Rede) -> list[Escola]:
-    return sorted(db.execute(select(Escola).where(Escola.rede_id == rede.id)).scalars(),
-                  key=lambda e: ordem_nome(e.nome, e.id))
+    # Dentro de ``leituras_da_requisicao`` (o catálogo, um indicador, a análise da escola), as
+    # escolas que o SARESP e o Ideb também leem: uma leitura só na requisição.
+    lidas = (leituras.escolas_da_rede(db, rede.id) if leituras.ativa(db)
+             else db.execute(select(Escola).where(Escola.rede_id == rede.id)).scalars())
+    return sorted(lidas, key=lambda e: ordem_nome(e.nome, e.id))
 
 
 def resumo_escola(e: Escola) -> dict:
@@ -1011,12 +1019,59 @@ def _alertas(L: Leituras, itens: list[dict], escolas: list[dict], ano_plataforma
     return saida
 
 
-def ano_letivo_de_referencia(escolas: list[Escola]) -> int | None:
-    """O ano letivo ativo mais comum entre as escolas da rede (no empate, o mais novo)."""
+# --- O ano letivo de referência da rede ------------------------------------------------------
+#
+# A troca do ano letivo é manual e escola a escola (PATCH /escolas): escola fechada ou só
+# cadastrada (sem aluno nenhum) nunca avança. Por isso quem decide o ano da rede são as
+# escolas EM USO — ativas e com aluno na coorte da análise (aluno ATIVO matriculado no ano
+# letivo ATIVO da escola, a coorte de ``plataformas._parte_coorte``). Sem nenhuma em uso,
+# as que têm aluno; sem nenhuma com aluno, todas.
+
+def escolas_com_aluno(db: Session, escolas: list[Escola]) -> set[int]:
+    """Os ids das escolas com aluno na coorte da análise — UMA consulta."""
+    if not escolas:
+        return set()
+    coorte = (select(Aluno.id)
+              .join(Matricula, Matricula.aluno_id == Aluno.id)
+              .join(Turma, Matricula.turma_id == Turma.id)
+              .where(Aluno.escola_id == Escola.id, Aluno.status == "ativo",
+                     Matricula.ano_letivo == Escola.ano_letivo_ativo))
+    return set(db.execute(select(Escola.id).where(Escola.id.in_([e.id for e in escolas]),
+                                                  coorte.exists())).scalars())
+
+
+def escolas_em_uso(escolas: list[Escola], com_aluno: set[int]) -> list[Escola]:
+    """As escolas que decidem o ano letivo de referência: as ativas com aluno na coorte
+    (``com_aluno``); sem nenhuma, as com aluno; sem nenhuma com aluno, todas."""
+    medidas = [e for e in escolas if e.id in com_aluno]
+    return [e for e in medidas if e.status == "ativa"] or medidas or list(escolas)
+
+
+def anos_letivos_medidos(escolas: list[Escola], com_aluno: set[int]) -> list[int]:
+    """Os anos letivos em que a rede é medida: os das escolas com aluno na coorte (cada uma
+    é medida no ano dela, também a inativa que ainda tem aluno); sem nenhuma, os de todas.
+    Escola sem aluno não é medida e não põe "anos letivos diferentes" na tela."""
+    medidas = [e for e in escolas if e.id in com_aluno] or escolas
+    return sorted({e.ano_letivo_ativo for e in medidas})
+
+
+def ano_letivo_de_referencia(escolas: list[Escola], com_aluno: set[int]) -> int | None:
+    """O ano letivo ativo mais comum entre as escolas EM USO da rede (``escolas_em_uso``; no
+    empate, o mais novo)."""
     anos: dict[int, int] = {}
-    for e in escolas:
+    for e in escolas_em_uso(escolas, com_aluno):
         anos[e.ano_letivo_ativo] = anos.get(e.ano_letivo_ativo, 0) + 1
     return max(anos, key=lambda a: (anos[a], a)) if anos else None
+
+
+def ano_letivo_da_rede(db: Session, escolas: list[Escola]) -> int | None:
+    """``ano_letivo_de_referencia`` para quem não leu a coorte. Com as escolas todas no mesmo
+    ano letivo, é esse ano (nenhuma consulta); só na rede com anos diferentes (a virada) uma
+    consulta lê quais escolas têm aluno."""
+    anos = {e.ano_letivo_ativo for e in escolas}
+    if len(anos) <= 1:
+        return next(iter(anos), None)
+    return ano_letivo_de_referencia(escolas, escolas_com_aluno(db, escolas))
 
 
 def catalogo(db: Session, rede: Rede) -> dict:
@@ -1037,7 +1092,7 @@ def catalogo(db: Session, rede: Rede) -> dict:
         "estimativas": estimativas(db, rede),
         "sem_registro_oficial": sem_registro_oficial(L),
         "escolas": escolas,
-        "alertas": _alertas(L, itens, escolas, ano_letivo_de_referencia(escolas_modelo)),
+        "alertas": _alertas(L, itens, escolas, ano_letivo_da_rede(db, escolas_modelo)),
         "metodologia_resumo": list(METODOLOGIA_RESUMO),
         "fontes": {str(d["fonte_id"]): fontes_todas[d["fonte_id"]] for d in destaques
                    if d["fonte_id"] in fontes_todas},

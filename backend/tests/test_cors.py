@@ -67,6 +67,16 @@ def test_cors_preflight_permite_front_de_producao():
     assert r.headers.get("access-control-allow-credentials") == "true"
 
 
+def test_cors_preflight_fica_guardado_no_navegador_por_duas_horas():
+    """O navegador guarda o preflight por ``Access-Control-Max-Age`` (o padrão do Starlette,
+    600 s, fazia a mesma URL pagar o OPTIONS de novo a cada 10 minutos); 7200 é o teto do
+    Chrome. A origem fora da lista continua sem nenhum cabeçalho de permissão."""
+    r = _preflight("https://www.constelaedu.com")
+    assert r.status_code == 200
+    assert r.headers.get("access-control-max-age") == "7200"
+    assert _preflight("https://evil.example.com").headers.get("access-control-allow-origin") is None
+
+
 def test_cors_preflight_permite_quest_de_producao():
     r = _preflight("https://quest.constelaedu.com")
     assert r.headers.get("access-control-allow-origin") == "https://quest.constelaedu.com"

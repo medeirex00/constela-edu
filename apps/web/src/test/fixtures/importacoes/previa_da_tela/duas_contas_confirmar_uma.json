@@ -1,0 +1,23 @@
+{
+  "mensagem": "1 aluno(s) com dado novo importado(s).",
+  "importacao_id": 1,
+  "qtd_alunos": 1,
+  "qtd_erros": 0,
+  "avisos": [
+    "“Crianca Ficticia Repetida”: quem confirmou a importação deixou esta linha para a Revisão de identidade: nada foi associado nem criado (confira se a criança já tem ficha antes de criar uma)."
+  ],
+  "ignorados": [
+    "crianca ficticia repetida"
+  ],
+  "qtd_revisoes": 1,
+  "alunos_aplicados_ids": [
+    1
+  ],
+  "linhas_recebidas": 2,
+  "linhas_em_revisao": 1,
+  "linhas_descartadas": {},
+  "avisos_criticos": [],
+  "contas_em_revisao": 1,
+  "ids_de_outra_escola": [],
+  "criacao_bloqueada": 0
+}

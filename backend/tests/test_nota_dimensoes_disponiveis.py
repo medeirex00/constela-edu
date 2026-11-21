@@ -37,6 +37,7 @@ from app.models import (
 )
 from app.services import modulos as svc_modulos
 from app.services import scoring
+from tests._ano_letivo import ANO
 
 # --- Perfis de aluno usados nos cenários -------------------------------------
 # LEITOR: 30 livros de nível 4 (120 pontos de dificuldade), 100 questões certas.
@@ -57,7 +58,7 @@ def montar_escola(db, *, com_rede=False):
         rede = Rede(nome="Rede C01", status="ativa")
         db.add(rede)
         db.flush()
-    escola = Escola(nome="EM C01", ano_letivo_ativo=2026, status="ativa",
+    escola = Escola(nome="EM C01", ano_letivo_ativo=ANO, status="ativa",
                     rede_id=rede.id if rede else None)
     db.add(escola)
     db.flush()
@@ -68,7 +69,7 @@ def montar_escola(db, *, com_rede=False):
                             codigos=["D", "E"], pontos_padrao=4.0, ordem=1))
     db.add(ReferenciaNormalizacao(escola_id=escola.id, modo="auto"))
     turma = Turma(escola_id=escola.id, nome="1ºA", ano_escolar="1º Ano",
-                  ano_letivo=2026, status="ativa")
+                  ano_letivo=ANO, status="ativa")
     db.add(turma)
     db.flush()
     importacao = Importacao(escola_id=escola.id, plataforma="seed", tipo="seed")
@@ -82,7 +83,7 @@ def novo_aluno(db, escola, turma, importacao, nome, *, elefante=None, matific=No
     db.add(aluno)
     db.flush()
     db.add(Matricula(escola_id=escola.id, aluno_id=aluno.id, turma_id=turma.id,
-                     ano_letivo=2026))
+                     ano_letivo=ANO))
     if elefante is not None:
         db.add(SnapshotElefante(escola_id=escola.id, aluno_id=aluno.id,
                                 importacao_id=importacao.id, **elefante))

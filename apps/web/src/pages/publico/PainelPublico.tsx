@@ -366,7 +366,8 @@ function ColunaPodio({
       <div
         className={`mx-2 flex items-center justify-center gap-3 rounded-b-3xl ${campeao ? "painel-podio-base-campeao h-16" : "painel-podio-base h-11"}`}
         style={{
-          background: `linear-gradient(180deg, ${cor}66, ${cor}1e)`,
+          // O número mantém contraste mesmo quando o brilho do céu passa atrás do pódio.
+          background: `linear-gradient(180deg, ${cor}66, ${cor}1e), #0F1626`,
           boxShadow: `inset 0 3px 0 0 ${cor}AA, inset 0 -8px 16px -8px rgba(0,0,0,0.5)`,
         }}
       >
@@ -501,7 +502,7 @@ function SlideRanking({
   altura: number | null;
 }) {
   const listaRef = useRef<HTMLDivElement | null>(null);
-  // gap-2.5 = 10px; reserva ~30px para a linha "+ N alunos".
+  // gap-2.5 = 10px; reserva = vão (10px) + a linha "+ N alunos" (text-sm, 20px).
   const visiveis = useLinhasQueCabem(listaRef, altura, itens.length, 10, 30);
   if (itens.length === 0) {
     return <p className="py-16 text-center text-xl text-white/70">Ainda sem dados para exibir.</p>;
@@ -538,8 +539,10 @@ function SlideRanking({
 
 function SlideMural({ mural, altura }: { mural: DadosPainel["mural"]; altura: number | null }) {
   const listaRef = useRef<HTMLUListElement | null>(null);
-  // gap-3 = 12px; reserva ~30px para a linha "+ N novidades".
-  const visiveis = useLinhasQueCabem(listaRef, altura, mural.length, 12, 30);
+  // gap-3 = 12px; reserva = vão (12px) + a linha "+ N novidades" (text-sm, 20px).
+  // Era 30 (a conta do ranking, cujo vão é 10px): em algumas alturas a linha "+ N"
+  // ficava 2px escondida na rolagem invisível do palco.
+  const visiveis = useLinhasQueCabem(listaRef, altura, mural.length, 12, 32);
   if (mural.length === 0) {
     return <p className="py-16 text-center text-xl text-white/70">Nada no mural ainda.</p>;
   }
@@ -607,7 +610,16 @@ export default function PainelPublico() {
     const palco = palcoRef.current;
     if (!palco) return;
     const medir = () => {
-      const altura = palco.clientHeight;
+      // A lista mora num invólucro com respiro em cima e embaixo (py-1): a altura
+      // útil é a do palco MENOS esse respiro. Sem o desconto, a lista cortada no
+      // limite passava 8 px do palco — a linha "+ N" ficava escondida na rolagem
+      // invisível e o palco virava parada do Tab (com o nome da escola em 2 linhas,
+      // em 1366×768, num dia útil).
+      if (palco.clientHeight <= 0) return;
+      const conteudo = palco.firstElementChild;
+      const estilo = conteudo ? getComputedStyle(conteudo) : null;
+      const respiro = estilo ? (parseFloat(estilo.paddingTop) || 0) + (parseFloat(estilo.paddingBottom) || 0) : 0;
+      const altura = palco.clientHeight - respiro;
       if (altura > 0) setAlturaPalco(altura);
     };
     medir();
@@ -773,7 +785,9 @@ export default function PainelPublico() {
   const slide = dados.slides[slideAtivo % dados.slides.length];
   const meta = TITULOS[slide] ?? TITULOS.ranking;
   const cor = dados.escola.cor_primaria;
-  const dataFmt = agora.toLocaleDateString("pt-BR", { weekday: "long", day: "2-digit", month: "long" });
+  // Só a primeira letra em maiúscula: o `capitalize` do CSS escrevia "Quinta-Feira, 05 De Novembro".
+  const dataLonga = agora.toLocaleDateString("pt-BR", { weekday: "long", day: "2-digit", month: "long" });
+  const dataFmt = dataLonga.charAt(0).toUpperCase() + dataLonga.slice(1);
   const horaFmt = agora.toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" });
 
   // Em fullscreen ocioso, controles/cursor somem — só o palco fica (modo TV).
@@ -805,7 +819,7 @@ export default function PainelPublico() {
   const controles = (
     <div className="flex shrink-0 items-center gap-3 sm:gap-4">
       <div className="hidden text-right sm:block">
-        <p className="flex items-center justify-end gap-1.5 text-sm font-medium capitalize text-white/80">
+        <p className="flex items-center justify-end gap-1.5 text-sm font-medium text-white/80">
           <Calendar className="h-4 w-4 text-white/50" /> {dataFmt}
         </p>
         <p className="text-lg font-bold tabular-nums text-white/95">{horaFmt}</p>
@@ -902,6 +916,7 @@ export default function PainelPublico() {
           <div
             ref={palcoRef}
             data-palco
+            data-altura-palco={celular ? undefined : alturaPalco}
             className={celular ? "flex flex-1 flex-col" : "painel-sem-barra flex min-h-0 flex-1 flex-col overflow-y-auto"}
           >
             <div className="my-auto w-full py-1">

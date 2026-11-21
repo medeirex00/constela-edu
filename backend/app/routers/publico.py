@@ -13,12 +13,13 @@ Duas metades:
 import ipaddress
 import re
 import secrets
+import threading
 import time
 from urllib.parse import urlsplit
 
 from fastapi import APIRouter, Depends, HTTPException, Response, status
 from pydantic import BaseModel, Field
-from sqlalchemy import func, or_, select
+from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
@@ -50,7 +51,30 @@ PADRAO = {
 }
 
 
-def _config_row(db: Session, escola_id: int) -> Configuracao | None:
+def _slides_limpos(slides) -> list[str]:
+    """Os slides de uma config: só os VÁLIDOS, sem repetição, na ordem em que a
+    escola os escolheu. Vale na gravação e em toda leitura — uma config gravada
+    antes do teto (com a lista repetida milhares de vezes) não pode continuar
+    servindo essa lista ao telão sem login a cada consulta. Valor que não é
+    lista (config corrompida) volta ao padrão."""
+    if not isinstance(slides, (list, tuple)):
+        return list(SLIDES_VALIDOS)
+    limpos: list[str] = []
+    for slide in slides:
+        if slide in SLIDES_VALIDOS and slide not in limpos:
+            limpos.append(slide)
+    return limpos
+
+
+def _config_row(db: Session, escola_id: int, *, para_gravar: bool = False) -> Configuracao | None:
+    if para_gravar:
+        # A linha da escola existe também na primeira configuração do painel.
+        # Serializa as duas escritas sem bloquear leituras nem chaves estrangeiras.
+        escola = db.execute(
+            select(Escola.id).where(Escola.id == escola_id).with_for_update(key_share=True)
+        ).scalar_one_or_none()
+        if escola is None:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "Escola não encontrada.")
     return db.execute(
         select(Configuracao).where(
             Configuracao.escola_id == escola_id,
@@ -141,7 +165,9 @@ config_router = APIRouter(prefix="/escolas/{escola_id}/painel-publico",
 
 class PainelConfigIn(BaseModel):
     ativo: bool
-    slides: list[str] = Field(default=SLIDES_VALIDOS)
+    # Teto = os slides que existem: a tela manda caixas de seleção sem repetição;
+    # uma lista maior só vem de chamada direta (ou cliente com defeito).
+    slides: list[str] = Field(default=SLIDES_VALIDOS, max_length=len(SLIDES_VALIDOS))
     intervalo_s: int = Field(default=12, ge=4, le=120)
     max_posicoes: int = Field(default=10, ge=3, le=50)
     # Padrão seguro: anonimiza o nome no telão público (ver PADRAO).
@@ -231,7 +257,7 @@ def _com_url(valores: dict, origem: str | None = None) -> dict:
     token = valores.get("token")
     return {
         "ativo": valores.get("ativo", False),
-        "slides": valores.get("slides", SLIDES_VALIDOS),
+        "slides": _slides_limpos(valores.get("slides", SLIDES_VALIDOS)),
         "intervalo_s": valores.get("intervalo_s", 12),
         "max_posicoes": valores.get("max_posicoes", 10),
         "anonimizar": valores.get("anonimizar", True),
@@ -259,11 +285,11 @@ def salvar_config(
     usuario: Usuario = Depends(exigir_papeis("admin", "coordenador")),
     db: Session = Depends(get_db),
 ):
-    slides = [s for s in dados.slides if s in SLIDES_VALIDOS]
+    slides = _slides_limpos(dados.slides)
     if not slides:
         raise HTTPException(status.HTTP_400_BAD_REQUEST,
                             "Escolha pelo menos um slide para o painel.")
-    row = _config_row(db, escola_id)
+    row = _config_row(db, escola_id, para_gravar=True)
     anterior = dict((row.valor or {}) if row else {})
     estava_ativo = bool(anterior.get("ativo"))
     # Barreira de SERVIDOR: só passa de protegido→exposto (nome completo de
@@ -306,7 +332,7 @@ def trocar_token(
     db: Session = Depends(get_db),
 ):
     """Gera um novo endereço público — o link antigo deixa de funcionar."""
-    row = _config_row(db, escola_id)
+    row = _config_row(db, escola_id, para_gravar=True)
     valores = dict((row.valor or {}) if row else dict(PADRAO))
     valores["token"] = secrets.token_urlsafe(9)
     if row is None:
@@ -384,7 +410,7 @@ def _slides_ativos(config: dict) -> set[str]:
     token é público, então desligar o slide do ranking tem de tirar o ranking
     da resposta (e o perfil público de quem só aparecia nele), não só do
     carrossel."""
-    return set(config.get("slides", SLIDES_VALIDOS))
+    return set(_slides_limpos(config.get("slides", SLIDES_VALIDOS)))
 
 
 def _com_algum_dado():
@@ -492,27 +518,37 @@ def _dados_publicos(db: Session, escola: Escola, config: dict) -> dict:
     # de outro ano letivo não soma nas estrelas/atividades do telão.
     # CONTRATO: a plataforma de módulo que a rede não contratou não aparece no
     # telão — o número dela sai `null` (a faixa mostra "—") e nem é somado.
+    # A POPULAÇÃO é uma só para a faixa inteira: a criança ATIVA e matriculada no ano
+    # letivo — a que "alunos" conta, e a mesma do Painel da coordenação
+    # (``rankings.montar_dashboard``). O retrato não é apagado quando a criança sai da
+    # escola (é o histórico), e o "atual" de cada uma varre a escola inteira: sem o
+    # corte, os livros da criança transferida ou arquivada seguiam somando no telão
+    # sem login, ao lado de um "alunos" que já não a contava. Uma matrícula por ano
+    # (``uq_matricula_aluno_ano``), então o tamanho da coorte é o total de alunos.
     fora = svc_modulos.plataformas_fora_do_plano(svc_modulos.modulos_da_escola(db, escola))
-    snaps_m = ({} if "matific" in fora
-               else scoring.snapshots_matific_do_ano(db, escola.id, escola.ano_letivo_ativo))
-    snaps_e = ({} if "elefante" in fora
-               else scoring._snapshots_atuais(db, escola.id, SnapshotElefante))
-    total_alunos = db.execute(
-        select(func.count())
-        .select_from(Matricula)
+    coorte = set(db.execute(
+        select(Matricula.aluno_id)
         .join(Aluno, Matricula.aluno_id == Aluno.id)
         .where(Matricula.escola_id == escola.id,
                Matricula.ano_letivo == escola.ano_letivo_ativo,
                Aluno.status == "ativo")
-    ).scalar() or 0
+    ).scalars())
+    snaps_m = ([] if "matific" in fora else [
+        s for aid, s in scoring.snapshots_matific_do_ano(
+            db, escola.id, escola.ano_letivo_ativo).items() if aid in coorte])
+    snaps_e = ([] if "elefante" in fora else [
+        s for aid, s in scoring._snapshots_atuais(
+            db, escola.id, SnapshotElefante).items() if aid in coorte])
     estatisticas = {
-        "alunos": int(total_alunos),
+        "alunos": len(coorte),
         "atividades": (None if "matific" in fora
-                       else int(sum(s.atividades for s in snaps_m.values()))),
+                       else int(sum(s.atividades for s in snaps_m))),
+        # As estrelas que CONTAM (no máximo 5 por atividade: o teto do motor,
+        # ``scoring.estrelas_que_contam``) — o telão bate com a nota e os rankings.
         "estrelas": (None if "matific" in fora
-                     else int(sum(s.estrelas for s in snaps_m.values()))),
+                     else int(sum(scoring.estrelas_que_contam(s) for s in snaps_m))),
         "livros": (None if "elefante" in fora
-                   else int(sum(s.livros_unicos for s in snaps_e.values()))),
+                   else int(sum(s.livros_unicos for s in snaps_e))),
     }
 
     return {
@@ -520,7 +556,7 @@ def _dados_publicos(db: Session, escola: Escola, config: dict) -> dict:
             "nome": escola.nome,
             "cor_primaria": svc_relatorios.cor_primaria(db, escola.id),
         },
-        "slides": config.get("slides", SLIDES_VALIDOS),
+        "slides": _slides_limpos(config.get("slides", SLIDES_VALIDOS)),
         "intervalo_s": config.get("intervalo_s", 12),
         "ranking": [
             {
@@ -565,6 +601,30 @@ _cache_painel: dict[int, tuple[float, tuple, dict]] = {}
 # recomputar a evolução da escola inteira a cada abertura de aluno (mesmo TTL).
 _cache_visiveis: dict[int, tuple[float, tuple, set[int]]] = {}
 
+# GERAÇÃO do cache: cada `invalidar_cache_painel` avança a da escola (ou a global,
+# quando invalida todas). A montagem anota a geração ANTES de ler o banco e só grava
+# no cache se ela não mudou. Sem isto, uma montagem que começou antes do commit de um
+# arquivamento (ela leva segundos) lia a criança ainda ativa e gravava o resultado
+# DEPOIS da invalidação, valendo pelo TTL inteiro no mesmo processo — a invalidação
+# do próprio worker se perdia. (Entre workers, a desatualização de até TTL_PAINEL_S
+# continua aceita por desenho.)
+_geracao_lock = threading.Lock()
+_geracao_global = 0
+_geracao_por_escola: dict[int, int] = {}
+
+
+def _geracao(escola_id: int) -> tuple[int, int]:
+    with _geracao_lock:
+        return _geracao_global, _geracao_por_escola.get(escola_id, 0)
+
+
+def _guardar(cache: dict, escola_id: int, geracao: tuple[int, int], entrada: tuple) -> None:
+    """Grava a montagem no cache só se nenhuma invalidação chegou enquanto ela era
+    feita; senão, o resultado vale só para a resposta que já estava a caminho."""
+    with _geracao_lock:
+        if (_geracao_global, _geracao_por_escola.get(escola_id, 0)) == geracao:
+            cache[escola_id] = entrada
+
 
 def _assinatura_config(config: dict) -> tuple:
     """O que da config muda o que o telão publica (e quem pode ter o perfil
@@ -574,7 +634,7 @@ def _assinatura_config(config: dict) -> tuple:
     requisição seguinte, não só depois do TTL."""
     return (
         bool(config.get("anonimizar", True)),
-        tuple(config.get("slides", SLIDES_VALIDOS)),
+        tuple(_slides_limpos(config.get("slides", SLIDES_VALIDOS))),
         int(config.get("max_posicoes", 10)),
         config.get("intervalo_s", 12),
     )
@@ -601,8 +661,9 @@ def painel_publico(token: str, response: Response, db: Session = Depends(get_db)
     assinatura = _assinatura_config(config)
     dados = _do_cache(_cache_painel, escola.id, agora, assinatura)
     if dados is None:
+        geracao = _geracao(escola.id)          # ANTES de ler o banco
         dados = _dados_publicos(db, escola, config)
-        _cache_painel[escola.id] = (agora, assinatura, dados)
+        _guardar(_cache_painel, escola.id, geracao, (agora, assinatura, dados))
     # NUNCA cachear no navegador/CDN: DESLIGAR o painel (ou trocar o token) tem que
     # bloquear NA HORA, e o payload pode conter nome de criança (anonimizar=False).
     # O cache em memória (_cache_painel) já absorve os polls do telão no servidor.
@@ -612,7 +673,14 @@ def painel_publico(token: str, response: Response, db: Session = Depends(get_db)
 
 def invalidar_cache_painel(escola_id: int | None = None) -> None:
     """Chamado após recálculo/importação/troca de config para o painel refletir
-    logo (inclui o cache de tokens, caso o token tenha rotacionado/desativado)."""
+    logo (inclui o cache de tokens, caso o token tenha rotacionado/desativado).
+    Avança a geração: a montagem que estava em andamento não grava no cache."""
+    global _geracao_global
+    with _geracao_lock:
+        if escola_id is None:
+            _geracao_global += 1
+        else:
+            _geracao_por_escola[escola_id] = _geracao_por_escola.get(escola_id, 0) + 1
     if escola_id is None:
         _cache_painel.clear()
         _cache_visiveis.clear()
@@ -639,6 +707,7 @@ def _ids_visiveis(db: Session, escola: Escola, config: dict) -> set[int]:
     em_cache = _do_cache(_cache_visiveis, escola.id, agora, assinatura)
     if em_cache is not None:
         return em_cache
+    geracao = _geracao(escola.id)              # ANTES de ler o banco (ver _guardar)
     limite = int(config.get("max_posicoes", 10))
     ativos = _slides_ativos(config)
     # AS FASES NÃO CONCORREM: o conjunto tem de casar com o que o telão exibe
@@ -674,13 +743,13 @@ def _ids_visiveis(db: Session, escola: Escola, config: dict) -> set[int]:
     # Fases do payload: sem ele, a criança da Fase que lidera o crescimento
     # entraria aqui e o perfil público dela abriria (200).
     if "evolucao" not in ativos:
-        _cache_visiveis[escola.id] = (agora, assinatura, ids)
+        _guardar(_cache_visiveis, escola.id, geracao, (agora, assinatura, ids))
         return ids
     for item in [it for it in svc_evolucao.ranking_evolucao(
             db, escola.id, dias=30, base_no_periodo=True, turma_ids=premiaveis)
             if it.nota_evolucao > 0][:limite]:
         ids.add(item.aluno_id)
-    _cache_visiveis[escola.id] = (agora, assinatura, ids)
+    _guardar(_cache_visiveis, escola.id, geracao, (agora, assinatura, ids))
     return ids
 
 
@@ -733,15 +802,24 @@ def perfil_publico(token: str, aluno_id: int, response: Response,
     # CONTRATO: nota de plataforma de módulo fora do plano sai nula (mesma regra
     # de ``rankings._ranking`` e do perfil autenticado).
     fora = svc_modulos.plataformas_fora_do_plano(svc_modulos.modulos_da_escola(db, escola))
+    # AUSÊNCIA NÃO É ZERO (scoring.py, invariante 2): o motor grava 0.0 na nota
+    # da matéria em que a criança NÃO é aferida. Sem o corte, quem só usa o
+    # Matific aparecia com "Leitura 0,0" nesta página aberta a qualquer um. A
+    # nota sai nula (a página mostra "—") e o `aferido_*` vai junto, como no
+    # Ranking Geral; o retrato ZERADO (aferido, abriu e não produziu) segue 0,0.
+    aferido_l = bool(nota is not None and nota.aferido_leitura)
+    aferido_m = bool(nota is not None and nota.aferido_matematica)
     return {
         "nome": svc_gami.anonimizar_nome(aluno.nome) if anonimizar else aluno.nome,
         # K-anonimato: turma omitida no modo anônimo (não reidentificar).
         "turma": None if anonimizar else (matricula[1].nome if matricula else None),
         "posicao": nota.posicao if nota else None,
-        "nota_matific": (None if "matific" in fora
-                         else (nota.nota_matific if nota else 0.0)),
-        "nota_elefante": (None if "elefante" in fora
-                          else (nota.nota_elefante if nota else 0.0)),
+        "nota_matific": (nota.nota_matific
+                         if aferido_m and "matific" not in fora else None),
+        "nota_elefante": (nota.nota_elefante
+                          if aferido_l and "elefante" not in fora else None),
+        "aferido_leitura": aferido_l,
+        "aferido_matematica": aferido_m,
         "nota_geral": nota.nota_geral if nota else 0.0,
         "nivel": gamificacao["nivel"],
         "xp": gamificacao["xp"],

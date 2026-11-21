@@ -1,0 +1,21 @@
+{
+  "mensagem": "0 aluno(s) com dado novo importado(s).",
+  "importacao_id": 1,
+  "qtd_alunos": 0,
+  "qtd_erros": 0,
+  "avisos": [
+    "“Crianca Ficticia Ambigua”: mais de uma turma cadastrada corresponde à sala do relatório — nenhum aluno foi associado nem criado. A linha ficou como pendência na fila de revisão de identidade para um gestor decidir."
+  ],
+  "ignorados": [
+    "crianca ficticia ambigua"
+  ],
+  "qtd_revisoes": 1,
+  "alunos_aplicados_ids": [],
+  "linhas_recebidas": 1,
+  "linhas_em_revisao": 1,
+  "linhas_descartadas": {},
+  "avisos_criticos": [],
+  "contas_em_revisao": 1,
+  "ids_de_outra_escola": [],
+  "criacao_bloqueada": 0
+}

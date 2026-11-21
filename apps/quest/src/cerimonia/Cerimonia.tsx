@@ -14,6 +14,7 @@ import type { Avatar, PersonagemBase } from "@constela/quest-core";
 import { narrar, tocar } from "../audio/audio";
 import { Palco3D } from "../personagem/Palco3D";
 import { useSessao } from "../estado/sessao";
+import { soLetrasDoNome } from "./nome";
 import "./cerimonia.css";
 
 type Passo = "personagem" | "nome" | "pronto";
@@ -153,7 +154,7 @@ export function Cerimonia({ aoConcluir }: CerimoniaProps) {
             <p className="dica">Pode ser seu nome ou seu apelido preferido</p>
             <input ref={campoNome} className="campo-nome" value={nome} maxLength={20}
                    autoComplete="off" spellCheck={false}
-                   onChange={(e) => setNome(e.target.value.replace(/[^\p{L} ]/gu, ""))}
+                   onChange={(e) => setNome(soLetrasDoNome(e.target.value))}
                    onKeyDown={(e) => e.key === "Enter" && confirmarNome()}
                    aria-label="Como você quer ser chamado" />
             {erro && <div className="entrada-erro" role="alert">{erro}</div>}

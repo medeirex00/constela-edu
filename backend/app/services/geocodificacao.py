@@ -19,6 +19,8 @@ import time
 from typing import Callable, Optional
 
 import httpx
+from sqlalchemy import update
+from sqlalchemy.orm import Session
 
 from app.models import Escola
 
@@ -79,25 +81,36 @@ def geocodificar_escola(escola: Escola, geocoder: Geocoder = _nominatim) -> Opti
 
 
 def geocodificar_lote(escolas: list[Escola], geocoder: Geocoder,
-                      intervalo: float = INTERVALO_PADRAO) -> dict:
+                      intervalo: float = INTERVALO_PADRAO
+                      ) -> list[tuple[Escola, tuple[float, float]]]:
     """Geocodifica uma lista de escolas, respeitando o rate-limit entre chamadas.
-    Preenche latitude/longitude das que forem localizadas (NÃO commita — quem
-    chama decide a transação). Devolve a contagem {encontradas, falhas}.
+    Recebe os cadastros carregados e devolve apenas os resultados encontrados.
 
     Dorme ANTES de cada chamada (não só entre elas): como o endpoint fatia a rede
     em vários lotes, isso garante o espaçamento do OSM também na FRONTEIRA entre
     lotes (a 1ª chamada de um lote não sai colada na última do lote anterior)."""
-    encontradas = falhas = 0
+    encontradas = []
     for escola in escolas:
         if intervalo > 0:
             time.sleep(intervalo)  # respeita o limite do OSM (inclusive entre lotes)
         coord = geocodificar_escola(escola, geocoder)
-        if coord:
-            escola.latitude, escola.longitude = coord
-            encontradas += 1
-        else:
-            falhas += 1
-    return {"encontradas": encontradas, "falhas": falhas}
+        if coord is not None:
+            encontradas.append((escola, coord))
+    return encontradas
+
+
+def salvar_coordenadas(db: Session, escola: Escola, coord: tuple[float, float]) -> bool:
+    """Persiste o resultado se o endereço e as coordenadas ainda forem os mesmos."""
+    campos = ("rede_id", "nome", "endereco", "bairro", "cidade", "estado",
+              "latitude", "longitude")
+    iguais = [getattr(Escola, campo).is_not_distinct_from(getattr(escola, campo))
+              for campo in campos]
+    resultado = db.execute(
+        update(Escola).where(Escola.id == escola.id, *iguais)
+        .values(latitude=coord[0], longitude=coord[1])
+        .execution_options(synchronize_session=False)
+    )
+    return resultado.rowcount == 1
 
 
 # --- Dependências injetáveis (testes sobrescrevem para não bater na rede) ----

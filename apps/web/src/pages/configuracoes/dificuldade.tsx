@@ -397,8 +397,13 @@ export function EditorNiveis({ aoMudar }: { aoMudar?: () => void }) {
  * turma escolhida. Turmas sem config usam o padrão da escola.
  * ----------------------------------------------------------------------- */
 type CatalogoNivel = { codigo: string; pontos_padrao: number; faixa: string };
-type TurmaPontos = { turma_id: number; nome: string; ano_escolar: string; pontos: Record<string, number> };
-type PontuacaoResp = { catalogo: CatalogoNivel[]; turmas: TurmaPontos[] };
+type TurmaPontos = {
+  turma_id: number; nome: string; ano_escolar: string; ano_letivo?: number;
+  pontos: Record<string, number>;
+};
+// A API manda só as turmas do ano letivo ATIVO da escola (a pontuação é por turma e as
+// turmas de um ano novo são outras): ``ano_letivo`` diz de que ano são.
+type PontuacaoResp = { catalogo: CatalogoNivel[]; ano_letivo?: number; turmas: TurmaPontos[] };
 
 export function PontuacaoPorTurma() {
   const { escolaId, usuario } = useApp();
@@ -450,7 +455,9 @@ export function PontuacaoPorTurma() {
   if (dados.turmas.length === 0)
     return (
       <Card className="p-6 text-sm text-zinc-500 dark:text-zinc-400">
-        Cadastre turmas para configurar a pontuação por nível.
+        {dados.ano_letivo
+          ? `Nenhuma turma ativa no ano letivo ${dados.ano_letivo}. Cadastre as turmas deste ano para configurar a pontuação por nível.`
+          : "Cadastre turmas para configurar a pontuação por nível."}
       </Card>
     );
 
@@ -498,7 +505,9 @@ export function PontuacaoPorTurma() {
       </p>
 
       <Card className="flex flex-wrap items-center gap-3 p-4 sm:p-5">
-        <label className="text-sm font-semibold" htmlFor="pontuacao-turma-escolhida">Turma</label>
+        <label className="text-sm font-semibold" htmlFor="pontuacao-turma-escolhida">
+          {dados.ano_letivo ? `Turma do ano letivo ${dados.ano_letivo}` : "Turma"}
+        </label>
         <select
           id="pontuacao-turma-escolhida"
           className={`${inputCurto} w-auto min-w-[12rem]`}

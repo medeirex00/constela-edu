@@ -5,7 +5,10 @@
  */
 import { describe, expect, it } from "vitest";
 
+import fonteSincronizacao from "../pages/Sincronizacao.tsx?raw";
 import { COR_TOM, META_CRITERIOS } from "../components/CriteriosVisuais";
+import { situacaoIntegracao } from "../components/StatusIntegracao";
+import type { Execucao, PlataformaStatus } from "../components/StatusIntegracao";
 import Suporte, { PASTAS_GUIAS, type RegraPontuacao } from "../pages/Suporte";
 import {
   FAQ_COORDENACAO,
@@ -233,6 +236,93 @@ describe("Suporte — a regra da nota vem do servidor", () => {
     abrir(coordenadora, null);
     expect(await screen.findByText(/Não foi possível carregar a regra da nota/)).toBeInTheDocument();
     expect(screen.queryByText(/%$/)).toBeNull();
+  });
+});
+
+describe("Suporte — celular", () => {
+  // O Layout mantém a pesquisa em todas as larguras; quem some abaixo de 1024 px é a
+  // trilha ("Visão geral › … › página") — `NavegacaoPerfis.test.tsx` trava o Layout.
+  it("diz que a pesquisa continua e que a linha de onde você está some (não o contrário)", () => {
+    const resposta = FAQ_COORDENACAO.find((p) => p.pergunta === "Dá para usar no celular?")?.resposta ?? "";
+    expect(resposta).toContain("a pesquisa continua no topo");
+    expect(resposta).toContain("a linha do topo que mostra em que página você está e algumas colunas das tabelas só aparecem em telas maiores");
+    expect(resposta).not.toMatch(/pesquisa do topo e algumas colunas só aparecem/);
+  });
+});
+
+describe("Suporte — certificado que não sai", () => {
+  // Antes da primeira importação o botão de Integrações se chama “Importar Lista
+  // Piloto” (Sincronizacao.tsx); só depois vira “Atualizar Lista Piloto”. A escola que
+  // nunca importou — onde toda ficha está sem confirmação — procuraria um botão que
+  // não está ali.
+  it("cita os dois nomes do botão da Lista Piloto, os mesmos de Integrações", () => {
+    const resposta = FAQ_COORDENACAO.find((p) => p.pergunta === "O certificado de um aluno não sai.")?.resposta ?? "";
+    expect(resposta).toContain("(botão “Importar Lista Piloto” ou “Atualizar Lista Piloto”)");
+    for (const botao of ["Importar Lista Piloto", "Atualizar Lista Piloto"]) {
+      expect(fonteSincronizacao).toContain(`"${botao}"`);
+    }
+  });
+});
+
+describe("Suporte — o que a sincronização transforma em ficha nova", () => {
+  // Nome abreviado (A2) e duas contas com o mesmo nome na mesma coleta (A5) não viram
+  // ficha nem com a escola permitindo: vão para a fila. Quem lia "vira ficha nova"
+  // procurava a ficha para fundir e não achava.
+  it("nome abreviado e contas com o mesmo nome vão para as Revisões, não viram ficha", () => {
+    const resposta = SINCRONIZACAO_GESTAO.find(
+      (p) => p.pergunta === "O aluno não aparece, ou a conta dele não foi ligada")?.resposta ?? "";
+    expect(resposta).toContain("um nome sem nenhum candidato vira ficha nova");
+    expect(resposta).toContain("nome abreviado (como “ZEFA Q”)");
+    expect(resposta).toContain("duas contas com o mesmo nome na mesma sincronização");
+    expect(resposta).toMatch(/não viram ficha e esperam em Revisões de identidade/);
+  });
+});
+
+describe("Suporte — os estados do cartão de Integrações têm entrada", () => {
+  // O rótulo da pergunta é o que o cartão MOSTRA (situacaoIntegracao), não um texto à parte.
+  function situacao(over: Partial<Execucao>) {
+    const exec: Execucao = {
+      id: 1, plataforma: "elefante", origem: "agendada", status: "concluida",
+      iniciada_em: "2026-10-20T09:00:00Z", finalizada_em: "2026-10-20T09:02:00Z",
+      duracao_ms: 120000, qtd_alunos: 0, qtd_turmas: 1, qtd_arquivos: 1, qtd_erros: 0,
+      tentativa: 1, erro_resumo: null, ...over,
+    };
+    const p: PlataformaStatus = {
+      plataforma: "elefante", estrategia: "api", conectada: true,
+      credencial_status: "valida", validada_em: null, ultimo_erro: null,
+      agendada: true, cadencia: "diaria", hora_local: "03:00", dia_semana: null,
+      proxima_execucao: null, ultima_execucao: exec, ultima_tentativa: exec,
+      ultimo_sucesso_em: "2026-10-20T09:02:00Z", desatualizada: false,
+      frescor: "atualizado", idade_horas: 3, limite_horas: 48, falha_categoria: null,
+      fila_parada: false,
+    };
+    return situacaoIntegracao(p);
+  }
+  const entrada = (rotulo: string) =>
+    SINCRONIZACAO_GESTAO.find((p) => p.pergunta === rotulo)?.resposta ?? "";
+
+  it("'Sem atualização: tempo ou questões não vieram': o que significa e o que fazer", () => {
+    const s = situacao({ status: "sem_atualizacao", motivo: "campos_nao_atualizados" });
+    expect(s.rotulo).toBe("Sem atualização: tempo ou questões não vieram");
+    const resposta = entrada(s.rotulo);
+    expect(resposta).toContain("deixou de mandar parte dos números (tempo de leitura ou questões)");
+    expect(resposta).toContain("valor da coleta anterior");
+    expect(resposta).toContain("sincronizar de novo não os traz de volta");
+    expect(resposta).toContain("“Formato do relatório mudou”");
+    expect(resposta).toContain("avise o suporte");
+  });
+
+  it("'Falhou: escola sem administrador ou coordenador ativo': o que significa e o que fazer", () => {
+    const s = situacao({ status: "erro", motivo: "escola_sem_responsavel" });
+    expect(s.rotulo).toBe("Falhou: escola sem administrador ou coordenador ativo");
+    const resposta = entrada(s.rotulo);
+    expect(resposta).toContain("nada foi coletado");
+    expect(resposta).toContain("não é problema da senha nem da plataforma");
+    expect(resposta).toContain("Cadastre ou reative um em Minha Escola › Usuários");
+    // O Admin Global lê o caminho do menu dele.
+    const global = sincronizacaoDaGestao({ admin: true, global: true })
+      .find((p) => p.pergunta === s.rotulo)?.resposta ?? "";
+    expect(global).toContain("Administração › Usuários");
   });
 });
 

@@ -62,9 +62,12 @@ def _turma_com_alunos(db, escola_id, nome, alunos, professor_id=None):
                                 livros_unicos=5, tempo_leitura_min=60))
         db.add(SnapshotMatific(escola_id=escola_id, aluno_id=a.id, importacao_id=imp.id,
                                atividades=20, estrelas=100))
+        # Aferido nas duas, como o motor carimba quem tem os dois snapshots
+        # acima (o Top 10 do painel só lista quem tem dado de alguma plataforma).
         db.add(Nota(escola_id=escola_id, aluno_id=a.id, ano_letivo=2026,
                     nota_geral=nota_geral, nota_elefante=nota_geral,
-                    nota_matific=nota_geral, posicao=posicao))
+                    nota_matific=nota_geral, posicao=posicao,
+                    aferido_leitura=True, aferido_matematica=True))
         ids.append(a.id)
     return turma, ids
 

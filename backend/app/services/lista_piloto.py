@@ -19,12 +19,14 @@ não terem a coluna "Nome".
 from __future__ import annotations
 
 import io
+import logging
 import re
+import zipfile
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
 
 from app.models import Aluno, Turma
-from app.services.importacao import chave_nome, normalizar_nome
+from app.services.importacao import chave_nome, normalizar_nome, sem_controle
 from app.services.planilhas import (
     MAX_COLUNAS_LIDAS,
     OrcamentoLeitura,
@@ -33,6 +35,8 @@ from app.services.planilhas import (
     limitar_celula,
     linhas_contidas,
 )
+
+logger = logging.getLogger(__name__)
 
 # Teto de células do arquivo: uma escola tem centenas/milhares de alunos; muito
 # acima disso é planilha inválida ou tentativa de exaustão de memória (uma
@@ -102,12 +106,26 @@ class TurmaMatriculas:
 class ListaPilotoAnalise:
     escola_detectada: str = ""
     ano_letivo: int | None = None
+    # De onde veio ``ano_letivo``: "planilha" (a célula "Lista Piloto: 2027") ou
+    # "arquivo" (o ano no nome do arquivo, a reserva quando a célula falta). A rota o
+    # usa para dizer à escola onde corrigir o ano de uma lista de outro ano.
+    ano_letivo_origem: str | None = None
+    # O ano escrito em CADA aba importada (título da aba → ano da célula "Lista
+    # Piloto:"), na ordem da planilha. A aba sem a célula não entra (vale o ano das
+    # outras, como sempre valeu). Com abas de anos diferentes, ``ano_letivo`` fica
+    # ``None`` e a rota recusa a gravação: a 1ª aba não decide pelo arquivo inteiro.
+    anos_por_aba: dict[str, int] = field(default_factory=dict)
     turmas: list[TurmaMatriculas] = field(default_factory=list)
     avisos: list[str] = field(default_factory=list)
 
     @property
     def total_alunos(self) -> int:
         return sum(len(t.alunos) for t in self.turmas)
+
+    @property
+    def anos_divergentes(self) -> bool:
+        """As abas importadas trazem anos DIFERENTES entre si?"""
+        return len(set(self.anos_por_aba.values())) > 1
 
 
 # --------------------------------------------------------------------------
@@ -290,8 +308,9 @@ _MARCADORES_NOME = " \t*#•·‧∙°º"
 
 
 def _limpar_nome(bruto: str) -> str:
-    """Colapsa espaços e tira marcadores de rodapé das pontas do nome."""
-    return " ".join((bruto or "").split()).strip(_MARCADORES_NOME)
+    """Colapsa espaços, troca caractere de controle invisível por espaço
+    (``importacao.sem_controle``) e tira marcadores de rodapé das pontas do nome."""
+    return " ".join(sem_controle(bruto or "").split()).strip(_MARCADORES_NOME)
 
 
 def _casar_coluna(rotulo: str, ja_usadas: set[str]) -> str | None:
@@ -376,8 +395,9 @@ _RE_TURMA = re.compile(r"^\s*(\d+)\s*[ºªo°]?\s*ano\s*([A-Za-z])?\s*$", re.IGN
 
 def _canonizar_turma(nome: str) -> tuple[str, str]:
     """(nome_turma, serie) canônicos. '1º ANO B' → ('1º Ano B', '1º Ano').
-    Formatos fora do padrão "Nº Ano X" ficam como estão (série = nome)."""
-    nome = " ".join(nome.split())
+    Formatos fora do padrão "Nº Ano X" ficam como estão (série = nome). O
+    caractere de controle invisível vira espaço, como no nome do aluno."""
+    nome = " ".join(sem_controle(nome).split())
     casado = _RE_TURMA.match(nome)
     if not casado:
         return nome, re.sub(r"\s+[A-Za-z]$", "", nome).strip() or nome
@@ -390,6 +410,28 @@ def _canonizar_turma(nome: str) -> tuple[str, str]:
 # Análise
 # --------------------------------------------------------------------------
 
+_MIMETYPE_ODS = b"application/vnd.oasis.opendocument.spreadsheet"
+
+
+def _eh_ods(conteudo: bytes) -> bool:
+    """O .ods (LibreOffice) é um zip cuja entrada ``mimetype`` diz o formato. Lida com
+    teto: o arquivo já passou pela guarda de planilha inflada antes do leitor falhar."""
+    try:
+        with zipfile.ZipFile(io.BytesIO(conteudo)) as pacote:
+            with pacote.open("mimetype") as entrada:
+                return entrada.read(len(_MIMETYPE_ODS) + 16).strip() == _MIMETYPE_ODS
+    except Exception:  # noqa: BLE001 — não é zip, ou não tem a entrada: não é .ods
+        return False
+
+
+def _aviso_planilha_ilegivel(conteudo: bytes) -> str:
+    if _eh_ods(conteudo):
+        return ("A planilha está no formato do LibreOffice (.ods). Abra no LibreOffice, "
+                "salve como Excel (.xlsx) e envie de novo.")
+    return ("Não foi possível ler a planilha. Abra o arquivo no Excel, salve como .xlsx "
+            "e envie de novo.")
+
+
 def analisar_matriculas(conteudo: bytes, nome_arquivo: str = "") -> ListaPilotoAnalise:
     analise = ListaPilotoAnalise()
     try:
@@ -397,26 +439,40 @@ def analisar_matriculas(conteudo: bytes, nome_arquivo: str = "") -> ListaPilotoA
     except PlanilhaRecusada:
         raise  # inflada ou grande demais: a rota recusa (413/400) com a mensagem
     except Exception as exc:  # noqa: BLE001 — arquivo ilegível vira aviso, não 500
-        analise.avisos.append(f"Não foi possível ler a planilha: {exc}")
+        # O aviso diz o que fazer; o tipo do erro do leitor vai para o log — sem o
+        # nome do arquivo nem a mensagem do leitor, que podem trazer dado de aluno
+        # (o xlrd cita os primeiros bytes do arquivo).
+        logger.warning("Lista Piloto ilegível (%d bytes): %s", len(conteudo),
+                       type(exc).__name__)
+        analise.avisos.append(_aviso_planilha_ilegivel(conteudo))
         return analise
 
     ano_arquivo = _ano_do_texto(nome_arquivo)
+    # O 1º ano escrito em QUALQUER aba (mesmo numa que não é importada): a reserva de
+    # antes, quando nenhuma aba importada traz a célula.
+    ano_de_alguma_aba: int | None = None
     for nome_aba, linhas in abas:
         hr = _linha_cabecalho(linhas)
         if hr is None:
             continue  # aba de resumo/legenda — sem coluna "Nome"
 
-        # Metadados no topo (linhas antes do cabeçalho).
+        # Metadados no topo (linhas antes do cabeçalho). O ano é lido em CADA aba:
+        # uma aba velha copiada à frente das do ano novo não fala pelas outras.
         topo = linhas[:hr]
+        ano_da_aba: int | None = None
         for linha in topo:
             if not analise.escola_detectada:
                 v = _valor_apos_rotulo(linha, "escola")
                 if v:
                     analise.escola_detectada = v
-            if analise.ano_letivo is None:
+            if ano_da_aba is None:
                 v = _valor_apos_rotulo(linha, "lista piloto")
-                if v.strip().isdigit():
-                    analise.ano_letivo = int(v.strip())
+                # isdecimal, não isdigit: "2026²" é dígito para o isdigit e o int()
+                # levantava — sem try aqui, a prévia inteira dava 500.
+                if v.strip().isdecimal():
+                    ano_da_aba = int(v.strip())
+        if ano_de_alguma_aba is None:
+            ano_de_alguma_aba = ano_da_aba
         turma = _extrair_turma(nome_aba, topo)
         # Aba AUXILIAR (ex.: "COMPARAR COM INEP", "DESENHOS", "Etiqueta"): tem
         # uma coluna "Nome", mas NENHUM metadado de turma (turno/professor/SED)
@@ -449,7 +505,19 @@ def analisar_matriculas(conteudo: bytes, nome_arquivo: str = "") -> ListaPilotoA
         for posicao, linha in enumerate(linhas[hr + 1:], start=1):
             try:
                 aluno = _extrair_aluno(linha, colunas)
-            except Exception:  # noqa: BLE001 — linha corrompida não derruba a aba
+            except Exception as exc:  # noqa: BLE001 — linha corrompida não derruba a aba
+                # Mas não some em silêncio: aviso (aba e posição, sem nome) e log; e,
+                # como a criança da linha não foi vista, a turma não marca ninguém
+                # "fora da lista piloto" neste envio (``linhas_puladas``).
+                logger.warning("Lista Piloto: aba %r, %dª linha abaixo dos títulos não "
+                               "pôde ser lida: %s", turma.aba[:60], posicao,
+                               type(exc).__name__)
+                turma.linhas_puladas += 1
+                analise.avisos.append(
+                    f"Aba “{turma.aba}”, {posicao}ª linha preenchida abaixo dos títulos: "
+                    "a linha não pôde ser lida e fica fora da importação. Confira a "
+                    "planilha e envie de novo; até lá, ninguém desta turma é marcado "
+                    "“fora da lista piloto”.")
                 continue
             if aluno is None:
                 continue
@@ -466,6 +534,20 @@ def analisar_matriculas(conteudo: bytes, nome_arquivo: str = "") -> ListaPilotoA
 
         if turma.alunos:
             analise.turmas.append(turma)
+            if ano_da_aba is not None:
+                analise.anos_por_aba[turma.aba] = ano_da_aba
+
+    # O ano da LISTA: o das abas importadas, quando todas concordam. Com anos
+    # diferentes entre elas, nenhum (``anos_divergentes``: a rota recusa a gravação e
+    # o aviso nomeia as abas de cada ano). Sem a célula em nenhuma aba importada, o
+    # 1º ano escrito em qualquer aba (como antes) e, por fim, o nome do arquivo.
+    anos_importados = set(analise.anos_por_aba.values())
+    if len(anos_importados) == 1:
+        analise.ano_letivo = anos_importados.pop()
+        analise.ano_letivo_origem = "planilha"
+    elif not anos_importados and ano_de_alguma_aba is not None:
+        analise.ano_letivo = ano_de_alguma_aba
+        analise.ano_letivo_origem = "planilha"
 
     # Mesmo aluno em DUAS turmas: a escola às vezes lista quem está trocando de
     # sala. Com RA, é o mesmo aluno (cadastrado uma vez, matriculado na 1ª). Sem
@@ -492,8 +574,10 @@ def analisar_matriculas(conteudo: bytes, nome_arquivo: str = "") -> ListaPilotoA
                 f"“{nome0}” aparece em mais de uma turma ({turmas_str}) sem RA — "
                 "confira se é a mesma pessoa (será cadastrado(a) em cada turma).")
 
-    if analise.ano_letivo is None:
+    if (analise.ano_letivo is None and not analise.anos_divergentes
+            and ano_arquivo is not None):
         analise.ano_letivo = ano_arquivo
+        analise.ano_letivo_origem = "arquivo"
     if not analise.turmas:
         analise.avisos.append(
             "Nenhuma turma reconhecida. Confira se a planilha tem uma aba por "
@@ -522,11 +606,12 @@ def _extrair_turma(nome_aba: str, topo: list[list]) -> TurmaMatriculas:
             professor = _valor_apos_rotulo(linha, "professor")
         if not sed:
             v = _valor_apos_rotulo(linha, "classe", contains=True)
-            if v.strip().isdigit():
+            if v.strip().isdecimal():      # "123456¹" (rodapé) não é o código da classe
                 sed = v.strip()
     nome_turma, serie = _canonizar_turma(nome or nome_aba)
     return TurmaMatriculas(nome=nome_turma, ano_escolar=serie,
-                           turno=turno, professor=professor, sed=sed, aba=nome_aba)
+                           turno=turno, professor=sem_controle(professor), sed=sed,
+                           aba=nome_aba)
 
 
 def _aluno_cabe_nas_colunas(analise: ListaPilotoAnalise, turma: TurmaMatriculas,
@@ -618,7 +703,9 @@ def _extrair_aluno(linha: list, colunas: dict[str, int]) -> AlunoMatricula | Non
 
     aluno = AlunoMatricula(nome=nome)
     numero = val("numero")
-    if numero.isdigit():
+    # isdecimal, não isdigit: o "2¹" de rodapé é dígito para o isdigit e o int()
+    # levantava — a linha inteira (a criança) ficava de fora. Como "2a", fica sem nº.
+    if numero.isdecimal():
         aluno.numero_chamada = int(numero)
 
     c_nasc = colunas.get("nascimento")
@@ -662,5 +749,8 @@ def _data_iso(bruto: str) -> str | None:
 
 
 def _ano_do_texto(texto: str) -> int | None:
-    achado = re.search(r"20\d{2}", texto or "")
+    """O ano ("2027") escrito no nome do arquivo. Só um número de QUATRO dígitos
+    sozinho: o nº da classe (SED) no nome — "Lista 300320221.xlsx" — contém "2022" e
+    não é ano nenhum (a confirmação recusa a lista de outro ano)."""
+    achado = re.search(r"(?<!\d)20\d{2}(?!\d)", texto or "")
     return int(achado.group()) if achado else None

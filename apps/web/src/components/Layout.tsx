@@ -56,7 +56,7 @@ import {
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { Fragment, Suspense, useEffect, useId, useRef, useState } from "react";
-import type { KeyboardEvent as ReactKeyboardEvent, MouseEvent as ReactMouseEvent } from "react";
+import type { KeyboardEvent as ReactKeyboardEvent, MouseEvent as ReactMouseEvent, ReactNode } from "react";
 import { Link, NavLink, Outlet, useLocation, useNavigate, useNavigationType } from "react-router-dom";
 
 import { useApp } from "../context/AppContext";
@@ -69,12 +69,12 @@ import { useHeartbeat } from "../hooks/useHeartbeat";
 import { useOnboarding } from "../hooks/useOnboarding";
 import { usePerfil } from "../hooks/usePerfil";
 import { useAtalhosGlobais } from "../lib/atalhos";
-import { bimestreEmCurso } from "../lib/calendarioBimestres";
+import { bimestreEmCurso, useCalendarioBimestres, type CalendarioDoAno } from "../lib/calendarioBimestres";
 import { dataHora } from "../lib/formato";
 import { normalizar } from "../lib/nomes";
 import { podeAbrirRota } from "../lib/rotasGuardadas";
 import { Logo, LogoHorizontal } from "./Logo";
-import { Avatar, BotaoIcone, Carregando, IconePastel } from "./ui";
+import { Avatar, Botao, BotaoIcone, Carregando, IconePastel } from "./ui";
 
 /** Seção da barra lateral (identidade v2): o rótulo em caixa alta sobre os grupos. Cada
  *  PERFIL tem as suas (`secoesDoPerfil`) — as fixas "Projeto"/"Gestão" não diziam nada à
@@ -710,7 +710,7 @@ function usePrimeiroAcesso(): boolean {
 }
 
 /** Selo do item "Premiações": dias até o FIM do bimestre em curso, pelo calendário
- *  oficial (lib/calendarioBimestres, espelho do backend). Não existe data de
+ *  oficial (o do backend, via useCalendarioBimestres). Não existe data de
  *  premiação no sistema — o selo nunca diz "dias para a premiação". Fora do
  *  calendário (férias, ano sem calendário) não há selo. */
 interface SeloMenu {
@@ -720,8 +720,8 @@ interface SeloMenu {
   completo: string;
 }
 
-function seloDoBimestre(hoje: Date): SeloMenu | null {
-  const bimestre = bimestreEmCurso(hoje);
+function seloDoBimestre(hoje: Date, calendario: CalendarioDoAno | null): SeloMenu | null {
+  const bimestre = bimestreEmCurso(hoje, calendario);
   if (!bimestre) return null;
   const dias = bimestre.diasParaOFim;
   if (dias === 0) return { curto: "hoje", completo: `O ${bimestre.numero}º bimestre termina hoje` };
@@ -948,6 +948,9 @@ function Notificacoes() {
   const [naoLidas, setNaoLidas] = useState(0);
   const [itens, setItens] = useState<Notificacao[]>([]);
   const [carregando, setCarregando] = useState(false);
+  // Falha ao LISTAR não é "nenhuma novidade": o contador pode estar dizendo que há
+  // avisos (inclusive os críticos de coleta) e o popover não pode negar isso.
+  const [falhou, setFalhou] = useState(false);
   const caixa = useRef<HTMLDivElement | null>(null);
 
   // Badge: busca o contador em segundo plano (~60s), independente do popover
@@ -979,23 +982,33 @@ function Notificacoes() {
     return () => document.removeEventListener("mousedown", fechar);
   }, []);
 
-  async function alternar() {
-    const abrindo = !aberto;
-    setAberto(abrindo);
-    if (!abrindo) return;
+  async function carregar() {
     setCarregando(true);
+    setFalhou(false);
     try {
       const lista = await api<Notificacao[]>("/notificacoes");
       setItens(lista);
       if (lista.some((n) => !n.lida)) {
-        await api("/notificacoes/marcar-lidas", { method: "POST" }).catch(() => {});
+        // Abrir = visto tudo, mas só quando o servidor GRAVOU a leitura: com o
+        // marcar-lidas falhando, o contador continua (a próxima busca dele, em
+        // segundo plano, segue dizendo a verdade).
+        await api("/notificacoes/marcar-lidas", { method: "POST" })
+          .then(() => setNaoLidas(0), () => undefined);
+      } else {
+        setNaoLidas(0);
       }
-      setNaoLidas(0); // abrir = visto tudo
     } catch {
       setItens([]);
+      setFalhou(true);
     } finally {
       setCarregando(false);
     }
+  }
+
+  function alternar() {
+    const abrindo = !aberto;
+    setAberto(abrindo);
+    if (abrindo) void carregar();
   }
 
   // Aviso que aponta para uma tela que o perfil não abre (ex.: backup →
@@ -1037,6 +1050,13 @@ function Notificacoes() {
           </p>
           {carregando ? (
             <p className="px-4 py-4 text-sm text-zinc-500 dark:text-zinc-400">Carregando…</p>
+          ) : falhou ? (
+            <div role="alert" className="flex flex-col items-center px-4 py-6 text-center">
+              <p className="text-sm text-zinc-600 dark:text-zinc-300">Não foi possível carregar as notificações.</p>
+              <Botao variante="secundario" tamanho="sm" className="mt-3" onClick={() => void carregar()}>
+                Tentar de novo
+              </Botao>
+            </div>
           ) : itens.length === 0 ? (
             <div className="flex flex-col items-center px-4 py-7 text-center">
               <IconePastel icone={Bell} tom="violeta" />
@@ -1248,7 +1268,9 @@ function Navegacao({ aoNavegar }: { aoNavegar?: () => void }) {
   const todos = grupos.flatMap((g) => g.itens);
   const ativo = contextoDaRota(grupos, pathname, search)?.grupo.chave ?? null;
   const ativoDe = (item: ItemNav) => itemAtivo(item, pathname, search, todos);
-  const selo = seloDoBimestre(new Date());
+  const { escolaId } = useApp();
+  const calendario = useCalendarioBimestres(escolaId);
+  const selo = seloDoBimestre(new Date(), calendario);
   // A Navegacao existe duas vezes (barra fixa e gaveta do celular): ids próprios.
   const idBase = useId();
   const refNav = useRef<HTMLElement | null>(null);
@@ -1329,45 +1351,47 @@ function Navegacao({ aoNavegar }: { aoNavegar?: () => void }) {
   }
 
   return (
-    <nav ref={refNav} aria-label="Menu principal" className={CLASSE_NAV}>
-      <DegradeRolagem lado="topo" visivel={acima} />
-      <div>
-        {secoesDoPerfil(perfil).map((secao) => {
-          const daSecao = grupos.filter((g) => g.secao === secao.chave);
-          // Seção vazia não aparece (ex.: tudo dela fora dos módulos contratados).
-          if (daSecao.length === 0) return null;
-          const idTitulo = `${idBase}-secao-${secao.chave}`;
-          return (
-            <div key={secao.chave} role="group" aria-labelledby={idTitulo} className="mt-6 first:mt-0">
-              <TituloSecao id={idTitulo}>{secao.rotulo}</TituloSecao>
-              <div className="space-y-1">
-                {daSecao.map((grupo) =>
-                  ehSolto(grupo) ? (
-                    grupo.itens.map((item) => (
-                      <LinkMenu key={item.caminho} item={item} ativo={ativoDe(item)} aoNavegar={aoNavegar}
-                                selo={seloDoItem(item, selo)} />
-                    ))
-                  ) : (
-                    <GrupoMenu
-                      key={grupo.chave}
-                      grupo={grupo}
-                      aberto={estaAberto(grupo)}
-                      temAtivo={ativo === grupo.chave}
-                      idPainel={`${idBase}-${grupo.chave}`}
-                      aoAlternar={() => alternar(grupo)}
-                      aoNavegar={aoNavegar}
-                      selo={selo}
-                      ativoDe={ativoDe}
-                    />
-                  ),
-                )}
+    <ListaComSetas acima={acima} abaixo={abaixo}>
+      <nav ref={refNav} aria-label="Menu principal" className={CLASSE_NAV}>
+        <DegradeRolagem lado="topo" visivel={acima} />
+        <div>
+          {secoesDoPerfil(perfil).map((secao) => {
+            const daSecao = grupos.filter((g) => g.secao === secao.chave);
+            // Seção vazia não aparece (ex.: tudo dela fora dos módulos contratados).
+            if (daSecao.length === 0) return null;
+            const idTitulo = `${idBase}-secao-${secao.chave}`;
+            return (
+              <div key={secao.chave} role="group" aria-labelledby={idTitulo} className="mt-6 first:mt-0">
+                <TituloSecao id={idTitulo}>{secao.rotulo}</TituloSecao>
+                <div className="space-y-1">
+                  {daSecao.map((grupo) =>
+                    ehSolto(grupo) ? (
+                      grupo.itens.map((item) => (
+                        <LinkMenu key={item.caminho} item={item} ativo={ativoDe(item)} aoNavegar={aoNavegar}
+                                  selo={seloDoItem(item, selo)} />
+                      ))
+                    ) : (
+                      <GrupoMenu
+                        key={grupo.chave}
+                        grupo={grupo}
+                        aberto={estaAberto(grupo)}
+                        temAtivo={ativo === grupo.chave}
+                        idPainel={`${idBase}-${grupo.chave}`}
+                        aoAlternar={() => alternar(grupo)}
+                        aoNavegar={aoNavegar}
+                        selo={selo}
+                        ativoDe={ativoDe}
+                      />
+                    ),
+                  )}
+                </div>
               </div>
-            </div>
-          );
-        })}
-      </div>
-      <DegradeRolagem lado="base" visivel={abaixo} />
-    </nav>
+            );
+          })}
+        </div>
+        <DegradeRolagem lado="base" visivel={abaixo} />
+      </nav>
+    </ListaComSetas>
   );
 }
 
@@ -1376,7 +1400,8 @@ function Navegacao({ aoNavegar }: { aoNavegar?: () => void }) {
  *  item cortado ficar sem aviso. Decorativo. Fica dentro da área que rola, preso à
  *  borda (sticky); o do topo não ocupa espaço (margens negativas) e o do pé deixa
  *  uma folga para o último item subir acima dele. `recuo` anula o padding lateral
- *  da lista (px-3 no menu, px-2 na barra só de ícones). */
+ *  da lista (px-3 no menu, px-2 na barra só de ícones). A SETA não mora aqui: ver
+ *  `SetaRolagem`. */
 function DegradeRolagem({ lado, visivel, recuo = "-mx-3" }: {
   lado: "topo" | "base";
   visivel: boolean;
@@ -1390,15 +1415,42 @@ function DegradeRolagem({ lado, visivel, recuo = "-mx-3" }: {
       aria-hidden
       data-degrade={lado}
       data-visivel={visivel ? "sim" : "nao"}
-      className={`pointer-events-none sticky z-10 ${recuo} flex h-8 justify-center from-marinho-900 to-transparent transition-opacity duration-200 motion-reduce:transition-none dark:from-marinho-950 ${posicao} ${
-        lado === "topo" ? "items-start" : "items-end"
+      className={`pointer-events-none sticky z-10 ${recuo} block h-8 from-marinho-900 to-transparent transition-opacity duration-200 motion-reduce:transition-none dark:from-marinho-950 ${posicao} ${
+        visivel ? "opacity-100" : "opacity-0"}`}
+    />
+  );
+}
+
+/** Seta que avisa que há itens escondidos naquele lado da lista do menu (com a janela
+ *  baixa um item pode ficar todo escondido, e o esmaecido sozinho quase não se nota).
+ *  Fica FORA da área que rola, numa faixa de 8 px na folga entre a lista e o cabeçalho
+ *  (topo) ou o rodapé (base) — onde não há texto. Dentro da lista, presa à borda, ela
+ *  caía em cima do rótulo que passava ali ("Regras de⌄pontuação" numa janela de 768 px
+ *  com todos os grupos abertos). Decorativa. */
+function SetaRolagem({ lado, visivel }: { lado: "topo" | "base"; visivel: boolean }) {
+  return (
+    <div
+      aria-hidden
+      data-seta={lado}
+      data-visivel={visivel ? "sim" : "nao"}
+      className={`pointer-events-none absolute inset-x-0 z-10 flex h-2 items-center justify-center transition-opacity duration-200 motion-reduce:transition-none ${
+        lado === "topo" ? "top-0 -translate-y-full" : "bottom-0 translate-y-full"
       } ${visivel ? "opacity-100" : "opacity-0"}`}
     >
-      {/* Seta visível: com a janela baixa (1440×900) um item pode ficar todo escondido
-          e o esmaecido sozinho, sobre o fundo vazio, quase não se nota. */}
       {lado === "topo"
-        ? <ChevronUp size={16} className="text-marinho-300" />
-        : <ChevronDown size={16} className="mb-0.5 text-marinho-300" />}
+        ? <ChevronUp size={16} className="shrink-0 text-marinho-300" />
+        : <ChevronDown size={16} className="shrink-0 text-marinho-300" />}
+    </div>
+  );
+}
+
+/** A lista do menu com as setas de rolagem por fora dela (ver `SetaRolagem`). */
+function ListaComSetas({ acima, abaixo, children }: { acima: boolean; abaixo: boolean; children: ReactNode }) {
+  return (
+    <div className="relative flex min-h-0 flex-1 flex-col">
+      <SetaRolagem lado="topo" visivel={acima} />
+      {children}
+      <SetaRolagem lado="base" visivel={abaixo} />
     </div>
   );
 }
@@ -1462,7 +1514,9 @@ function NavegacaoRail() {
   const { modulos: modulosRail } = useModulos();
   const { pathname, search } = useLocation();
   const grupos = sidebarDoPerfil(perfil, modulosRail);
-  const selo = seloDoBimestre(new Date());
+  const { escolaId } = useApp();
+  const calendario = useCalendarioBimestres(escolaId);
+  const selo = seloDoBimestre(new Date(), calendario);
   // Primeiro acesso: o MESMO recorte do menu aberto — só "Comece aqui" (e, para o Admin
   // Global, os cadastros que não dependem da escola). Antes a barra recolhida ignorava o
   // primeiro acesso e mostrava o menu inteiro de uma escola ainda vazia.
@@ -1475,21 +1529,23 @@ function NavegacaoRail() {
   const refNav = useRef<HTMLElement | null>(null);
   const { inicio: acima, fim: abaixo } = useBordasDaRolagem(refNav, "y");
   return (
-    <nav ref={refNav} aria-label="Menu principal" className={`${CLASSE_NAV} !px-2`}>
-      <DegradeRolagem lado="topo" visivel={acima} recuo="-mx-2" />
-      <div className="space-y-1">
-        {blocos.map((itens, i) => (
-          <Fragment key={itens[0]?.caminho ?? i}>
-            {i > 0 && <div aria-hidden data-divisoria="secao" className="mx-3 my-3 border-t border-white/10" />}
-            {itens.map((item) => (
-              <IconeMenu key={item.caminho} item={item} ativo={itemAtivo(item, pathname, search, todos)}
-                         selo={seloDoItem(item, selo)} />
-            ))}
-          </Fragment>
-        ))}
-      </div>
-      <DegradeRolagem lado="base" visivel={abaixo} recuo="-mx-2" />
-    </nav>
+    <ListaComSetas acima={acima} abaixo={abaixo}>
+      <nav ref={refNav} aria-label="Menu principal" className={`${CLASSE_NAV} !px-2`}>
+        <DegradeRolagem lado="topo" visivel={acima} recuo="-mx-2" />
+        <div className="space-y-1">
+          {blocos.map((itens, i) => (
+            <Fragment key={itens[0]?.caminho ?? i}>
+              {i > 0 && <div aria-hidden data-divisoria="secao" className="mx-3 my-3 border-t border-white/10" />}
+              {itens.map((item) => (
+                <IconeMenu key={item.caminho} item={item} ativo={itemAtivo(item, pathname, search, todos)}
+                           selo={seloDoItem(item, selo)} />
+              ))}
+            </Fragment>
+          ))}
+        </div>
+        <DegradeRolagem lado="base" visivel={abaixo} recuo="-mx-2" />
+      </nav>
+    </ListaComSetas>
   );
 }
 
@@ -1729,8 +1785,10 @@ function SimboloEscola({ url, rede }: { url: string | null | undefined; rede: bo
 }
 
 /** Telas que dependem da escola escolhida (com as sub-rotas): a Secretaria que volta a
- *  "Toda a Rede Municipal" numa delas é levada ao Panorama da Rede. */
-const TELAS_DA_ESCOLA = ["/escola", "/turmas", "/professores", "/metricas", "/livros", "/simulador"];
+ *  "Toda a Rede Municipal" numa delas é levada ao Panorama da Rede. Só as que ela ABRE
+ *  (RotaGestao): Turmas, Professores, Simulador e o Catálogo de Livros são RotaEscolaOp, e
+ *  o App a manda ao Dashboard antes de o Layout montar. */
+const TELAS_DA_ESCOLA = ["/escola", "/metricas"];
 const ehTelaDaEscola = (pathname: string): boolean =>
   TELAS_DA_ESCOLA.some((r) => pathname === r || pathname.startsWith(`${r}/`));
 
@@ -1753,13 +1811,17 @@ const LEEM_O_CONTEXTO_NO_LUGAR = ["/suporte"];
  *  quase todo nome de escola), com o texto inteiro no title. O foco do teclado aparece no
  *  contorno do cartão. Na barra recolhida vira um botão que expande o menu. */
 function CartaoEscola({ compacto = false, aoExpandir }: { compacto?: boolean; aoExpandir?: () => void }) {
-  const { escolas, escolaId, selecionarEscola } = useApp();
+  const { escolas, escolaId, escolaAtual, selecionarEscola } = useApp();
   const { secretaria } = usePerfil();
   const navegar = useNavigate();
   const { pathname } = useLocation();
   if (!secretaria && escolas.length === 0) return null;
-  const atual = escolas.find((e) => e.id === escolaId) ?? null;
-  // Escola no contexto que não está na lista: nome próprio (nunca "Toda a Rede Municipal").
+  // A escola aberta: a da lista ou, para o Admin Global, a que ele abriu fora dela (uma
+  // inativa — o AppContext a busca com as inativas), com o nome dela como Turmas e
+  // Configurações já mostram.
+  const atual = escolaAtual;
+  const atualForaDaLista = atual != null && !escolas.some((e) => e.id === atual.id);
+  // Escola no contexto que não se sabe qual é: o número (nunca "Toda a Rede Municipal").
   const foraDaLista = escolaId != null && !atual ? `Escola nº ${escolaId} (fora da lista)` : null;
   const rotulo = secretaria ? "Contexto" : "Escola";
   const nomeAtual = atual?.nome ?? foraDaLista ?? (secretaria ? "Toda a Rede Municipal" : "");
@@ -1813,6 +1875,7 @@ function CartaoEscola({ compacto = false, aoExpandir }: { compacto?: boolean; ao
         {/* Sem emoji no texto: o ícone do cartão já diz que é a rede, e o nome cabe. */}
         {secretaria && <option value="">Toda a Rede Municipal</option>}
         {foraDaLista && <option value={escolaId ?? ""}>{foraDaLista}</option>}
+        {atualForaDaLista && <option value={atual.id}>{atual.nome}</option>}
         {escolas.map((escola) => (
           <option key={escola.id} value={escola.id}>
             {escola.nome}

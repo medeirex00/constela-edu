@@ -62,8 +62,8 @@ def test_da_importacao_ao_login_pelo_link(db, escola_completa):
     previsiveis |= {"josiane123", "fictelli123", "josianefictelli", "12345678", conta.email}
     for senha in previsiveis:
         # A lista de candidatos cresceu (todas as caixas do nome/@) além do teto
-        # do limitador de login: zera-o a cada tentativa para que CADA senha
-        # receba a recusa por senha errada (401), não o 429 do limitador.
+        # do limitador de login. Zere o contador a cada tentativa para testar
+        # cada senha; o bloqueio da conta também responde com o mesmo 401.
         _zerar_limitadores()
         assert _login("JosianeFictelli", senha).status_code == 401, senha
 

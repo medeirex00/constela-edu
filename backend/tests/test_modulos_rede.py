@@ -29,6 +29,7 @@ from app.models import (
 from app.services import modulos as svc
 from app.services import rede as svc_rede
 from app.services import scoring
+from tests._ano_letivo import ANO
 
 
 def _login(email: str, senha: str = "s3nh4") -> TestClient:
@@ -44,10 +45,10 @@ def _cenario(db, *, com_elefante=True, com_matific=True, alunos=6):
     rede = Rede(nome="Rede Modulos", status="ativa")
     db.add(rede)
     db.flush()
-    esc = Escola(nome="EM Modulos", ano_letivo_ativo=2026, rede_id=rede.id, status="ativa")
+    esc = Escola(nome="EM Modulos", ano_letivo_ativo=ANO, rede_id=rede.id, status="ativa")
     db.add(esc)
     db.flush()
-    turma = Turma(escola_id=esc.id, nome="1ºA", ano_escolar="1º Ano", ano_letivo=2026,
+    turma = Turma(escola_id=esc.id, nome="1ºA", ano_escolar="1º Ano", ano_letivo=ANO,
                   status="ativa")
     db.add(turma)
     db.flush()
@@ -58,7 +59,7 @@ def _cenario(db, *, com_elefante=True, com_matific=True, alunos=6):
         a = Aluno(escola_id=esc.id, nome=f"Crianca {i}", status="ativo")
         db.add(a)
         db.flush()
-        db.add(Matricula(escola_id=esc.id, aluno_id=a.id, turma_id=turma.id, ano_letivo=2026))
+        db.add(Matricula(escola_id=esc.id, aluno_id=a.id, turma_id=turma.id, ano_letivo=ANO))
         if com_elefante:
             db.add(SnapshotElefante(escola_id=esc.id, aluno_id=a.id, importacao_id=imp.id,
                                     livros_unicos=5 + i, tempo_leitura_min=60 + i * 10,
@@ -298,7 +299,12 @@ def test_recalculo_ciclo_completo_desligar_e_religar(db):
     for aluno_id, (geral, ele, mat) in so_leitura.items():
         assert geral == pytest.approx(ele, abs=0.01)      # Geral = Leitura
         assert ele == pytest.approx(com_dois[aluno_id][1], abs=0.01)  # a de leitura não muda
-        assert mat == com_dois[aluno_id][2]  # o DADO do Matific continua lá (reversível)
+        # A NOTA do Matific não fica gravada com valor real — ela desempatava a
+        # ordem legada (G_MODULOS-2). O DADO continua lá, e o passo 8 prova que
+        # religar devolve tudo (reversível).
+        assert mat == 0.0
+    assert db.query(SnapshotMatific).filter(
+        SnapshotMatific.escola_id == esc.id).count() == len(com_dois)
 
     # 6 e 7 — religa; o PUT recalcula de novo.
     r = root.put(f"/api/v1/redes/{rede.id}/modulos", json={"matematica": True})
@@ -338,7 +344,7 @@ def test_falha_no_recalculo_nao_derruba_as_outras_escolas_nem_o_contrato(db, mon
       conserta.
     """
     rede, esc = _cenario(db)
-    outra = Escola(nome="EM Segunda", ano_letivo_ativo=2026, rede_id=rede.id, status="ativa")
+    outra = Escola(nome="EM Segunda", ano_letivo_ativo=ANO, rede_id=rede.id, status="ativa")
     db.add(outra)
     db.commit()
 
@@ -375,7 +381,7 @@ def test_falha_no_recalculo_nao_derruba_as_outras_escolas_nem_o_contrato(db, mon
 def test_recalculo_alcanca_todas_as_escolas_da_rede_e_so_elas(db):
     """A mudança vale para a rede inteira — e não encosta em escola de fora."""
     rede, esc = _cenario(db)
-    avulsa = Escola(nome="EM Avulsa", ano_letivo_ativo=2026, status="ativa")  # sem rede
+    avulsa = Escola(nome="EM Avulsa", ano_letivo_ativo=ANO, status="ativa")  # sem rede
     db.add(avulsa)
     db.commit()
 
@@ -415,7 +421,10 @@ def test_vincular_a_escola_a_rede_sem_matematica_recalcula_a_nota(db):
     assert rec["falhas"] == [] and rec["alunos"] == len(com_dois)
     for aluno_id, (geral, ele, mat) in _notas_gravadas(db, esc.id).items():
         assert geral == pytest.approx(ele, abs=0.01)          # Geral = Leitura
-        assert mat == com_dois[aluno_id][2]   # o DADO do Matific continua (reversível)
+        assert mat == 0.0   # a nota fora do plano não fica gravada (G_MODULOS-2)
+    # O DADO do Matific continua no banco (reversível).
+    assert db.query(SnapshotMatific).filter(
+        SnapshotMatific.escola_id == esc.id).count() == len(com_dois)
     nota = db.query(Nota).filter(Nota.escola_id == esc.id).first()
     assert nota.aferido_matematica is False
     assert nota.detalhes["dimensoes"]["matematica"]["contratada"] is False
@@ -442,7 +451,7 @@ def test_vinculo_sem_mudanca_de_contrato_nao_recalcula_ninguem(db, monkeypatch):
     vincular uma escola avulsa (todos os módulos) a uma rede com o contrato
     padrão (todos os módulos), não dispara o motor."""
     rede, esc = _cenario(db)
-    avulsa = Escola(nome="EM Avulsa Ficticia", ano_letivo_ativo=2026, status="ativa")
+    avulsa = Escola(nome="EM Avulsa Ficticia", ano_letivo_ativo=ANO, status="ativa")
     db.add(avulsa)
     db.commit()
     chamadas: list[int] = []

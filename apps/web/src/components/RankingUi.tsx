@@ -20,7 +20,7 @@ import { paraData } from "@constela/core";
 import { useApp } from "../context/AppContext";
 import { useApi } from "../hooks/useApi";
 import { usePerfil } from "../hooks/usePerfil";
-import { bimestreEmCurso } from "../lib/calendarioBimestres";
+import { bimestreEmCurso, type CalendarioDoAno } from "../lib/calendarioBimestres";
 import { baixarCsv, type TabelaCsv } from "../lib/csvRanking";
 import type { AlunoParaCertificado, ModeloCertificado } from "../lib/tiposCertificados";
 import type { Dimensao } from "../lib/types";
@@ -447,6 +447,10 @@ export interface CertificadosDaTela {
   contexto: string;
   /** Bimestre da lista quando o período da aba é um bimestre (`bimestreDoPeriodo`). */
   bimestreInicial?: number;
+  /** A dica do botão desabilitado quando a lista do lote está vazia (padrão: "Não há
+   *  alunos nesta lista."). A aba cujo lote é só PARTE da tabela diz por quê — na
+   *  Evolução, o lote é só quem cresceu e a tabela ao lado mostra quem ficou em 0,0. */
+  semAlunos?: string;
 }
 
 /**
@@ -495,7 +499,8 @@ export function AcoesRanking({
           variante="ambar"
           onClick={() => setAberto(true)}
           disabled={!certificados || certificados.alunos.length === 0}
-          title={certificados && certificados.alunos.length === 0 ? "Não há alunos nesta lista." : undefined}
+          title={certificados && certificados.alunos.length === 0
+            ? (certificados.semAlunos ?? "Não há alunos nesta lista.") : undefined}
         >
           <Award size={16} aria-hidden /> Gerar certificados
         </Botao>
@@ -523,8 +528,14 @@ export function AcoesRanking({
 
 // ── Subtítulo: período + data do dado ──────────────────────────────────────
 
-/** "Este mês", "4º bimestre", "01/08/2026 a 20/08/2026"... (rótulo do período global). */
-export function rotuloDoPeriodo(periodo: Periodo, hoje: Date = new Date()): string {
+/** "Este mês", "4º bimestre", "01/08/2026 a 20/08/2026"... (rótulo do período global).
+ *  `calendario` é o do backend (`useCalendarioBimestres`): sem ele, "Este bimestre" só
+ *  ganha o número em 2026 (a cópia da web); fora dela fica "Este bimestre". */
+export function rotuloDoPeriodo(
+  periodo: Periodo,
+  hoje: Date = new Date(),
+  calendario?: CalendarioDoAno | null,
+): string {
   const br = (iso?: string) => (iso ? iso.split("-").reverse().join("/") : "");
   if (periodo.preset === "personalizado") {
     return periodo.inicio && periodo.fim ? `${br(periodo.inicio)} a ${br(periodo.fim)}` : "Período personalizado";
@@ -532,7 +543,7 @@ export function rotuloDoPeriodo(periodo: Periodo, hoje: Date = new Date()): stri
   if (periodo.preset === "dia") return periodo.inicio ? `Dia ${br(periodo.inicio)}` : "Um dia";
   if (periodo.preset === "bimestre") {
     // Mesmo calendário oficial que o backend usa para "este bimestre".
-    const atual = bimestreEmCurso(hoje);
+    const atual = bimestreEmCurso(hoje, calendario);
     return atual ? `${atual.numero}º bimestre` : "Este bimestre";
   }
   return PRESETS_PERIODO.find((p) => p.valor === periodo.preset)?.rotulo ?? periodo.preset;

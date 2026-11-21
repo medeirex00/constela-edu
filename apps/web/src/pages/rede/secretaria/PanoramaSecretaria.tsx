@@ -52,7 +52,7 @@ import { usePerfil } from "../../../hooks/usePerfil";
 import type { ApiError } from "../../../lib/api";
 import { numero } from "../../../lib/formato";
 import { SeloNatureza, usePlataformasDaRede, type NaturezaSelo } from "../../analise/comum";
-import { decimal, diaBR } from "../../analise/formato";
+import { decimal, diaBR, numeroProtegido } from "../../analise/formato";
 import type { MetricasElefante, MetricasMatific, RespostaPlataformas } from "../../analise/tipos";
 import { MetasDaRede, VitrinePublica, type DashboardRede, type DestaquesRede, type ListaDeDestaques } from "../comum";
 import {
@@ -201,7 +201,7 @@ function RedeNoConstela({ painel, situacoes, erroUso, modulos, ano, anosMistos }
                       valor={<ValorDaLeitura pronto={conta != null} erro={erroUso}>{conta?.com_uso === 0 ? "nenhuma" : numero(conta?.com_uso)}</ValorDaLeitura>}
                       detalhe={anosMistos ? `ano letivo de cada escola (${anosMistos.join(", ")}), pelas coletas`
                         : ano != null ? `ano letivo de ${ano}, pelas coletas` : "pelas coletas"} />
-        <NumeroDaRede testId="numero-demais" rotulo="Sem uso registrado ou sem dado" oQueMede={O_QUE_MEDE_REDE.demais}
+        <NumeroDaRede testId="numero-demais" rotulo="Sem uso registrado, sem dado ou protegidas" oQueMede={O_QUE_MEDE_REDE.demais}
                       valor={<ValorDaLeitura pronto={demais != null} erro={erroUso}>{demais === 0 ? "nenhuma" : numero(demais)}</ValorDaLeitura>}
                       detalhe={conta && demais ? textoDemaisSituacoes(conta, semUsoParcial) : undefined} />
       </div>
@@ -212,7 +212,8 @@ function RedeNoConstela({ painel, situacoes, erroUso, modulos, ano, anosMistos }
 // --- 3. Participação no ano letivo -----------------------------------------------------------
 
 /** Um número da rede numa plataforma: sem ele, "protegido" (escondido para proteger um grupo
- *  pequeno) ou "sem dado" — escritos, nunca 0. */
+ *  pequeno — o bloco inteiro ou só a métrica: `numeroProtegido`) ou "sem dado" — escritos,
+ *  nunca 0. */
 function MetricaDaRede({ rotulo, valor, campo, bloco, oQueMede, testId }: {
   rotulo: string;
   valor: string | null;
@@ -221,7 +222,7 @@ function MetricaDaRede({ rotulo, valor, campo, bloco, oQueMede, testId }: {
   oQueMede: string;
   testId: string;
 }) {
-  const protegido = (bloco?.metricas_protegidas ?? []).includes(campo);
+  const protegido = numeroProtegido(bloco, campo);
   return (
     <div className="rounded-xl bg-zinc-50 px-3 py-2 dark:bg-zinc-800/50" data-testid={testId}>
       <p className="flex flex-wrap items-baseline gap-x-2">
@@ -252,8 +253,11 @@ function CartaoParticipacao({ p, dados, anosMistos }: {
   const ultima = diaBR(dados.cobertura.ultima_coleta[p]);
   // Com anos letivos misturados, o rótulo da janela (o do ano mais comum) não vale para todas.
   const periodo = anosMistos ? `Ano letivo de cada escola (${anosMistos.join(", ")})` : `${j.rotulo}${datas}`;
-  // Quantas escolas entraram no número da rede (só as com a coleta em dia somam).
-  const naSoma = textoEscolasNaSoma(dados.rede.escolas_com_dado?.[p], dados.escolas.length);
+  // Quantas escolas entraram no número da rede (só as com a coleta em dia somam). O bloco
+  // protegido inteiro (poucos alunos medidos) não mostra soma nenhuma: não se diz de quais
+  // escolas é um número que não aparece.
+  const naSoma = numeroProtegido(bloco) ? null
+    : textoEscolasNaSoma(dados.rede.escolas_com_dado?.[p], dados.escolas.length);
   return (
     <Card className="flex min-w-0 flex-col p-5">
       <article className="flex min-w-0 flex-1 flex-col gap-3" aria-labelledby={id} data-testid={`participacao-${p}`}>

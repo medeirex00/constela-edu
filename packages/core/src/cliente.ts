@@ -11,10 +11,31 @@
 
 export class ApiError extends Error {
   status: number;
-  constructor(status: number, mensagem: string) {
+  /** O id da requisição no log do servidor (cabeçalho X-Request-ID), quando veio. */
+  requestId?: string;
+  constructor(status: number, mensagem: string, requestId?: string) {
     super(mensagem);
     this.status = status;
+    if (requestId) this.requestId = requestId;
   }
+}
+
+/** O id que o servidor põe em toda resposta (X-Request-ID, exposto no CORS) e grava em
+ *  cada linha do log daquela requisição. Só o formato que ele gera (letras, números e
+ *  hífen): um valor estranho, de um proxy no caminho, não vai para a tela. */
+export function idDaRequisicao(resposta: Response): string | undefined {
+  const cabecalhos = (resposta as { headers?: { get?: unknown } }).headers;
+  if (!cabecalhos || typeof cabecalhos.get !== "function") return undefined;
+  const id = ((cabecalhos as Headers).get("X-Request-ID") ?? "").trim();
+  return /^[A-Za-z0-9-]{8,64}$/.test(id) ? id : undefined;
+}
+
+/** Num erro do SERVIDOR (5xx), a mensagem termina com o começo do id da requisição —
+ *  "(código: 4f1c2b9a)" — para a pessoa repassar ao suporte, que acha o erro no log por
+ *  ele. Nos erros de quem pediu (4xx), a mensagem já diz o que corrigir e fica como está. */
+export function comCodigoDeSuporte(mensagem: string, status: number, requestId?: string): string {
+  if (status < 500 || !requestId) return mensagem;
+  return `${mensagem} (código: ${requestId.slice(0, 8)})`;
 }
 
 export interface ArmazenamentoToken {
@@ -46,6 +67,15 @@ let armazenamento: ArmazenamentoToken = {
   },
 };
 
+let ultimaAlteracaoDoToken = Promise.resolve();
+
+/** Serializa gravação e invalidação quando o cofre da plataforma é assíncrono. */
+function alterarToken(alterar: () => void | Promise<void>): Promise<void> {
+  const resultado = ultimaAlteracaoDoToken.then(alterar);
+  ultimaAlteracaoDoToken = resultado.catch(() => undefined);
+  return resultado;
+}
+
 export function configurarApi(config: ConfiguracaoApi): void {
   if (config.base !== undefined) base = config.base.replace(/\/$/, "");
   if (config.armazenamento) armazenamento = config.armazenamento;
@@ -60,12 +90,25 @@ export async function obterToken(): Promise<string | null> {
   return armazenamento.obter();
 }
 
-export async function guardarToken(token: string): Promise<void> {
-  await armazenamento.guardar(token);
+export function guardarToken(token: string): Promise<void> {
+  return alterarToken(() => armazenamento.guardar(token));
 }
 
-export async function limparToken(): Promise<void> {
-  await armazenamento.remover();
+export function limparToken(): Promise<void> {
+  return alterarToken(() => armazenamento.remover());
+}
+
+/** Uma resposta atrasada só pode invalidar a sessão que fez a requisição. */
+export function invalidarSessao(tokenDaRequisicao: string | null): Promise<void> {
+  if (!tokenDaRequisicao) return Promise.resolve();
+  return alterarToken(async () => {
+    const leitura = armazenamento.obter();
+    const tokenAtual = typeof leitura === "string" || leitura === null ? leitura : await leitura;
+    if (tokenAtual !== tokenDaRequisicao) return;
+    const remocao = armazenamento.remover();
+    if (remocao) await remocao;
+    aoExpirarSessao();
+  });
 }
 
 async function extrairDetalhe(resposta: Response, padrao: string): Promise<string> {
@@ -117,16 +160,15 @@ async function buscar(url: string, init: RequestInit): Promise<Response> {
   }
 }
 
-async function tratarErro(resposta: Response): Promise<never> {
+async function tratarErro(resposta: Response, token: string | null): Promise<never> {
   if (resposta.status === 401) {
-    await limparToken();
-    aoExpirarSessao();
+    await invalidarSessao(token);
     throw new ApiError(401, "Sessão expirada. Entre novamente.");
   }
-  throw new ApiError(
-    resposta.status,
-    await extrairDetalhe(resposta, "Não foi possível completar a operação."),
-  );
+  const requestId = idDaRequisicao(resposta);
+  const mensagem = await extrairDetalhe(resposta, "Não foi possível completar a operação.");
+  throw new ApiError(resposta.status, comCodigoDeSuporte(mensagem, resposta.status, requestId),
+    requestId);
 }
 
 /** Corpo JSON de uma resposta OK. 204 (No Content) e corpo vazio devolvem
@@ -138,8 +180,13 @@ async function lerCorpo<T>(resposta: Response): Promise<T> {
   return (texto.trim() ? JSON.parse(texto) : undefined) as T;
 }
 
-export async function api<T>(caminho: string, opcoes: RequestInit = {}): Promise<T> {
+export async function api<T>(
+  caminho: string, opcoes: RequestInit = {}, tokenDaSessao?: string,
+): Promise<T> {
   const token = await obterToken();
+  if (tokenDaSessao !== undefined && token !== tokenDaSessao) {
+    throw new ApiError(401, "Esta operação pertence a uma sessão encerrada.");
+  }
   const resposta = await buscar(`${base}${caminho}`, {
     ...opcoes,
     headers: {
@@ -148,7 +195,7 @@ export async function api<T>(caminho: string, opcoes: RequestInit = {}): Promise
       ...((opcoes.headers as Record<string, string>) ?? {}),
     },
   });
-  if (!resposta.ok) await tratarErro(resposta);
+  if (!resposta.ok) await tratarErro(resposta, token);
   return lerCorpo<T>(resposta);
 }
 
@@ -160,7 +207,7 @@ export async function apiUpload<T>(caminho: string, dados: FormData): Promise<T>
     headers: token ? { Authorization: `Bearer ${token}` } : {},
     body: dados,
   });
-  if (!resposta.ok) await tratarErro(resposta);
+  if (!resposta.ok) await tratarErro(resposta, token);
   return lerCorpo<T>(resposta);
 }
 
@@ -172,7 +219,7 @@ export async function apiBlob(
   const resposta = await buscar(`${base}${caminho}`, {
     headers: token ? { Authorization: `Bearer ${token}` } : {},
   });
-  if (!resposta.ok) await tratarErro(resposta);
+  if (!resposta.ok) await tratarErro(resposta, token);
   const disposicao = resposta.headers.get("Content-Disposition") ?? "";
   const nomeArquivo = /filename="?([^";]+)"?/.exec(disposicao)?.[1] ?? "arquivo";
   return { blob: await resposta.blob(), nomeArquivo };
@@ -186,8 +233,10 @@ export async function loginRequest(email: string, senha: string) {
     body: corpo.toString(),
   });
   if (!resposta.ok) {
+    const requestId = idDaRequisicao(resposta);
     const detalhe = await extrairDetalhe(resposta, "Falha no login.");
-    throw new ApiError(resposta.status, detalhe);
+    throw new ApiError(resposta.status, comCodigoDeSuporte(detalhe, resposta.status, requestId),
+      requestId);
   }
   return resposta.json();
 }

@@ -2,6 +2,8 @@
 
 O agendador automático (Elefante Letrado e Matific) está **desligado em produção desde 17/09/2026**. Ele continua desligado por padrão: `SYNC_SCHEDULER_ENABLED=false`.
 
+Decisão de 20/11/2026. Manter só as coletas manuais até depois de 01/12/2026. A data abre a possibilidade de avaliar o piloto. A reativação requer o checklist, a estabilidade medida e autorização explícita. Mantêm-se os 15 minutos sem sinal e o monitoramento atual.
+
 Este documento lista o que precisa estar pronto para religá-lo, com autorização do dono. O código não executa nenhum passo daqui: cada passo é uma ação humana. A mudança de variável de ambiente e o reinício do serviço são feitos pelo dono.
 
 Por que não basta ligar a variável: o diagnóstico de 22/10 mostrou que, sem as correções, o agendador amplia os defeitos que hoje ficam escondidos.
@@ -37,10 +39,10 @@ A verificação é **só leitura**: não cria agenda, não cancela execução, n
 | id | Crítico | O que confere | Como resolver |
 |---|---|---|---|
 | `teto_execucao` | sim | `SYNC_TETO_EXECUCAO_S` existe e é maior que 0. O padrão do contrato é 2700 s; a #407 levou ~17 min. | Implantar a versão com o teto. |
-| `teto_coerente` | sim | `SYNC_TRAVADA_S` é maior que o teto, e o teto é maior ou igual a `SYNC_TIMEOUT_S`. | Com o teto de 2700 s, um `SYNC_TRAVADA_S` de 1800 s **não serve**: a limpeza de órfãs mataria uma coleta viva entre 30 e 45 min. O padrão da integração (fix/sync-integridade) já é 3600; confira se o ambiente não o sobrescreve com um valor menor. |
+| `teto_coerente` | sim | `SYNC_TRAVADA_S` é maior que o teto, e o teto é maior ou igual a `SYNC_TIMEOUT_S`. | Com o teto de 2700 s, um `SYNC_TRAVADA_S` de 1800 s **não serve**: o sinal de vida (que para em 2 × `SYNC_TRAVADA_S`) deixaria só 15 min depois do teto para a aplicação e o recálculo. A limpeza de órfãs e a verificação `execucoes_presas` não entram nessa conta: as duas decidem a execução em `executando` pela falta de registro no log há mais de `SYNC_SEM_SINAL_S`, e a coleta viva escreve nele. O padrão da integração (fix/sync-integridade) já é 3600; confira se o ambiente não o sobrescreve com um valor menor. |
 | `status_honesto` | sim | O serviço conhece os estados `concluida`, `parcial`, `sem_atualizacao`, `sem_dados` e `erro`. Lê de `service.ESTADOS_FINAIS` ou, na falta dele, do código. Também confere as colunas da migração 0039 no modelo **e no banco**: `qtd_linhas`, `qtd_em_revisao`, `qtd_falhas`, `recalculo_pendente` e `motivo`. | Implantar a versão e aplicar a 0039. |
 | `selo_frescor` | sim | Existem `/ranking/frescor` e `frescor_ranking.frescor_da_escola`. | Já estão no c5e78d3. |
-| `execucoes_presas` | sim | Nenhuma execução em `executando` além de min(teto, `SYNC_TRAVADA_S`). Nenhuma em `fila` sem sinal de vida além de `SYNC_TRAVADA_S`. | O reinício libera as órfãs antigas. Uma manual presa sai com um novo "Sincronizar agora". |
+| `execucoes_presas` | sim | Nenhuma execução em `executando` sem registro no log há mais de `SYNC_SEM_SINAL_S` (15 min), a mesma regra do boot: uma execução viva não conta, por mais antiga que seja, porque a aplicação e o recálculo vêm depois do teto da coleta. Nenhuma em `fila` sem sinal de vida além de `SYNC_TRAVADA_S`. | A execução em `executando` sem registro no log há mais de `SYNC_SEM_SINAL_S` (15 min) é liberada no boot, na leitura do `/status` e por um novo "Sincronizar agora". Uma manual presa na fila sai com um novo "Sincronizar agora". |
 | `credenciais_legiveis` | sim | Toda integração que o agendador rodaria tem credencial que **decifra**. Isso inclui as agendas ativas não manuais e as credenciais sem agenda, que ganham agenda diária ao ligar. | Recadastrar pela tela Integrações depois da rotação de chaves. |
 | `recalculo_sem_pendencia` | sim | Nenhum alerta `recalculo_pendente` aberto. Nenhuma execução com `recalculo_pendente=true` sem uma execução **posterior** da mesma integração em `concluida`/`parcial` com recálculo feito. Sem a coluna, a verificação não tem como conferir e **falha**. | Recalcular as notas da escola: "Recalcular agora" no aviso da tela Integrações (`POST /importacoes/recalcular`) ou uma nova coleta que aplique dado. O recálculo que dá certo fecha o alerta **e** zera a marca das execuções. Resolver o alerta à mão, sem recalcular, não solta. |
 | `fuso_da_agenda` | sim | O fuso é `America/Sao_Paulo`. O cálculo real da agenda põe "03:00" em 06:00 UTC. A `proxima_execucao` de cada agenda ativa bate com o `hora_local` em Brasília. | Re-salvar a agenda desalinhada. Se aparecer a nota "UTC-3 fixo", instalar `tzdata`. |
@@ -69,8 +71,19 @@ Não pule passos. Cada passo depende do anterior.
 
 Atenção: credencial **legível** não é credencial **válida**. A validade é provada pelo "Testar" e pela primeira coleta.
 
-### Passo 3. Uma semana de coletas manuais com status honesto (≥ 5 dias úteis)
-- [ ] Em todo dia útil, houve coleta manual ("Sincronizar agora") nas escolas com credencial, acompanhada.
+### Passo 2b. Vínculo da escola externa gravado antes da 1ª coleta
+- [ ] Em cada escola com credencial, o "Testar conexão" foi rodado e o id e o nome da escola que a conta enxerga na plataforma foram conferidos.
+- [ ] O Admin Global gravou o vínculo explícito (`PUT /escolas/{id}/sync/escola-externa/{elefante|matific}`) de cada escola e plataforma.
+
+Por quê: na última anotação nenhuma das escolas tinha vínculo (`docs/SINCRONIZACAO.md`, "Implantação e as 5 escolas atuais"). Sem ele, a 1ª coleta aprende o vínculo sozinha quando a conta enxerga uma escola só; a conta que enxerga duas para em `conta_multiescola` até alguém escolher, e um nome que não confere deixa a escola sem vínculo aprendido. Com o vínculo gravado antes, nenhuma escola depende do aprendizado automático.
+
+### Passo 3. Medir a estabilidade das coletas manuais por 14 dias
+
+**Faça as coletas manuais fora da janela do backup privado: 07:30 a 10:30 de Brasília (10:30 a 13:30 UTC).** O "Sincronizar agora" não confere essa janela (só as agendas passam pelo `horario_fora_do_backup`), e uma coleta pode levar até o teto de 45 min: comece até 06:45 ou a partir de 10:30.
+
+O critério aprovado é de **14 dias consecutivos com pelo menos 95% de sucesso por dia** nos pares escola × plataforma configurados. Depois de **cinco dias úteis**, confira os resultados como checagem intermediária. Use a mesma contagem de [Coleta de plataformas](../operacao/COLETA-PLATAFORMAS.md#11-critérios-para-religar-o-agendador-critérios-não-resultados).
+
+- [ ] Em todo dia útil, houve coleta manual ("Sincronizar agora") nas escolas com credencial, acompanhada, fora da janela do backup.
 - [ ] Toda execução terminou num estado do contrato, e nenhuma ficou em `executando` (`execucoes_presas` ok).
 - [ ] `concluida` só aparece com alunos aplicados > 0.
 - [ ] `parcial` vem com o alerta `coleta_parcial`.

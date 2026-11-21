@@ -39,31 +39,126 @@ NOTIFICAVEIS: dict[str, tuple[str, str, Callable[[int | None], str]]] = {
                      lambda eid: f"/alunos/{eid}" if eid else "/alunos"),
     # Importação/sync NÃO pode descartar linha em silêncio: a correspondência
     # insegura e a linha sem aluno vinculado viram notificação para a escola.
+    # Rota de quando a pendência NÃO está na fila de revisão (a Lista Piloto manda
+    # a correspondência insegura para Alunos › Fundir duplicatas; a "mudança de sala
+    # sem prova", para a própria ficha: ``MOTIVOS_DO_LINK_DA_FICHA``); a que está na
+    # fila leva às Revisões de identidade (``ROTA_REVISOES``, em
+    # ``emitir_da_auditoria``).
     "aluno.revisao_necessaria": ("Importação: aluno com correspondência insegura — revisar",
                                  "aviso", lambda _: "/alunos"),
     "importacao.linha_ignorada": ("Importação: linha sem aluno vinculado — revisar",
                                   "aviso", lambda _: "/importacoes"),
 }
 
+# A tela onde o gestor decide as pendências da fila de identidade.
+ROTA_REVISOES = "/revisoes-identidade"
+# Os avisos que SÃO uma pendência: só eles vão para a fila quando a auditoria traz o
+# ``revisao_id``. Os outros que trazem o id só citam a origem — o "Novo aluno
+# cadastrado" da ficha criada pela fila leva à ficha nova, como qualquer outro.
+AVISOS_DE_PENDENCIA = frozenset({"aluno.revisao_necessaria", "importacao.linha_ignorada"})
+# Pendência da Lista Piloto (fora da fila) cujo caminho é a FICHA candidata
+# (``entidade_id``), não a lista de Alunos. Na "mudança de sala sem prova" (a virada,
+# G_VIRADA-8) a ficha não tem matrícula no ano ativo, e a lista /alunos, que só mostra
+# quem tem, não a traz: o aviso da importação manda abrir a ficha (três pontinhos ›
+# Editar dados › Turma), e o link do sino leva até ela. Os outros motivos seguem em
+# /alunos, onde está "Fundir duplicatas".
+MOTIVOS_DO_LINK_DA_FICHA = {"aluno.revisao_necessaria": frozenset({"mudanca_de_sala_sem_prova"})}
+
+# GUARDAS DE PERFIL das telas para onde os avisos apontam. A fonte da regra é a
+# web: ``apps/web/src/lib/rotasGuardadas.ts`` (o espelho das guardas do App.tsx).
+# Aqui ficam só as rotas que os avisos DESTE módulo usam, com as MESMAS guardas;
+# ``test_notificacoes_rotas_guardadas`` lê a tabela da web e falha se uma rota daqui
+# divergir de lá ou se um aviso apontar para uma tela guardada que não está aqui.
+# Rota fora do mapa não tem guarda. Quem não passa recebe o aviso SEM o link: na
+# web, o link o mandaria de volta à página inicial (o professor recebe os avisos
+# que tocam os alunos dele — inclusive "dados da Matific editados" e as pendências
+# de identidade —, mas não abre as telas de operação da escola). O módulo
+# contratado (RotaModulo) não entra: quem esconde o link de módulo fora do plano é
+# a web (``podeAbrirRota``).
+GUARDAS_DAS_ROTAS: dict[str, tuple[str, ...]] = {
+    ROTA_REVISOES: ("RotaEscolaOp",),
+    "/importacoes": ("RotaEscolaOp",),
+    "/matific": ("RotaEscolaOp",),
+    "/elefante": ("RotaEscolaOp",),
+    "/metricas": ("RotaGestao",),
+    "/configuracoes": ("RotaGestao", "RotaAdmin"),
+    "/usuarios": ("RotaSemSecretaria",),
+    "/alunos": ("RotaSemSecretaria",),
+    "/alunos/:id": ("RotaSemSecretaria",),
+}
+
 
 def emitir_da_auditoria(db: Session, acao: str, escola_id: int | None,
                         autor_id: int | None = None, entidade: str | None = None,
-                        entidade_id: int | None = None) -> None:
+                        entidade_id: int | None = None,
+                        detalhes: dict | None = None) -> None:
     """Materializa uma notificação de escopo ESCOLA para os eventos conhecidos.
     No-op silencioso para ações não notificáveis ou sem escola. Adiciona à sessão
-    (o commit fica com a operação principal, como o próprio registrar())."""
+    (o commit fica com a operação principal, como o próprio registrar()).
+
+    Pendência gravada na fila de revisão de identidade (a auditoria traz o
+    ``revisao_id``) aponta para as Revisões de identidade — é lá que o gestor
+    escolhe o aluno, cria a ficha ou descarta. Só a PENDÊNCIA
+    (``AVISOS_DE_PENDENCIA``): a ficha criada pela fila também traz o id, de origem,
+    e o aviso dela leva à ficha. Fora da fila, o motivo cujo caminho é a ficha
+    (``MOTIVOS_DO_LINK_DA_FICHA``) leva à ficha candidata."""
     if escola_id is None:
         return
     spec = NOTIFICAVEIS.get(acao)
     if spec is None:
         return
     titulo, severidade, rota_de = spec
+    rota = rota_de(entidade_id)
+    if (acao in AVISOS_DE_PENDENCIA and isinstance(detalhes, dict)
+            and "revisao_id" in detalhes):
+        rota = ROTA_REVISOES
+    elif (entidade == "aluno" and entidade_id and isinstance(detalhes, dict)
+            and detalhes.get("motivo") in MOTIVOS_DO_LINK_DA_FICHA.get(acao, ())):
+        rota = f"/alunos/{entidade_id}"
     aluno_id = entidade_id if entidade == "aluno" else None
     db.add(Notificacao(
         escopo="escola", escola_id=escola_id, tipo=acao, severidade=severidade,
-        titulo=titulo, rota=rota_de(entidade_id), entidade=entidade,
+        titulo=titulo, rota=rota, entidade=entidade,
         entidade_id=entidade_id, aluno_id=aluno_id, autor_id=autor_id,
     ))
+
+
+def _admin(usuario: Usuario) -> bool:
+    return bool(usuario.is_global) or usuario.cargo == "admin"
+
+
+# O mesmo teste de cada guarda em App.tsx, sobre os campos de ``usePerfil()``:
+# gestor = global ou admin/coordenador (``acesso_total``); secretaria = rede
+# vinculada e não global (``e_secretaria``); admin = global ou cargo admin.
+_PASSA: dict[str, Callable[[Usuario], bool]] = {
+    "RotaGestao": lambda u: permissoes.acesso_total(u),
+    "RotaEscolaOp": lambda u: permissoes.acesso_total(u) and not permissoes.e_secretaria(u),
+    "RotaSemSecretaria": lambda u: not permissoes.e_secretaria(u),
+    "RotaAdmin": lambda u: _admin(u) and not permissoes.e_secretaria(u),
+}
+
+
+def _segmentos(caminho: str) -> list[str]:
+    return [s for s in caminho.split("?")[0].split("#")[0].split("/") if s]
+
+
+def guardas_da_rota(rota: str) -> tuple[str, ...]:
+    """As guardas da tela (mesmo casamento de ``podeAbrirRota``: ``:id`` casa
+    qualquer segmento). Rota fora do mapa: nenhuma."""
+    alvo = _segmentos(rota)
+    for padrao, guardas in GUARDAS_DAS_ROTAS.items():
+        p = _segmentos(padrao)
+        if len(p) == len(alvo) and all(a.startswith(":") or a == b for a, b in zip(p, alvo)):
+            return guardas
+    return ()
+
+
+def rota_para(usuario: Usuario, rota: str | None) -> str | None:
+    """A rota do aviso para ESTE usuário: ``None`` quando alguma guarda da tela o
+    barra (o aviso aparece, sem link)."""
+    if rota and not all(_PASSA[g](usuario) for g in guardas_da_rota(rota)):
+        return None
+    return rota
 
 
 def _condicao_feed(db: Session, usuario: Usuario):
@@ -109,7 +204,7 @@ def feed(db: Session, usuario: Usuario, limite: int = 30) -> list[dict]:
             "tipo": n.tipo,
             "severidade": n.severidade,
             "titulo": n.titulo,
-            "rota": n.rota,
+            "rota": rota_para(usuario, n.rota),
             "autor": autor,
             "data": n.created_at,
             "lida": n.id <= lidas_ate,

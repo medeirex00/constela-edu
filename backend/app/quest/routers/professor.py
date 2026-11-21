@@ -9,7 +9,7 @@ from fastapi import APIRouter, Depends, HTTPException, Response, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.core.database import get_db
+from app.core.database import bloquear_escola_para_cartoes_quest, get_db
 from app.core.deps import escola_autorizada, exigir_papeis, negar_secretaria
 from app.models import Aluno, Escola, Turma, Usuario
 from app.quest import schemas
@@ -37,6 +37,33 @@ def _turma_da_escola(db: Session, escola_id: int, turma_id: int) -> Turma:
     if turma is None or turma.escola_id != escola_id:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Turma não encontrada.")
     return turma
+
+
+def _exigir_reimpressao_no_ano_ativo(turma: Turma, escola: Escola | None) -> None:
+    """Reimpressão (sem revogação) da folha de uma turma de OUTRO ano letivo: 409.
+
+    A turma de outro ano (a do ano anterior, ou a do ano seguinte criada antes da
+    virada) lista as matrículas daquele ano, mas a credencial é uma por criança: a
+    folha sairia com o nome dessa turma em cada cartão ("3º Ano A" para quem já
+    está no "4º Ano A") e criaria credencial e perfil para quem não tinha. O cartão
+    sai pela turma do ano letivo ativo.
+
+    O texto da recusa só diz o que vale sempre: logo depois da virada, antes da
+    Lista Piloto do ano novo, nenhuma criança tem matrícula no ano ativo, e quem
+    saiu da escola não terá (REV3-QUEST-1).
+
+    A revogação (``regenerar``/``rotacionar_codigo``) dessa turma segue valendo:
+    depois da virada, é o caminho em lote que derruba o cartão de quem saiu da
+    escola e segue com a ficha ativa (G_VIRADA-2, decisão pendente do dono)."""
+    ano = escola.ano_letivo_ativo if escola is not None else None
+    if ano is None or turma.ano_letivo == ano:
+        return
+    raise HTTPException(
+        status.HTTP_409_CONFLICT,
+        f"A turma “{turma.nome}” é do ano letivo {turma.ano_letivo}, e o ano letivo "
+        f"ativo é {ano}. Os cartões do Quest saem com o nome da turma, então a folha "
+        "desta turma não é impressa. Nenhum cartão foi gerado. Imprima os cartões "
+        f"pela turma do ano letivo {ano} em que a criança estiver matriculada.")
 
 
 def _slug_ascii(texto: str) -> str:
@@ -151,12 +178,24 @@ def gerar_cartoes(turma_id: int,
     `rotacionar_codigo=true` tem o mesmo efeito (nome mantido por
     compatibilidade; virada de ano letivo). Sem expiração automática durante o
     ano — a criança nunca perde acesso sozinha.
+
+    Turma de OUTRO ano letivo: a reimpressão é 409 (o cartão sairia com o nome
+    de uma turma que não é a do ano ativo); a revogação segue valendo
+    (``_exigir_reimpressao_no_ano_ativo``).
     """
     turma = _turma_da_escola(db, escola_id, turma_id)
     # Professor restrito não gera/regenera/rotaciona credenciais de turma alheia
     # (troca o QR/código de todos e derruba sessões — antes do efeito).
     permissoes.exigir_turma_permitida(db, escola_id, usuario, turma_id)
     revogar = regenerar or rotacionar_codigo
+    escola = db.get(Escola, escola_id)
+    if revogar:
+        # Antes de ler ou travar qualquer credencial: duas revogações de turma da
+        # mesma escola (troca cruzada de crianças desde a última folha) travavam as
+        # credenciais em ordens opostas — deadlock no PostgreSQL, 500 numa delas.
+        bloquear_escola_para_cartoes_quest(db, escola_id)
+    else:
+        _exigir_reimpressao_no_ano_ativo(turma, escola)
     revogados_inativos = (svc.revogar_cartoes_inativos_da_turma(db, escola_id, turma)
                           if revogar else 0)
     # Lê as folhas ANTERIORES (a auditoria desta ainda não foi gravada).
@@ -165,7 +204,6 @@ def gerar_cartoes(turma_id: int,
     dados = svc.garantir_credenciais_turma(
         db, escola_id, turma, regenerar=regenerar,
         rotacionar_codigo=rotacionar_codigo)
-    escola = db.get(Escola, escola_id)
     pdf = cartoes_pdf.gerar_cartoes_pdf(
         escola_nome=escola.nome if escola else "Escola",
         cor=svc_relatorios.cor_primaria(db, escola_id),

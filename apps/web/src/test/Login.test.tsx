@@ -52,8 +52,10 @@ describe("Login", () => {
     );
   });
 
-  it("exibe a mensagem de erro quando as credenciais são inválidas", async () => {
-    loginRequest.mockRejectedValueOnce(new ApiError(401, "E-mail ou senha inválidos."));
+  it("exibe a orientação de recuperação vinda da API", async () => {
+    const mensagem = "Não foi possível entrar. Confira o e-mail ou usuário e a senha. " +
+      "Se precisar, peça um link de redefinição à administração.";
+    loginRequest.mockRejectedValueOnce(new ApiError(401, mensagem));
     renderComApp(<Login />, { autenticado: false });
     const u = userEvent.setup();
 
@@ -61,7 +63,7 @@ describe("Login", () => {
     await u.type(screen.getByLabelText("Senha"), "errado");
     await u.click(screen.getByRole("button", { name: /entrar/i }));
 
-    expect(await screen.findByText("E-mail ou senha inválidos.")).toBeInTheDocument();
+    expect(await screen.findByText(mensagem)).toBeInTheDocument();
     // A senha continua na tela (não navegou para dentro do sistema).
     expect(screen.getByLabelText("Senha")).toBeInTheDocument();
   });

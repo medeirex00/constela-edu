@@ -9,17 +9,33 @@ recálculo etc.).
 from __future__ import annotations
 
 import logging
+import re
 
-from sqlalchemy import delete, select
+from sqlalchemy import delete, select, update
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from app.models import DispositivoMovel, Escola, Usuario
+from app.core.security import impressao_da_chave_de_sessao
+from app.models import Configuracao, DispositivoMovel, Escola, Usuario
 from app.services import permissoes
+from app.services.audit import registrar
 
 logger = logging.getLogger(__name__)
 
 EXPO_PUSH_URL = "https://exp.host/--/api/v2/push/send"
 TAMANHO_LOTE = 100  # limite documentado do Expo por requisição
+
+# Formato do token que o app recebe de ``Notifications.getExpoPushTokenAsync``:
+# ``ExponentPushToken[...]`` (ou a grafia nova ``ExpoPushToken[...]``), sem espaço
+# nem colchete dentro. ``/dispositivos`` só aceita isto; texto fora do formato não
+# identifica aparelho nenhum — não vai ao Expo e sai do banco (``notificar_escola``).
+PADRAO_TOKEN_EXPO = r"^Expo(?:nent)?PushToken\[[^\[\]\s]+\]$"
+_TOKEN_EXPO = re.compile(PADRAO_TOKEN_EXPO)
+
+
+def token_expo_valido(token: str | None) -> bool:
+    """True se o texto tem o formato de token do Expo (``PADRAO_TOKEN_EXPO``)."""
+    return bool(token) and _TOKEN_EXPO.fullmatch(token) is not None
 
 
 def montar_lotes(tokens: list[str], titulo: str, corpo: str,
@@ -89,14 +105,107 @@ def remover_aparelhos_da_conta(db: Session, usuario_id: int) -> int:
     """Apaga os aparelhos (push) registrados pela conta e devolve quantos eram.
 
     Chamado quando a conta perde o acesso (desativar, excluir — ``admin.
-    _revogar_acessos``) ou muda de alcance (promoção a Secretaria, ``rede.py``):
+    _revogar_acessos``), muda de alcance (promoção a Secretaria, ``rede.py``) e
+    quando a senha é substituída (troca pelo admin, ``admin._revogar_acessos(
+    senha_substituida=True)``, redefinição pelo link, ``auth.consumir_link_reset``, e
+    a etapa de deploy que invalida a senha derivada do nome, ``professores.
+    invalidar_senhas_derivadas``):
     o app não se descadastra sozinho no 401, e a conta revogada nem conseguiria
     chamar ``/dispositivos/remover``. Reativar a conta não traz o aparelho de
     volta — só um novo registro pelo app. Não comita: vai na transação de quem
-    chama, junto da auditoria (``dispositivos_removidos``)."""
+    chama, junto da auditoria (``dispositivos_removidos``; a etapa de deploy não
+    grava a contagem, a auditoria dela tem só ``uso`` e ``origem``)."""
     return db.execute(
         delete(DispositivoMovel).where(DispositivoMovel.usuario_id == usuario_id)
     ).rowcount or 0
+
+
+# Impressão da chave de sessão com que os aparelhos da escola foram registrados
+# (``security.impressao_da_chave_de_sessao``), guardada em ``configuracoes`` — uma linha
+# por escola, sem migração. O aparelho não guarda nada da sessão que o registrou; quando
+# a SECRET_KEY muda, todas as sessões caem, e a impressão diferente mostra que os
+# aparelhos da escola também são de sessões que não valem mais.
+NAMESPACE_CHAVE_DE_SESSAO = "push"
+CHAVE_IMPRESSAO = "chave_de_sessao"
+
+
+def conferir_chave_de_sessao(db: Session, escola_id: int, *,
+                             sem_marca_apaga: bool = False) -> tuple[int, bool]:
+    """Os aparelhos (push) saem com as sessões também na troca da SECRET_KEY.
+
+    Compara a impressão gravada para a escola com a da chave atual. Diferente: apaga
+    os aparelhos da escola (registrados com sessões que já dão 401 — inclusive uma
+    sessão forjada com a chave exposta) e grava a atual; o app volta a se registrar
+    no próximo login. Igual: nada. Sem impressão gravada: grava a atual e, só com
+    ``sem_marca_apaga`` (o boot), apaga os aparelhos — não há como saber com que
+    chave foram registrados.
+
+    Devolve ``(aparelhos removidos, gravou algo)``. Não comita: vai na transação de
+    quem chama. Só quem grava a nova impressão limpa os aparelhos da escola."""
+    atual = impressao_da_chave_de_sessao()
+    filtros = (
+        Configuracao.escola_id == escola_id,
+        Configuracao.namespace == NAMESPACE_CHAVE_DE_SESSAO,
+        Configuracao.chave == CHAVE_IMPRESSAO,
+    )
+    consulta = select(Configuracao).where(*filtros).execution_options(populate_existing=True)
+    marca = db.execute(consulta).scalar_one_or_none()
+    if marca is not None and marca.valor == atual:
+        return 0, False
+
+    # Outra transação pode ter trocado a impressão entre a leitura e a limpeza.
+    # Confira novamente sob a trava para preservar os aparelhos que ela registrou.
+    if db.get_bind().dialect.name == "sqlite":
+        # SQLite ignora FOR UPDATE. Uma instrução de escrita sem alterar a marca
+        # abre a transação de escrita antes da releitura e do SAVEPOINT.
+        db.execute(update(Configuracao).where(*filtros)
+                   .values(updated_at=Configuracao.updated_at))
+    consulta_travada = consulta.with_for_update()
+    marca = db.execute(consulta_travada).scalar_one_or_none()
+    apagar = sem_marca_apaga
+    if marca is None:
+        try:
+            with db.begin_nested():
+                db.add(Configuracao(escola_id=escola_id,
+                                    namespace=NAMESPACE_CHAVE_DE_SESSAO,
+                                    chave=CHAVE_IMPRESSAO, valor=atual))
+        except IntegrityError:
+            # A restrição única decide quem pode gravar a primeira impressão.
+            marca = db.execute(consulta_travada).scalar_one_or_none()
+            if marca is None:
+                raise
+    if marca is not None:
+        if marca.valor == atual:
+            return 0, False
+        marca.valor = atual
+        apagar = True
+
+    removidos = 0
+    if apagar:
+        removidos = db.execute(
+            delete(DispositivoMovel).where(DispositivoMovel.escola_id == escola_id)
+        ).rowcount or 0
+    if removidos:
+        registrar(db, "dispositivo.chave_de_sessao_trocada", escola_id=escola_id,
+                  detalhes={"removidos": removidos})
+        logger.info("Push: %s aparelho(s) da escola %s removido(s): registrados com "
+                    "sessões de outra chave de sessão (SECRET_KEY trocada)",
+                    removidos, escola_id)
+    return removidos, True
+
+
+def conferir_chave_de_sessao_no_boot(db: Session) -> int:
+    """No boot: confere a chave de sessão de cada escola que tem aparelho e apaga os
+    registrados com outra chave — ou sem impressão gravada, de antes desta conferência
+    existir (``conferir_chave_de_sessao(sem_marca_apaga=True)``). Comita. Devolve quantos
+    aparelhos saíram."""
+    escolas = db.execute(select(DispositivoMovel.escola_id).distinct()
+                         .order_by(DispositivoMovel.escola_id)).scalars().all()
+    removidos = 0
+    for escola_id in escolas:
+        removidos += conferir_chave_de_sessao(db, escola_id, sem_marca_apaga=True)[0]
+    db.commit()
+    return removidos
 
 
 def _ve_a_crianca(db: Session, escola_id: int, ano: int | None, usuario: Usuario,
@@ -129,12 +238,34 @@ def notificar_escola(db: Session, escola_id: int, titulo: str, corpo: str,
 
     Melhor esforço: erros de rede são registrados em log e engolidos;
     tokens que o Expo reportar como mortos são removidos do banco.
+
+    Token fora do formato do Expo (``token_expo_valido``) — só pode ter sido gravado
+    antes de ``/dispositivos`` validar o formato — não é aparelho: não vai ao Expo
+    (não ocupa lote nem chamada) e é apagado aqui. Antes ele só sairia se o Expo o
+    devolvesse como ``DeviceNotRegistered`` — o que nada garante para um texto que
+    nem é token (a resposta do Expo a ele não foi verificada).
+
+    Transação: a lista de destinos é lida e a transação ENCERRADA antes da chamada
+    ao Expo (até 15 s por lote); os tokens mortos são apagados numa transação curta,
+    depois. Antes, a leitura deixava a transação da requisição aberta durante a rede
+    e, no PostgreSQL, a conexão ficava presa ao pool ("idle in transaction").
+
+    Chave de sessão trocada (``conferir_chave_de_sessao``): os aparelhos da escola
+    registrados com a SECRET_KEY anterior saem antes da leitura dos destinos — a
+    sessão que os registrou já não vale, e o aviso não vai a eles.
     """
+    _, gravou_marca = conferir_chave_de_sessao(db, escola_id)
     linhas = db.execute(
         select(DispositivoMovel.token_push, Usuario)
         .join(Usuario, Usuario.id == DispositivoMovel.usuario_id)
         .where(DispositivoMovel.escola_id == escola_id, Usuario.status == "ativo")
     ).all()
+    lixo = [token for token, _ in linhas if not token_expo_valido(token)]
+    linhas = [(token, usuario) for token, usuario in linhas if token_expo_valido(token)]
+    if lixo:
+        db.execute(delete(DispositivoMovel).where(DispositivoMovel.token_push.in_(lixo)))
+        logger.info("Push: %s aparelho(s) com token fora do formato do Expo removido(s) "
+                    "da escola %s", len(lixo), escola_id)
     if aluno_id is None:
         tokens = [token for token, _ in linhas]
     else:
@@ -143,8 +274,17 @@ def notificar_escola(db: Session, escola_id: int, titulo: str, corpo: str,
         tokens = [token for token, usuario in linhas
                   if _ve_a_crianca(db, escola_id, ano, usuario, aluno_id)]
     if not tokens:
+        if lixo or gravou_marca:
+            db.commit()
         return 0
 
+    # Fecha a transação que as leituras acima abriram (autobegin) ANTES da rede: a
+    # conexão volta ao pool enquanto o Expo responde. Quem chama já comitou o próprio
+    # trabalho (``importacoes._pos_commit_importacao``): aqui só houve leitura e, se
+    # havia, a limpeza do lixo. É COMMIT, e não rollback, para nunca descartar algo
+    # que um chamador deixasse pendente — o mesmo que a limpeza dos tokens mortos,
+    # abaixo, já fazia.
+    db.commit()
     try:
         invalidos = _enviar_lotes(montar_lotes(list(tokens), titulo, corpo, dados))
         if invalidos:

@@ -714,6 +714,17 @@ describe("Navegação — trilha em três níveis", () => {
   });
 });
 
+describe("Navegação — tela pequena (o que a página de Suporte afirma)", () => {
+  it("a pesquisa fica em todas as larguras; a trilha só aparece a partir de lg", async () => {
+    await montar(COORDENACAO, { rota: "/alunos" });
+    const pesquisa = screen.getByRole("textbox", { name: /Pesquisar páginas/ });
+    for (let el: HTMLElement | null = pesquisa; el; el = el.parentElement) {
+      expect(String(el.className ?? "")).not.toMatch(/(^|\s)hidden(\s|$)/);
+    }
+    expect(screen.getByRole("navigation", { name: "Trilha de navegação" })).toHaveClass("hidden", "lg:flex");
+  });
+});
+
 describe("Navegação — atalhos de teclado (Alt+1..0)", () => {
   const teclar = (tecla: string) => fireEvent.keyDown(window, { key: tecla, altKey: true });
 
@@ -743,6 +754,22 @@ describe("Navegação — atalhos de teclado (Alt+1..0)", () => {
     expect(espiao.endereco).toBe("/conquistas");
   });
 
+  // Importações (RotaEscolaOp), Conquistas e Mural e Assistente (RotaGestao) não abrem para
+  // a professora: as teclas a mandavam, sem aviso, de volta à Visão geral.
+  it("professora: Alt+5, Alt+6 e Alt+8 não navegam; Alt+2, Alt+4 e Alt+9 seguem", async () => {
+    const { espiao } = await montar(PROFESSORA, { rota: "/suporte" });
+    for (const tecla of ["5", "6", "8", "0"]) {
+      teclar(tecla);
+      expect(espiao.endereco, `Alt+${tecla}`).toBe("/suporte");
+    }
+    teclar("2");
+    expect(espiao.endereco).toBe("/ranking");
+    teclar("4");
+    expect(espiao.endereco).toBe("/alunos");
+    teclar("9");
+    expect(espiao.endereco).toBe("/relatorios");
+  });
+
   it("destinosDoTeclado: a Secretaria só tem as três áreas; os outros perfis, os destinos de sempre", () => {
     const AREAS = { "1": "/", "2": "/rede/escolas", "3": "/rede/avaliacoes-externas" };
     expect(destinosDoTeclado(false, true)).toEqual(AREAS);
@@ -767,7 +794,9 @@ describe("Navegação — o cartão Contexto da Secretaria", () => {
     expect(marcados()).toEqual(["/rede/escolas"]);
   });
 
-  it.each(["/escola", "/turmas", "/turmas/7", "/professores", "/metricas", "/livros", "/simulador"])(
+  // Só as telas de escola que a Secretaria abre: Turmas, Professores, Simulador e o Catálogo
+  // de Livros são RotaEscolaOp (o App a manda ao Dashboard antes de o Layout montar).
+  it.each(["/escola", "/metricas"])(
     "'Toda a Rede Municipal' numa tela de escola (%s) volta ao Panorama da Rede", async (rota) => {
       const { espiao } = await montar(SECRETARIA, { rota, escolas: ESCOLAS, escolaSelecionada: 1 });
       await userEvent.selectOptions(contexto(), "");

@@ -92,6 +92,7 @@ import { nota, numero, tempoLeitura } from "../../lib/formato";
 import { SeloNatureza } from "../analise/comum";
 import type { EstadoDaVisaoEscola } from "../VisaoEscola";
 import {
+  AvisoAnosLetivos,
   AvisoTotaisParciais,
   EnvolucroRede,
   INICIO_GLOBAL,
@@ -101,6 +102,8 @@ import {
   TituloCartao,
   ValorProtegido,
   VitrinePublica,
+  anosLetivosMistos,
+  valorParaOrdenar,
   type DashboardRede,
   type EscolaCartao,
   type MetaProgresso,
@@ -128,6 +131,37 @@ function escolaComparada(e: EscolaCartao & { comparada?: boolean }): boolean {
   if (typeof e.comparada === "boolean") return e.comparada;
   if (Array.isArray(e.dimensoes_pontuadas)) return e.dimensoes_pontuadas.length > 0;
   return e.alunos_com_dados > 0;
+}
+
+/** Quantos alunos têm a nota de uma média 0–100 (o denominador dela). Plataforma: o
+ *  contador dela; a geral (`"geral"`): os das duas somados. `undefined` = o cartão não
+ *  traz os contadores (API anterior pelo cache do PWA) — aí vale o número, como antes. */
+function alunosComNota(
+  c: { alunos_com_nota_elefante?: number | null; alunos_com_nota_matific?: number | null },
+  qual: "elefante" | "matific" | "geral",
+): number | undefined {
+  const ele = c.alunos_com_nota_elefante ?? undefined;
+  const mat = c.alunos_com_nota_matific ?? undefined;
+  if (qual === "elefante") return ele;
+  if (qual === "matific") return mat;
+  return ele === undefined && mat === undefined ? undefined : (ele ?? 0) + (mat ?? 0);
+}
+
+/** Uma média 0–100 que pode não ter medido ninguém: o backend manda 0,0 quando nenhum aluno
+ *  tem nota daquela plataforma (ausência). Aqui é "sem dado", por extenso, como na tela das
+ *  plataformas — "0,0" se lia como nota zero. Nula (escondida) = "—", como sempre. */
+function mediaOuSemDado(valor: number | null | undefined, comNota: number | undefined): string {
+  if (valor != null && comNota === 0) return "sem dado";
+  return nota(valor);
+}
+
+/** Soma de um contador entre cartões; `undefined` se nenhum cartão o traz. */
+function somaComNota(
+  cartoes: { alunos_com_nota_elefante?: number | null; alunos_com_nota_matific?: number | null }[],
+  qual: "elefante" | "matific" | "geral",
+): number | undefined {
+  const valores = cartoes.map((c) => alunosComNota(c, qual)).filter((n): n is number => n !== undefined);
+  return valores.length === 0 ? undefined : valores.reduce((soma, n) => soma + n, 0);
 }
 
 // Cor da escola FORA da comparação (sem aluno do 1º–5º ano com dado): neutra.
@@ -447,7 +481,8 @@ function TopEscolas({ escolas, aoAbrir }: { escolas: EscolaCartao[]; aoAbrir: (i
   const m = METRICAS_TOP[metrica];
   // Indicador AUSENTE não pode derrubar o painel: um bundle servido pelo cache do
   // PWA pode ser mais novo/velho que a API (já causou a regressão do Dashboard).
-  const val = (e: EscolaCartao) => Number(e[m.chave] ?? 0);
+  // Per capita: pela conta exata, não pelo número arredondado do cartão (`valorParaOrdenar`).
+  const val = (e: EscolaCartao) => valorParaOrdenar(e, m.chave);
   // Entrada = a do Ranking da Rede (`escolaComparada`), em TODOS os critérios,
   // inclusive Engajamento: é o resumo dele, e o atalho leva para lá.
   // `null` (≠ ausente) = o critério está escondido da Secretaria nesta escola (grupo
@@ -503,7 +538,7 @@ function TopEscolas({ escolas, aoAbrir }: { escolas: EscolaCartao[]; aoAbrir: (i
                       </button>
                     </td>
                     <td className="whitespace-nowrap px-4 py-2.5 text-right text-lg font-bold text-indigo-700 tabular-nums dark:text-indigo-300">
-                      {m.indice ? numero(Math.round(val(e))) : nota(val(e))}
+                      {m.indice ? numero(Math.round(Number(e[m.chave] ?? 0))) : nota(Number(e[m.chave] ?? 0))}
                       {m.sufixo ?? ""}
                     </td>
                   </tr>
@@ -684,11 +719,18 @@ function SecaoPlataforma({
   );
 }
 
-function ComparativoRede({ escolas, aoAbrir }: { escolas: EscolaCartao[]; aoAbrir: (id: number) => void }) {
+function ComparativoRede({ escolas, aoAbrir, modulos }: {
+  escolas: EscolaCartao[]; aoAbrir: (id: number) => void; modulos: string[];
+}) {
   // Ordena pelo ÍNDICE per capita — a única métrica comparável entre escolas de
   // tamanhos diferentes. As médias 0–100 seguem na tabela, mas rotuladas como o
   // que são: desempenho INTERNO de cada escola (régua = os próprios alunos dela).
   // Só as escolas COMPARADAS: as mesmas que a Equidade, logo abaixo, mede.
+  // Só as médias dos MÓDULOS CONTRATADOS: a coluna de um módulo fora do plano mostrava
+  // 0,0 em todas as escolas (lido como nota zero) — o mesmo corte do Boletim da Rede.
+  const temLeitura = modulos.includes("leitura");
+  const temMatematica = modulos.includes("matematica");
+  const colunas0a100 = ["Geral", ...(temLeitura ? ["Leitura"] : []), ...(temMatematica ? ["Matific"] : [])];
   const linhas = useMemo(
     () => [...escolas]
       .filter(escolaComparada)
@@ -709,8 +751,8 @@ function ComparativoRede({ escolas, aoAbrir }: { escolas: EscolaCartao[]; aoAbri
                 Índice
               </th>
               <th scope="col" className={`${th} text-right`}>Geral</th>
-              <th scope="col" className={`${th} text-right`}>Leitura</th>
-              <th scope="col" className={`${th} text-right`}>Matific</th>
+              {temLeitura && <th scope="col" className={`${th} text-right`}>Leitura</th>}
+              {temMatematica && <th scope="col" className={`${th} text-right`}>Matific</th>}
               <th scope="col" className={`${th} text-right`}>Engaj.</th>
             </tr>
           </thead>
@@ -729,15 +771,23 @@ function ComparativoRede({ escolas, aoAbrir }: { escolas: EscolaCartao[]; aoAbri
                 <td className="px-4 py-3 text-right text-base font-bold text-indigo-700 dark:text-indigo-300">
                   {numero(Math.round(e.pontuacao_geral ?? 0))}
                 </td>
-                <td className="px-4 py-3 text-right text-zinc-700 dark:text-zinc-200">{nota(e.media_geral)}</td>
                 <td className="px-4 py-3 text-right text-zinc-700 dark:text-zinc-200">
-                  {e.oculto?.leitura && !e.oculto.leitura.parcial
-                    ? <ValorProtegido bloco={e.oculto.leitura} /> : nota(e.media_elefante)}
+                  {mediaOuSemDado(e.media_geral, alunosComNota(e, "geral"))}
                 </td>
-                <td className="px-4 py-3 text-right text-zinc-700 dark:text-zinc-200">
-                  {e.oculto?.matematica && !e.oculto.matematica.parcial
-                    ? <ValorProtegido bloco={e.oculto.matematica} /> : nota(e.media_matific)}
-                </td>
+                {temLeitura && (
+                  <td className="px-4 py-3 text-right text-zinc-700 dark:text-zinc-200">
+                    {e.oculto?.leitura && !e.oculto.leitura.parcial
+                      ? <ValorProtegido bloco={e.oculto.leitura} />
+                      : mediaOuSemDado(e.media_elefante, alunosComNota(e, "elefante"))}
+                  </td>
+                )}
+                {temMatematica && (
+                  <td className="px-4 py-3 text-right text-zinc-700 dark:text-zinc-200">
+                    {e.oculto?.matematica && !e.oculto.matematica.parcial
+                      ? <ValorProtegido bloco={e.oculto.matematica} />
+                      : mediaOuSemDado(e.media_matific, alunosComNota(e, "matific"))}
+                  </td>
+                )}
                 <td className="px-4 py-3 text-right text-zinc-700 dark:text-zinc-200">{nota(e.adocao)}%</td>
               </tr>
             ))}
@@ -747,7 +797,7 @@ function ComparativoRede({ escolas, aoAbrir }: { escolas: EscolaCartao[]; aoAbri
       <p className="mt-3 text-xs leading-relaxed text-zinc-500 dark:text-zinc-400">
         <b>Índice</b> (0–1000): desempenho por aluno na régua da rede — 1000 é a melhor
         escola do município. É o número comparável entre escolas e o que ordena esta tabela.
-        <b> Geral · Leitura · Matific</b> (0–100): desempenho interno de cada escola,
+        <b> {colunas0a100.join(" · ")}</b> (0–100): desempenho interno de cada escola,
         calculado contra os próprios alunos dela — bom para acompanhar a escola no tempo,
         não para compará-la com outra.
       </p>
@@ -756,12 +806,14 @@ function ComparativoRede({ escolas, aoAbrir }: { escolas: EscolaCartao[]; aoAbri
 }
 
 /** O progresso no Panorama de UMA rede (modo "analise": só o admin global, na Visão
- *  Global). O convite manda ao Painel da Rede pelo caminho do menu dele. */
-function MetasRede({ redeId }: { redeId: number }) {
+ *  Global). O convite manda ao Painel da Rede pelo caminho do menu dele. `modulos`: os da
+ *  rede mostrada (a meta de uma plataforma fora do plano não aparece). */
+function MetasRede({ redeId, modulos }: { redeId: number; modulos: string[] }) {
   const leitura = useApi<MetaProgresso[]>(`/redes/${redeId}/metas`);
   return (
     <ProgressoMetas
       leitura={leitura}
+      modulos={modulos}
       titulo="Metas da rede"
       semMeta={<>
         Nenhuma meta definida ainda. Defina as metas da rede em <b>{CAMINHO_PAINEL_GLOBAL}</b>, no menu — o
@@ -874,6 +926,14 @@ function PainelRede({ redeId, modo }: { redeId: number; modo: "analise" | "secre
   const temMatematica = mods.includes("matematica");
   const eq = dados.equidade;
   const kpisPrincipais = 2 + (temLeitura ? 1 : 0) + (temMatematica ? 1 : 0);
+  // As médias da rede com o denominador de cada uma (o mesmo do backend): a de cada
+  // plataforma pesa os alunos com nota dela em todas as escolas; a geral, só nas comparadas.
+  const mediaGeralDaRede = mediaOuSemDado(t.media_geral, somaComNota(dados.escolas.filter(escolaComparada), "geral"));
+  const mediaMatificDaRede = mediaOuSemDado(t.media_matific, somaComNota(dados.escolas, "matific"));
+  const mediaElefanteDaRede = mediaOuSemDado(t.media_elefante, somaComNota(dados.escolas, "elefante"));
+  // Na virada do ano, escolas em anos letivos diferentes: cada uma é medida no ano dela, e o
+  // painel compara assim mesmo. O aviso diz isso e quem está em cada ano (nos dois modos).
+  const avisoAnos = <AvisoAnosLetivos anos={anosLetivosMistos(dados)} escolas={dados.escolas} />;
 
   return (
     <div className="space-y-6">
@@ -890,6 +950,7 @@ function PainelRede({ redeId, modo }: { redeId: number; modo: "analise" | "secre
                            dimensoes={[...(temLeitura ? ["leitura" as const] : []),
                                        ...(temMatematica ? ["matematica" as const] : [])]} />
       </div>
+      {avisoAnos}
 
       {/* Indicadores PRINCIPAIS (os quatro da referência); o que não foi contratado
           não aparece, nem zerado. Nenhuma pílula de variação: não há série. */}
@@ -921,8 +982,9 @@ function PainelRede({ redeId, modo }: { redeId: number; modo: "analise" | "secre
         <KpiCompacto rotulo="Adoção" valor={`${nota(t.adocao)}%`} detalhe="alunos com dados" />
         <KpiCompacto
           rotulo="Média geral"
-          valor={nota(t.media_geral)}
-          detalhe={`Matific ${nota(t.media_matific)} · Elefante ${nota(t.media_elefante)}`}
+          valor={mediaGeralDaRede}
+          detalhe={[...(temMatematica ? [`Matific ${mediaMatificDaRede}`] : []),
+                    ...(temLeitura ? [`Elefante ${mediaElefanteDaRede}`] : [])].join(" · ") || undefined}
           titulo="Média interna (0–100): cada escola é medida contra os próprios alunos"
         />
       </Card>
@@ -967,7 +1029,7 @@ function PainelRede({ redeId, modo }: { redeId: number; modo: "analise" | "secre
             { rotulo: "Atividades", valor: numero(t.atividades) },
             { rotulo: "Alunos com dados", valor: numero(t.ativos_matific),
               titulo: "Alunos com retrato do Matific (inclui quem ainda não fez atividade)" },
-            { rotulo: "Média", valor: nota(t.media_matific) },
+            { rotulo: "Média", valor: mediaMatificDaRede },
           ]}
           escolas={dados.escolas}
           campoTop="estrelas"
@@ -978,7 +1040,7 @@ function PainelRede({ redeId, modo }: { redeId: number; modo: "analise" | "secre
       </div>
 
       {/* Comparativo entre escolas (tabela por indicador). */}
-      <ComparativoRede escolas={dados.escolas} aoAbrir={abrirEscola} />
+      <ComparativoRede escolas={dados.escolas} aoAbrir={abrirEscola} modulos={mods} />
 
       {/* Equidade e Metas com a altura da linha (antes sobrava um vão embaixo do menor). */}
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
@@ -1006,7 +1068,7 @@ function PainelRede({ redeId, modo }: { redeId: number; modo: "analise" | "secre
         </Card>
 
         {/* Metas da rede — progresso REAL (alvo cadastrado no painel /rede). */}
-        <MetasRede redeId={redeId} />
+        <MetasRede redeId={redeId} modulos={mods} />
       </div>
       </>
       )}
@@ -1014,9 +1076,10 @@ function PainelRede({ redeId, modo }: { redeId: number; modo: "analise" | "secre
       {/* --- PAINEL DA REDE (/rede): funções administrativas + mapa/navegação. --- */}
       {modo === "secretaria" && (
       <>
+      {avisoAnos}
       {/* Metas: o PROGRESSO (a conclusão, que antes só aparecia no Panorama antigo) ao
           lado do cadastro, com uma leitura só — salvar uma meta atualiza os dois. */}
-      <MetasDaRede redeId={redeId} />
+      <MetasDaRede redeId={redeId} modulos={mods} />
 
       {/* Vitrine e "Comparar as escolas" (só links) com a altura da linha. */}
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
@@ -1100,14 +1163,21 @@ interface RedeCartao {
   media_geral: number;
   media_matific: number;
   media_elefante: number;
+  /** Alunos com nota de cada plataforma na rede (o denominador da média dela). */
+  alunos_com_nota_elefante?: number;
+  alunos_com_nota_matific?: number;
   livros: number;
   atividades: number;
   estrelas: number;
   escolas_em_atencao: number;
   // Comparação ENTRE REDES: per capita + índice 0–1000 na coorte "todas as
-  // redes" (mesmo motor das escolas, outro escopo).
+  // redes" (mesmo motor das escolas, outro escopo). O per capita vem arredondado
+  // para exibir; a ordem usa os totais de quem concorre (`valorParaOrdenar`).
   livros_por_matricula: number;
   estrelas_por_matricula: number;
+  alunos_premiaveis?: number;
+  livros_premiaveis?: number;
+  estrelas_premiaveis?: number;
   pontuacao_geral: number;
   posicao?: number;
 }
@@ -1139,7 +1209,7 @@ function ConteudoGlobal({ aoAbrirRede }: { aoAbrirRede: (id: number) => void }) 
   const m = METRICAS_REDE[metrica];
   const redesRanked = useMemo(
     () => [...(dados?.redes ?? [])]
-      .sort((a, b) => Number(b[m.chave] ?? 0) - Number(a[m.chave] ?? 0)),
+      .sort((a, b) => valorParaOrdenar(b, m.chave) - valorParaOrdenar(a, m.chave)),
     [dados, m.chave],
   );
   const cabecalho = (acoes?: ReactNode) => (
@@ -1209,8 +1279,9 @@ function ConteudoGlobal({ aoAbrirRede }: { aoAbrirRede: (id: number) => void }) 
         <KpiCompacto
           className="col-span-2 sm:col-span-1"
           rotulo="Média geral"
-          valor={nota(t.media_geral)}
-          detalhe={`Matific ${nota(t.media_matific)} · Elefante ${nota(t.media_elefante)}`}
+          valor={mediaOuSemDado(t.media_geral, somaComNota(dados.redes, "geral"))}
+          detalhe={`Matific ${mediaOuSemDado(t.media_matific, somaComNota(dados.redes, "matific"))}`
+                   + ` · Elefante ${mediaOuSemDado(t.media_elefante, somaComNota(dados.redes, "elefante"))}`}
           titulo="Média interna (0–100): cada escola é medida contra os próprios alunos"
         />
       </Card>
@@ -1270,8 +1341,12 @@ function ConteudoGlobal({ aoAbrirRede }: { aoAbrirRede: (id: number) => void }) 
                     {m.indice ? numero(Math.round(Number(r[m.chave] ?? 0))) : nota(Number(r[m.chave] ?? 0))}
                     {m.sufixo ?? ""}
                   </td>
-                  <td className="whitespace-nowrap px-3 py-2.5 text-right">{nota(r.media_elefante)}</td>
-                  <td className="whitespace-nowrap px-3 py-2.5 text-right">{nota(r.media_matific)}</td>
+                  <td className="whitespace-nowrap px-3 py-2.5 text-right">
+                    {mediaOuSemDado(r.media_elefante, alunosComNota(r, "elefante"))}
+                  </td>
+                  <td className="whitespace-nowrap px-3 py-2.5 text-right">
+                    {mediaOuSemDado(r.media_matific, alunosComNota(r, "matific"))}
+                  </td>
                   <td className="whitespace-nowrap px-3 py-2.5 text-right">{nota(r.adocao)}%</td>
                 </tr>
               ))}

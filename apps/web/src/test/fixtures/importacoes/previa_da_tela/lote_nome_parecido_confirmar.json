@@ -1,0 +1,21 @@
+{
+  "mensagem": "0 aluno(s) com dado novo importado(s).",
+  "importacao_id": 1,
+  "qtd_alunos": 0,
+  "qtd_erros": 0,
+  "avisos": [
+    "“SOFIA ALMEIDA DURTE”: nome parecido, mas a correspondência não é segura — Sofia Almeida Duarte. A correspondência não é segura: NÃO foi criada uma 2ª ficha nem os dados foram associados. A linha ficou como pendência na fila de revisão de identidade para um gestor escolher o aluno."
+  ],
+  "ignorados": [
+    "sofia almeida durte"
+  ],
+  "qtd_revisoes": 1,
+  "alunos_aplicados_ids": [],
+  "linhas_recebidas": 2,
+  "linhas_em_revisao": 2,
+  "linhas_descartadas": {},
+  "avisos_criticos": [],
+  "contas_em_revisao": 1,
+  "ids_de_outra_escola": [],
+  "criacao_bloqueada": 0
+}

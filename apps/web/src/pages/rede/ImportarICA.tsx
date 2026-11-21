@@ -14,6 +14,7 @@
 import { FileUp, RotateCcw, Upload } from "lucide-react";
 import { useState } from "react";
 
+import { TabelaRolavel } from "../../components/TabelaRolavel";
 import { Botao, Campo, Confirmacao, Mensagem, estiloInput } from "../../components/ui";
 import { useApi } from "../../hooks/useApi";
 import { ApiError, api, apiUpload } from "../../lib/api";
@@ -280,41 +281,43 @@ export default function ImportarICA({ redeId, redeNome, semCodigoIbge, aoMudar }
         <Mensagem tipo="erro">Não foi possível carregar as importações: {lista.erro.message}</Mensagem>
       )}
       {(lista.dados ?? []).length > 0 && (
-        <table className="w-full text-xs">
-          <caption className="sr-only">Importações do ICA desta rede</caption>
-          <thead>
-            <tr className="text-left text-zinc-500">
-              <th className="py-1 pr-2 font-medium">Arquivo</th>
-              <th className="py-1 pr-2 font-medium">Avaliação</th>
-              <th className="py-1 pr-2 font-medium">Situação</th>
-              <th className="py-1 pr-2 font-medium">Quando</th>
-              <th className="py-1 font-medium" />
-            </tr>
-          </thead>
-          <tbody>
-            {(lista.dados ?? []).map((i) => (
-              <tr key={i.id} className="border-t border-zinc-100 dark:border-zinc-800">
-                <td className="py-1 pr-2">
-                  #{i.id} · {i.arquivo_nome}
-                  {i.modo === "pacote_cli" && <span className="text-zinc-500"> (pacote dos microdados)</span>}
-                </td>
-                <td className="py-1 pr-2 tabular-nums">{i.edicao_arquivo}</td>
-                <td className="py-1 pr-2">{STATUS[i.status] ?? i.status}</td>
-                <td className="py-1 pr-2">{dataHora(i.aplicado_em ?? i.created_at)}</td>
-                <td className="py-1 text-right">
-                  {i.pode_desfazer ? (
-                    <Botao variante="neutro" className="px-2 py-1 text-xs" disabled={ocupado}
-                           aria-label={`Desfazer a importação #${i.id}`} onClick={() => setParaDesfazer(i)}>
-                      <RotateCcw size={13} aria-hidden="true" /> Desfazer
-                    </Botao>
-                  ) : i.status === "aplicada" && i.bloqueada_por ? (
-                    <span className="text-zinc-500">para desfazer, desfaça antes a #{i.bloqueada_por}</span>
-                  ) : null}
-                </td>
+        <TabelaRolavel rotulo="Histórico de importações do ICA: tabela completa">
+          <table className="w-full text-xs">
+            <caption className="sr-only">Importações do ICA desta rede</caption>
+            <thead>
+              <tr className="text-left text-zinc-500">
+                <th className="py-1 pr-2 font-medium">Arquivo</th>
+                <th className="py-1 pr-2 font-medium">Avaliação</th>
+                <th className="py-1 pr-2 font-medium">Situação</th>
+                <th className="py-1 pr-2 font-medium">Quando</th>
+                <th className="py-1 font-medium" />
               </tr>
-            ))}
-          </tbody>
-        </table>
+            </thead>
+            <tbody>
+              {(lista.dados ?? []).map((i) => (
+                <tr key={i.id} className="border-t border-zinc-100 dark:border-zinc-800">
+                  <td className="py-1 pr-2">
+                    #{i.id} · {i.arquivo_nome}
+                    {i.modo === "pacote_cli" && <span className="text-zinc-500"> (pacote dos microdados)</span>}
+                  </td>
+                  <td className="py-1 pr-2 tabular-nums">{i.edicao_arquivo}</td>
+                  <td className="py-1 pr-2">{STATUS[i.status] ?? i.status}</td>
+                  <td className="py-1 pr-2">{dataHora(i.aplicado_em ?? i.created_at)}</td>
+                  <td className="py-1 text-right">
+                    {i.pode_desfazer ? (
+                      <Botao variante="neutro" className="px-2 py-1 text-xs" disabled={ocupado}
+                             aria-label={`Desfazer a importação #${i.id}`} onClick={() => setParaDesfazer(i)}>
+                        <RotateCcw size={13} aria-hidden="true" /> Desfazer
+                      </Botao>
+                    ) : i.status === "aplicada" && i.bloqueada_por ? (
+                      <span className="text-zinc-500">para desfazer, desfaça antes a #{i.bloqueada_por}</span>
+                    ) : null}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </TabelaRolavel>
       )}
 
       <Confirmacao

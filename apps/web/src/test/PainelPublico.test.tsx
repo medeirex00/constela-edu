@@ -145,3 +145,12 @@ test("o aviso de erro é anunciado (role=status)", async () => {
   abrirPainel();
   expect(await screen.findByText(/não encontrado ou desativado/i)).toHaveAttribute("role", "status");
 });
+
+test("data do telão: só a primeira letra em maiúscula ('Segunda-feira, 09 de novembro')", async () => {
+  responder("GET", /\/publico\/.+\/painel/, painelFake());
+  abrirPainel();
+
+  const data = await screen.findByText(/^\p{Lu}\p{Ll}+(-feira)?, \d{2} de \p{Ll}+$/u);
+  // O `capitalize` do CSS escrevia "Quinta-Feira, 05 De Novembro".
+  expect(data).not.toHaveClass("capitalize");
+});

@@ -19,6 +19,12 @@ Camada de PREMIAÇÃO — NÃO altera o scoring oficial (pesos, A3, P90, notas).
     matriculados no ano letivo. Turma, professor e turno só decidem QUEM APARECE
     no pódio; a nota de cada criança é a mesma em qualquer recorte.
 
+O ANO LETIVO das crianças e do contador do Matific é o do PERÍODO quando ele cai
+inteiro num ano letivo já encerrado (``periodos.populacao_do_periodo``): a cerimônia
+de 2026 feita em fevereiro de 2027, depois da virada, premia as crianças de 2026, com a
+turma e a série de 2026 — a formanda que liderou continua no pódio. Nos outros casos, o
+ano letivo ativo, como sempre; a resposta diz qual (``populacao``).
+
 Turno (manhã/tarde/noite) é o eixo do PERÍODO ESCOLAR, ORTOGONAL ao PERÍODO
 TEMPORAL (datas). Com ``por_turno`` os pódios saem quebrados por ``Turma.turno``,
 reusando os valores já calculados sobre a escola inteira.
@@ -32,7 +38,8 @@ from sqlalchemy.orm import Session
 
 from app.models import (Aluno, Escola, Leitura, Livro, Matricula, SnapshotElefante,
                         SnapshotMatific, Turma)
-from app.services import dificuldade_livro, elegibilidade, matific_destaque, scoring
+from app.services import (dificuldade_livro, elegibilidade, matific_destaque, periodos,
+                          scoring)
 from app.services import turnos as svc_turnos
 from app.services.evolucao import _series_por_aluno
 
@@ -127,6 +134,27 @@ def _recorte(coorte: dict[int, dict], turma_id: int | None,
     return {aid: info for aid, info in coorte.items()
             if (not turma_id or info["turma_id"] == turma_id)
             and (permitidas is None or info["turma_id"] in permitidas)}
+
+
+def _recorte_do_periodo(db: Session, escola_id: int, coorte: dict[int, dict],
+                        turma_id: int | None, turma_ids: list[int] | None,
+                        populacao: periodos.PopulacaoDoPeriodo) -> dict[int, dict]:
+    """``_recorte`` para a população do período. No ano ativo é o próprio ``_recorte``.
+    Num ano encerrado, a turma do filtro e as do professor são as de AGORA (as únicas
+    que os seletores e as permissões conhecem): elas escolhem QUEM aparece pelas
+    matrículas nelas (``PopulacaoDoPeriodo.alunos_das_turmas``), e cada criança segue
+    com a turma e a série do ano do período. A régua continua a da escola inteira."""
+    if not populacao.outro_ano:
+        return _recorte(coorte, turma_id, turma_ids)
+    escolhidos: set[int] | None = None
+    for ids in ([turma_id] if turma_id else None, turma_ids):
+        if ids is None:
+            continue
+        quem = set(db.execute(populacao.alunos_das_turmas(escola_id, ids)).scalars())
+        escolhidos = quem if escolhidos is None else escolhidos & quem
+    if escolhidos is None:
+        return dict(coorte)
+    return {aid: info for aid, info in coorte.items() if aid in escolhidos}
 
 
 def _leitura_no_periodo(db: Session, escola_id: int, alunos: dict[int, dict],
@@ -254,14 +282,15 @@ def regua_matematica(db: Session, escola_id: int, inicio: datetime | None,
     ``zeros_extras``, ``alunos_com_atividade``, ``modo``, janela efetiva), aqui
     SEM o corte de privacidade (``_regua_publicada``): quem chama aplica o dele.
 
-    Mesma coorte (``_alunos_ativos`` da escola inteira, 1º–5º ano, ano letivo
-    ativo) e mesmo cálculo (``_matematica_no_periodo``): é a mesma régua por
-    construção, não uma cópia. Serve o "Quer ver um exemplo?" da Pontuação, que
+    Mesma coorte (``_alunos_ativos`` da escola inteira, 1º–5º ano, no ano letivo
+    da população do período — ``periodos.populacao_do_periodo``) e mesmo cálculo
+    (``_matematica_no_periodo``): é a mesma régua por construção, não uma cópia.
+    Serve o "Quer ver um exemplo?" da Pontuação, que
     explica o índice com o ``k`` REAL da escola sem expor nenhum aluno — por isso
     só a régua sai daqui, nunca os índices por aluno. NÃO grava nada e ignora o
     contrato de módulos (quem chama já exige ``matematica``)."""
     escola = db.get(Escola, escola_id)
-    ano = escola.ano_letivo_ativo
+    ano = periodos.populacao_do_periodo(inicio, fim, escola.ano_letivo_ativo).ano_letivo
     coorte = _alunos_ativos(db, escola_id, ano, None)
     _por_aluno, regua = _matematica_no_periodo(db, escola_id, coorte, inicio, fim, ano)
     return regua
@@ -363,10 +392,15 @@ def _categorias(alunos: dict[int, dict], livros: dict, pontos: dict, tempo: dict
         desempate=desempate_m, extras=auditoria_m)
     if ocultar_indice:
         _sem_indice(melhor_matematica)
+    # Desempate do Melhor Leitor: livros do período → tempo do período → nome.
+    # É a cascata do /ranking/leitura (``routers.rankings.ranking_leitura``):
+    # pontos iguais (mesmos livros do mesmo nível) não podem coroar uma criança
+    # aqui e outra no Ranking de Leitura do MESMO período.
+    desempate_l = {aid: (livros.get(aid, 0), tempo.get(aid, 0)) for aid in pontos}
     return [
         _categoria("melhor_leitor", "Melhor Leitor", "🏆",
                    "Mais pontos de dificuldade no período", "pontos",
-                   pontos, alunos, limite),
+                   pontos, alunos, limite, desempate=desempate_l),
         melhor_matematica,
         _categoria("mais_livros", "Mais Livros Lidos", "📚",
                    "Maior quantidade de livros no período", "livros",
@@ -389,13 +423,18 @@ def premiacoes(db: Session, escola_id: int, inicio: datetime | None,
 
     ``modulos`` = os módulos do plano da rede (``None`` = todos): categoria de
     módulo não contratado não sai (``melhor_matematica`` e a ``regua_matematica``
-    sem Matemática; as de leitura sem Leitura), também nos pódios por turno."""
+    sem Matemática; as de leitura sem Leitura), também nos pódios por turno.
+
+    ``populacao`` na resposta diz de que ano letivo são as crianças, as turmas e o
+    contador do Matific (``periodos.populacao_do_periodo``): o do período, quando ele
+    cai inteiro num ano letivo já encerrado; senão, o ativo."""
     escola = db.get(Escola, escola_id)
-    ano = escola.ano_letivo_ativo
+    populacao = periodos.populacao_do_periodo(inicio, fim, escola.ano_letivo_ativo)
+    ano = populacao.ano_letivo
     # COORTE COMPLETA da escola (sem turma nem professor): é a base da régua.
     coorte = _alunos_ativos(db, escola_id, ano, None)
     # RECORTE: quem aparece nos pódios.
-    alunos = _recorte(coorte, turma_id, turma_ids)
+    alunos = _recorte_do_periodo(db, escola_id, coorte, turma_id, turma_ids, populacao)
 
     livros, pontos, tempo = _leitura_no_periodo(db, escola_id, alunos, inicio, fim)
     matematica, regua = _matematica_no_periodo(db, escola_id, coorte, inicio, fim, ano)
@@ -409,6 +448,8 @@ def premiacoes(db: Session, escola_id: int, inicio: datetime | None,
                                   modulos, ocultar_indice=ocultar_indice),
         # Abaixo do mínimo de alunos o ``k`` não sai (ver ``_regua_publicada``).
         "regua_matematica": _regua_publicada(regua),
+        # De que ano letivo são as crianças e as turmas dos pódios, e por quê.
+        "populacao": populacao.como_dict(),
     }
     if modulos is not None and "matematica" not in modulos:
         resultado.pop("regua_matematica")

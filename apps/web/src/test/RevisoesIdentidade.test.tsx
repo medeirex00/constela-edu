@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import RevisoesIdentidade from "../pages/RevisoesIdentidade";
 import type { RevisaoIdentidade } from "../pages/RevisoesIdentidade";
+import fonteTurmas from "../pages/Turmas.tsx?raw";
 import {
   api,
   renderComApp,
@@ -289,9 +290,16 @@ describe("Revisões de identidade — detalhe", () => {
     ["id_externo_duplicado", "o mesmo identificador da plataforma veio em mais de uma linha",
       /só o vínculo é gravado agora/],
     ["turma_arquivada", "a turma do relatório está arquivada no cadastro",
-      /Turmas › Mostrar turmas arquivadas › Reativar/],
+      /reative-a em Turmas: ligue “Mostrar arquivadas e de outros anos” e use “Reativar”/],
     ["turma_fora_do_ano_letivo", "a turma escolhida não é do ano letivo ativo da escola",
       /numa turma do ano letivo atual/],
+    // Duas contas sem vínculo, mesmo nome, nenhuma ficha (nada foi criado).
+    ["contas_repetidas_no_relatorio", "duas contas diferentes da plataforma vieram no mesmo relatório",
+      /se são duas crianças, crie uma ficha para cada/],
+    // Política "bloquear": a orientação diz o que fazer com os controles da gaveta.
+    ["criacao_bloqueada_por_politica",
+      "nenhum aluno corresponde e a política desta escola não deixa a plataforma criar ficha",
+      /use “Criar novo aluno” só depois de confirmar com a secretaria da escola/],
   ])("motivo %s mostra o texto do backend e a orientação", async (motivo, texto, orientacao) => {
     const u = userEvent.setup();
     filaMock([revisaoFake({ motivo, motivo_texto: texto })]);
@@ -300,6 +308,47 @@ describe("Revisões de identidade — detalhe", () => {
     const identidade = within(dialogo).getByRole("region", { name: "Identidade recebida" });
     expect(within(identidade).getByText(`Motivo: ${texto}`)).toBeInTheDocument();
     expect(within(identidade).getByText(orientacao)).toBeInTheDocument();
+  });
+
+  // Criação barrada pela política: o motivo (texto do backend) já diz que nada
+  // corresponde e que a matrícula vem da Lista Piloto. A orientação não repete isso
+  // e é coerente com a gaveta: antes mandava "matricular pela Lista Piloto ou em
+  // Alunos e depois vincular aqui" logo acima do botão "Criar novo aluno".
+  it("criação barrada pela política: orientação curta, sem repetir o motivo, com os botões da gaveta", async () => {
+    const u = userEvent.setup();
+    const motivoTexto = "nenhum aluno corresponde e a política desta escola não deixa a plataforma "
+      + "criar ficha — nem pela sincronização nem pela importação de relatório (a matrícula vem da "
+      + "Lista Piloto)";
+    filaMock([revisaoFake({ motivo: "criacao_bloqueada_por_politica", motivo_texto: motivoTexto,
+      candidatos: [] })]);
+    renderComApp(<RevisoesIdentidade />, { rota: "/revisoes-identidade" });
+    const dialogo = await abrirDetalhe(u);
+    const identidade = within(dialogo).getByRole("region", { name: "Identidade recebida" });
+    expect(within(identidade).getByText(`Motivo: ${motivoTexto}`)).toBeInTheDocument();
+    const orientacao = within(identidade).getByText(/Criar novo aluno/).textContent ?? "";
+    expect(orientacao).toBe(
+      "Se a criança já tem ficha, busque-a em “Buscar outro aluno da escola” e vincule. Se não "
+      + "tem, use “Criar novo aluno” só depois de confirmar com a secretaria da escola que ela "
+      + "está matriculada.");
+    // Não repete o motivo nem manda matricular fora daqui.
+    expect(orientacao).not.toMatch(/Lista Piloto|política|Nenhuma ficha corresponde|matricule-a/);
+    // Cada controle citado está na gaveta, com esse nome.
+    expect(within(dialogo).getByRole("button", { name: /Buscar outro aluno da escola/ })).toBeInTheDocument();
+    const criar = within(dialogo).getByRole("region", { name: "Criar novo aluno" });
+    expect(within(criar).getByRole("button", { name: "Criar novo aluno" })).toBeInTheDocument();
+  });
+
+  it("turma arquivada: a orientação cita o rótulo que a tela Turmas de fato mostra", async () => {
+    const u = userEvent.setup();
+    filaMock([revisaoFake({ motivo: "turma_arquivada", motivo_texto: "a turma do relatório está arquivada" })]);
+    renderComApp(<RevisoesIdentidade />, { rota: "/revisoes-identidade" });
+    const dialogo = await abrirDetalhe(u);
+    const orientacao = within(dialogo).getByText(/reative-a em Turmas/).textContent ?? "";
+    const rotulo = /ligue “([^”]+)”/.exec(orientacao)?.[1];
+    expect(rotulo).toBe("Mostrar arquivadas e de outros anos");
+    // O mesmo texto visível ao lado do interruptor em Turmas.tsx (o nome acessível do
+    // interruptor é mais longo; quem lê a orientação procura o que está escrito).
+    expect(fonteTurmas).toMatch(new RegExp(`>\\s*${rotulo}\\s*<`));
   });
 
   it("leituras (livro a livro) aparecem como tabela", async () => {
@@ -407,6 +456,44 @@ describe("Revisões de identidade — detalhe", () => {
     expect(corpoDoPost(`${BASE}/7/resolver`)).toEqual({ criar_em_turma_id: 2 });
     expect(await screen.findByText(/Revisão resolvida: uma ficha nova \(5ºB\) foi criada para “TOBIAS D” e recebeu os dados\./)).toBeInTheDocument();
     expect(await screen.findByText("Nenhuma pendência")).toBeInTheDocument();
+  });
+
+  it("criar novo aluno: promete o nome que a ficha recebe (sem a turma escrita no fim), turma a turma", async () => {
+    // A10: o /resolver grava o nome sem o sufixo de turma ("5B") quando ele é o da sala
+    // escolhida (ou o da linha). O backend manda o nome padrão e, por turma, onde ele muda;
+    // a tela mostra o da turma escolhida — o mesmo que será gravado.
+    const u = userEvent.setup();
+    filaMock([revisaoFake({
+      candidatos: [], motivo: "turma_ambigua", nome_recebido: "ZEFA QUARESMA LIMA 5B",
+      motivo_texto: "mais de uma turma cadastrada corresponde à sala do relatório",
+      nome_ficha_nova: "ZEFA QUARESMA LIMA 5B",
+      nome_ficha_nova_por_turma: { "2": "ZEFA QUARESMA LIMA" },
+    })]);
+    renderComApp(<RevisoesIdentidade />, { rota: "/revisoes-identidade" });
+    const dialogo = await abrirDetalhe(u, "ZEFA QUARESMA LIMA 5B");
+    const q = within(dialogo);
+    expect(q.getByText(/sem a turma, quando ela vem escrita no fim do nome/)).toBeInTheDocument();
+
+    const nomeDaFicha = () => q.getByText("Nome:").nextElementSibling?.textContent;
+    await u.selectOptions(q.getByLabelText("Turma da ficha nova"), "1");
+    expect(nomeDaFicha()).toBe("ZEFA QUARESMA LIMA 5B");      // na 5ºA, o "5B" fica
+    await u.selectOptions(q.getByLabelText("Turma da ficha nova"), "2");
+    expect(nomeDaFicha()).toBe("ZEFA QUARESMA LIMA");         // na 5ºB, sai
+    await u.click(q.getByRole("button", { name: "Criar novo aluno" }));
+    const modal = (await screen.findByRole("heading", { name: "Criar novo aluno?" })).parentElement as HTMLElement;
+    expect(modal.textContent).toContain("Uma ficha nova será criada para ZEFA QUARESMA LIMA na turma 5ºB");
+    expect(modal.textContent).not.toContain("ZEFA QUARESMA LIMA 5B");
+  });
+
+  it("criar novo aluno: servidor antigo (sem o nome previsto) mostra o nome recebido", async () => {
+    const u = userEvent.setup();
+    filaMock([revisaoFake({ candidatos: [] })]);
+    renderComApp(<RevisoesIdentidade />, { rota: "/revisoes-identidade" });
+    const q = within(await abrirDetalhe(u));
+    await u.selectOptions(q.getByLabelText("Turma da ficha nova"), "2");
+    await u.click(q.getByRole("button", { name: "Criar novo aluno" }));
+    const modal = (await screen.findByRole("heading", { name: "Criar novo aluno?" })).parentElement as HTMLElement;
+    expect(modal.textContent).toContain("Uma ficha nova será criada para TOBIAS D na turma 5ºB");
   });
 
   it("sem turma cadastrada, a criação fica bloqueada com explicação", async () => {
@@ -734,15 +821,21 @@ describe("Revisões de identidade — aviso de duas contas na mesma ficha", () =
   it("explica a consequência, o que confirmar e que volume não é prova", async () => {
     const u = userEvent.setup();
     filaMock([duasContas()]);
+    // A ficha JÁ tem outra conta em uso — só então o aviso vale (sem conta nenhuma, o
+    // mesmo motivo nasce da outra conta no relatório ou numa pendência).
+    responder("GET", "/escolas/1/importacoes/identidades/matific/aluno/31", [
+      { id: 1, id_externo: "conta-da-ficha", status: "efetiva", created_at: "2026-04-01T10:00:00",
+        aposentada_em: null, aposentada_por: null, motivo_aposentadoria: null },
+    ]);
     renderComApp(<RevisoesIdentidade />, { rota: "/revisoes-identidade" });
     const dialogo = await abrirDetalhe(u);
-    const aviso = within(dialogo).getByRole("note", {
+    const aviso = await within(dialogo).findByRole("note", {
       name: "Atenção: duas contas da mesma plataforma",
     });
 
     expect(within(aviso).getByText(/esta ficha tem duas contas no Matific/i)).toBeInTheDocument();
     // 1. a consequência de vincular
-    expect(within(aviso).getByText(/deixam de aparecer no retrato/i)).toBeInTheDocument();
+    expect(within(aviso).getByText(/já importados da outra conta permanecem no histórico/i)).toBeInTheDocument();
     // 2. o que o gestor precisa confirmar, e onde
     expect(within(aviso).getByText(/pelo nome completo e pelo login/i)).toBeInTheDocument();
     // 3. volume não é identidade
@@ -826,11 +919,48 @@ describe("Revisões de identidade — contas do aluno na plataforma", () => {
     expect(within(bloco).getByText("conta-A")).toBeInTheDocument();
     expect(within(bloco).getByText("Conta em uso")).toBeInTheDocument();
     expect(within(bloco).getByText("conta-B")).toBeInTheDocument();
-    expect(within(bloco).getByText("Preservada, não contabilizada")).toBeInTheDocument();
+    // REV2-COSTURA-3: o que já veio dela continua contando — "não contabilizada" prometia o contrário
+    expect(within(bloco).getByText("Preservada, fora da importação")).toBeInTheDocument();
+    expect(bloco).not.toHaveTextContent(/não contabilizada/);
     // o histórico da decisão
     expect(within(bloco).getByText(/por Admin — conta de teste/)).toBeInTheDocument();
     // a distinção que não pode se perder
     expect(within(bloco).getByText(/não desativa nem remove a conta no Matific/i)).toBeInTheDocument();
+    // ALUNOS-4 / REV2-COSTURA-3: o histórico não guarda a conta de origem. O que já veio da
+    // aposentada fica na ficha e continua contando, e o retrato atual só muda quando entra
+    // uma coleta da conta que vale; a trava contra queda pode segurar essa coleta. O texto
+    // não promete que os números saem na próxima coleta.
+    expect(bloco).toHaveTextContent(/O que já veio dela continua na ficha \(o histórico não guarda de qual conta veio\): os retratos já importados continuam nos períodos em que entraram, e o retrato atual só muda quando entrar uma coleta da conta que vale\./);
+    expect(bloco).toHaveTextContent(/Se a conta aposentada tinha números maiores, a coleta automática da que vale fica retida como queda/);
+    expect(bloco).not.toHaveTextContent(/até a próxima coleta da conta que vale/);
+    expect(bloco).not.toHaveTextContent(/alimentar o retrato e a pontuação/);
+  });
+
+  it("no Elefante, diz que as leituras que vieram da conta aposentada continuam contando", async () => {
+    const u = userEvent.setup();
+    filaMock([revisaoFake({
+      plataforma: "elefante", formato: "leituras", id_externo: "4242",
+      motivo: "outra_identidade_na_plataforma",
+      motivo_texto: "o aluno encontrado já tem outra conta nesta plataforma",
+      candidatos: [
+        { aluno_id: 31, nome: "ARIELLE CRISTINA TESTELLI DE AMARO", status: "ativo", turma: "5ºB" },
+      ],
+    })]);
+    responder("GET", "/escolas/1/importacoes/identidades/elefante/aluno/31", [
+      { id: 1, id_externo: "4242", status: "efetiva", created_at: "2026-04-01T10:00:00",
+        aposentada_em: null, aposentada_por: null, motivo_aposentadoria: null },
+      { id: 2, id_externo: "4343", status: "aposentada", created_at: "2026-05-01T10:00:00",
+        aposentada_em: "2026-09-25T09:00:00", aposentada_por: "Admin",
+        motivo_aposentadoria: "conta de teste" },
+    ]);
+    renderComApp(<RevisoesIdentidade />, { rota: "/revisoes-identidade" });
+    const dialogo = await abrirDetalhe(u);
+    const bloco = await within(dialogo).findByRole("region", {
+      name: "Contas do aluno no Elefante Letrado",
+    });
+    expect(bloco).toHaveTextContent(/as leituras já importadas continuam contando, e o retrato atual só muda quando entrar uma coleta da conta que vale\./);
+    // a trava contra queda é do Matific: o aviso dela não aparece aqui
+    expect(bloco).not.toHaveTextContent(/retida como queda/);
   });
 
   it("escolher a conta principal exige motivo e envia aposentando a outra", async () => {
@@ -854,6 +984,8 @@ describe("Revisões de identidade — contas do aluno na plataforma", () => {
     });
 
     await u.click(within(bloco).getAllByRole("button", { name: "Usar só esta conta" })[0]);
+    expect(bloco).toHaveTextContent(/só a conta escolhida envia dados novos ao Constela/i);
+    expect(bloco).not.toHaveTextContent(/deixam de aparecer no retrato/i);
     const confirmar = within(bloco).getByRole("button", { name: "Confirmar" });
     expect(confirmar).toBeDisabled();                 // sem motivo, não envia
 
@@ -885,5 +1017,133 @@ describe("Revisões de identidade — contas do aluno na plataforma", () => {
     expect(within(dialogo).queryByRole("region", {
       name: "Contas do aluno no Matific",
     })).toBeNull();
+  });
+});
+
+// ── A14: a triagem do backend na tela (selo, filtro por motivo, "só seguras") ──
+// A tela mostra o veredito e filtra; NÃO resolve nada em lote.
+
+function triagemFake(classificacao: "segura" | "decisao_humana", motivo_texto: string,
+                     extra: Partial<NonNullable<RevisaoIdentidade["triagem"]>> = {}) {
+  return { classificacao, motivo: classificacao === "segura" ? "candidato_unico_compativel" : "ambigua_decisao_humana",
+           motivo_texto, aluno_id: null, evidencias: [], conflitos: [], retrato_superado: null,
+           irmas: [], ...extra };
+}
+
+function filaComTriagem() {
+  return filaMock([
+    revisaoFake({ triagem: triagemFake("decisao_humana",
+      "mais de um candidato e nenhuma evidência objetiva desempata",
+      { conflitos: ["2 fichas candidatas, e a linha não traz a conta da plataforma"] }) }),
+    revisaoFake({ id: 8, nome_recebido: "MAURO R", motivo: "correspondencia_insegura",
+      motivo_texto: "nome parecido, mas a correspondência não é segura",
+      candidatos: [{ aluno_id: 40, nome: "MAURO RIBEIRO FICTONI", status: "ativo", turma: "5ºB" }],
+      triagem: triagemFake("segura", "candidato único, turma e série compatíveis, sem conta concorrente",
+        { evidencias: ["Candidato único registrado: MAURO RIBEIRO FICTONI (5ºB)",
+                       "Série compatível (5º ano)"] }) }),
+    revisaoFake({ id: 9, nome_recebido: "LIA S", motivo: "nome_incompleto",
+      motivo_texto: "a plataforma mandou só o nome abreviado", candidatos: [],
+      triagem: triagemFake("decisao_humana", "nenhum aluno corresponde — criar ficha é decisão de gestão") }),
+  ]);
+}
+
+describe("Revisões de identidade — triagem", () => {
+  it("cada pendência mostra o selo da triagem e o porquê", async () => {
+    filaComTriagem();
+    renderComApp(<RevisoesIdentidade />, { rota: "/revisoes-identidade" });
+    const item = (n: string) =>
+      screen.getByRole("button", { name: `Ver revisão de ${n}` }).closest("li") as HTMLElement;
+    await screen.findByText("3 pendências");
+    expect(within(item("MAURO R")).getByText("Segura")).toBeInTheDocument();
+    expect(within(item("MAURO R")).getByText(/Triagem: candidato único/)).toBeInTheDocument();
+    expect(within(item("TOBIAS D")).getByText("Decisão humana")).toBeInTheDocument();
+    expect(within(item("LIA S")).getByText("Decisão humana")).toBeInTheDocument();
+  });
+
+  it("filtra por motivo, com a contagem de cada um", async () => {
+    const u = userEvent.setup();
+    filaComTriagem();
+    renderComApp(<RevisoesIdentidade />, { rota: "/revisoes-identidade" });
+    await screen.findByText("3 pendências");
+    const filtro = screen.getByLabelText("Motivo");
+    expect(within(filtro).getByRole("option", { name: "Nome abreviado (1)" })).toBeInTheDocument();
+    await u.selectOptions(filtro, "nome_incompleto");
+    expect(screen.getByRole("button", { name: "Ver revisão de LIA S" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Ver revisão de TOBIAS D" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Ver revisão de MAURO R" })).toBeNull();
+  });
+
+  it("'Só as seguras' deixa só as que a triagem chamou de seguras", async () => {
+    const u = userEvent.setup();
+    filaComTriagem();
+    renderComApp(<RevisoesIdentidade />, { rota: "/revisoes-identidade" });
+    await screen.findByText("3 pendências");
+    await u.click(screen.getByRole("checkbox", { name: /Só as seguras \(1\)/ }));
+    expect(screen.getByRole("button", { name: "Ver revisão de MAURO R" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Ver revisão de TOBIAS D" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Ver revisão de LIA S" })).toBeNull();
+  });
+
+  it("não há ação em lote: resolver continua sendo um por um", async () => {
+    filaComTriagem();
+    renderComApp(<RevisoesIdentidade />, { rota: "/revisoes-identidade" });
+    await screen.findByText("3 pendências");
+    expect(screen.queryByRole("button", { name: /lote|todas as seguras|resolver todas/i })).toBeNull();
+    expect(api.mock.calls.some(([, o]) => (o as RequestInit)?.method === "POST")).toBe(false);
+  });
+
+  it("o detalhe explica a triagem com as evidências e os conflitos", async () => {
+    const u = userEvent.setup();
+    filaComTriagem();
+    renderComApp(<RevisoesIdentidade />, { rota: "/revisoes-identidade" });
+    const dialogo = await abrirDetalhe(u, "MAURO R");
+    const bloco = within(dialogo).getByRole("region", { name: "Triagem automática" });
+    expect(within(bloco).getByText("Segura")).toBeInTheDocument();
+    expect(within(bloco).getByText("Série compatível (5º ano)")).toBeInTheDocument();
+    expect(within(bloco).getByText(/nada é vinculado sem a sua escolha/)).toBeInTheDocument();
+  });
+
+  // Evidências e conflitos que ocupam duas linhas: a 2ª linha alinha com o texto da 1ª,
+  // não volta para baixo do marcador. O jsdom não faz layout — a medida no navegador
+  // (desalinhamento de 17 px antes, 0 depois) fica no relatório da correção; aqui, a
+  // estrutura que a garante: marcador FORA do texto ("list-outside") e o recuo da
+  // lista para ele ("pl-4"), nunca "list-inside".
+  it("triagem: listas com o marcador fora do texto e recuo, para a 2ª linha alinhar", async () => {
+    const u = userEvent.setup();
+    filaComTriagem();
+    renderComApp(<RevisoesIdentidade />, { rota: "/revisoes-identidade" });
+    const lista = async (nome: string, rotulo: string) => {
+      const dialogo = await abrirDetalhe(u, nome);
+      const bloco = within(dialogo).getByRole("region", { name: "Triagem automática" });
+      const classes = within(bloco).getByRole("list", { name: rotulo }).className.split(/\s+/);
+      await u.click(within(dialogo).getByRole("button", { name: "Fechar" }));
+      return classes;
+    };
+    for (const classes of [await lista("TOBIAS D", "Conflitos da triagem"),
+                           await lista("MAURO R", "Evidências da triagem")]) {
+      expect(classes).toEqual(expect.arrayContaining(["list-outside", "list-disc", "pl-4"]));
+      expect(classes).not.toContain("list-inside");
+    }
+  });
+
+  it("no detalhe, a frase da triagem começa com maiúscula", async () => {
+    const u = userEvent.setup();
+    filaComTriagem();
+    renderComApp(<RevisoesIdentidade />, { rota: "/revisoes-identidade" });
+    const dialogo = await abrirDetalhe(u, "TOBIAS D");
+    const bloco = within(dialogo).getByRole("region", { name: "Triagem automática" });
+    // Abre o bloco, logo depois do selo: frase com maiúscula, não "mais de um…".
+    expect(within(bloco).getByText("Mais de um candidato e nenhuma evidência objetiva desempata"))
+      .toBeInTheDocument();
+    expect(within(bloco).queryByText(/^mais de um candidato/)).toBeNull();
+  });
+
+  it("o contador usa o total real quando a fila passa do limite da lista", async () => {
+    filaComTriagem();
+    responder("GET", "/escolas/1/importacoes/contagem-revisoes",
+      { pendentes: 612, por_motivo: {}, limite_da_lista: 500 });
+    renderComApp(<RevisoesIdentidade />, { rota: "/revisoes-identidade" });
+    expect(await screen.findByText("612 pendências")).toBeInTheDocument();
+    expect(screen.queryByText(/500\+ pendências/)).toBeNull();
   });
 });

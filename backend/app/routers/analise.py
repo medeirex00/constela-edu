@@ -27,18 +27,27 @@ A supressão de células pequenas na rota da escola segue QUEM lê: a Secretaria
 global (que também leem a rede) recebem a decisão da rede inteira; o coordenador e o admin
 da própria escola (que não leem a rede), a decisão tomada só dentro da escola.
 
+PERÍODO DA SECRETARIA: nas rotas que medem as plataformas (``plataformas``,
+``diagnostico``, ``relacao`` e a da escola), a Secretaria só pede o ano letivo ou um
+bimestre inteiro (``plataformas.PRESETS_DA_REDE``; 422 nos demais): a diferença entre dois
+períodos que se sobrepõem refaria o número de uma criança que um deles esconde (ver
+"Blocos fixos do calendário" em ``services/analise/plataformas.py``). O admin global e a
+coordenação da escola, que já veem cada criança, continuam com todos os períodos.
+
 Os critérios e as fórmulas estão em ``docs/analise/METODOLOGIA.md``.
 """
+from dataclasses import dataclass
 from datetime import date
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
-from app.core.database import get_db
+from app.core.database import get_db, leitura_sem_transacao
 from app.core.deps import exigir_rede, get_usuario_atual
 from app.core.tempo import hoje_br
 from app.models import Escola, Rede, Usuario
 from app.routers.indicadores import escola_com_indicadores_legiveis
+from app.services import permissoes
 from app.services.analise import AnaliseInvalida
 from app.services.analise import diagnostico as svc_diagnostico
 from app.services.analise import escola as svc_escola
@@ -59,7 +68,23 @@ def _executar(funcao, *args, **kwargs):
         raise HTTPException(exc.status, str(exc)) from exc
 
 
+def _periodo_de_quem_le(usuario: Usuario, periodo: str) -> None:
+    """A Secretaria só pede o ano letivo ou um bimestre inteiro (422 nos demais)."""
+    if permissoes.e_secretaria(usuario):
+        _executar(svc_plataformas.exigir_periodo_da_secretaria, periodo)
+
+
+@dataclass(frozen=True)
+class _RedeConferida:
+    """A rede das rotas que MEDEM as plataformas, já conferida por ``exigir_rede`` (existe e
+    a conta pode lê-la). As medições (``plataformas_da_rede`` e ``evolucao``) usam só o ``id``
+    dela: reler a linha da rede seria uma ida ao banco (~195 ms em produção) sem uso. Qualquer
+    outro atributo dá erro — de propósito, para nenhuma medição passar a ler um campo vazio."""
+    id: int
+
+
 @router.get("/{rede_id}/analise/indicadores")
+@leitura_sem_transacao
 def catalogo(rede_id: int = Depends(exigir_rede), db: Session = Depends(get_db)):
     """O que existe de indicador oficial para a rede, desde quando e com que ressalva."""
     with leituras_da_requisicao(db):
@@ -67,6 +92,7 @@ def catalogo(rede_id: int = Depends(exigir_rede), db: Session = Depends(get_db))
 
 
 @router.get("/{rede_id}/analise/indicadores/{chave}")
+@leitura_sem_transacao
 def indicador(
     chave: str,
     etapa: str | None = None,
@@ -89,6 +115,7 @@ def indicador(
 
 
 @router.get("/{rede_id}/analise/plataformas")
+@leitura_sem_transacao
 def plataformas(
     periodo: str = "ano_letivo",
     inicio: date | None = None,
@@ -96,15 +123,18 @@ def plataformas(
     serie: int | None = None,
     escola_id: int | None = None,
     rede_id: int = Depends(exigir_rede),
+    usuario: Usuario = Depends(get_usuario_atual),
     db: Session = Depends(get_db),
 ):
     """Elefante e Matific por escola × série no período (padrão: o ano letivo)."""
-    return _executar(svc_plataformas.plataformas_da_rede, db, db.get(Rede, rede_id),
+    _periodo_de_quem_le(usuario, periodo)
+    return _executar(svc_plataformas.plataformas_da_rede, db, _RedeConferida(rede_id),
                      preset=periodo, inicio=inicio, fim=fim, serie=serie,
                      escola_id=escola_id, hoje=hoje_br())
 
 
 @router.get("/{rede_id}/analise/plataformas/evolucao")
+@leitura_sem_transacao
 def evolucao_plataformas(
     serie: int | None = None,
     escola_id: int | None = None,
@@ -116,26 +146,30 @@ def evolucao_plataformas(
     escolas, em ordem de nome) — cada bimestre é o período da rota de plataformas. Com
     ``so_escola`` (a ficha da escola, pede ``escola_id``): só a escola é medida e o bloco da
     rede sai nulo."""
-    return _executar(svc_evolucao.evolucao, db, db.get(Rede, rede_id), serie=serie,
+    return _executar(svc_evolucao.evolucao, db, _RedeConferida(rede_id), serie=serie,
                      escola_id=escola_id, so_escola=so_escola, hoje=hoje_br())
 
 
 @router.get("/{rede_id}/analise/diagnostico")
+@leitura_sem_transacao
 def diagnostico_pedagogico(
     periodo: str = "ano_letivo",
     inicio: date | None = None,
     fim: date | None = None,
     rede_id: int = Depends(exigir_rede),
+    usuario: Usuario = Depends(get_usuario_atual),
     db: Session = Depends(get_db),
 ):
     """O diagnóstico pedagógico EXPLORATÓRIO de cada escola da rede (em ordem de nome):
     avaliações oficiais × plataformas no período (padrão: o ano letivo). Hipótese para
     orientar o acompanhamento — nunca causa e efeito."""
+    _periodo_de_quem_le(usuario, periodo)
     return _executar(svc_diagnostico.diagnostico, db, db.get(Rede, rede_id), preset=periodo,
                      inicio=inicio, fim=fim, hoje=hoje_br())
 
 
 @router.get("/{rede_id}/analise/relacao")
+@leitura_sem_transacao
 def relacao(
     indicador: str,
     etapa: str | None = None,
@@ -147,16 +181,19 @@ def relacao(
     fim: date | None = None,
     serie: int | None = None,
     rede_id: int = Depends(exigir_rede),
+    usuario: Usuario = Depends(get_usuario_atual),
     db: Session = Depends(get_db),
 ):
     """A relação indicador oficial × plataforma por escola: o coeficiente só quando os
     critérios valem; os pares lado a lado sempre."""
+    _periodo_de_quem_le(usuario, periodo)
     return _executar(svc_relacao.relacao, db, db.get(Rede, rede_id), indicador=indicador,
                      etapa=etapa, componente=componente, edicao=edicao, metrica=metrica,
                      periodo=periodo, inicio=inicio, fim=fim, serie=serie, hoje=hoje_br())
 
 
 @router_escola.get("/{escola_id}/analise")
+@leitura_sem_transacao
 def analise_da_escola(
     periodo: str = "ano_letivo",
     inicio: date | None = None,
@@ -172,6 +209,7 @@ def analise_da_escola(
     # Quem lê a REDE (global, Secretaria) recebe a supressão da rede; quem só lê a escola,
     # a decidida dentro dela (nada da resposta depende das outras escolas).
     escopo_rede = bool(usuario.is_global or usuario.rede_id is not None)
+    _periodo_de_quem_le(usuario, periodo)
     return _executar(svc_escola.analise_da_escola, db, escola, preset=periodo, inicio=inicio,
                      fim=fim, hoje=hoje_br(), escopo_rede=escopo_rede,
                      com_plataformas=not so_avaliacoes)

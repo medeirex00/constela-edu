@@ -5,7 +5,7 @@ import pytest
 from sqlalchemy import select
 
 from app.core import config as config_mod
-from app.core.rate_limit import limitador_login
+from app.core.rate_limit import chave_conta_ip, identidade_da_conta, limitador_conta, limitador_login
 from app.core.security import criar_token, validar_forca_senha
 from app.models import LogAuditoria, Usuario
 
@@ -38,10 +38,14 @@ def test_criar_usuario_recusa_senha_fraca(cliente, escola_completa):
 
 def test_login_bloqueia_forca_bruta(cliente, escola_completa):
     dados = {"username": "admin@teste.local", "password": "errada"}
-    codigos = [cliente.post("/api/v1/auth/login", data=dados).status_code
-               for _ in range(9)]
-    assert codigos[:8] == [401] * 8      # 8 tentativas permitidas
-    assert codigos[8] == 429             # a 9ª é bloqueada
+    respostas = [cliente.post("/api/v1/auth/login", data=dados)
+                 for _ in range(limitador_login.max_tentativas)]
+    assert all(r.status_code == 401 for r in respostas)
+    identidade = identidade_da_conta(escola_completa["admin"])
+    assert limitador_login.bloqueado(chave_conta_ip(identidade, "testclient"))
+    bloqueada = cliente.post("/api/v1/auth/login", data={**dados, "password": "s3nh4"})
+    assert bloqueada.status_code == 401
+    assert bloqueada.json() == respostas[0].json()
 
 
 def test_xff_forjado_nao_burla_o_limitador(cliente, escola_completa):
@@ -49,13 +53,18 @@ def test_xff_forjado_nao_burla_o_limitador(cliente, escola_completa):
     o IP usado é o que o proxy APPENDA no fim (203.0.113.9). Variar o valor da
     esquerda (spoof) não zera o contador — a força-bruta ainda trava na 9ª."""
     dados = {"username": "admin@teste.local", "password": "errada"}
-    codigos = [
+    respostas = [
         cliente.post("/api/v1/auth/login", data=dados,
-                     headers={"X-Forwarded-For": f"9.9.9.{i}, 203.0.113.9"}).status_code
-        for i in range(9)
+                     headers={"X-Forwarded-For": f"192.0.2.{i}, 203.0.113.9"})
+        for i in range(limitador_login.max_tentativas)
     ]
-    assert codigos[:8] == [401] * 8
-    assert codigos[8] == 429   # o XFF variável NÃO burlou o limitador
+    assert all(r.status_code == 401 for r in respostas)
+    identidade = identidade_da_conta(escola_completa["admin"])
+    assert limitador_login.bloqueado(chave_conta_ip(identidade, "203.0.113.9"))
+    bloqueada = cliente.post("/api/v1/auth/login", data={**dados, "password": "s3nh4"},
+                             headers={"X-Forwarded-For": "192.0.2.109, 203.0.113.9"})
+    assert bloqueada.status_code == 401
+    assert bloqueada.json() == respostas[0].json()
 
 
 def test_limitador_por_conta_bloqueia_mesmo_com_ips_diferentes(cliente, escola_completa):
@@ -63,15 +72,20 @@ def test_limitador_por_conta_bloqueia_mesmo_com_ips_diferentes(cliente, escola_c
     disparam o limitador POR CONTA (independente de IP) — defesa contra
     força-bruta distribuída que o limitador por (conta, IP) sozinho não pega."""
     dados = {"username": "admin@teste.local", "password": "errada"}
-    codigos = [
+    respostas = [
         cliente.post("/api/v1/auth/login", data=dados,
-                     headers={"X-Forwarded-For": f"203.0.113.{i}"}).status_code
-        for i in range(22)
+                     headers={"X-Forwarded-For": f"203.0.113.{i}"})
+        for i in range(limitador_conta.max_tentativas)
     ]
-    # Cada IP é único -> o limitador por (conta,IP) nunca acumula (não trava).
-    assert codigos[:20] == [401] * 20
-    # ... mas o limitador POR CONTA acumula e bloqueia a partir da 21ª.
-    assert codigos[20] == 429 and codigos[21] == 429
+    assert all(r.status_code == 401 for r in respostas)
+    identidade = identidade_da_conta(escola_completa["admin"])
+    assert limitador_conta.bloqueado(identidade)
+    novo_ip = "203.0.113.109"
+    assert not limitador_login.bloqueado(chave_conta_ip(identidade, novo_ip))
+    bloqueada = cliente.post("/api/v1/auth/login", data={**dados, "password": "s3nh4"},
+                             headers={"X-Forwarded-For": novo_ip})
+    assert bloqueada.status_code == 401
+    assert bloqueada.json() == respostas[0].json()
 
 
 def test_login_falho_e_auditado(cliente, db, escola_completa):

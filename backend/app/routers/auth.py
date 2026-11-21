@@ -8,16 +8,23 @@ from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import func, select, update
 from sqlalchemy.orm import Session
 
-from app.core.database import get_db
+from app.core.database import get_db, leitura_sem_transacao
 from app.core.deps import get_usuario_atual
 from app.core.rate_limit import (
     alerta_global_login,
+    alerta_portao_login,
+    chave_conta_ip,
+    identidade_da_conta,
+    identidade_digitada,
     ip_do_cliente,
+    liberar_conta,
     limitador_conta,
     limitador_global_falha_login,
     limitador_ip_falha_login,
     limitador_login,
     mascarar_ip,
+    minutos_de_espera,
+    portao_login,
     rede_para_limite,
 )
 from app.core.security import (
@@ -30,6 +37,7 @@ from app.core.security import (
 )
 from app.models import TokenResetSenha, Usuario
 from app.schemas import LoginOut, UsuarioOut
+from app.services import push as svc_push
 from app.services.audit import registrar
 
 router = APIRouter(prefix="/auth", tags=["Autenticação"])
@@ -70,52 +78,132 @@ def _identificador_para_log(entrada: str) -> str:
 # nenhuma tabela nova —, com dimensões PRÓPRIAS do Edu (prefixo ``edu_login_``),
 # que nunca se misturam com as do Quest. O IP vai para o banco só como HMAC
 # (``limites.chave``), nunca em texto.
+#
+# No banco, a tentativa é RESERVADA antes de procurar a conta (``limites.reservar``:
+# conferir o teto e somar 1 numa instrução atômica só) e devolvida se não virar falha
+# (G_CARGA-3). Conferir no começo e contar no fim deixava passar, numa rajada de
+# logins simultâneos, todos os que chegavam antes de a falha do teto ser gravada.
 _DIM_IP_FALHA = "edu_login_ip_falha"
 _DIM_GLOBAL_FALHA = "edu_login_global_falha"
 _GLOBAL = "*"   # valor único da dimensão global (vale para a API inteira)
+# Por quantos segundos a recusa do banco vale na memória do processo que a recebeu
+# (REV2-AUTH2-1). Curto de propósito: a vaga que enche o teto pode ser de uma
+# tentativa AINDA EM ANDAMENTO noutro worker, que volta se não virar falha (login
+# certo). Pela espera inteira (~5 min), o processo seguia recusando o IP — ou, no teto
+# global, o login de todos — com o banco já abaixo do teto. Passado este tempo, o
+# banco é consultado de novo e decide; até lá, a rajada para na memória.
+_RECUSA_DO_BANCO_NA_MEMORIA_S = 5
 
 ERRO_MUITAS_GLOBAL = ("O acesso está temporariamente limitado por excesso de "
                       "tentativas na plataforma. Aguarde {minutos} minuto(s) e "
                       "tente novamente.")
+# O portão de logins simultâneos (``portao_login``) está cheio: recusado na hora.
+ERRO_LOGIN_OCUPADO = ("Muitas pessoas estão entrando ao mesmo tempo. Aguarde alguns "
+                      "segundos e tente novamente.")
+ERRO_CREDENCIAIS = ("Não foi possível entrar. Confira o e-mail ou usuário e a senha. "
+                    "Se precisar, peça um link de redefinição à administração.")
 
 
 def _erro_muitas(espera_s: int) -> str:
-    """O texto do 429 por (conta, IP), por conta e por IP (o mesmo de sempre)."""
-    return (f"Muitas tentativas. Aguarde {max(1, espera_s // 60) } minuto(s) e "
+    """O texto do 429 por IP, com os minutos arredondados para cima."""
+    return (f"Muitas tentativas. Aguarde {minutos_de_espera(espera_s)} minuto(s) e "
             "tente novamente.")
 
 
 def _tetos_de_falha(rede: str):
-    """(dimensão, valor, limitador) dos tetos de falha, na ordem da CONTAGEM: o
-    global por último — a linha mais disputada fica travada só do UPDATE dela até
-    o commit, e todas as transações travam as linhas na mesma ordem."""
+    """(dimensão, valor, limitador) dos tetos de falha: o do IP e o global. A ordem
+    em que o banco trava as linhas é a de ``limites`` (a da chave), a mesma em todos
+    os pedidos."""
     return ((_DIM_IP_FALHA, rede, limitador_ip_falha_login),
             (_DIM_GLOBAL_FALHA, _GLOBAL, limitador_global_falha_login))
 
 
-def _exigir_tetos_de_falha_livres(db: Session, rede: str, entrada: str,
-                                  ip_log: str) -> None:
-    """429 se o IP (ou a API inteira) já estourou o teto de falhas. Roda ANTES de
-    procurar a conta: a resposta é a mesma para conta existente ou não."""
+class _TetosDoPedido:
+    """A tentativa deste login nos tetos de falha por IP e global, já reservada no
+    banco (``reserva``; None quando o banco não respondeu a tempo e só a memória
+    vale). Termina de UM jeito: ``falhou`` (a reserva fica: é a falha contada) ou
+    ``devolver`` (login certo, conta desativada ou erro inesperado)."""
+
+    def __init__(self, db: Session, rede: str, reserva) -> None:
+        self._db = db
+        self._rede = rede
+        self._reserva = reserva
+        self._resolvida = False
+
+    def falhou(self) -> None:
+        """Falha pública de login: conta na memória (no banco, a reserva já é a
+        contagem) e alerta se o teto global foi atingido."""
+        from app.quest.services import limites
+
+        self._resolvida = True
+        for _, valor, limitador in _tetos_de_falha(self._rede):
+            limitador.registrar_falha(valor)
+        if self._reserva is not None:
+            falhas = self._reserva.falhas(limites.chave(_DIM_GLOBAL_FALHA, _GLOBAL))
+        else:
+            falhas = limitador_global_falha_login.falhas_na_janela(_GLOBAL)
+        if (falhas >= limitador_global_falha_login.max_tentativas
+                or limitador_global_falha_login.bloqueado(_GLOBAL)):
+            _alertar_teto_global(falhas)
+
+    def devolver(self) -> None:
+        """Devolve a vaga reservada no banco (uma vez só; nada depois de ``falhou``).
+        Chamar com a sessão sem conexão (depois do commit ou do rollback)."""
+        from app.quest.services import limites
+
+        if self._resolvida:
+            return
+        self._resolvida = True
+        if self._reserva is None:
+            return
+        try:
+            limites.devolver(self._db, self._reserva)
+        except limites.LimiteIndisponivel:
+            pass   # fica contada (o aviso já saiu no log): o erro é a favor do teto
+
+
+def _reservar_tetos_de_falha(db: Session, rede: str, entrada: str,
+                             ip_log: str) -> _TetosDoPedido:
+    """429 se o IP (ou a API inteira) já estourou o teto de falhas; senão RESERVA esta
+    tentativa nos dois tetos. Roda ANTES de procurar a conta: a resposta é a mesma
+    para conta existente ou não.
+
+    Primeiro a memória (barra a rajada sem ir ao banco); depois o banco, numa
+    instrução só que confere e soma (``limites.reservar``), fora da transação da
+    requisição. Recusada lá (outro worker contou as falhas, antes de um reinício, ou
+    tentativas ainda em andamento ocupam as últimas vagas), a memória deste processo
+    guarda a recusa por ``_RECUSA_DO_BANCO_NA_MEMORIA_S`` segundos, não pela espera
+    inteira: a vaga em andamento pode voltar. A espera anunciada é a do banco."""
     from app.quest.services import limites
 
+    tetos = _tetos_de_falha(rede)
     estourado: tuple[str, int] | None = None
-    for dimensao, valor, limitador in reversed(_tetos_de_falha(rede)):  # global 1º
+    for dimensao, valor, limitador in reversed(tetos):  # global 1º
         if limitador.bloqueado(valor):
-            estourado = (dimensao, limitador.segundos_restantes(valor))
+            estourado = (dimensao, limitador.segundos_para_resposta(valor))
             break
+    reserva = None
     if estourado is None:
-        chaves = {d: limites.chave(d, v) for d, v, _ in _tetos_de_falha(rede)}
-        if limites.bloqueado(db, list(chaves.values())):
-            # Bloqueado só no banco (outro worker, ou antes de um reinício): o
-            # bloqueio dura uma janela inteira, que é o teto da espera.
-            global_ = limites.bloqueado(db, [chaves[_DIM_GLOBAL_FALHA]])
-            limitador = (limitador_global_falha_login if global_
-                         else limitador_ip_falha_login)
-            estourado = (_DIM_GLOBAL_FALHA if global_ else _DIM_IP_FALHA,
-                         limitador.janela_s)
+        chaves = {d: limites.chave(d, v) for d, v, _ in tetos}
+        try:
+            reserva = limites.reservar(db, [
+                limites.Limite(chaves[dimensao], limitador.max_tentativas,
+                               limitador.janela_s)
+                for dimensao, _, limitador in tetos])
+        except limites.LimiteIndisponivel:
+            reserva = None   # o banco não respondeu a tempo: vale a memória (acima)
+        if reserva is not None and not reserva.aceita:
+            for dimensao, valor, limitador in tetos:
+                espera = reserva.espera(chaves[dimensao])
+                if espera is not None:
+                    limitador.bloquear_por(
+                        valor, min(espera, _RECUSA_DO_BANCO_NA_MEMORIA_S),
+                        espera_persistente=espera)
+            global_ = reserva.espera(chaves[_DIM_GLOBAL_FALHA])
+            estourado = ((_DIM_GLOBAL_FALHA, global_) if global_ is not None
+                         else (_DIM_IP_FALHA, reserva.espera(chaves[_DIM_IP_FALHA]) or 1))
     if estourado is None:
-        return
+        return _TetosDoPedido(db, rede, reserva)
     dimensao, espera = estourado
     e_global = dimensao == _DIM_GLOBAL_FALHA
     registrar(db, "login.bloqueado",
@@ -124,26 +212,8 @@ def _exigir_tetos_de_falha_livres(db: Session, rede: str, entrada: str,
     db.commit()
     raise HTTPException(
         status.HTTP_429_TOO_MANY_REQUESTS,
-        ERRO_MUITAS_GLOBAL.format(minutos=max(1, espera // 60)) if e_global
+        ERRO_MUITAS_GLOBAL.format(minutos=minutos_de_espera(espera)) if e_global
         else _erro_muitas(espera))
-
-
-def _contar_falha_nos_tetos(db: Session, rede: str) -> None:
-    """Conta 1 falha no teto do IP e no global, nas duas camadas. NÃO commita:
-    chamar por último, colado no commit do caminho de erro."""
-    from app.quest.services import limites
-
-    falhas_globais = 0
-    for dimensao, valor, limitador in _tetos_de_falha(rede):
-        limitador.registrar_falha(valor)
-        falhas = limites.registrar_falha(
-            db, limites.chave(dimensao, valor),
-            max_tentativas=limitador.max_tentativas, janela_s=limitador.janela_s)
-        if dimensao == _DIM_GLOBAL_FALHA:
-            falhas_globais = falhas
-    if (falhas_globais >= limitador_global_falha_login.max_tentativas
-            or limitador_global_falha_login.bloqueado(_GLOBAL)):
-        _alertar_teto_global(falhas_globais)
 
 
 def _alertar_teto_global(falhas: int) -> None:
@@ -163,12 +233,42 @@ def _alertar_teto_global(falhas: int) -> None:
     })
 
 
+def _avisar_portao_cheio() -> None:
+    """Log de aviso quando o portão de logins simultâneos recusa (no máximo um por
+    minuto em cada processo). Sem IP nem conta."""
+    if alerta_portao_login.bloqueado("*"):
+        return
+    alerta_portao_login.registrar_falha("*")
+    logger.warning("login_simultaneos_no_teto", extra={
+        "evento": "login.simultaneos_no_teto",
+        "alerta": "seguranca",
+        "vagas": portao_login.vagas,
+        "efeito": ("o /auth/login recusa com 429, sem ir ao banco, quem chega com o "
+                   "teto cheio; as sessões já abertas seguem sendo atendidas"),
+    })
+
+
 @router.post("/login", response_model=LoginOut)
 def login(
     request: Request,
     form: OAuth2PasswordRequestForm = Depends(),
     db: Session = Depends(get_db),
 ):
+    # Portão de logins SIMULTÂNEOS neste processo (``portao_login``), antes de
+    # qualquer ida ao banco: uma rajada anônima ocupava todas as threads e conexões
+    # do worker, e as sessões já abertas esperavam na fila (G_CARGA-1). Acima do
+    # teto, 429 na hora; quem entrou sai no ``finally``.
+    if not portao_login.entrar():
+        _avisar_portao_cheio()
+        raise HTTPException(status.HTTP_429_TOO_MANY_REQUESTS, ERRO_LOGIN_OCUPADO,
+                            headers={"Retry-After": "5"})
+    try:
+        return _login(request, form, db)
+    finally:
+        portao_login.sair()
+
+
+def _login(request: Request, form: OAuth2PasswordRequestForm, db: Session) -> LoginOut:
     # Aceita e-mail OU nome de usuário (com ou sem o "@" na frente).
     entrada = form.username.lower().strip().lstrip("@")
     if len(entrada) > _TETO_IDENTIFICADOR:
@@ -181,9 +281,24 @@ def login(
     rede = rede_para_limite(ip)          # IPv6 em /64: chave do teto de falhas por IP
 
     # Tetos de falha por IP e global ANTES de procurar a conta: a mesma resposta
-    # para conta existente ou não (ver ``_exigir_tetos_de_falha_livres``).
-    _exigir_tetos_de_falha_livres(db, rede, entrada, ip_log)
+    # para conta existente ou não. A tentativa fica reservada no banco e, se não
+    # virar falha, volta (ver ``_reservar_tetos_de_falha``).
+    tetos = _reservar_tetos_de_falha(db, rede, entrada, ip_log)
+    try:
+        return _avaliar(form, db, entrada, ip, ip_log, tetos)
+    except Exception:
+        # A devolução só opera se ainda houver vaga pendente (conta desativada
+        # ou erro inesperado). O rollback libera a conexão antes da devolução.
+        db.rollback()
+        tetos.devolver()
+        raise
 
+
+def _avaliar(form: OAuth2PasswordRequestForm, db: Session, entrada: str, ip: str,
+             ip_log: str, tetos: _TetosDoPedido) -> LoginOut:
+    """O login depois dos tetos de falha: procura a conta, confere os limites por
+    conta e a senha. A recusa por conta e as falhas de palpite chamam
+    ``tetos.falhou()``. O login certo devolve a vaga depois do commit."""
     usuario = db.execute(
         select(Usuario).where(Usuario.email == entrada)
     ).scalar_one_or_none()
@@ -199,21 +314,30 @@ def login(
 
     # O limitador conta pela CONTA (e-mail canônico): tentar pelo e-mail e
     # pelo @username soma no MESMO contador — dois identificadores não podem
-    # dobrar o orçamento de força bruta contra a mesma vítima.
-    identidade = usuario.email if usuario is not None else entrada
-    # Para o LOG: conta inexistente nunca grava o texto cru (``_identificador_para_log``).
+    # dobrar o orçamento de força bruta contra a mesma vítima. A chave leva a
+    # versão da sessão (``identidade_da_conta``): a senha substituída sobe a
+    # versão e libera o login em todos os processos da API. Conta inexistente conta
+    # pelo texto digitado, noutro espaço de nomes (``identidade_digitada``): texto
+    # que não acha conta nunca soma falhas na chave de uma conta (``u:`` × ``t:``).
+    identidade = (identidade_da_conta(usuario) if usuario is not None
+                  else identidade_digitada(entrada))
+    # Para o LOG: o e-mail da conta, sem a versão; conta inexistente nunca grava
+    # o texto cru (``_identificador_para_log``).
     identidade_log = (usuario.email if usuario is not None
                       else _identificador_para_log(entrada))
-    chave = f"{identidade}|{ip}"
+    chave = chave_conta_ip(identidade, ip)
 
     # Duas camadas: por (conta, IP) — freio fino — e por CONTA (sem IP) —
     # freio contra força-bruta distribuída (vários IPs) contra a mesma conta.
     if limitador_login.bloqueado(chave) or limitador_conta.bloqueado(identidade):
-        espera = max(limitador_login.segundos_restantes(chave),
-                     limitador_conta.segundos_restantes(identidade))
+        # A recusa é indistinguível de um erro de credencial no status, no texto
+        # e na contagem dos tetos públicos. O bcrypt descartável preserva o custo
+        # de verificação sem conferir a senha real nem renovar o bloqueio da conta.
+        verificar_senha_dummy()
         registrar(db, "login.bloqueado", detalhes={"email": identidade_log, "ip": ip_log})
+        tetos.falhou()
         db.commit()
-        raise HTTPException(status.HTTP_429_TOO_MANY_REQUESTS, _erro_muitas(espera))
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, ERRO_CREDENCIAIS)
 
     if usuario is None:
         # Equaliza o tempo de resposta para não revelar se a conta existe.
@@ -223,20 +347,21 @@ def login(
         registrar(db, "login.falhou",
                   detalhes={"email": identidade_log, "ip": ip_log,
                             "motivo": "conta_inexistente"})
-        _contar_falha_nos_tetos(db, rede)   # por último, colado no commit
+        tetos.falhou()
         db.commit()
-        raise HTTPException(status.HTTP_401_UNAUTHORIZED,
-                            "E-mail/usuário ou senha incorretos.")
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, ERRO_CREDENCIAIS)
 
-    if not verificar_senha(form.password, usuario.senha_hash):
+    senha_hash = usuario.senha_hash
+    versao_autenticada = usuario.token_version
+    if not verificar_senha(form.password, senha_hash):
         limitador_login.registrar_falha(chave)
         limitador_conta.registrar_falha(identidade)
         registrar(db, "login.falhou", escola_id=usuario.escola_id, usuario_id=usuario.id,
-                  detalhes={"email": identidade, "ip": ip_log, "motivo": "senha_incorreta"})
-        _contar_falha_nos_tetos(db, rede)
+                  detalhes={"email": identidade_log, "ip": ip_log,
+                            "motivo": "senha_incorreta"})
+        tetos.falhou()
         db.commit()
-        raise HTTPException(status.HTTP_401_UNAUTHORIZED,
-                            "E-mail/usuário ou senha incorretos.")
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, ERRO_CREDENCIAIS)
 
     if _senha_da_convencao_antiga(form.password, usuario):
         # A senha confere, mas é a da convenção abolida (nome/@ + "123"): quem
@@ -246,9 +371,9 @@ def login(
         limitador_login.registrar_falha(chave)
         limitador_conta.registrar_falha(identidade)
         registrar(db, "login.falhou", escola_id=usuario.escola_id, usuario_id=usuario.id,
-                  detalhes={"email": identidade, "ip": ip_log,
+                  detalhes={"email": identidade_log, "ip": ip_log,
                             "motivo": "senha_convencao_antiga"})
-        _contar_falha_nos_tetos(db, rede)
+        tetos.falhou()
         db.commit()
         raise HTTPException(status.HTTP_403_FORBIDDEN,
                             "Senha expirada: peça um link de redefinição ao "
@@ -256,18 +381,34 @@ def login(
 
     if usuario.status != "ativo":
         registrar(db, "login.falhou", escola_id=usuario.escola_id, usuario_id=usuario.id,
-                  detalhes={"email": identidade, "ip": ip_log, "motivo": "conta_desativada"})
+                  detalhes={"email": identidade_log, "ip": ip_log,
+                            "motivo": "conta_desativada"})
         db.commit()
         raise HTTPException(status.HTTP_403_FORBIDDEN, "Usuário desativado.")
 
-    limitador_login.limpar(chave)
-    limitador_conta.limpar(identidade)
-    usuario.ultimo_acesso = datetime.now(timezone.utc)
+    # A senha foi conferida antes da escrita. Só registra o acesso se a mesma
+    # credencial continua ativa, mesmo quando uma revogação termina nesse intervalo.
+    acesso = db.execute(
+        update(Usuario).where(
+            Usuario.id == usuario.id,
+            Usuario.status == "ativo",
+            Usuario.senha_hash == senha_hash,
+            Usuario.token_version == versao_autenticada,
+        ).values(ultimo_acesso=datetime.now(timezone.utc))
+        .execution_options(synchronize_session=False)
+    )
+    if acesso.rowcount != 1:
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, ERRO_CREDENCIAIS)
+    token = criar_token(usuario.id, versao_autenticada)
     registrar(db, "login", escola_id=usuario.escola_id, usuario_id=usuario.id)
     db.commit()
+    limitador_login.limpar(chave)
+    limitador_conta.limpar(identidade)
+    # Login certo não conta no teto do IP nem no global: a vaga reservada volta.
+    tetos.devolver()
 
     return LoginOut(
-        access_token=criar_token(usuario.id, usuario.token_version),
+        access_token=token,
         usuario=_com_modulos(db, usuario),
     )
 
@@ -275,7 +416,11 @@ def login(
 def _senha_da_convencao_antiga(senha: str, usuario: Usuario) -> bool:
     """A senha digitada é uma das que as convenções antigas de professor dariam a
     esta conta (o @ ou o primeiro nome + "123", em qualquer caixa)? Só compara
-    strings com o nome/@ ATUAIS da conta — nenhum bcrypt extra no login."""
+    strings com o nome/@ ATUAIS da conta — nenhum bcrypt extra no login.
+
+    Qualquer caixa de propósito ("aNaSilva123" também é a senha do nome). O
+    ``scripts/senhas_derivadas`` (o checklist pré-deploy) só confere com bcrypt 4
+    caixas e diz isso na saída (``AVISO_CAIXAS``, G_SCRIPTS-2)."""
     # Import tardio: o serviço de professores puxa modelos e segurança.
     from app.services.professores import _senhas_da_convencao_antiga
 
@@ -294,6 +439,7 @@ def _com_modulos(db: Session, usuario: Usuario) -> UsuarioOut:
 
 
 @router.get("/me", response_model=UsuarioOut)
+@leitura_sem_transacao
 def me(usuario: Usuario = Depends(get_usuario_atual),
        db: Session = Depends(get_db)):
     return _com_modulos(db, usuario)
@@ -422,7 +568,7 @@ def consumir_link_reset(dados: RedefinirSenhaIn, db: Session = Depends(get_db)):
     Atomicidade com as revogações (desativar, excluir, trocar a senha pelo
     admin, promover a Secretaria, mexer no autor do link): elas gravam a linha
     do USUÁRIO e só depois marcam os tokens pendentes (``UPDATE ... WHERE
-    usado_em IS NULL``). Aqui é a MESMA ordem: (1) trava a conta (``FOR
+    usado_em IS NULL``). Aqui é a MESMA ordem: (1) trava a conta (``FOR NO KEY
     UPDATE``), (2) marca o token com UPDATE condicional e exige 1 linha, (3) só
     então confere a situação da conta e o autor. Sem isso as conferências eram
     SELECTs comuns e a gravação vinha depois, por chave primária: a revogação
@@ -442,18 +588,20 @@ def consumir_link_reset(dados: RedefinirSenhaIn, db: Session = Depends(get_db)):
 
     # (1) Trava a conta e relê do banco (``populate_existing``): uma revogação
     # em curso termina antes, e o que se confere abaixo é o estado já gravado.
-    alvo = db.get(Usuario, registro.usuario_id, with_for_update=True,
+    alvo = db.get(Usuario, registro.usuario_id, with_for_update={"key_share": True},
                   populate_existing=True)
     if alvo is None:
         raise HTTPException(status.HTTP_400_BAD_REQUEST,
                             "Conta indisponível. Fale com o administrador.")
     # (2) Uso único de verdade: só um pedido marca o token. O que chegou depois
     # de outro consumo — ou de uma revogação, que também marca — recebe 0 linhas.
+    agora = datetime.now(timezone.utc)
     marcado = db.execute(
         update(TokenResetSenha)
         .where(TokenResetSenha.id == registro.id,
-               TokenResetSenha.usado_em.is_(None))
-        .values(usado_em=datetime.now(timezone.utc))
+               TokenResetSenha.usado_em.is_(None),
+               TokenResetSenha.expira_em > agora)
+        .values(usado_em=agora)
         .execution_options(synchronize_session=False)).rowcount
     if marcado != 1:
         raise _link_invalido(alvo)
@@ -470,10 +618,20 @@ def consumir_link_reset(dados: RedefinirSenhaIn, db: Session = Depends(get_db)):
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, erro)
 
     alvo.senha_hash = novo_hash
-    # Lido sob a trava: nenhuma revogação concorrente perde o incremento.
-    alvo.token_version = (alvo.token_version or 0) + 1  # derruba sessões antigas
+    # Lido sob a trava: nenhuma revogação concorrente perde o incremento. A versão
+    # nova derruba as sessões antigas e muda a chave dos limitadores da conta
+    # (``identidade_da_conta``): quem errou a senha até travar o login entra com
+    # a nova em qualquer processo da API (o link prova a posse da conta).
+    alvo.token_version = (alvo.token_version or 0) + 1
+    # Os aparelhos (push) saem com as sessões, como na troca pelo admin
+    # (``admin._revogar_acessos``): o celular perdido, cuja sessão cai agora, não
+    # segue recebendo os avisos da escola. O app registra de novo no login.
+    removidos = svc_push.remover_aparelhos_da_conta(db, alvo.id)
+    email = alvo.email
     registrar(db, "usuario.senha_redefinida_por_token", escola_id=alvo.escola_id,
               usuario_id=alvo.id, entidade="usuario", entidade_id=alvo.id,
-              detalhes={"email": alvo.email})
+              detalhes={"email": email, "dispositivos_removidos": removidos})
     db.commit()
+    # Só libera a memória deste processo: o "já pode entrar" vem da versão nova.
+    liberar_conta(email)
     return {"mensagem": "Senha redefinida. Você já pode entrar com a nova senha."}

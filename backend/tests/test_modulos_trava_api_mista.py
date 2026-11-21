@@ -37,6 +37,7 @@ from app.models.sincronizacao import (
 )
 from app.services import modulos as svc_modulos
 from app.services import scoring
+from tests._ano_letivo import escola_no_ano_de_hoje  # noqa: F401 — fixture
 
 API = "/api/v1"
 
@@ -201,6 +202,15 @@ def test_evolucao_com_tudo_ligado_segue_igual(db, tudo_ligado, cliente):
     assert r.json()["linha_do_tempo"]["matific"][0]["estrelas"] == 63
     indicadores = {i["indicador"] for i in r.json()["resumo"]["indicadores"]}
     assert {"atividades", "estrelas", "livros_unicos"} <= indicadores
+
+
+def test_ranking_de_evolucao_omite_ganhos_de_matematica_fora_do_plano(sem_matematica, cliente):
+    escola, aluno = sem_matematica
+    resposta = cliente.get(f"{API}/escolas/{escola.id}/ranking-evolucao?dias=30")
+    assert resposta.status_code == 200, resposta.text
+    item = next(i for i in resposta.json() if i["aluno_id"] == aluno.id)
+    assert set(item["ganhos"]) == {"livros", "tempo_leitura_min", "acertos", "pontos_dificuldade"}
+    assert item["dimensoes"]["matematica"]["contratada"] is False
 
 
 def test_linha_do_tempo_sem_matematica(db, sem_matematica, cliente):
@@ -517,17 +527,18 @@ def test_sincronizar_agora_com_tudo_ligado_coleta_o_matific(db, tudo_ligado, cli
 def test_agendador_nao_enfileira_o_matific_e_avanca_a_agenda(db, sem_matematica):
     escola, _ = sem_matematica
     from app.sync import service
+    vencida = service._agora() - timedelta(hours=1)   # há pouco: atraso de dias só recalcula
     for plat in ("matific", "elefante"):
         db.add(SincronizacaoConfig(escola_id=escola.id, plataforma=plat, ativo=True,
                                    cadencia="diaria", hora_local="03:00",
-                                   proxima_execucao=datetime(2020, 1, 1)))
+                                   proxima_execucao=vencida))
     db.commit()
     assert service.enfileirar_agendados(db) == 1          # só o Elefante
     execs = db.query(SincronizacaoExecucao).all()
     assert [e.plataforma for e in execs] == ["elefante"]
     db.expire_all()
     cfg_m = db.query(SincronizacaoConfig).filter_by(plataforma="matific").one()
-    assert cfg_m.proxima_execucao > datetime(2020, 1, 2)  # avançou: não vence de novo
+    assert cfg_m.proxima_execucao > vencida  # avançou: não vence de novo
     assert service.enfileirar_agendados(db) == 0
 
 

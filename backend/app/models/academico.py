@@ -1,6 +1,6 @@
 from datetime import date, datetime
 
-from sqlalchemy import JSON, ForeignKey, Index, String, UniqueConstraint
+from sqlalchemy import JSON, ForeignKey, Index, String, UniqueConstraint, false
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.database import Base
@@ -75,7 +75,10 @@ class Aluno(Base):
     # Piloto. Só estes entram na reconciliação incremental: quem some de uma
     # nova lista vira "fora_lista_piloto"; alunos criados à mão ou por upload
     # (Matific/Elefante) NUNCA são afetados.
-    da_lista_piloto: Mapped[bool] = mapped_column(default=False)
+    # server_default: o FALSE que a 0009 deu às linhas que já existiam (os
+    # server_default dos modelos repetem os das migrações — elas são a verdade
+    # do banco; o ORM sempre grava pelo `default`).
+    da_lista_piloto: Mapped[bool] = mapped_column(default=False, server_default=false())
     observacoes: Mapped[str | None] = mapped_column(String(1000))
     # Ficha cadastral livre (JSON): dados da planilha de matrículas da escola
     # que não têm coluna própria — RA, RM, responsável, endereço, telefone,
@@ -132,14 +135,16 @@ class IdentidadeExterna(Base):
         ForeignKey("alunos.id", ondelete="CASCADE"), index=True)
     plataforma: Mapped[str] = mapped_column(String(30))      # matific | elefante
     id_externo: Mapped[str] = mapped_column(String(80))       # UUID/id do aluno lá
-    created_at: Mapped[datetime] = mapped_column(default=agora)
+    # Nulável no banco desde a 0013 (o ORM sempre preenche).
+    created_at: Mapped[datetime | None] = mapped_column(default=agora)
     # APOSENTADORIA (§ conta duplicada): a criança tem DUAS contas na mesma
     # plataforma e a escola decidiu qual vale. A perdedora não é apagada — o
     # histórico dela continua no banco e a linha aqui continua provando de quem
     # era o id externo. Ela só deixa de ser a identidade EFETIVA: não casa mais
     # na importação, não alimenta retrato nem pontuação, e não volta sozinha.
     # É decisão INTERNA do Constela: a conta segue existindo na plataforma.
-    status: Mapped[str] = mapped_column(String(20), default="efetiva")  # efetiva|aposentada
+    status: Mapped[str] = mapped_column(String(20), default="efetiva",  # efetiva|aposentada
+                                        server_default="efetiva")  # o da 0033
     aposentada_em: Mapped[datetime | None] = mapped_column(default=None)
     aposentada_por_id: Mapped[int | None] = mapped_column(
         ForeignKey("usuarios.id", ondelete="SET NULL"), default=None)

@@ -167,32 +167,33 @@ def test_turno_inexistente_devolve_lista_vazia(cliente, db, escola_completa):
 
 
 def test_ranking_legado_sem_dimensao_tambem_filtra_por_turno(cliente, db, escola_completa):
-    """O LEGADO ordena por `Nota.posicao` sobre quem TEM Nota no ano — e o motor
-    grava Nota para TODA matrícula ativa, inclusive a de quem não foi aferido em
-    nenhuma dimensão (nota_geral 0, no fim). Por isso M3 (sem dado) ENTRA no
-    legado, ao contrário do ranking por dimensão."""
+    """O LEGADO ordena por `Nota.posicao`. O motor grava Nota para TODA matrícula
+    ativa, inclusive a de quem não foi aferido em nenhuma dimensão (nota_geral 0,
+    no fim), mas quem não tem dado NENHUM não ganha posição nem 0,0 (DEC-19,
+    RANKINGS-4-legado-geral: o corte `so_com_dado` do telão e do Top 10). Por
+    isso M3 (sem dado) fica FORA também do legado."""
     c = _cenario(db, escola_completa)
     legado = _ranking(cliente, c["escola"].id, turno="manha")
-    assert _nomes(legado) == ["M1 Forte", "M2 Fraco", "M3 Sem Dado"]
-    assert _posicoes(legado) == [1, 2, 3]                  # renumerado no recorte
+    assert _nomes(legado) == ["M1 Forte", "M2 Fraco"]
+    assert _posicoes(legado) == [1, 2]                     # renumerado no recorte
     # Recortado → denominador do recorte carimbado também no legado.
     assert [i["n_aferidos"] for i in legado] == [len(legado)] * len(legado)
     assert all(i["dimensao"] is None for i in legado)
 
     sem = _ranking(cliente, c["escola"].id, turno="")
-    assert set(_nomes(sem)) == c["nomes_sem_turno"] | {"Sofia Almeida Duarte"}
-    assert _posicoes(sem) == [1, 2, 3]
-    assert {i["n_aferidos"] for i in sem} == {3}
+    assert set(_nomes(sem)) == c["nomes_sem_turno"]        # Sofia (sem dado) fora
+    assert _posicoes(sem) == [1, 2]
+    assert {i["n_aferidos"] for i in sem} == {2}
 
 
 def test_ranking_legado_sem_turno_mantem_contrato_antigo(cliente, db, escola_completa):
-    """Sem recorte o legado não muda: posição carimbada da escola inteira e
-    `n_aferidos` ausente (None) — contrato dos clientes antigos."""
+    """Sem recorte o legado mantém o contrato: posição carimbada da escola inteira
+    e `n_aferidos` ausente (None). Quem não tem dado nenhum (M3 e Sofia, nota 0
+    no fim da ordem carimbada) não aparece (DEC-19)."""
     c = _cenario(db, escola_completa)
     todos = _ranking(cliente, c["escola"].id)
-    assert set(_nomes(todos)) == (c["nomes_manha"] | c["nomes_tarde"] | c["nomes_sem_turno"]
-                                  | {"M3 Sem Dado", "Sofia Almeida Duarte"})
-    assert _posicoes(todos) == list(range(1, 9))
+    assert set(_nomes(todos)) == (c["nomes_manha"] | c["nomes_tarde"] | c["nomes_sem_turno"])
+    assert _posicoes(todos) == list(range(1, 7))
     assert {i["n_aferidos"] for i in todos} == {None}
 
 
@@ -327,11 +328,11 @@ def test_professor_continua_renumerado(cliente, db, escola_completa):
     assert _ranking(pc, esc.id, dimensao="leitura", turno="tarde") == []
 
     # LEGADO do professor (recorte pelas turmas dele, sem turno): renumerado e
-    # com o denominador do recorte carimbado (M3 sem dado entra no legado).
+    # com o denominador do recorte carimbado (M3, sem dado, fica fora: DEC-19).
     legado = _ranking(pc, esc.id)
-    assert _nomes(legado) == ["M1 Forte", "M2 Fraco", "M3 Sem Dado"]
-    assert _posicoes(legado) == [1, 2, 3]
-    assert {i["n_aferidos"] for i in legado} == {3}
+    assert _nomes(legado) == ["M1 Forte", "M2 Fraco"]
+    assert _posicoes(legado) == [1, 2]
+    assert {i["n_aferidos"] for i in legado} == {2}
 
 
 # --------------------------------------------------------------------------

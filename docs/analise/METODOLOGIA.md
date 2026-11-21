@@ -153,6 +153,16 @@ limites em datas de Brasília, comparados com os instantes gravados em UTC, **se
 conversão** (a regra herdada das premiações — ver 5). Cada escola usa o próprio ano letivo
 ativo.
 
+**Ano letivo de referência da rede** (o `janela.ano_letivo` da rota da rede, o rótulo da
+janela e o ano da evolução por bimestre): o mais comum entre as escolas **em uso** —
+ativas e com aluno na coorte (no empate, o mais novo). A troca do ano letivo é manual e
+escola a escola: escola fechada ou só cadastrada, sem aluno, fica parada no ano antigo e
+**não decide** o ano da rede. Sem nenhuma escola em uso, valem as que têm aluno; sem
+nenhuma com aluno, todas. `janela.anos_letivos` lista os anos das escolas **com aluno** (as
+que são medidas, cada uma no ano dela — também a inativa que ainda tem aluno): escola sem
+aluno não põe "anos letivos diferentes" na tela nem tira a relação e o diagnóstico do
+"mesmo ano".
+
 **Exceção — questões do Elefante**: seguem a regra do Relatório por Período
 (`relatorios_periodo._diferenca_de_retratos`): cada coleta é convertida para Brasília, a
 borda do período é medida pela coleta a até **1 h** dela (`TOLERANCIA_BORDA`: a agenda das
@@ -163,6 +173,17 @@ Datas do período e edição da avaliação só entre os anos **2000 e 2100**
 (`analise.ANO_MINIMO`/`ANO_MAXIMO`): fora disso a resposta é **422**, antes de medir
 qualquer escola (o ano 0 ou o 10000 não existe para `datetime` e virava erro 500 depois de
 a rota já ter medido a rede inteira).
+
+**Período da Secretaria — só blocos inteiros do calendário** (`PRESETS_DA_REDE`): nas rotas
+que medem as plataformas (`/redes/{id}/analise/plataformas`, `/diagnostico`, `/relacao` e
+`/escolas/{id}/analise`), a Secretaria pede o **ano letivo** ou **um bimestre** (`bimestre_1`
+a `bimestre_4`, `bimestre` e `bimestre_anterior`). O personalizado, o dia, a semana, o mês, o
+semestre e "todo o histórico" voltam **422** (`TEXTO_PERIODO_DA_SECRETARIA`): com dois
+períodos que se sobrepõem, a diferença entre eles é o que aconteceu só no trecho que um tem
+e o outro não — e esse trecho pode ter **uma** criança, que nenhum dos dois esconde (3.5,
+"Blocos fixos"). O admin global e a coordenação da escola, que já veem cada criança,
+continuam com todos os períodos. É uma mudança de comportamento por segurança (G_GRUPO-2,
+11/2026): a Secretaria perdeu o personalizado, o dia, a semana e o mês nessas telas.
 
 ### 3.2 Coorte e série
 
@@ -227,8 +248,8 @@ Notação: `n` = alunos medidos da célula. Com `n < k` (k = 5), nenhuma métric
 |---|---|---|
 | `alunos_com_leitura` | medidos com livro novo **ou** evento de leitura no período | contagem |
 | `participacao_pct` | `alunos_com_leitura ÷ n × 100` | 1 casa |
-| `livros_por_aluno` | `Σ livros novos ÷ n` | 2 casas; livro novo = `Leitura.data` no período (o par da premiação "Mais Livros") |
-| `minutos_por_aluno` | `Σ Leitura.tempo_leitura_min ÷ n` | 1 casa; é um **piso** (a fonte nem sempre informa o tempo) |
+| `livros_por_aluno` | `Σ livros novos ÷ n` | 2 casas; livro novo = `Leitura.data` no período (o par da premiação "Mais Livros"); só com **nenhum ou ≥ k alunos com livro novo** (os contribuintes — §3.5) |
+| `minutos_por_aluno` | `Σ Leitura.tempo_leitura_min ÷ n` | 1 casa; é um **piso** (a fonte nem sempre informa o tempo); só com **nenhum ou ≥ k alunos com tempo** |
 | `nivel_medio` / `nivel_medio_posicao` | média da posição do nível (AA = 0 … Z = 29, `scoring.POS_DO_NIVEL`) dos livros novos, com o nível congelado da leitura (`coalesce(Leitura.nivel_codigo, Livro.nivel_codigo)`); a letra é a posição arredondada | só com **≥ k alunos com livro novo de nível conhecido**; nível fora do vocabulário não entra |
 | `taxa_acerto_pct` | `Σ acertos ÷ Σ tentativas × 100`, pela **diferença entre coletas** | 1 casa; só com **≥ k alunos com questão**; `janela_questoes` = o intervalo real das coletas. As exclusões são as da regra oficial (`_elefante_questoes`): o aluno **sem intervalo medido** (uma coleta só, sem base) não soma 0/0, e o aluno cujo **contador diminuiu** entre as coletas (série que mistura contas — fusão, colisão de identidade — ou recontada) **sai das questões** (continua em `n`); o bloco avisa com `contador_regrediu = true` e `texto_contador_regrediu`, sem a contagem |
 
@@ -237,16 +258,19 @@ Notação: `n` = alunos medidos da célula. Com `n < k` (k = 5), nenhuma métric
 | Métrica | Fórmula | Observação |
 |---|---|---|
 | `participacao_pct` | `alunos com atividade (ganho > 0) ÷ n × 100` | 1 casa |
-| `atividades_por_aluno` | `Σ atividades ganhas ÷ n` | 2 casas |
+| `atividades_por_aluno` | `Σ atividades ganhas ÷ n` | 2 casas; só com **nenhum ou ≥ k alunos com atividade** (os contribuintes — §3.5) |
 | `estrelas_por_aluno` | `Σ estrelas ganhas ÷ n` | 2 casas; só com **≥ k alunos com atividade** (senão "estrelas ÷ atividades" das duas médias refaria o desempenho escondido) |
 | `desempenho_medio` | `Σ estrelas ÷ Σ atividades` (escala 0 a 5) | 2 casas; só com **≥ k alunos com atividade**; num total, some também quando as atividades somem em complemento (§3.5) — ao lado das estrelas por aluno, ele as refaria |
 
 Arredondamento: "meio para cima" (`ica.arredondar`), como na divulgação oficial.
 
 **Só os retratos que a regra lê.** A análise não carrega o histórico diário inteiro: lê,
-de cada aluno, só as coletas que a regra pode usar (uma consulta por escola, com `lag` e
-`row_number`) — o resultado é o mesmo (há teste que confere contra as funções oficiais
-sobre o histórico inteiro, também no PostgreSQL), e o custo não cresce com o histórico.
+de cada aluno, só as coletas que a regra pode usar (uma consulta para todas as escolas e
+períodos: os retratos ordenados uma vez, cada um com a data do anterior e a do seguinte —
+`lag` e `lead` —, e cada período escolhe as linhas na borda das faixas dele) — o resultado
+é o mesmo (há teste que confere contra as funções oficiais sobre o histórico inteiro e
+contra a escolha linha a linha, também no PostgreSQL), e o custo não cresce com o
+histórico nem se multiplica pelos períodos.
 
 * **Matific** (`_retratos_essenciais`): o último retrato antes do início e o primeiro e o
   último dentro do período, no instante gravado (UTC), como na regra das premiações (que
@@ -293,7 +317,8 @@ sobre o histórico inteiro, também no PostgreSQL), e o custo não cresce com o 
   atividade — ex.: o desempenho de **uma** criança ativa no 3º ano). Para cada grupo de
   métricas que depende de um subconjunto (`_PROTEGIDAS`: participação/livros/minutos e
   participação/atividades pelos **medidos**; nível pelos alunos **com nível**; acerto pelos
-  alunos **com questão**; estrelas/desempenho pelos alunos **com atividade**), a métrica some
+  alunos **com questão**; estrelas/desempenho/atividades pelos alunos **com atividade**;
+  livros pelos alunos **com livro novo** e minutos pelos alunos **com tempo**), a métrica some
   também do total que a revelaria:
   * **escola**: quando as crianças escondidas nas séries dela somam de 1 a k − 1 (com k ou
     mais, a diferença dá só a soma de k ou mais crianças — a proteção da própria célula);
@@ -324,6 +349,20 @@ sobre o histórico inteiro, também no PostgreSQL), e o custo não cresce com o 
   escondidas, vale a soma delas (o zero fica misturado). No Elefante, o nível e o acerto
   dividem por somas que não saem em resposta nenhuma, e a regra não muda. Antes (até
   a937245), a escola e a rede mostravam as estrelas por aluno nesse caso.
+  **Contribuintes** (G_GRUPO-4): as médias por aluno **medido** — livros, minutos e
+  atividades — dão a soma exata (média × `alunos_medidos`); com 6 medidos e 1 só lendo, 0,5
+  livro por aluno eram os 3 livros dela. Por isso cada uma depende também de quem **soma** no
+  campo (o campo > 0): com nenhum, é o zero sabido; de 1 a k − 1, some (na célula e, em
+  complemento, nos totais), entra em `metricas_protegidas` e o texto diz que é proteção
+  (`TEXTO_METRICAS_POUCOS_CONTRIBUINTES`). É a regra dos contribuintes do cartão da
+  Secretaria (`grupo_pequeno`) e da vitrine. Releitura conta na participação, não nos livros:
+  quem só releu não soma livro novo.
+  **Mesmo rótulo na mesma célula** (REV2-ANALISE-2): a métrica que a regra do próprio
+  subconjunto esconde — nível médio (com livro de nível), acerto (com questão), estrelas por
+  aluno e desempenho (com atividade) — com 1 a k − 1 crianças nele também entra em
+  `metricas_protegidas`, com o mesmo texto: é a mesma causa das médias por contribuinte, e
+  a tela diz "protegido" em todas. Com **nenhuma** criança no subconjunto, continua fora
+  da lista (é falta de dado, não proteção).
   O total diz quais métricas escondeu em complemento (`metricas_protegidas`) e por quê
   (`texto_metricas_protegidas`). Há teste que confere, por álgebra linear exata sobre as
   respostas (rede, rede por série e escola), que nenhuma soma de menos de k crianças
@@ -341,6 +380,57 @@ sobre o histórico inteiro, também no PostgreSQL), e o custo não cresce com o 
   o total da rede). Para o coordenador e o admin da própria escola (que não leem a rede),
   a decisão é tomada só dentro da escola: ela não perde o agregado dela por causa de outra
   escola, e a resposta não depende das outras.
+* **Blocos fixos do calendário (entre respostas de períodos diferentes)**: a proteção por
+  métrica acima é a de **cada** período, e a diferença entre dois períodos que se
+  sobrepõem a refaria (a auditoria refez as estrelas, o desempenho e o nível de leitura de
+  uma criança com [01/03, 15/08] × [01/03, 04/10]). Por isso a Secretaria só pede uniões de
+  **blocos** (3.1) e a métrica de um período que junta vários blocos — o ano letivo — só
+  aparece se **nenhum** deles a esconde:
+  * os blocos são uma partição do ano civil: os quatro bimestres, pelas mesmas janelas de
+    `bimestre_1..4` (o calendário oficial, ou a aproximação sem ele), e as **folgas** entre
+    eles (em 2026, 01/01 a 01/02, antes do 1º bimestre). Só contam os blocos que já
+    começaram;
+  * cada bloco é medido como um período (na mesma consulta ao banco) e marca, em cada
+    célula, escola e rede da resposta, os grupos que ele esconde **com crianças dentro**: de
+    1 a k − 1 no subconjunto, ou em complemento (as regras acima). Total sem nenhuma criança
+    no subconjunto do bloco não marca (a soma dele é zero, e a das partes também);
+  * **a medida de cada escola em cada bloco é guardada** (REV2-ANALISE-1): medir os blocos a
+    cada pedido levou o ano letivo da rede fictícia de 28 escolas (PG local) de ~2,4 s para
+    ~5,6 s, e as telas da Secretaria pedem o ano letivo várias vezes seguidas. A medida fica
+    na memória do servidor por até 10 minutos, com uma chave que leva tudo o que a decide: a
+    escola, o ano letivo, a janela do bloco, o dia, o k, os módulos, as séries visíveis, a
+    coorte (cada criança com a turma e o ano escolar), as datas da primeira e da última
+    coleta e um **carimbo dos dados** da escola, lido na mesma consulta da coorte (linhas,
+    maior id e soma dos alunos dos retratos, das leituras e dos eventos de leitura; linhas,
+    maior id e quantas "sem questões" das importações). Coleta nova, importação apagada,
+    fusão de fichas, criança inativada ou trocada de série mudam a chave e a escola é medida
+    de novo. O período pedido é medido sempre — a resposta nunca sai da guarda, e o resto da
+    conta compara a criança no período (lida agora) com a soma dela nos blocos. Fica fora da
+    chave só o que muda um dado já gravado sem linha nova (os retratos não são reescritos
+    fora de uma importação; o nível de um livro do catálogo nas leituras antigas sem o nível
+    congelado): vale no máximo até o fim dos 10 minutos. O primeiro pedido depois de uma
+    coleta (ou dos 10 minutos) continua medindo tudo;
+  * o **resto** da conta que nenhum bloco mede é um bloco a mais (`_residuo`): no Matific, o
+    ano letivo parte do zero e o bimestre parte da **primeira coleta** de quem chega no meio
+    do ano (ganho zero nela); o teto das estrelas e a queda do contador também não somam
+    igual; nas questões do Elefante, as bordas das coletas fazem o mesmo. O subconjunto do
+    resto é o das crianças com número diferente da soma dos blocos. Livros, tempo e nível
+    somam exatamente pelas datas das leituras;
+  * os grupos dos alunos **medidos** (a participação) ficam fora dessa regra: são contagens,
+    não números de criança;
+  * a métrica escondida assim entra em `metricas_protegidas`, com o texto
+    `TEXTO_METRICAS_PROTEGIDAS_BLOCOS` (ou `..._AMBOS`, quando o complemento da mesma resposta
+    também esconde, e `..._VARIOS`, com os contribuintes junto). O texto diz a **parte** do
+    período — "um bimestre, os dias fora dos bimestres ou o que só o período inteiro conta"
+    —, não "um dos bimestres": quando quem esconde é a folga (janeiro) ou o resto (a
+    primeira coleta de quem chegou no meio do ano), todos os bimestres mostram o número ou
+    não têm ninguém ativo, e quem os confere na tela não acharia o bimestre citado
+    (REV2-ANALISE-3).
+  Assim a diferença entre dois períodos aceitos é sempre uma soma de blocos que mostram a
+  métrica, e "ano letivo − bimestres" não isola criança nenhuma. Vale para a Secretaria e o
+  admin global (a proteção da rede), não para a coordenação da escola. Não cobre a
+  diferença entre o **mesmo** período lido em dias diferentes (o bimestre em andamento muda
+  a cada coleta) — ver 5.
 
 ## 4. Relação com as avaliações
 
@@ -434,10 +524,17 @@ visíveis.
   Ideb e o IEE) passa a somar só as séries visíveis. A supressão complementar por métrica
   (3.5) também esconde médias de totais grandes — sobretudo no total da rede filtrado por
   série e em períodos curtos, em que mais séries têm menos de k crianças ativas.
-* **Média por aluno com poucos ativos**: `atividades_por_aluno` e `livros_por_aluno` exigem
-  só k alunos **medidos**; com 1 aluno ativo entre eles, "média × medidos" é o total dessa
-  criança (sem nome). É lacuna de desenho conhecida (o critério declarado é k medidos), não
-  recomposição de métrica escondida.
+* **Médias por aluno escondidas com poucos contribuintes** (desde G_GRUPO-4): livros,
+  minutos e atividades por aluno somem quando de 1 a k − 1 crianças somam nelas (§3.5) —
+  sobretudo em bimestres de pouco uso. A participação continua: é contagem.
+* **O mesmo período em dias diferentes**: o bimestre em andamento (e o ano letivo, que o
+  contém) muda a cada coleta; a diferença entre a leitura de hoje e a de ontem é o que
+  aconteceu entre as duas coletas, que pode ser de uma criança só. A proteção por blocos
+  (3.5) fecha a diferença entre períodos, não a diferença no tempo. Fechar esta exigiria
+  medir só até o último bimestre fechado (os números do bimestre corrente sumiriam das
+  telas da Secretaria) ou esconder as médias protegidas enquanto o bimestre corre —
+  decisão do dono, registrada na auditoria (G_GRUPO-2). O mesmo vale para os cartões do
+  Painel da Rede.
 * **Nada disto é causalidade**: escolas diferem em muitas coisas além do uso das
   plataformas.
 
@@ -458,6 +555,7 @@ visíveis.
   `sem_conta_na_plataforma`, `series_suprimidas`, `sem_dado_nas_escolas_visiveis` (rede),
   `sem_alunos_na_serie` (escola, com o filtro de série: nenhum aluno ativo na série; 3.2).
 * Supressão: `suprimido`.
+* Período recusado à Secretaria (422): o texto `TEXTO_PERIODO_DA_SECRETARIA` (3.1).
 * Alertas: `cadastro`, `ausente`, `insuficiente`, `sem_registro`, `desatualizado`,
   `metodologia`.
 * Recusa da relação: ver 4.1.
@@ -673,8 +771,8 @@ Serviço: `evolucao.py`. Só leitura.
   `escola_id`: 422; escola de outra rede: 404, como sempre.
 * **Só os bimestres que já começaram** (início ≤ hoje); o que contém hoje vem com
   `em_andamento = true` (números parciais, até hoje).
-* **Ano**: o ano letivo de referência da rede (o mais comum entre as escolas). Se ele não é
-  o ano de hoje (a virada de ano antes de a escola trocar o ano letivo), as datas são as do
+* **Ano**: o ano letivo de referência da rede (3.1: o mais comum entre as escolas em uso);
+  na ficha (`so_escola`), o ano letivo da própria escola. Se ele não é o ano de hoje (a virada de ano antes de a escola trocar o ano letivo), as datas são as do
   calendário daquele ano, pedidas como período personalizado — o mesmo resultado. Ano sem
   calendário oficial: as datas aproximadas do serviço de períodos, com o aviso em
   `limitacoes` (`calendario_oficial = false`).

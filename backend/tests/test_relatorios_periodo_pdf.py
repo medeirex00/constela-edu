@@ -11,6 +11,7 @@ baixa o Chromium (.github/workflows/ci.yml) — então lá roda a reserva. Por i
 o grosso dos testes força a reserva (determinístico e igual ao CI) e dois testes
 exercitam o renderizador real, pulando quando o navegador não existe.
 """
+import pathlib
 import re
 from datetime import date, datetime
 
@@ -380,11 +381,12 @@ def test_reserva_carrega_as_ressalvas_e_a_janela_efetiva(db, cenario, sem_chromi
     dados = _dados(db, escola.id, plataformas=("elefante", "matific"))
     texto = _texto(pdf._reserva(dados, "#1B2A4A"))
     assert "Janela efetiva" in texto
-    assert "Ressalva" in texto
-    # a vitrine e a reserva dizem as MESMAS ressalvas
+    assert "CUIDADO AO LER" in texto
+    # a vitrine e a reserva dizem os MESMOS cuidados (os de "Como ler estes números")
     assert pdf._ressalvas(dados), "o motor devolveu ressalvas?"
-    for nome, _r in pdf._ressalvas(dados):
-        assert nome.split(" · ")[1][:12] in texto
+    for nome, cuidado in pdf._ressalvas(dados):
+        assert pdf._sem_tipografia(nome) in texto
+        assert pdf._sem_tipografia(cuidado)[:30] in texto
 
 
 def test_queda_para_a_reserva_deixa_rastro(db, cenario, monkeypatch, caplog):
@@ -471,6 +473,268 @@ def test_base_ausente_na_janela_efetiva_nao_e_sem_dado(db, cenario):
     avisos = pdf._avisos_janela(dados)
     assert avisos and avisos[0][1] == "a primeira coleta"
     assert pdf.SEM_DADO not in avisos[0][1]
+
+
+def _cobertura_sem_base(status, **extra):
+    """Cobertura SEM coleta-base (``coleta_inicio`` nulo): a conta parte do início
+    do contador da plataforma."""
+    regra = "oficial_matific" if status == "regra_oficial" else None
+    return {"status": status, "regra": regra, "periodo_inicio": "2026-09-01",
+            "periodo_fim": "2026-09-30", "coleta_inicio": None,
+            "coleta_fim": "2026-10-01T03:10:00", "alunos_medidos": 3, **extra}
+
+
+@pytest.mark.parametrize("status,extra,esperado", [
+    ("completa", {}, "medido pelas coletas desde o início do contador até 01/10/2026 00:10."),
+    ("regra_oficial", {}, "diferença entre o início do contador e a última coleta considerada, "
+                          "01/10/2026 00:10"),
+    ("ampliada", {"inclui_antes_do_inicio": True, "alunos_ampliados": 3,
+                  "antecedencia_max_horas": 72},
+     "Intervalo medido pelas coletas do Constela: desde o início do contador até 01/10/2026 00:10."),
+    ("parcial", {"fim_coberto": False, "alunos_sem_fim": 3},
+     "Intervalo medido pelas coletas do Constela: desde o início do contador até 01/10/2026 00:10."),
+])
+def test_cobertura_sem_coleta_base_diz_desde_o_inicio_do_contador(status, extra, esperado):
+    """O documento que vai para as reuniões dizia "medido pelas coletas de o
+    início do contador a …" — a tela já dizia "desde o início do contador até …"."""
+    dados = {"elefante": {"cobertura_questoes": _cobertura_sem_base(status, **extra)}}
+    aviso = pdf._avisos_cobertura(dados)[0]
+    html = pdf._cobertura_html(aviso)
+    assert esperado in html, html
+    # "de o início" como palavra solta ("desde o início" é o certo e contém o trecho).
+    for texto in (html, " ".join(aviso["motivos"])):
+        assert not re.search(r"\bde o início", texto), texto
+        assert "a coleta-base, o início" not in texto, texto
+
+
+# Vocabulário interno que o documento das reuniões não mostra (D5): nome de campo,
+# tabela, classificação técnica. A segunda leva é o que o "Como ler estes números" e o
+# "O que este relatório não responde" do PDF imprimiam do motor (revisão pp3): o campo
+# ("Leitura.data (COUNT)"), a chave ("Elefante · tempo min por evento"), o selo
+# ("NÃO SUPORTADO", "Ressalva") e o porquê técnico (`totalTimeSpent`, §35...).
+TERMOS_INTERNOS = ("retrato", "snapshot", "responses", "questoes_tentativas",
+                   "campos_nao_atualizados", "suportado", "nullable", "conector",
+                   "leitura.data", "eventoaluno", "ocorrido_em", "(count", "count distinct",
+                   "tempo min por evento", "tempo_min", "livros_relidos", "eventos_leitura",
+                   "alunos_sem_retrato", "cobertura_questoes", "tempo_leitura_min",
+                   "totaltimespent", "lastreadwhen", "uq_evento", "matific_destaque",
+                   "premiacoes", "ressalva", "§", "`")
+
+
+@pytest.mark.parametrize("status,extra", [
+    ("parcial", {"coleta_fim": "2026-09-20T03:10:00", "fim_coberto": False,
+                 "alunos_sem_fim": 1, "alunos_questoes_nao_vieram": 2}),
+    ("sem_intervalo", {"coleta_fim": None, "alunos_medidos": 0,
+                       "alunos_questoes_nao_vieram": 2}),
+])
+def test_aviso_das_questoes_que_nao_vieram_na_lingua_do_professor(status, extra):
+    """S9 × D5: o aviso de que a plataforma não mandou as questões chegou depois da
+    revisão de linguagem do PDF e ficava fora dela — o mesmo cuidado com "de o início" e
+    com o vocabulário interno, no texto da nota, nos motivos e nas linhas curtas da
+    versão de reserva."""
+    dados = {"elefante": {"cobertura_questoes": _cobertura_sem_base(status, **extra)}}
+    aviso = pdf._avisos_cobertura(dados)[0]
+    html = pdf._cobertura_html(aviso)
+    motivos = " ".join(aviso["motivos"])
+    curtos = " ".join(f"{a} {b}" for a, b in aviso["curtos"])
+    assert "não mandou as questões" in html
+    for texto in (html, motivos, curtos):
+        assert not re.search(r"\bde o início", texto), texto
+        for termo in TERMOS_INTERNOS:
+            assert termo not in texto.lower(), (termo, texto)
+
+
+def test_coleta_base_anterior_ao_periodo_sem_coleta_base_parte_do_contador():
+    c = _cobertura_sem_base("ampliada", inclui_antes_do_inicio=True, alunos_ampliados=3,
+                            antecedencia_max_horas=72)
+    motivos = " ".join(pdf._avisos_cobertura({"elefante": {"cobertura_questoes": c}})[0]["motivos"])
+    assert "a conta parte do início do contador, 3 dias antes de 01/09/2026" in motivos
+
+
+def test_cobertura_com_coleta_base_continua_com_as_duas_datas():
+    c = _cobertura_sem_base("regra_oficial", coleta_inicio="2026-08-30T03:10:00")
+    html = pdf._cobertura_html(pdf._avisos_cobertura({"matific": {"cobertura": c}})[0])
+    assert ("diferença entre a coleta-base, 30/08/2026 00:10, e a última coleta "
+            "considerada, 01/10/2026 00:10") in html, html
+    c = _cobertura_sem_base("completa", coleta_inicio="2026-08-30T03:10:00")
+    html = pdf._cobertura_html(pdf._avisos_cobertura({"matific": {"cobertura": c}})[0])
+    assert "medido pelas coletas de 30/08/2026 00:10 a 01/10/2026 00:10." in html, html
+
+
+# ============================================================================
+# "Como ler estes números" e "O que este relatório não responde" (revisão pp3)
+# ============================================================================
+def _snap_matific(db, escola_id, aluno_id, quando, atividades, estrelas):
+    from app.models import Importacao, SnapshotMatific
+    imp = Importacao(escola_id=escola_id, usuario_id=None, plataforma="matific",
+                     tipo="seed", arquivo_original=None, qtd_alunos=0, qtd_erros=0,
+                     tempo_ms=0, status="concluida")
+    db.add(imp)
+    db.flush()
+    db.add(SnapshotMatific(escola_id=escola_id, aluno_id=aluno_id, importacao_id=imp.id,
+                           data_referencia=quando, atividades=atividades, estrelas=estrelas))
+    db.flush()
+
+
+def _dados_das_duas_plataformas(db, cenario):
+    """O relatório do motor com tudo que o papel explica: as duas plataformas, os
+    cuidados, o que não responde e avisos de cobertura (base antes do início e fim
+    sem coleta)."""
+    escola = cenario["escola"]
+    a, b = cenario["alunos"][0], cenario["alunos"][1]
+    _snap(db, escola.id, a.id, datetime(2026, 8, 15, 12, 0), 10, 8)
+    _snap(db, escola.id, a.id, datetime(2026, 10, 1, 3, 10), 40, 30)
+    _snap(db, escola.id, b.id, datetime(2026, 9, 1, 3, 10), 5, 4)
+    _snap(db, escola.id, b.id, datetime(2026, 9, 20, 3, 10), 9, 7)
+    _snap_matific(db, escola.id, a.id, datetime(2026, 8, 30, 12, 0), 20, 30)
+    _snap_matific(db, escola.id, a.id, datetime(2026, 9, 29, 12, 0), 35, 50)
+    db.commit()
+    dados = _dados(db, escola.id, plataformas=("elefante", "matific"))
+    assert dados["nao_suportado"] and dados["elefante"]["cobertura_questoes"]
+    return dados
+
+
+def _texto_da_vitrine(html: str) -> str:
+    import html as html_mod
+    sem_estilo = re.sub(r"<style.*?</style>", " ", html, flags=re.S)
+    return re.sub(r"\s+", " ", html_mod.unescape(re.sub(r"<[^>]+>", " ", sem_estilo)))
+
+
+def _linhas_da_reserva(dados, monkeypatch) -> list[list[str]]:
+    capturadas = {}
+
+    def gerar_pdf(_titulo, _escola, _cor, cabecalho, linhas, *_a, **_k):
+        capturadas["linhas"] = [cabecalho, *linhas]
+        return b"%PDF-"
+    monkeypatch.setattr(pdf, "gerar_pdf", gerar_pdf)
+    pdf._reserva(dados, "#1B2A4A")
+    return capturadas["linhas"]
+
+
+def test_o_papel_inteiro_na_lingua_do_professor(db, cenario, monkeypatch):
+    """O PDF vai para professores e reuniões. Antes, o "Como ler estes números" trazia
+    o nome do campo ("Leitura.data (COUNT)"), a chave ("Elefante · tempo min por
+    evento"), o selo "NÃO SUPORTADO" e o porquê técnico do motor; e "O que este
+    relatório não responde" trazia o `totalTimeSpent` da API. Vale para a vitrine e para
+    a reserva, célula por célula."""
+    dados = _dados_das_duas_plataformas(db, cenario)
+    vitrine = _texto_da_vitrine(pdf.montar_html(dados))
+    reserva = [" | ".join(linha) for linha in _linhas_da_reserva(dados, monkeypatch)]
+    assert "COMO LER ESTES NÚMEROS" in vitrine and "Confiável, com um cuidado" in vitrine
+    assert "Cuidado ao ler:" in vitrine
+    assert "Tempo de cada leitura (Elefante Letrado)" in vitrine
+    for texto in (vitrine, *reserva):
+        for termo in TERMOS_INTERNOS:
+            assert termo not in texto.lower(), (termo, texto)
+
+
+def _secao(texto: str, titulo: str, proximo: str | None) -> str:
+    inicio = texto.index(titulo)
+    fim = texto.index(proximo, inicio) if proximo else len(texto)
+    return texto[inicio:fim]
+
+
+def test_como_ler_nao_repete_o_que_o_relatorio_nao_responde(db, cenario, monkeypatch):
+    """A regra da tela (f5d55fdd): o número que o motor lista em ``nao_suportado`` (o
+    tempo de cada leitura do Elefante, as questões do Matific) é explicado UMA vez, em
+    "O que este relatório não responde" — antes saía também no "Como ler estes números",
+    com o selo "NÃO SUPORTADO". As questões do ELEFANTE, que o relatório calcula,
+    continuam no "Como ler"."""
+    dados = _dados_das_duas_plataformas(db, cenario)
+    vitrine = _texto_da_vitrine(pdf.montar_html(dados))
+    como_ler = _secao(vitrine, "COMO LER ESTES NÚMEROS", "O QUE ESTE RELATÓRIO NÃO RESPONDE")
+    nao_responde = _secao(vitrine, "O QUE ESTE RELATÓRIO NÃO RESPONDE", None)
+    tempo = pdf._EXPLICACAO_NAO_RESPONDE["elefante.tempo_min_por_evento"]["explicacao"]
+    questoes_mat = pdf._EXPLICACAO_NAO_RESPONDE["matific.questoes"]["explicacao"]
+    for explicacao in (tempo, questoes_mat):
+        assert vitrine.count(explicacao) == 1, explicacao
+        assert explicacao in nao_responde and explicacao not in como_ler
+    assert "Não calculado" not in como_ler
+    assert pdf._EXPLICACAO_ELEFANTE["questoes"]["explicacao"] in como_ler
+    assert pdf._EXPLICACAO_MATIFIC["explicacao"] in como_ler
+    # Na reserva, cada item de nao_suportado é explicado numa linha só, e nenhum vira
+    # "Cuidado ao ler" (o resumo continua com a linha do número, "não calculado").
+    reserva = _linhas_da_reserva(dados, monkeypatch)
+    for e in pdf._o_que_nao_responde(dados):
+        explicada = [pdf._sem_tipografia(e["nome"]), pdf.SEM_SUPORTE,
+                     pdf._sem_tipografia(e["curto"])]
+        assert reserva.count(explicada) == 1, explicada
+    titulo = reserva.index(["CUIDADO AO LER", "", ""])
+    cuidados = [linha[0] for linha in reserva[titulo + 1:titulo + 5]]
+    assert cuidados == [pdf._sem_tipografia(nome)
+                        for nome in ("“Livros novos”", "“Tempo de leitura”", "“Questões”",
+                                     "“Atividades” e “Estrelas”")], cuidados
+    assert reserva.count(["CUIDADO AO LER", "", ""]) == 1
+
+
+def test_reserva_imprime_o_cuidado_curto_e_o_nome_inteiros(db, cenario):
+    """Revisão do acabamento (sonda R1). O ``curto`` existe "só para a reserva (fpdf),
+    cuja célula corta o texto longo: a frase inteira, cortada no meio, diria outra
+    coisa" — e a reserva gerada imprimia "tempo não informado entra como zero: o total é
+    o míni...", "sem coleta no período, o aluno fica fora da conta (não ..." (sem o "é
+    zero") e "Tempo de cada leitura (Elefante Letrad...". Cada cuidado curto e cada nome
+    de "O que este relatório não responde" têm de sair INTEIROS no PDF."""
+    dados = _dados_das_duas_plataformas(db, cenario)
+    texto = _texto(pdf._reserva(dados, "#1B2A4A"))
+    esperados = [pdf._sem_tipografia(c) for _n, c in pdf._ressalvas(dados)]
+    esperados += [pdf._sem_tipografia(e[k]) for e in pdf._o_que_nao_responde(dados)
+                  for k in ("nome", "curto")]
+    esperados += [pdf._sem_tipografia(n) for n, _c in pdf._ressalvas(dados)]
+    cortados = [e for e in esperados if e not in texto]
+    assert not cortados, (cortados, texto[-900:])
+    assert "..." not in _secao(texto, "CUIDADO AO LER", None), texto[-900:]
+
+
+def test_reserva_com_recorte_do_professor_tambem_nao_corta_o_cuidado(db, cenario):
+    """O recorte do professor acrescenta a linha "Recorte do usuário", cujo detalhe (o
+    mais longo da 3ª coluna) a cortava e estreitava as outras colunas."""
+    dados = _dados_das_duas_plataformas(db, cenario)
+    dados["escopo"] = {**(dados.get("escopo") or {}), "restrito_a_turmas": [1, 2]}
+    texto = _texto(pdf._reserva(dados, "#1B2A4A"))
+    esperados = [pdf._sem_tipografia(c) for _n, c in pdf._ressalvas(dados)]
+    esperados += [pdf._sem_tipografia(e[k]) for e in pdf._o_que_nao_responde(dados)
+                  for k in ("nome", "curto")]
+    esperados.append("turmas de quem gerou - não é a escola inteira")
+    cortados = [e for e in esperados if e not in texto]
+    assert not cortados, (cortados, texto[-900:])
+
+
+def test_cada_curto_cabe_na_coluna_da_reserva():
+    """Guarda de quem edita os textos: cada ``curto`` (de "Como ler" e de "O que este
+    relatório não responde") mede até ``LARGURA_DO_CURTO_MM`` na fonte da reserva —
+    a mesma codificação dela (cp1252, ``relatorios._novo_fpdf``): com o FPDF padrão
+    (latin-1), um curto com travessão ou aspas curvas derrubava a medida."""
+    from app.services.relatorios import _novo_fpdf
+
+    medida = _novo_fpdf()
+    medida.add_page()
+    medida.set_font("helvetica", "", 9)
+    largos = {}
+    for e in (*pdf._EXPLICACAO_ELEFANTE.values(), pdf._EXPLICACAO_MATIFIC,
+              *pdf._EXPLICACAO_NAO_RESPONDE.values()):
+        if e.get("curto"):
+            mm = medida.get_string_width(pdf._sem_tipografia(e["curto"]))
+            if mm > pdf.LARGURA_DO_CURTO_MM:
+                largos[e["curto"]] = round(mm, 1)
+    assert not largos, largos
+
+
+_TELA = (pathlib.Path(__file__).resolve().parents[2] / "apps" / "web" / "src" / "pages"
+         / "RelatorioPeriodo.tsx")
+
+
+@pytest.mark.skipif(not _TELA.exists(), reason="cópia sem apps/web")
+def test_as_explicacoes_do_papel_sao_as_da_tela():
+    """"A mesma linguagem da tela": cada nome, explicação e cuidado do papel está,
+    letra por letra, nas listas da tela (``EXPLICACAO_*`` em RelatorioPeriodo.tsx, com
+    as concatenações desfeitas). Mudou um lado sem o outro, este teste avisa."""
+    fonte = re.sub(r'"\s*\+\s*"', "", _TELA.read_text(encoding="utf-8"))
+    frases = [pdf._ROTULO_CLASSIFICACAO[c] for c in pdf._ROTULO_CLASSIFICACAO]
+    for e in (*pdf._EXPLICACAO_ELEFANTE.values(), pdf._EXPLICACAO_MATIFIC,
+              *pdf._EXPLICACAO_NAO_RESPONDE.values()):
+        frases += [e[k] for k in ("nome", "explicacao", "cuidado") if e.get(k)]
+    faltam = [f for f in frases if f not in fonte]
+    assert not faltam, faltam
 
 
 def test_questoes_sem_nenhuma_coleta_nao_viram_zero(db, cenario, sem_chromium):

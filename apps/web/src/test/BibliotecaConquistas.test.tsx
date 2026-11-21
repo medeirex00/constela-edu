@@ -7,7 +7,7 @@
 import { describe, expect, it } from "vitest";
 
 import BibliotecaConquistas from "../pages/BibliotecaConquistas";
-import { ApiError, renderComApp, responder, screen, userEvent, within } from "./utils";
+import { ApiError, renderComApp, responder, screen, userEvent, usuarioFake, within } from "./utils";
 
 const URL_BIB = "/escolas/1/gamificacao/biblioteca";
 
@@ -117,6 +117,22 @@ describe("Biblioteca de Conquistas", () => {
     expect(within(dialogo).getByText("Persistência na matemática")).toBeInTheDocument();
     expect(within(dialogo).getByText("2 (4% da escola)")).toBeInTheDocument();
     expect(within(dialogo).getByText("01/09/2026")).toBeInTheDocument();
+  });
+
+  // "Conquistas e Mural" (/conquistas) é da gestão (RotaGestao): para a professora o
+  // link de volta a mandava, sem aviso, para a Visão geral.
+  it("gestão vê o link de volta a 'Conquistas e Mural'; a professora não", async () => {
+    responder("GET", URL_BIB, bibliotecaFake());
+    const { unmount } = renderComApp(<BibliotecaConquistas />, {
+      usuario: usuarioFake({ cargo: "coordenador" }),
+    });
+    expect(await screen.findByRole("link", { name: "Conquistas e Mural" })).toHaveAttribute("href", "/conquistas");
+    unmount();
+
+    responder("GET", URL_BIB, bibliotecaFake());
+    renderComApp(<BibliotecaConquistas />, { usuario: usuarioFake({ cargo: "professor" }) });
+    await screen.findByText("3 conquistas");
+    expect(screen.queryByRole("link", { name: "Conquistas e Mural" })).not.toBeInTheDocument();
   });
 
   it("carregando: esqueleto, sem estado vazio falso; erro: 'Tentar de novo' busca de novo", async () => {

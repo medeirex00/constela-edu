@@ -25,6 +25,7 @@ import { useApp } from "../context/AppContext";
 import { useApi } from "../hooks/useApi";
 import { api, ApiError } from "../lib/api";
 import type { Aluno, PaginaAlunos, Turma } from "../lib/types";
+import LeiturasRepetidas, { type ResumoLeiturasRepetidas } from "./LeiturasRepetidas";
 import MenuSuspenso, { ItemMenu } from "./MenuSuspenso";
 import { AvatarAluno } from "./PessoasUi";
 import { Botao, Campo, Mensagem, Modal, estiloInput } from "./ui";
@@ -356,13 +357,39 @@ export function ModalEditarAluno({ aluno, escolaId, aoFechar, aoSalvo }: {
   );
 }
 
-/** Funde dois cadastros do MESMO aluno (duplicados). Busca o outro cadastro,
- *  deixa escolher qual fica como principal e combina Matific + Elefante +
- *  leituras num só. Irreversível → confirmação "FUNDIR". */
 /** Confirmação extra quando o motor de identidade prova conflito (o backend
  *  responde 409 e exige exatamente esta frase). */
 const CONFIRMA_CONFLITO = "FUNDIR MESMO COM CONFLITO";
 
+/** Prévia só leitura da fusão (`GET /alunos/fundir/previa`), NESTA direção. */
+interface PreviaFusao {
+  manter: { id: number; nome: string };
+  remover: { id: number; nome: string };
+  /** Qual ficha deveria ficar: a mesma regra da fusão em lote. */
+  sugestao?: { manter_id: number; remover_id: number; motivo: string };
+  /** Esta direção deixa um nome abreviado na ficha que fica? */
+  nome?: { mantem_abreviado: boolean; fica: string; sai: string };
+  leituras: ResumoLeiturasRepetidas;
+  /** O que acontece com o Constela Quest: fica o progresso e o cartão que a
+   *  criança usa; as duas fichas com progresso, o servidor recusa (``conflito``). */
+  quest?: { tem_quest: boolean; conflito: boolean; texto: string | null };
+  /** Por que o servidor vai recusar esta fusão (o MESMO texto do 409): contas
+   *  diferentes da mesma plataforma, ou as duas fichas com progresso no Quest. */
+  recusa?: string | null;
+}
+
+const MOTIVO_PRINCIPAL: Record<string, string> = {
+  lista_piloto: "é a ficha da Lista Piloto, o cadastro oficial",
+  nome_mais_completo: "tem o nome mais completo",
+  cadastro_mais_antigo: "é o cadastro mais antigo",
+};
+
+/** Funde dois cadastros do MESMO aluno (duplicados). Busca o outro cadastro,
+ *  SUGERE qual fica como principal (a mesma regra da fusão em lote: Lista
+ *  Piloto, depois o nome mais completo, depois o mais antigo), avisa quando a
+ *  escolha deixa um nome abreviado e combina Matific + Elefante + leituras num
+ *  só. A sugestão não trava: "trocar" continua valendo. Irreversível →
+ *  confirmação "FUNDIR". */
 export function ModalFundir({ aluno, escolaId, aoFechar, aoConcluir }: {
   aluno: Aluno;
   escolaId: number;
@@ -400,7 +427,36 @@ export function ModalFundir({ aluno, escolaId, aoFechar, aoConcluir }: {
 
   const principal = manterAtual ? aluno : outro;
   const absorvido = manterAtual ? outro : aluno;
-  const liberado = outro && confirmacao.trim().toUpperCase() === "FUNDIR"
+  // O que a fusão faz com os livros que estão nas duas fichas, NESTA direção
+  // (fica a data da principal). Trocar a principal refaz a consulta.
+  const previa = useApi<PreviaFusao>(
+    principal && absorvido
+      ? `/escolas/${escolaId}/alunos/fundir/previa?manter_id=${principal.id}&remover_id=${absorvido.id}`
+      : null,
+  );
+  // A resposta só vale para a direção que está na tela (a anterior pode chegar depois).
+  const previaAtual = previa.dados && principal && previa.dados.manter.id === principal.id
+    && previa.dados.remover.id === absorvido?.id ? previa.dados : null;
+  // Enquanto confere, não deixa fundir; se a conferência falhar, avisa e não bloqueia.
+  const conferindo = Boolean(outro) && !previaAtual && !previa.erro;
+  // A ficha aberta não é, por si, a melhor para ficar: na 1ª resposta para cada
+  // cadastro escolhido, a tela adota a sugestão do backend. Depois disso quem
+  // manda é o "trocar" (a consulta da outra direção não reaplica nada).
+  const sugestaoAplicada = useRef<number | null>(null);
+  useEffect(() => {
+    if (!outro || !previaAtual?.sugestao || sugestaoAplicada.current === outro.id) return;
+    sugestaoAplicada.current = outro.id;
+    setManterAtual(previaAtual.sugestao.manter_id === aluno.id);
+  }, [outro, previaAtual, aluno.id]);
+  const sugerido = previaAtual?.sugestao
+    ? (previaAtual.sugestao.manter_id === aluno.id ? aluno : outro) : null;
+  const contraSugestao = Boolean(sugerido && principal && sugerido.id !== principal.id);
+  // Fusão que o servidor recusa (409: contas diferentes da mesma plataforma, ou
+  // as duas fichas com progresso no Constela Quest): a tela avisa antes e não
+  // libera o botão.
+  const recusa = previaAtual?.recusa ?? null;
+  const liberado = outro && !conferindo && !recusa
+    && confirmacao.trim().toUpperCase() === "FUNDIR"
     && (!conflito || confirmaConflito.trim().toUpperCase() === CONFIRMA_CONFLITO);
 
   async function fundir() {
@@ -494,9 +550,64 @@ export function ModalFundir({ aluno, escolaId, aoFechar, aoConcluir }: {
                     onClick={() => {
                       setOutro(null); setConfirmacao(""); setManterAtual(true);
                       setConflito(false); setConfirmaConflito(""); setErro("");
+                      sugestaoAplicada.current = null;
                     }}>
               ← escolher outro cadastro
             </button>
+          </div>
+          <div className="mt-3 space-y-2" aria-live="polite">
+            {sugerido && previaAtual?.sugestao && (
+              contraSugestao ? (
+                <p className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-100">
+                  O sistema sugere manter <strong>{sugerido.nome}</strong>:{" "}
+                  {MOTIVO_PRINCIPAL[previaAtual.sugestao.motivo] ?? "é o melhor cadastro"}.
+                  Você escolheu o contrário — confira antes de fundir.
+                </p>
+              ) : (
+                <p className="text-xs text-zinc-500 dark:text-zinc-400">
+                  Sugestão do sistema: manter este cadastro, porque ele{" "}
+                  {MOTIVO_PRINCIPAL[previaAtual.sugestao.motivo] ?? "é o melhor cadastro"}.
+                </p>
+              )
+            )}
+            {previaAtual?.nome?.mantem_abreviado && (
+              <div role="note" aria-label="Atenção: nome abreviado"
+                   className="rounded-xl border border-rose-300 bg-rose-50 p-3 text-sm text-rose-900 dark:border-rose-500/40 dark:bg-rose-500/10 dark:text-rose-100">
+                <p className="font-semibold">
+                  Atenção: o nome que fica é “{previaAtual.nome.fica}”, abreviado ou incompleto.
+                </p>
+                <p className="mt-1 text-xs">
+                  A fusão não muda nomes: é este nome que vai sair no certificado e nos
+                  relatórios, e “{previaAtual.nome.sai}” será apagado. Se não for isso, clique
+                  em “trocar” — ou, se mantiver, corrija o nome depois em Editar dados.
+                </p>
+              </div>
+            )}
+            {conferindo && (
+              <p className="text-xs text-zinc-500 dark:text-zinc-400">Conferindo as leituras das duas fichas…</p>
+            )}
+            {previa.erro && (
+              <Mensagem tipo="erro">
+                Não foi possível conferir as leituras repetidas antes da fusão ({previa.erro.message}).
+                A fusão continua possível; se o aluno tem livros nas duas fichas, fica a data da principal.
+              </Mensagem>
+            )}
+            {recusa ? (
+              <div role="note" aria-label="Atenção: esta fusão não é feita"
+                   className="rounded-xl border border-rose-300 bg-rose-50 p-3 text-sm text-rose-900 dark:border-rose-500/40 dark:bg-rose-500/10 dark:text-rose-100">
+                {recusa}
+              </div>
+            ) : previaAtual?.quest?.texto && (
+              <p className="text-xs text-zinc-500 dark:text-zinc-400">{previaAtual.quest.texto}</p>
+            )}
+            {previaAtual && principal && absorvido && (
+              <LeiturasRepetidas
+                resumo={previaAtual.leituras}
+                nomeFica={principal.nome}
+                nomeSai={absorvido.nome}
+                dica="Se a data certa é a da outra ficha, clique em “trocar” para que ela fique como principal."
+              />
+            )}
           </div>
           <div className="mt-3">
             <Campo rotulo="Digite FUNDIR para confirmar">
@@ -546,6 +657,15 @@ function ModalPermanenteUm({ nome, ocupado, erro, aoFechar, aoConfirmar }: {
           <p className="mt-1">
             <strong>{nome}</strong> será removido por completo: cadastro, histórico,
             leituras, dados do Matific e do Elefante Letrado, rankings, XP e conquistas.
+          </p>
+          {/* A conta na plataforma continua existindo: o Constela passa a ignorá-la
+              nas coletas (marca de esquecimento), mas só a plataforma a encerra — e
+              uma linha sem a conta (só o nome) não tem como ser reconhecida. */}
+          <p className="mt-2">
+            Se a criança ainda tiver conta no Matific ou no Elefante Letrado, peça o
+            encerramento dela na plataforma. Até lá, o Constela ignora nas próximas coletas
+            as contas ligadas a este cadastro. Um relatório ou planilha que traga só o nome,
+            sem a conta da plataforma, pode cadastrar a criança de novo.
           </p>
         </div>
       </div>

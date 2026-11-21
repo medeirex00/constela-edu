@@ -127,6 +127,17 @@ class Contexto:
     # Escolas externas (ids) já vinculadas a OUTRAS escolas do Constela: a conta
     # que lê uma delas é recusada antes de qualquer dado de turma ser pedido.
     externas_de_outras_escolas: frozenset = frozenset()
+    # Campos não essenciais (tempo, questões) que SUMIRAM de todas as linhas de um
+    # relatório de turma DESTA execução (S9, ``orchestrator.campos_nao_atualizados``):
+    # as leituras que vêm depois também não gravam retrato que só os repetiria.
+    campos_nao_atualizados: set = field(default_factory=set)
+
+
+# Quem resolve a resposta que mudou de formato, na língua de quem lê os alertas e os
+# logs na tela de Integrações — o mesmo texto do Relatório por Período e do Suporte
+# ("conector" é vocabulário de quem programa). Aqui, e não no orchestrator, para os
+# conectores (que o orchestrator importa) usarem o mesmo texto na mensagem do erro.
+AJUSTE_DA_COLETA = "a equipe do Constela precisa ajustar a coleta dessa plataforma"
 
 
 class ErroConector(Exception):

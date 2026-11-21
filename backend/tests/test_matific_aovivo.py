@@ -319,6 +319,128 @@ def test_coletar_via_http_sem_cookie_e_expirada(monkeypatch):
     assert e2.value.codigo == "sessao_invalida"
 
 
+# --- N1: resposta de erro ou fora do formato nunca vira "0 alunos" ------------
+
+_ESTADO_HTTP = {"cookies": [{"name": "sessionid", "value": "x", "domain": ".matific.com"}]}
+
+
+def _rotas_school_student(resposta):
+    return {
+        "school_student": resposta,
+        "accounts/current": _FakeResp({"school_id": SCHOOL}),
+        "competition-v2": _FakeResp([]),
+    }
+
+
+def _instalar_placar_http(db, escola, monkeypatch, resposta):
+    """Sessão salva + HTTP falso: o caminho real do placar ao vivo por HTTP direto."""
+    import httpx
+
+    monkeypatch.setattr(httpx, "Client", _fake_httpx_client(_rotas_school_student(resposta)))
+    monkeypatch.setattr(aovivo, "_carregar_sessao", lambda *a, **k: dict(_ESTADO_HTTP))
+    con = matific.ConectorMatific(None)
+    monkeypatch.setattr(connectors, "obter", lambda p: con if p == "matific" else None)
+    vault.salvar_credencial(db, escola.id, "matific", Credenciais(usuario="u", senha="p"))
+    db.commit()
+
+
+@pytest.mark.parametrize("status", [400, 404, 429, 500, 503])
+def test_http_direto_status_de_erro_com_json_vira_erro_e_nao_entra_no_cache(
+        db, escola_completa, monkeypatch, status):
+    """Antes, qualquer status fora de 401/403 com corpo JSON devolvia [] e a tela
+    dizia "0 alunos" por 60 s."""
+    escola = escola_completa["escola"]
+    _instalar_placar_http(db, escola, monkeypatch,
+                          _FakeResp({"detail": "falhou"}, status))
+    agora = datetime(2026, 7, 14, 12, 0, 0)
+    with pytest.raises(ErroConector) as exc:
+        aovivo.placar_matific(db, escola.id, periodo="mes", inicio=None, fim=None, agora=agora)
+    assert exc.value.codigo == "falha_download"
+    assert str(status) in str(exc.value)
+    assert exc.value.recuperavel is True
+    assert not aovivo._cache                  # erro não é resultado: nada em cache
+
+
+@pytest.mark.parametrize("corpo", [
+    {"novo_formato": []},
+    [{"x": 1}],
+    {"data": "nao-e-lista"},
+])
+def test_http_direto_200_fora_do_formato_vira_erro_e_nao_entra_no_cache(
+        db, escola_completa, monkeypatch, corpo):
+    escola = escola_completa["escola"]
+    _instalar_placar_http(db, escola, monkeypatch, _FakeResp(corpo))
+    agora = datetime(2026, 7, 14, 12, 0, 0)
+    with pytest.raises(ErroConector) as exc:
+        aovivo.placar_matific(db, escola.id, periodo="mes", inicio=None, fim=None, agora=agora)
+    assert exc.value.codigo == "parser_incompativel"
+    assert exc.value.recuperavel is False
+    assert not aovivo._cache
+    # A mensagem chega à tela: na língua do gestor (revisão do acabamento, sonda R3).
+    _na_lingua_do_gestor(str(exc.value))
+
+
+def _na_lingua_do_gestor(mensagem: str) -> None:
+    """Sem "conector", sem nome de campo da API e com quem resolve — o mesmo texto do
+    alerta "Formato do relatório mudou" (``interfaces.AJUSTE_DA_COLETA``)."""
+    from app.sync.interfaces import AJUSTE_DA_COLETA
+
+    assert "conector" not in mensagem.lower(), mensagem
+    assert "'data'" not in mensagem and "API" not in mensagem, mensagem
+    assert f"Avise o suporte: {AJUSTE_DA_COLETA}." in mensagem, mensagem
+
+
+def test_http_direto_lista_vazia_continua_sendo_nenhum_aluno(db, escola_completa, monkeypatch):
+    """O formato conhecido sem ninguém no período é legítimo: não pode virar erro."""
+    escola = escola_completa["escola"]
+    _instalar_placar_http(db, escola, monkeypatch, _FakeResp([{"school_id": SCHOOL, "data": []}]))
+    r = aovivo.placar_matific(db, escola.id, periodo="mes", inicio=None, fim=None,
+                              agora=datetime(2026, 7, 14, 12, 0, 0))
+    assert r["total"] == 0 and r["itens"] == []
+
+
+@pytest.mark.parametrize("renomeado", ["score", "activities_completed"])
+def test_campo_numerico_renomeado_nao_mostra_zero_em_silencio(
+        db, escola_completa, monkeypatch, renomeado):
+    """200 com o resto certo, mas ``score`` renomeado: antes saía 0 estrelas."""
+    escola = escola_completa["escola"]
+    ss, _sl = _payloads({"u-ana": "Ana Beatriz Souza"})
+    linha = ss["body"][0]["data"][0]
+    linha["campo_novo"] = linha.pop(renomeado)
+    _instalar_placar_http(db, escola, monkeypatch, _FakeResp(ss["body"]))
+    with pytest.raises(ErroConector) as exc:
+        aovivo.placar_matific(db, escola.id, periodo="mes", inicio=None, fim=None,
+                              agora=datetime(2026, 7, 14, 12, 0, 0))
+    assert exc.value.codigo == "parser_incompativel"
+    esperado = {"score": "estrelas", "activities_completed": "atividades"}[renomeado]
+    assert esperado in str(exc.value)
+    assert not aovivo._cache
+    _na_lingua_do_gestor(str(exc.value))
+
+
+def test_campo_renomeado_tambem_e_recusado_pelo_caminho_do_navegador(
+        db, escola_completa, monkeypatch):
+    """O caminho pelo navegador devolve ``ausentes`` igual: mesma recusa."""
+    escola = escola_completa["escola"]
+    ss, sl = _payloads({"u-ana": "Ana Beatriz Souza"})
+    ss["body"][0]["data"][0].pop("score")
+    nav = NavFake(ss, sl)
+
+    async def fab(**_kw):
+        return nav
+
+    con = matific.ConectorMatific(fab)
+    monkeypatch.setattr(connectors, "obter", lambda p: con if p == "matific" else None)
+    vault.salvar_credencial(db, escola.id, "matific", Credenciais(usuario="u", senha="p"))
+    db.commit()
+    with pytest.raises(ErroConector) as exc:
+        aovivo.placar_matific(db, escola.id, periodo="mes", inicio=None, fim=None,
+                              agora=datetime(2026, 7, 14, 12, 0, 0))
+    assert exc.value.codigo == "parser_incompativel"
+    assert not aovivo._cache
+    _na_lingua_do_gestor(str(exc.value))
+
+
 def test_placar_matific_cache_dedupe(db, escola_completa, monkeypatch):
     """Mesmo período em segundos → uma única coleta; forcar=True ignora o cache."""
     escola = escola_completa["escola"]

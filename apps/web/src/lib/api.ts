@@ -8,7 +8,16 @@
  *   - base da API: proxy relativo "/api/v1" no web; no desktop (Tauri) não há
  *     proxy, então o build injeta VITE_API_URL apontando para o servidor.
  */
-import { ApiError, MENSAGEM_SEM_REDE, apiBlob, baseDaApi, configurarApi } from "@constela/core";
+import {
+  ApiError,
+  MENSAGEM_SEM_REDE,
+  apiBlob,
+  baseDaApi,
+  comCodigoDeSuporte,
+  configurarApi,
+  idDaRequisicao,
+  invalidarSessao,
+} from "@constela/core";
 
 import { ehTelaPublica } from "./pwaAtualizacao";
 
@@ -66,8 +75,9 @@ export async function apiDownload(caminho: string): Promise<void> {
 }
 
 /** Erro de uma resposta não-OK: a mensagem é o `detail` do backend (texto, ou a lista
- *  de validação do Pydantic), como no cliente compartilhado. O corpo JSON inteiro vai
- *  em `corpo`, para a tela ler campos extras (ex.: `itens` do 422 do lote de
+ *  de validação do Pydantic), como no cliente compartilhado — num 5xx, com o código de
+ *  suporte (o começo do X-Request-ID), e o id inteiro em `requestId`. O corpo JSON
+ *  inteiro vai em `corpo`, para a tela ler campos extras (ex.: `itens` do 422 do lote de
  *  certificados) sem perder a mensagem. */
 async function erroDaResposta(resposta: Response): Promise<ApiError & { corpo?: unknown }> {
   let corpo: unknown;
@@ -87,7 +97,12 @@ async function erroDaResposta(resposta: Response): Promise<ApiError & { corpo?: 
   } catch {
     /* corpo não-JSON */
   }
-  return Object.assign(new ApiError(resposta.status, mensagem), { corpo });
+  const requestId = idDaRequisicao(resposta);
+  return Object.assign(
+    new ApiError(resposta.status, comCodigoDeSuporte(mensagem, resposta.status, requestId),
+      requestId),
+    { corpo },
+  );
 }
 
 /**
@@ -121,9 +136,7 @@ export async function apiDownloadPost(
     throw new ApiError(0, MENSAGEM_SEM_REDE);
   }
   if (resposta.status === 401) {
-    // A mesma reação do `aoExpirarSessao` configurado acima.
-    limparToken();
-    window.location.href = "/login";
+    await invalidarSessao(token);
     throw new ApiError(401, "Sessão expirada. Entre novamente.");
   }
   if (!resposta.ok) throw await erroDaResposta(resposta);

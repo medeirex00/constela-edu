@@ -139,10 +139,15 @@ function RotaRede({ children }: { children: React.ReactNode }) {
 }
 
 /** Operações de ESCOLA (importar, sincronizar, diagnóstico, onboarding) e telas de
- *  gestão com dado NOMINAL de criança (Matific, Elefante, Comparador): a
- *  Secretaria (rede vinculada, não-global) acompanha os resultados da rede mas
- *  NÃO opera as escolas — é mandada ao Dashboard. Coordenador de escola (sem
- *  rede) e admin global entram. O backend também barra (deps.negar_secretaria;
+ *  gestão com dado NOMINAL de criança ou da equipe da escola (Matific, Elefante,
+ *  Catálogo de Livros, Comparador, Turmas, Professores, Conquistas e Mural,
+ *  Assistente, Simulador, Editar conquistas): a Secretaria (rede vinculada, não-global) acompanha os
+ *  resultados da rede mas NÃO opera as escolas — é mandada ao Dashboard. Sem esta
+ *  trava ela abria essas telas pelo endereço (tem cargo coordenador ou admin) e via
+ *  dado falso ou quebrado: "Esta escola ainda não cadastrou turmas" numa escola com
+ *  turmas, "—" nas turmas de cada professor, mural e assistente com erro, um editor
+ *  cujo Salvar é recusado. Coordenador de escola (sem rede) e admin global entram. O
+ *  backend também barra (deps.negar_secretaria e escola_autorizada nas escritas;
  *  nas telas nominais, turmas_permitidas = [] devolve a lista vazia). */
 function RotaEscolaOp({ children }: { children: React.ReactNode }) {
   const { gestor, secretaria } = usePerfil();
@@ -250,7 +255,13 @@ export default function App() {
           <Route path="/rede/plataformas" element={<RotaRede><PlataformasRedePagina /></RotaRede>} />
           <Route path="/rede/relatorios" element={<RotaRede><RelatoriosRedePagina /></RotaRede>} />
 
-          {/* --- Só GESTÃO (admin/coordenador) — professor é redirecionado --- */}
+          {/* --- Só GESTÃO (admin/coordenador) — professor é redirecionado. As de
+              operação ou dado da escola (RotaEscolaOp) desviam também a Secretaria;
+              a Visão da Escola, os Critérios e o Painel Público seguem abertos a ela
+              (cada uma já trata a Secretaria: só leitura ou um aviso que a leva ao
+              Panorama da Rede). O Catálogo de Livros não: o acervo nasce das
+              leituras das crianças e, com uma ou duas leitoras, é o histórico delas
+              (o backend devolve 403 à Secretaria). --- */}
           <Route path="/comparador" element={<RotaEscolaOp><Comparador /></RotaEscolaOp>} />
           <Route path="/escola" element={<RotaGestao><VisaoEscola /></RotaGestao>} />
           {/* Evolução por aluno: coordenador/admin veem qualquer aluno; o
@@ -258,28 +269,28 @@ export default function App() {
               é quem escopa (404 fora do alcance — a Secretaria sempre). Sem guard
               de gestão aqui; só a Secretaria é desviada. */}
           <Route path="/alunos/:id/evolucao" element={<RotaSemSecretaria><EvolucaoAluno /></RotaSemSecretaria>} />
-          <Route path="/turmas" element={<RotaGestao><Turmas /></RotaGestao>} />
-          <Route path="/turmas/:id" element={<RotaGestao><TurmaDetalhe /></RotaGestao>} />
-          <Route path="/professores" element={<RotaGestao><Professores /></RotaGestao>} />
+          <Route path="/turmas" element={<RotaEscolaOp><Turmas /></RotaEscolaOp>} />
+          <Route path="/turmas/:id" element={<RotaEscolaOp><TurmaDetalhe /></RotaEscolaOp>} />
+          <Route path="/professores" element={<RotaEscolaOp><Professores /></RotaEscolaOp>} />
           <Route path="/metricas" element={<RotaGestao><Metricas /></RotaGestao>} />
           {/* Configurações Gerais: só administrador (ver RotaAdmin). O editor de
               medalhas logo abaixo continua com a coordenação (o backend deixa
-              admin e coordenador gravarem as definições). */}
+              admin e coordenador gravarem as definições); a Secretaria não grava. */}
           <Route path="/configuracoes" element={<RotaGestao><RotaAdmin><Configuracoes /></RotaAdmin></RotaGestao>} />
-          <Route path="/configuracoes/conquistas" element={<RotaGestao><ConfigConquistas /></RotaGestao>} />
+          <Route path="/configuracoes/conquistas" element={<RotaEscolaOp><ConfigConquistas /></RotaEscolaOp>} />
           {/* Telas de PRODUTO: só existem para a rede que contratou o módulo. */}
           <Route path="/matific" element={<RotaEscolaOp><RotaModulo modulo="matematica"><Matific /></RotaModulo></RotaEscolaOp>} />
           <Route path="/elefante" element={<RotaEscolaOp><RotaModulo modulo="leitura"><Elefante /></RotaModulo></RotaEscolaOp>} />
-          <Route path="/livros" element={<RotaGestao><RotaModulo modulo="leitura"><Livros /></RotaModulo></RotaGestao>} />
+          <Route path="/livros" element={<RotaEscolaOp><RotaModulo modulo="leitura"><Livros /></RotaModulo></RotaEscolaOp>} />
           <Route path="/comecar" element={<RotaEscolaOp><Comecar /></RotaEscolaOp>} />
           <Route path="/importacoes" element={<RotaEscolaOp><Importacoes /></RotaEscolaOp>} />
           <Route path="/sincronizacao" element={<RotaEscolaOp><Sincronizacao /></RotaEscolaOp>} />
           <Route path="/revisoes-identidade" element={<RotaEscolaOp><RevisoesIdentidade /></RotaEscolaOp>} />
           <Route path="/diagnostico-elefante" element={<RotaEscolaOp><RotaModulo modulo="leitura"><DiagnosticoElefante /></RotaModulo></RotaEscolaOp>} />
-          <Route path="/conquistas" element={<RotaGestao><Conquistas /></RotaGestao>} />
-          <Route path="/assistente" element={<RotaGestao><Assistente /></RotaGestao>} />
+          <Route path="/conquistas" element={<RotaEscolaOp><Conquistas /></RotaEscolaOp>} />
+          <Route path="/assistente" element={<RotaEscolaOp><Assistente /></RotaEscolaOp>} />
           <Route path="/painel-publico" element={<RotaGestao><PainelPublicoConfig /></RotaGestao>} />
-          <Route path="/simulador" element={<RotaGestao><Simulador /></RotaGestao>} />
+          <Route path="/simulador" element={<RotaEscolaOp><Simulador /></RotaEscolaOp>} />
 
           {/* --- Só administrador GLOBAL --- */}
           <Route path="/escolas" element={<RotaGlobal><Escolas /></RotaGlobal>} />

@@ -25,7 +25,10 @@ from app.routers import importacoes as imp  # reuso: confirmar, _guardar_tempora
 from app.schemas.importacao import ImportacaoConfirm, LinhaConfirmacao
 from app.services import importacao as svc
 from app.services import perfis_pdf, planilhas, politica_sync, professores
-from app.sync.interfaces import ArquivoObtido, Contexto, ErroConector
+# AJUSTE_DA_COLETA: quem resolve a resposta que mudou de formato — o service o lê daqui
+# (``orchestrator.AJUSTE_DA_COLETA``); mora em ``interfaces`` porque os conectores (que
+# este módulo importa) usam o mesmo texto na mensagem do erro.
+from app.sync.interfaces import AJUSTE_DA_COLETA, ArquivoObtido, Contexto, ErroConector
 
 
 # Marcador do conteúdo JSON vindo da API interna do Elefante (overall-course-
@@ -118,6 +121,29 @@ def _resolver_ator(db: Session, escola_id: int, usuario_id: int | None) -> Usuar
     ).scalars().first()
 
 
+# Aviso crítico (código estável, sem PII) do campo não essencial que sumiu da
+# resposta: "campos_nao_atualizados:questoes_acertos,questoes_tentativas".
+AVISO_NAO_ATUALIZADOS = "campos_nao_atualizados:"
+# Os campos do retrato que as Questões do período medem: se um deles não veio, o
+# retrato não mede as questões (``IMPORTACAO_SEM_QUESTOES``).
+CAMPOS_QUESTOES = ("questoes_tentativas", "questoes_acertos")
+# Coleta feita FORA do ano letivo ativo da escola que não criou ficha nem mudou
+# matrícula de alguém (S_G_VIRADA-1): o motivo das linhas deixadas de fora e o tipo
+# do alerta que pede a virada do ano — o mesmo código da importação.
+MOTIVO_FORA_DO_ANO_LETIVO = imp.MOTIVO_COLETA_FORA_DO_ANO
+
+
+def campos_nao_atualizados(analise) -> list[str]:
+    """Campos do retrato fora dos essenciais da sync que SUMIRAM de todas as linhas
+    do relatório (``Analise.campos_sumidos``): a resposta perdeu o campo — não é
+    "sem dado". Os essenciais têm a regra própria (nada é aplicado)."""
+    n = len(analise.linhas or [])
+    essenciais = set(imp.CAMPOS_ESSENCIAIS_SYNC.get(
+        (analise.plataforma or "", analise.formato or ""), ()))
+    return sorted(c for c, q in (getattr(analise, "campos_sumidos", None) or {}).items()
+                  if n and q >= n and c not in essenciais)
+
+
 def _acumulado_matific(arquivo: ArquivoObtido, analise) -> bool:
     """O arquivo é o ACUMULADO do ano do Matific (``duration=this-year``)? Só
     nele um total menor que o gravado é suspeito: na coleta POR PERÍODO
@@ -144,7 +170,9 @@ def reter_quedas_matific(db: Session, escola: Escola, linhas: list,
     vinculada (UUID → ficha) e cujo total novo de atividades OU estrelas é menor
     que o do retrato atual DENTRO do ano (ver a virada abaixo) NÃO é aplicada — o
     valor gravado fica, a ocorrência vai para a auditoria (sem nome: só ids e
-    números) e o serviço abre o alerta 'queda_matific' para revisão humana.
+    números) e o serviço abre o alerta 'queda_matific' para revisão humana. Se o
+    retrato atual é um AJUSTE MANUAL, a base de cada campo é o menor entre o ajuste
+    e o último retrato coletado no ano (ver o comentário no corpo).
 
     VIRADA LEGÍTIMA (documentada): o acumulado recomeça no ano novo. A base de
     comparação são só os retratos que estão AO MESMO TEMPO no ano letivo ativo
@@ -211,31 +239,116 @@ def reter_quedas_matific(db: Session, escola: Escola, linhas: list,
             SnapshotMatific.id.in_(scoring.ids_snapshots_atuais(
                 SnapshotMatific, escola.id, janela=janela)),
             SnapshotMatific.aluno_id.in_(list(aluno_por_uuid.values())))).scalars()}
+    campos = ("atividades", "estrelas")
+    # A BASE, campo a campo, é o retrato atual do ano. Quando ele é um AJUSTE MANUAL,
+    # é o MENOR entre o ajuste e o último retrato COLETADO no ano (G_AJUSTE-1,
+    # REV2-COSTURA-1):
+    # * ajuste para CIMA (coletado 60, digitado 100): vale a coleta. Com o ajuste
+    #   como base, toda coleta abaixo do número digitado era retida como "queda" e
+    #   nunca chegava a desmenti-lo; a queda abaixo do último coletado segue retida;
+    # * ajuste para BAIXO (coletado 60, digitado 40): vale o número digitado. Com a
+    #   coleta antiga como base, a de 55 era retida como "queda" do 60, e o 40 ficava
+    #   como estado atual até a plataforma passar de 60.
+    # Sem retrato coletado no ano, o ajuste sozinho não é base (a coleta entra).
+    base = {aid: dict.fromkeys(campos, s) for aid, s in atuais.items()}
+    from app.services import evolucao
+    manuais = evolucao.ajustes_manuais_matific(db, escola.id)
+    de_ajuste = [aid for aid, s in atuais.items() if s.importacao_id in manuais]
+    if de_ajuste:
+        inicio, fim = janela
+        coletado: dict[int, SnapshotMatific] = {}
+        for s in db.execute(
+                select(SnapshotMatific).where(
+                    SnapshotMatific.escola_id == escola.id,
+                    SnapshotMatific.aluno_id.in_(de_ajuste),
+                    SnapshotMatific.importacao_id.not_in(sorted(manuais)),
+                    SnapshotMatific.data_referencia >= inicio,
+                    SnapshotMatific.data_referencia <= fim)
+                .order_by(SnapshotMatific.data_referencia, SnapshotMatific.id)).scalars():
+            coletado[s.aluno_id] = s        # o último, pela ordem
+        for aid in de_ajuste:
+            ajuste, col = atuais[aid], coletado.get(aid)
+            if col is None:
+                base.pop(aid)
+                continue
+            base[aid] = {campo: (ajuste if int(getattr(ajuste, campo) or 0)
+                                 <= int(getattr(col, campo) or 0) else col)
+                         for campo in campos}
 
     retidas: set[int] = set()
     for uuid, aluno_id in aluno_por_uuid.items():
-        atual = atuais.get(aluno_id)
-        if atual is None:
+        por_campo = base.get(aluno_id)
+        if por_campo is None:
             continue
         for linha in por_uuid[uuid]:
             dados = linha.dados or {}
-            caiu = [campo for campo in ("atividades", "estrelas")
+            caiu = [campo for campo in campos
                     if campo in dados and dados[campo] is not None
-                    and int(dados[campo]) < int(getattr(atual, campo) or 0)]
+                    and int(dados[campo]) < int(getattr(por_campo[campo], campo) or 0)]
             if not caiu:
                 continue
             retidas.add(id(linha))
             registrar(db, "sync.matific_queda_retida", escola_id=escola.id,
                       entidade="aluno", entidade_id=aluno_id,
-                      detalhes={campo: {"gravado": int(getattr(atual, campo) or 0),
+                      detalhes={campo: {"gravado": int(getattr(por_campo[campo], campo) or 0),
                                         "recebido": int(dados[campo])}
                                 for campo in caiu}
-                      | {"snapshot_id": atual.id, "ano_letivo": ano})
+                      | {"snapshot_id": por_campo[caiu[0]].id, "ano_letivo": ano})
     if retidas:
         contexto.log("validacao", "warn",
                      f"{len(retidas)} aluno(s) com total do Matific MENOR que o já "
                      "gravado no ano: valores mantidos, enviados para revisão.")
     return [linha for linha in linhas if id(linha) not in retidas], len(retidas)
+
+
+def _turma_pelo_nome(db: Session, escola_id: int, nome: str) -> Turma | None:
+    """A turma da escola com o nome que a plataforma informou (sem diferenciar
+    maiúsculas) — a mesma busca que define o titular com a política 'permitir'."""
+    return db.execute(
+        select(Turma).where(Turma.escola_id == escola_id,
+                            func.lower(Turma.nome) == (nome or "").strip().lower())
+    ).scalars().first()
+
+
+def _avisar_professor_sem_cadastro(db: Session, escola_id: int, analise, turma_txt: str,
+                                   contexto: Contexto) -> None:
+    """Política 'bloquear': a plataforma informou o professor da turma, e a coleta
+    não cria a conta nem define o titular. Avisa (sem o nome da pessoa) só quando a
+    gestão tem o que fazer, e uma vez por turma em cada coleta:
+
+    * o relatório de LIVROS do Elefante repete os descritores do relatório de turma
+      — só o de turma avisa (antes saíam dois avisos iguais por turma);
+    * a turma que JÁ tem titular no Constela não gera aviso — mandar "cadastre ou
+      vincule o professor" à escola que já fez isso era instrução falsa, repetida
+      em toda coleta, e escondia os avisos reais;
+    * a turma sem titular diz isso; a que não tem esse nome no Constela não afirma
+      o que a coleta não sabe (se a turma correspondente tem titular).
+
+    Só LÊ a turma; acessório: uma falha aqui não derruba a coleta."""
+    if (getattr(analise, "formato", "") or "") == "leituras":
+        return
+    try:
+        turma = _turma_pelo_nome(db, escola_id, turma_txt)
+    except Exception:  # noqa: BLE001 — professor é acessório; aluno é o essencial
+        db.rollback()
+        contexto.log("professores", "warn",
+                     "Não foi possível conferir o professor titular da turma.")
+        return
+    if turma is not None and turma.professor_id is not None:
+        return
+    if turma is not None:
+        contexto.log("professores", "warn",
+                     f"A turma “{turma_txt}” está sem professor titular no Constela e a "
+                     "plataforma informou o(s) professor(es) dela, mas esta escola não "
+                     "cadastra pela plataforma: nenhuma conta de professor foi criada. "
+                     "Cadastre ou vincule o professor da turma em Usuários.")
+        return
+    contexto.log("professores", "warn",
+                 f"A plataforma informou o(s) professor(es) da turma “{turma_txt}”, que "
+                 "não tem esse nome no Constela, mas esta escola não cadastra pela "
+                 "plataforma: nenhuma conta de professor foi criada. Se a turma "
+                 "correspondente estiver sem professor titular, cadastre ou vincule o "
+                 "professor em Usuários.")
 
 
 def aplicar_arquivo(db: Session, escola: Escola, arquivo: ArquivoObtido, *,
@@ -298,13 +411,42 @@ def aplicar_arquivo(db: Session, escola: Escola, arquivo: ArquivoObtido, *,
             n = len(analise.linhas)
             contexto.log("parser", "error",
                          f"Resposta da plataforma sem {', '.join(ausentes)} em todas as "
-                         f"{n} linha(s): nada aplicado (o conector precisa ser revisto).")
+                         f"{n} linha(s): nada aplicado ({AJUSTE_DA_COLETA}).")
             return {**base_res, "avisos": [], "sem_dados": True, "retidos_queda": retidos,
                     "verificou_queda": verificou,
                     "linhas": n + retidos + n_descartadas,
                     "descartadas": {**descartadas_parser, "campos_ausentes": n},
                     "avisos_criticos": ["campos_ausentes:" + ",".join(ausentes)],
                     "parser_incompativel": True}
+
+    # S9: campo NÃO essencial (tempo, questões do Elefante) que sumiu de TODAS as
+    # linhas — renomeado na API. Os livros entram (nada é destruído), mas a coleta
+    # não sai 'concluida' calada: o serviço a fecha 'parcial' (ou sem atualização)
+    # com o alerta crítico, e quem não mudou não ganha retrato repetido com a data
+    # de hoje (as Questões do período o leriam como "0 no período").
+    nao_atualizados = campos_nao_atualizados(analise) \
+        if arquivo.content_type == CT_ELEFANTE_API else []
+    perdidos_na_execucao = getattr(contexto, "campos_nao_atualizados", None)
+    if nao_atualizados:
+        contexto.log("parser", "error",
+                     f"Resposta da plataforma sem {', '.join(nao_atualizados)} em todas as "
+                     f"{len(analise.linhas)} linha(s): esses números ficam com o valor da "
+                     f"coleta anterior ({AJUSTE_DA_COLETA}).")
+        if isinstance(perdidos_na_execucao, set):
+            perdidos_na_execucao.update(nao_atualizados)
+    # As LEITURAS copiam tempo/questões do retrato atual quando nasce um retrato novo:
+    # depois de um resumo sem esses campos, também não repetem números de antes.
+    sem_retrato_repetido = bool(nao_atualizados) or (
+        arquivo.content_type == CT_ELEFANTE_API and bool(perdidos_na_execucao))
+    # Quem MUDOU (livro novo) ganha retrato com as questões da coleta anterior e a
+    # data de agora; as Questões do período o leriam como "0 no período" com
+    # cobertura completa. A importação é marcada e esses retratos deixam de ser
+    # borda das questões. O resumo decide pelo próprio arquivo; as leituras (que
+    # copiam as questões do retrato do dia) pela execução.
+    questoes_herdadas = arquivo.content_type == CT_ELEFANTE_API and bool(
+        set(CAMPOS_QUESTOES) & (set(perdidos_na_execucao or ())
+                                if (analise.formato or "") == "leituras"
+                                else set(nao_atualizados)))
 
     contexto.log("validacao", "info",
                  f"{len(analise.linhas)} linha(s); identificando alunos…")
@@ -359,8 +501,11 @@ def aplicar_arquivo(db: Session, escola: Escola, arquivo: ArquivoObtido, *,
     contexto.log("importacao", "info",
                  f"Aplicando {len(linhas)} linha(s) pelo pipeline existente…")
     try:
-        resultado = imp.confirmar(dados=imp.confirmacao_da_sincronizacao(confirm),
-                                  escola_id=escola.id, usuario=ator, db=db)
+        resultado = imp.confirmar(
+            dados=imp.confirmacao_da_sincronizacao(
+                confirm, sem_retrato_repetido=sem_retrato_repetido,
+                questoes_herdadas=questoes_herdadas),
+            escola_id=escola.id, usuario=ator, db=db)
     except HTTPException as exc:
         # A importação RECUSOU o pedido (ex.: intervalo de datas inválido). Não é
         # "falha inesperada" recuperável ("erro do nosso lado"): é o pedido — não
@@ -379,15 +524,17 @@ def aplicar_arquivo(db: Session, escola: Escola, arquivo: ArquivoObtido, *,
     # acesso é pelo link de redefinição gerado pela gestão em Usuários) e
     # vincula o titular para o RBAC. Acessório e idempotente: roda numa transação própria (o
     # confirmar já commitou os alunos) e NUNCA derruba a sync se falhar.
+    # Com a política ``bloquear`` a plataforma NÃO é fonte de cadastro nesta escola
+    # (``politica_sync``: "vale para TODO dado de plataforma"): a coleta não cria conta
+    # de professor nem define o titular da turma — nem o de um professor já cadastrado
+    # (o vínculo é da gestão, como a matrícula é da Lista Piloto). Só avisa, sem o nome.
     professor_txt = getattr(analise, "professor_detectado", "") or ""
     turma_txt = getattr(analise, "turma_detectada", "") or ""
-    if professor_txt and turma_txt:
+    if professor_txt and turma_txt and not confirm.permitir_criar_aluno:
+        _avisar_professor_sem_cadastro(db, escola.id, analise, turma_txt.strip(), contexto)
+    elif professor_txt and turma_txt:
         try:
-            turma_obj = db.execute(
-                select(Turma).where(
-                    Turma.escola_id == escola.id,
-                    func.lower(Turma.nome) == turma_txt.strip().lower())
-            ).scalars().first()
+            turma_obj = _turma_pelo_nome(db, escola.id, turma_txt)
             n_prof = professores.garantir_professores_da_turma(
                 db, escola.id, turma_obj, professor_txt)
             db.commit()
@@ -420,6 +567,12 @@ def aplicar_arquivo(db: Session, escola: Escola, arquivo: ArquivoObtido, *,
     for motivo, n in (getattr(resultado, "linhas_descartadas", None) or {}).items():
         descartadas[motivo] = descartadas.get(motivo, 0) + int(n or 0)
     aplicados_ids = list(getattr(resultado, "alunos_aplicados_ids", None) or [])
+    # Coleta de FORA do ano letivo ativo que deixou algo de fora (S_G_VIRADA-1): o
+    # código estável vira a marca própria, e ``avisos_criticos`` fica só com os
+    # campos que a plataforma perdeu (lidos como tal pelo alerta de formato).
+    criticos = list(getattr(resultado, "avisos_criticos", None) or [])
+    fora_do_ano = MOTIVO_FORA_DO_ANO_LETIVO in criticos
+    criticos = [a for a in criticos if a != MOTIVO_FORA_DO_ANO_LETIVO]
     return {
         "qtd_alunos": resultado.qtd_alunos,
         "qtd_erros": resultado.qtd_erros,
@@ -444,8 +597,13 @@ def aplicar_arquivo(db: Session, escola: Escola, arquivo: ArquivoObtido, *,
                    + retidos + n_descartadas),
         "em_revisao": em_revisao,
         "descartadas": descartadas,
-        "avisos_criticos": list(getattr(resultado, "avisos_criticos", None) or []),
+        "avisos_criticos": (criticos
+                            + ([AVISO_NAO_ATUALIZADOS + ",".join(nao_atualizados)]
+                               if nao_atualizados else [])),
         "parser_incompativel": False,
+        # A coleta foi feita fora do ano letivo ativo e não criou ficha nem mudou
+        # matrícula de alguém: o serviço abre o alerta 'coleta_fora_do_ano_letivo'.
+        "fora_do_ano_letivo": fora_do_ano,
         # Contas já efetivas em OUTRA escola do Constela (revisão própria): o
         # serviço abre o alerta crítico 'identidade_de_outra_escola'.
         "ids_de_outra_escola": list(getattr(resultado, "ids_de_outra_escola", None) or []),

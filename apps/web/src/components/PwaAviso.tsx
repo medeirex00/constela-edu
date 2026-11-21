@@ -1,8 +1,13 @@
 /**
  * Aviso de VERSÃO NOVA do app (PWA). A troca só acontece no clique — nada recarrega
  * sozinho com alguém editando (a regra completa está em lib/pwaAtualizacao.ts e em
- * docs/operacao/PWA-ATUALIZACAO.md). Fora da árvore do roteador e do LimiteErro: o
- * aviso aparece até numa tela que quebrou por arquivo antigo em cache.
+ * docs/operacao/PWA-ATUALIZACAO.md). As exceções são a aba do "atualizado em outra
+ * aba" e a página que veio da rede (1ª visita, Ctrl+Shift+R, plano B), que mostra o
+ * mesmo aviso "Nova versão disponível": ao abrir, depois de um deploy, uma tela que
+ * ainda não tinha aberto, ela recarrega uma vez, sozinha, porque os arquivos da versão
+ * antiga já não existem (lib/atualizacao.ts). Fora da árvore do
+ * roteador e do LimiteErro: o aviso aparece até numa tela que quebrou por arquivo
+ * antigo.
  *
  * role="status" (polido): anuncia sem roubar o foco de quem está digitando.
  *

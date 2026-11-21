@@ -64,6 +64,10 @@ interface InfoIndicador {
 interface Definicoes {
   conquistas: Definicao[];
   indicadores: Record<string, InfoIndicador>;
+  /** Plataformas de módulo que a rede desta escola NÃO contratou (ausente em API
+   *  antiga = nenhuma). As conquistas delas vêm na lista e voltam no PUT — senão
+   *  salvar as apagaria —, mas não aparecem nem são oferecidas aqui. */
+  plataformas_fora_do_plano?: string[];
   raridades: Record<string, string>;
   xp_sugerido: Record<string, number>;
 }
@@ -179,9 +183,22 @@ export default function ConfigConquistas() {
     setMensagem(null);
   }
 
+  // CONTRATO: conquista de módulo fora do plano da rede fica guardada na lista
+  // (o PUT a devolve), mas não aparece, não se reordena e o critério dela não é
+  // oferecido no editor.
+  const fora = new Set(dados?.plataformas_fora_do_plano ?? []);
+  const foraDoPlano = (c: Definicao) =>
+    fora.has(c.plataforma) || fora.has(dados?.indicadores[c.indicador]?.plataforma ?? "");
+  const visiveis = lista.flatMap((c, i) => (foraDoPlano(c) ? [] : [i]));
+  const guardadas = lista.length - visiveis.length;
+  const indicadoresNoPlano = Object.entries(dados?.indicadores ?? {})
+    .filter(([, info]) => !fora.has(info.plataforma));
+
+  /** Troca a conquista de lugar com a VIZINHA VISÍVEL (as guardadas não contam). */
   function mover(indice: number, direcao: -1 | 1) {
-    const destino = indice + direcao;
-    if (destino < 0 || destino >= lista.length) return;
+    const posicao = visiveis.indexOf(indice);
+    const destino = visiveis[posicao + direcao];
+    if (posicao < 0 || destino === undefined) return;
     const nova = [...lista];
     [nova[indice], nova[destino]] = [nova[destino], nova[indice]];
     alterar(nova);
@@ -228,7 +245,12 @@ export default function ConfigConquistas() {
     setEmEdicao({ ...emEdicao, item: { ...edicao, ...campos } });
   }
 
-  const novaConquista = () => setEmEdicao({ indice: null, item: { ...NOVA } });
+  // A conquista nova começa no primeiro critério que a rede contratou.
+  const novaConquista = () => setEmEdicao({
+    indice: null,
+    item: { ...NOVA, indicador: indicadoresNoPlano.some(([chave]) => chave === NOVA.indicador)
+      ? NOVA.indicador : indicadoresNoPlano[0]?.[0] ?? NOVA.indicador },
+  });
   const aRemover = removendo != null ? lista[removendo] : null;
   // Plataforma exibida: a gravada ou, vazia, a que o servidor deduz do critério.
   const plataformaDe = (c: Definicao) =>
@@ -264,7 +286,7 @@ export default function ConfigConquistas() {
         </Card>
       ) : dados === null ? (
         <EsqueletoLista />
-      ) : lista.length === 0 ? (
+      ) : visiveis.length === 0 ? (
         <Card className="p-6">
           <Vazio
             icone={Medal}
@@ -275,7 +297,9 @@ export default function ConfigConquistas() {
         </Card>
       ) : (
         <ol aria-label="Conquistas da escola, na ordem de exibição" className="space-y-3">
-          {lista.map((conquista, indice) => (
+          {visiveis.map((indice, posicao) => {
+            const conquista = lista[indice];
+            return (
             <li
               key={`${conquista.codigo}-${indice}`}
               className={`card flex flex-col gap-4 p-4 sm:p-5 lg:flex-row lg:items-center ${
@@ -290,7 +314,7 @@ export default function ConfigConquistas() {
                     type="button"
                     aria-label={`Subir ${conquista.nome}`}
                     className={CLASSE_SETA}
-                    disabled={indice === 0}
+                    disabled={posicao === 0}
                     onClick={() => mover(indice, -1)}
                   >
                     <ArrowUp size={15} aria-hidden />
@@ -299,7 +323,7 @@ export default function ConfigConquistas() {
                     type="button"
                     aria-label={`Descer ${conquista.nome}`}
                     className={CLASSE_SETA}
-                    disabled={indice === lista.length - 1}
+                    disabled={posicao === visiveis.length - 1}
                     onClick={() => mover(indice, 1)}
                   >
                     <ArrowDown size={15} aria-hidden />
@@ -358,7 +382,8 @@ export default function ConfigConquistas() {
                 </div>
               </div>
             </li>
-          ))}
+            );
+          })}
         </ol>
       )}
 
@@ -367,6 +392,13 @@ export default function ConfigConquistas() {
         definição da lista (o histórico de auditoria permanece). A ordem da tabela é a
         ordem de exibição em todo o sistema.
       </p>
+      {guardadas > 0 && (
+        <p className="text-xs text-zinc-500 dark:text-zinc-400">
+          {guardadas === 1
+            ? "1 conquista de um módulo que não faz parte do plano da rede fica guardada: ela não aparece para os alunos e volta se a rede contratar o módulo."
+            : `${guardadas} conquistas de um módulo que não faz parte do plano da rede ficam guardadas: elas não aparecem para os alunos e voltam se a rede contratar o módulo.`}
+        </p>
+      )}
 
       {/* Barra grudada na base: o estado do que foi editado e o "Salvar". */}
       {dados && (
@@ -494,7 +526,7 @@ export default function ConfigConquistas() {
                 value={edicao.indicador}
                 onChange={(e) => editar({ indicador: e.target.value, plataforma: "" })}
               >
-                {Object.entries(dados.indicadores).map(([chave, info]) => (
+                {indicadoresNoPlano.map(([chave, info]) => (
                   <option key={chave} value={chave}>{info.rotulo}</option>
                 ))}
               </select>

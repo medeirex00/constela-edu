@@ -32,6 +32,7 @@ from app.models import (
 from app.routers.importacoes import _resolver_aluno, confirmar
 from app.schemas import ImportacaoConfirm, LinhaConfirmacao
 from app.services import provisionamento, scoring
+from tests._ano_letivo import ANO
 
 
 # ---------------------------------------------------------------------------
@@ -51,7 +52,7 @@ def _conta_alunos(db, escola_id):
 def _cenario(db, extras=()):
     """Escola com a turma '5º Ano B' e a LIVIA da Lista Piloto (nome completo).
     ``extras`` matricula homônimos adicionais para os testes de ambiguidade."""
-    esc = Escola(nome="EMEF Piloto", ano_letivo_ativo=2026, status="ativa")
+    esc = Escola(nome="EMEF Piloto", ano_letivo_ativo=ANO, status="ativa")
     db.add(esc)
     db.flush()
     adm = Usuario(escola_id=esc.id, nome="Admin", email="a@a.local",
@@ -59,7 +60,7 @@ def _cenario(db, extras=()):
     db.add(adm)
     provisionamento.semear_config_inicial(db, esc.id)
     turma = Turma(escola_id=esc.id, nome="5º Ano B", ano_escolar="5º Ano",
-                  ano_letivo=2026, turno="manha", status="ativa")
+                  ano_letivo=ANO, turno="manha", status="ativa")
     db.add(turma)
     db.flush()
 
@@ -68,7 +69,7 @@ def _cenario(db, extras=()):
         db.add(a)
         db.flush()
         db.add(Matricula(escola_id=esc.id, aluno_id=a.id, turma_id=turma.id,
-                         ano_letivo=2026))
+                         ano_letivo=ANO))
         return a
 
     livia = matricular("LIVIA DE SOUZA FIORELLI")
@@ -87,7 +88,7 @@ def test_livia_subconjunto_unico_vincula_e_nao_descarta(db):
 
     # Matific manda "LIVIA FIORELLI" (larga "DE SOUZA") → ANTES ia a revisão e o
     # dado sumia; AGORA vincula ao único candidato da turma.
-    r = _resolver_aluno(db, esc.id, 2026,
+    r = _resolver_aluno(db, esc.id, ANO,
                         _linha("LIVIA FIORELLI", "5 ANO B",
                                dados={"matific_uuid": "u-livia"}),
                         [], {}, {})
@@ -99,7 +100,7 @@ def test_livia_vincula_uuid_para_convergir(db):
     """Ao casar o subconjunto, o UUID do Matific é VINCULADO → a próxima sync casa
     direto por UUID (convergência), sem redepender do nome parcial."""
     esc, turma, livia, _ = _cenario(db)
-    _resolver_aluno(db, esc.id, 2026,
+    _resolver_aluno(db, esc.id, ANO,
                     _linha("LIVIA FIORELLI", "5 ANO B",
                            dados={"matific_uuid": "u-livia"}), [], {}, {})
     db.flush()
@@ -117,7 +118,7 @@ def test_reverso_elefante_subconjunto_unico_vincula(db):
     esc, turma, livia, _ = _cenario(db)
     antes = _conta_alunos(db, esc.id)
     # Elefante manda o subconjunto (sem UUID de plataforma) → vincula ao único dono.
-    r = _resolver_aluno(db, esc.id, 2026,
+    r = _resolver_aluno(db, esc.id, ANO,
                         _linha("LIVIA FIORELLI", "5 ANO B"), [], {}, {})
     assert r is not None and r.id == livia.id
     assert _conta_alunos(db, esc.id) == antes
@@ -133,7 +134,7 @@ def test_subconjunto_com_dois_candidatos_nao_funde(db):
     esc, turma, livia, _ = _cenario(db, extras=("LIVIA CRISTINA FIORELLI",))
     antes = _conta_alunos(db, esc.id)
     avisos: list[str] = []
-    r = _resolver_aluno(db, esc.id, 2026,
+    r = _resolver_aluno(db, esc.id, ANO,
                         _linha("LIVIA FIORELLI", "5 ANO B",
                                dados={"matific_uuid": "u-x"}), avisos, {}, {})
     assert r is None                                   # não atribui nem cria
@@ -147,7 +148,7 @@ def test_variacao_de_sobrenome_unico_continua_em_revisao(db):
     correção do subconjunto NÃO afrouxa isto."""
     esc, turma, livia, _ = _cenario(db)
     antes = _conta_alunos(db, esc.id)
-    r = _resolver_aluno(db, esc.id, 2026,
+    r = _resolver_aluno(db, esc.id, ANO,
                         _linha("LIVIA DE SOUZA FIORELLO", "5 ANO B"), [], {}, {})
     assert r is None                                   # segue para o gestor decidir
     assert _conta_alunos(db, esc.id) == antes
@@ -157,7 +158,7 @@ def test_aluno_de_fora_do_roster_nao_rouba_candidato_existente(db):
     """Um nome que NÃO subconjunta ninguém não é colado no aluno existente — vira novo
     (ou revisão), nunca 'rouba' a LIVIA."""
     esc, turma, livia, _ = _cenario(db)
-    r = _resolver_aluno(db, esc.id, 2026,
+    r = _resolver_aluno(db, esc.id, ANO,
                         _linha("MARIANA COSTA LIMA", "5 ANO B"), [], {}, {})
     assert r is not None and r.id != livia.id and r.nome == "MARIANA COSTA LIMA"
 
@@ -189,7 +190,7 @@ def test_subconjunto_vinculado_fica_auditado_como_parcial(db):
     (scripts/diagnostico_dimensao_zero.py --subconjunto)."""
     from app.models import LogAuditoria
     esc, turma, livia, _ = _cenario(db)
-    _resolver_aluno(db, esc.id, 2026,
+    _resolver_aluno(db, esc.id, ANO,
                     _linha("LIVIA FIORELLI", "5 ANO B",
                            dados={"matific_uuid": "u-livia"}), [], {}, {})
     db.flush()
@@ -214,12 +215,12 @@ def test_preview_igual_confirmacao_com_homonimo_arquivado(db):
     arq = Aluno(escola_id=esc.id, nome="LIVIA FIORELLI SANTOS", status="arquivado")
     db.add(arq)
     db.flush()
-    db.add(_Matricula(escola_id=esc.id, aluno_id=arq.id, turma_id=turma.id, ano_letivo=2026))
+    db.add(_Matricula(escola_id=esc.id, aluno_id=arq.id, turma_id=turma.id, ano_letivo=ANO))
     db.commit()
 
     # "LIVIA FIORELLI" é subconjunto dos DOIS → 2 candidatos no roster completo.
     # CONFIRMAÇÃO: não vincula (revisão).
-    r = _resolver_aluno(db, esc.id, 2026,
+    r = _resolver_aluno(db, esc.id, ANO,
                         _linha("LIVIA FIORELLI", "5 ANO B",
                                dados={"matific_uuid": "u-x"}), [], {}, {})
     assert r is None

@@ -3,7 +3,8 @@
  * por rede, escola e série escolar, no período escolhido. Nunca há dado de aluno:
  * a célula com poucos alunos chega SUPRIMIDA do backend (com o texto único da
  * supressão) e a tela diz isso; métrica sem dado é "sem dado no período" (ou o
- * motivo), nunca 0.
+ * motivo), nunca 0. O cartão inteiro sem número por proteção (poucos alunos medidos)
+ * diz "Protegido", não "Sem dado" (`numeroProtegido`).
  *
  * O DENOMINADOR é o dos alunos que a plataforma conhece no período (`alunos_medidos`:
  * no Elefante, quem tem conta; no Matific, quem tem coleta no período) — o mesmo do
@@ -21,7 +22,7 @@ import { TabelaRolavel } from "../../components/TabelaRolavel";
 import { IconePastel } from "../../components/ui";
 import { Recolhivel } from "./DetalhesFonte";
 import { TD, TH } from "./comum";
-import { decimal, diaBR, rotuloSerie } from "./formato";
+import { decimal, diaBR, numeroProtegido, rotuloSerie } from "./formato";
 import type {
   CoberturaDoBloco, CoberturaPlataformas as Cobertura, EscolaDaRede, EscolaPlataformas, MetricasElefante,
   MetricasMatific, SeriePlataforma,
@@ -127,6 +128,15 @@ function semDado(m: { texto_sem_dado?: string | null; motivo_sem_dado?: string |
   return m.texto_sem_dado ?? (m.motivo_sem_dado ? SEM_DADO : null);
 }
 
+/** O cartão sem número, com o nome certo: "Protegido: …" quando o número existe e não aparece,
+ *  para proteger as crianças (poucos alunos medidos, todas as séries pequenas — `numeroProtegido`,
+ *  a mesma regra da situação de uso da ficha e da tela Escolas); "Sem dado do …" quando falta de
+ *  verdade (sem coleta, sem conta). */
+function semNumero(m: MetricasElefante | MetricasMatific | null, porque: string | null, plataforma: string): string {
+  const texto = porque ?? SEM_DADO;
+  return numeroProtegido(m) ? `Protegido: ${texto}.` : `Sem dado do ${plataforma}: ${texto}.`;
+}
+
 /** Os dois cartões (Elefante e Matific) de um recorte: rede inteira, escola ou série. */
 export function CartoesPlataformas({
   alunos, elefante, matific, modulos, suprimido, textoSupressao, textoBlocos, nivelTitulo = 4,
@@ -187,7 +197,7 @@ export function CartoesPlataformas({
                 <ColetaParcial bloco={elefante} testId="coleta-parcial-elefante" />
               </>
             ) : (
-              <p className={`text-xs ${CINZA}`}>Sem dado do Elefante: {semElefante ?? SEM_DADO}.</p>
+              <p className={`text-xs ${CINZA}`}>{semNumero(elefante, semElefante, "Elefante")}</p>
             )}
           </Plataforma>
         )}
@@ -213,7 +223,7 @@ export function CartoesPlataformas({
                 <ColetaParcial bloco={matific} testId="coleta-parcial-matific" />
               </>
             ) : (
-              <p className={`text-xs ${CINZA}`}>Sem dado do Matific: {semMatific ?? SEM_DADO}.</p>
+              <p className={`text-xs ${CINZA}`}>{semNumero(matific, semMatific, "Matific")}</p>
             )}
           </Plataforma>
         )}

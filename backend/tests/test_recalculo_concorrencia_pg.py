@@ -348,24 +348,19 @@ def test_trava_do_recalculo_e_solta_no_commit(motor_pg, escola_pg, monkeypatch):
             "a trava sobreviveu ao commit — escola travada até a conexão morrer")
 
 
-def test_hierarquia_nunca_pega_4713_segurando_4711(motor_pg, escola_pg,
-                                                   monkeypatch):
-    """A regra que impede DEADLOCK ENTRE TRAVAS: o recálculo (4713) nunca pode
-    ser pedido por uma transação que ainda segura a de importação (4711).
-
-    Prova no caminho real: ``importacoes.confirmar`` (que adquire 4711) até o
-    recálculo do fim — inspecionando ``pg_locks`` DE DENTRO da transação."""
+def test_confirmar_recalcula_com_a_trava_compartilhada(motor_pg, escola_pg, monkeypatch):
+    """A importação comita. O cálculo seguinte protege sua população e notas."""
     from app.routers import importacoes as imp
     from app.schemas.importacao import ImportacaoConfirm
 
     escola_id = escola_pg["escola_id"]
-    segurados: list[list[int]] = []
+    segurados: list[dict[int, str]] = []
     contexto_real = scoring._carregar_contexto
 
     def _contexto(db, eid):
-        segurados.append(sorted(db.execute(text(
-            "SELECT DISTINCT classid FROM pg_locks WHERE locktype='advisory' "
-            "AND pid = pg_backend_pid()")).scalars()))
+        segurados.append(dict(db.execute(text(
+            "SELECT classid, mode FROM pg_locks WHERE locktype='advisory' "
+            "AND granted AND pid = pg_backend_pid()")).all()))
         return contexto_real(db, eid)
 
     monkeypatch.setattr(scoring, "_carregar_contexto", _contexto)
@@ -381,8 +376,32 @@ def test_hierarquia_nunca_pega_4713_segurando_4711(motor_pg, escola_pg,
             escola_id=escola_id, usuario=usuario, db=db)
 
     assert segurados, "o recálculo do /confirmar nem rodou"
-    for travas in segurados:
-        assert _NS_RECALCULO in travas, "o recálculo rodou SEM a trava 4713"
-        assert _NS_IMPORTACAO not in travas, (
-            "4713 pedida ainda segurando 4711 — hierarquia violada, "
-            "duas travas em ordens opostas = deadlock entre travas")
+    assert segurados == [{_NS_IMPORTACAO: "ShareLock", _NS_RECALCULO: "ExclusiveLock"}]
+
+
+def test_recalcular_rele_o_ano_armazenado_apos_a_autorizacao(motor_pg, escola_pg):
+    escola_id = escola_pg["escola_id"]
+    with Session(motor_pg, autoflush=False) as calculo:
+        escola_em_memoria = calculo.get(Escola, escola_id)
+        assert escola_em_memoria.ano_letivo_ativo == 2026
+        with Session(motor_pg) as virada:
+            virada.get(Escola, escola_id).ano_letivo_ativo = 2027
+            virada.commit()
+
+        assert scoring.recalcular_escola(calculo, escola_id, commit=False) == 0
+        assert escola_em_memoria.ano_letivo_ativo == 2027
+        assert calculo.scalar(select(func.count()).select_from(Nota).where(
+            Nota.escola_id == escola_id)) == 0
+
+
+def test_recalcular_preserva_o_ano_alterado_na_propria_transacao(motor_pg, escola_pg):
+    escola_id = escola_pg["escola_id"]
+    with Session(motor_pg, autoflush=False) as calculo:
+        escola = calculo.get(Escola, escola_id)
+        escola.ano_letivo_ativo = 2027
+
+        assert scoring.recalcular_escola(calculo, escola_id, commit=False) == 0
+        assert escola.ano_letivo_ativo == 2027
+        calculo.commit()
+    with Session(motor_pg) as leitura:
+        assert leitura.get(Escola, escola_id).ano_letivo_ativo == 2027

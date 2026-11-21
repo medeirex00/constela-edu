@@ -32,6 +32,7 @@ import { useApp } from "../context/AppContext";
 import { useApi } from "../hooks/useApi";
 import { useJanela } from "../hooks/useJanela";
 import { useModulos } from "../hooks/useModulos";
+import { useCalendarioBimestres } from "../lib/calendarioBimestres";
 import { nomeArquivoCsv, type TabelaCsv } from "../lib/csvRanking";
 import { nota, numero } from "../lib/formato";
 import { bimestreDoPeriodo } from "../lib/tiposCertificados";
@@ -45,48 +46,54 @@ interface ItemEvolucao {
   turma: string;
   ano_escolar: string;
   nota_evolucao: number;
-  ganhos: {
+  ganhos: Partial<{
     atividades: number;
     estrelas: number;
     livros: number;
     tempo_leitura_min: number;
     acertos: number;
-  };
+  }>;
 }
 
 /** Os ganhos exibidos (os mesmos de antes), com o tom da plataforma de cada um. */
 const GANHOS: {
   chave: keyof ItemEvolucao["ganhos"];
+  dimensao: Dimensao;
+  colunaCsv: string;
   rotulo: string;
   /** Rótulo quando o ganho é exatamente 1 ("+1 livro", não "+1 livros"). */
   singular: string;
   icone: LucideIcon;
   tom: string;
 }[] = [
-  { chave: "atividades", rotulo: "atividades", singular: "atividade", icone: Calculator,
+  { chave: "atividades", dimensao: "matematica", colunaCsv: "Atividades (+)",
+    rotulo: "atividades", singular: "atividade", icone: Calculator,
     tom: "bg-teal-50 text-teal-700 dark:bg-teal-500/15 dark:text-teal-300" },
-  { chave: "livros", rotulo: "livros", singular: "livro", icone: BookOpen,
+  { chave: "livros", dimensao: "leitura", colunaCsv: "Livros (+)",
+    rotulo: "livros", singular: "livro", icone: BookOpen,
     tom: "bg-indigo-50 text-indigo-700 dark:bg-indigo-500/15 dark:text-indigo-300" },
-  { chave: "estrelas", rotulo: "estrelas", singular: "estrela", icone: Star,
+  { chave: "estrelas", dimensao: "matematica", colunaCsv: "Estrelas (+)",
+    rotulo: "estrelas", singular: "estrela", icone: Star,
     tom: "bg-ouro-50 text-ouro-700 dark:bg-ouro-400/15 dark:text-ouro-300" },
-  { chave: "acertos", rotulo: "acertos", singular: "acerto", icone: CheckCircle2,
+  { chave: "acertos", dimensao: "leitura", colunaCsv: "Acertos (+)",
+    rotulo: "acertos", singular: "acerto", icone: CheckCircle2,
     tom: "bg-emerald-50 text-emerald-700 dark:bg-emerald-500/15 dark:text-emerald-300" },
 ];
-
-/** Ganhos positivos do aluno, com o rótulo já no número certo (singular só no 1). */
-const ganhosDe = (item: ItemEvolucao) =>
-  GANHOS.filter((g) => (item.ganhos?.[g.chave] ?? 0) > 0).map((g) => {
-    const valor = item.ganhos[g.chave];
-    return { ...g, valor, rotulo: valor === 1 ? g.singular : g.rotulo };
-  });
 
 export default function RankingEvolucao({ embutido = false, alvoAcoes }: {
   embutido?: boolean;
   /** Espaço de ações do cabeçalho da tela Ranking (os botões vão para lá). */
   alvoAcoes?: HTMLElement | null;
 } = {}) {
-  const { escolaId, periodo, definirPeriodo, turno, definirTurno } = useApp();
-  const { tem } = useModulos();
+  const { escolaId, escolaAtual, periodo, definirPeriodo, turno, definirTurno } = useApp();
+  const { modulos } = useModulos();
+  const plano = escolaAtual?.modulos ?? modulos;
+  const dimensoes = (["leitura", "matematica"] as const).filter((d) => plano.includes(d));
+  const ganhosNoPlano = GANHOS.filter((g) => plano.includes(g.dimensao));
+  const ganhosDe = (item: ItemEvolucao) => ganhosNoPlano.flatMap((g) => {
+    const valor = item.ganhos?.[g.chave] ?? 0;
+    return valor > 0 ? [{ ...g, valor, rotulo: valor === 1 ? g.singular : g.rotulo }] : [];
+  });
   const [alvo, setAlvo] = useState<AlvoRanking>({});
 
   // Turmas alimentam apenas os filtros; na falha caímos para lista vazia.
@@ -94,6 +101,9 @@ export default function RankingEvolucao({ embutido = false, alvoAcoes }: {
     escolaId ? `/escolas/${escolaId}/turmas` : null, { cacheMs: 60_000 });
   const turmas = turmasDados ?? [];
   const turnoAtivo = turnoEfetivo(turno, turmasDados);
+  // Calendário oficial do ano, do backend: sem ele a web só conhece 2026 (o número de
+  // "Este bimestre" e o bimestre do lote de "Bimestre passado" sumiam de 2027 em diante).
+  const calendario = useCalendarioBimestres(escolaId);
 
   const parametros = new URLSearchParams(periodoParaQuery(periodo));
   if (alvo.turma_id) parametros.set("turma_id", alvo.turma_id);
@@ -106,7 +116,7 @@ export default function RankingEvolucao({ embutido = false, alvoAcoes }: {
   // Janelamento: em escolas grandes só as primeiras linhas entram no DOM.
   const { visiveis, restantes, mostrarMais } = useJanela(lista);
 
-  const rotuloPeriodo = rotuloDoPeriodo(periodo);
+  const rotuloPeriodo = rotuloDoPeriodo(periodo, new Date(), calendario);
   const turmaEscolhida = alvo.turma_id ? turmas.find((x) => String(x.id) === alvo.turma_id)?.nome : null;
   const recorte = [
     turmaEscolhida ?? (alvo.ano_escolar ? `${alvo.ano_escolar} (todas as turmas)` : null),
@@ -115,13 +125,20 @@ export default function RankingEvolucao({ embutido = false, alvoAcoes }: {
 
   const csv: TabelaCsv | null = lista.length === 0 ? null : {
     nomeArquivo: nomeArquivoCsv(`ranking-evolucao-${rotuloPeriodo}${recorte ? `-${recorte}` : ""}`),
-    cabecalho: ["Posição", "Aluno", "Turma", "Atividades (+)", "Livros (+)", "Estrelas (+)", "Acertos (+)", "Evolução"],
+    cabecalho: ["Posição", "Aluno", "Turma", ...ganhosNoPlano.map((g) => g.colunaCsv), "Evolução"],
     linhas: lista.map((item) => [
       item.posicao, item.nome, item.turma ?? "",
-      item.ganhos?.atividades ?? 0, item.ganhos?.livros ?? 0, item.ganhos?.estrelas ?? 0, item.ganhos?.acertos ?? 0,
+      ...ganhosNoPlano.map((g) => item.ganhos?.[g.chave] ?? 0),
       nota(item.nota_evolucao),
     ]),
   };
+
+  // Só sobe ao pódio e recebe certificado de evolução quem CRESCEU (> 0), a regra do
+  // telão e das Premiações: num período em que ninguém cresceu, os primeiros empatam
+  // em 0,0 e a ordem entre eles é só o desempate alfabético — não há o que celebrar.
+  // A API ordena pela evolução (maior primeiro), então quem cresceu é o começo da
+  // lista, na mesma ordem e com a mesma posição. A tabela continua com todos.
+  const cresceram = lista.filter((item) => item.nota_evolucao > 0);
 
   const acoes = (
     <AcoesRanking
@@ -129,21 +146,25 @@ export default function RankingEvolucao({ embutido = false, alvoAcoes }: {
       embutido={embutido}
       csv={csv}
       certificados={{
-        alunos: lista.map((item) => ({
+        alunos: cresceram.map((item) => ({
           aluno_id: item.aluno_id, nome: item.nome, turma: item.turma, posicao: item.posicao,
         })),
         // Evolução não tem arte própria: abre no Geral, e o modal deixa trocar.
         modeloInicial: null,
-        contexto: `Ranking de Evolução · ${rotuloPeriodo}${recorte ? ` · ${recorte}` : ""}`,
+        contexto: `Ranking de Evolução · quem cresceu · ${rotuloPeriodo}${recorte ? ` · ${recorte}` : ""}`,
+        // A tabela mostra todos, com 0,0 de quem não cresceu: "Não há alunos nesta lista"
+        // seria falso ao lado dela (DEC-20).
+        semAlunos: "Ninguém cresceu no período: não há certificado de evolução a gerar.",
         // Evolução dentro de um bimestre: trocando para uma arte de plataforma, o
         // bimestre impresso abre nele, não no de hoje.
-        bimestreInicial: bimestreDoPeriodo(periodo.preset),
+        bimestreInicial: bimestreDoPeriodo(periodo.preset, new Date(), calendario),
       }}
     />
   );
 
-  // Pódio: a nota de evolução (o que ordena), com os ganhos reais do período.
-  const podio: ItemPodio[] = itensDoPodio(lista).map((item) => ({
+  // Pódio: a nota de evolução (o que ordena), com os ganhos reais do período, só de
+  // quem cresceu (ver `cresceram` acima).
+  const podio: ItemPodio[] = itensDoPodio(cresceram).map((item) => ({
     chave: item.aluno_id,
     posicao: item.posicao,
     nome: item.nome,
@@ -152,8 +173,6 @@ export default function RankingEvolucao({ embutido = false, alvoAcoes }: {
     destaque: { valor: nota(item.nota_evolucao), unidade: "de evolução" },
     metricas: ganhosDe(item).slice(0, 3).map((g) => ({ rotulo: g.rotulo, valor: `+${numero(g.valor)}` })),
   }));
-
-  const dimensoes = (["leitura", "matematica"] as Dimensao[]).filter((d) => tem(d));
 
   return (
     <div>
@@ -173,7 +192,19 @@ export default function RankingEvolucao({ embutido = false, alvoAcoes }: {
 
       {/* A evolução é medida entre retratos: se a última coleta é antiga, o
           crescimento "do período" pode simplesmente não ter sido coletado. */}
-      <SeloFrescorDaEscola dimensoes={["leitura", "matematica"]} />
+      <SeloFrescorDaEscola dimensoes={dimensoes} />
+
+      {/* No ano inteiro não há acumulado anterior a descontar (serviço evolucao._janela):
+          o ganho é o total do ano e o pódio coincide com o do Ranking Geral. */}
+      {periodo.preset === "ano_letivo" && (
+        <p
+          role="note"
+          className="mb-4 rounded-2xl border border-indigo-100 bg-indigo-50/40 p-3 text-sm text-indigo-900 dark:border-indigo-500/20 dark:bg-indigo-500/5 dark:text-indigo-200"
+        >
+          No ano letivo inteiro todos os alunos partem do zero, por isso esta lista fica igual à do
+          Ranking Geral. Para ver quem mais cresceu, escolha um bimestre ou um mês.
+        </p>
+      )}
 
       <Card className="overflow-hidden">
         <CabecalhoCartao
@@ -256,9 +287,9 @@ function AjudaEvolucao() {
         crescimento do período pode ainda não ter chegado (veja a data no selo).
       </li>
       <li>
-        O nome do aluno abre a evolução dele. Em “Gerar certificados”, o modelo começa no Geral
-        (que imprime a posição do Ranking Geral, não a desta lista); dá para trocar pela arte de
-        uma plataforma.
+        O nome do aluno abre a evolução dele. Em “Gerar certificados” entram só os alunos que
+        cresceram no período, como no pódio. O modelo começa no Geral (que imprime a posição do
+        Ranking Geral, não a desta lista); dá para trocar pela arte de uma plataforma.
       </li>
     </ul>
   );

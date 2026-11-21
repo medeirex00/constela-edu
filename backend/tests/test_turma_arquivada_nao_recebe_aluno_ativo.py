@@ -248,7 +248,10 @@ def test_transferir_e_reativar_tomam_a_trava_do_arquivamento_antes_de_ler(
     assert _acoes(cliente, eid, acao="arquivar", aluno_ids=ids).status_code == 200
     eventos.clear()
     assert _acoes(cliente, eid, acao="reativar", aluno_ids=ids).status_code == 200
-    assert eventos == ["trava"]
+    # Toda ação em massa toma a trava antes de ler os alunos (revisão final: a ficha
+    # fundida no meio); a recusa do "Reativar" a toma de novo — no PostgreSQL o
+    # pg_advisory_xact_lock é reentrante na mesma transação.
+    assert eventos == ["trava", "trava"]
 
 
 # --- (d) corrigir turmas duplicadas -------------------------------------------

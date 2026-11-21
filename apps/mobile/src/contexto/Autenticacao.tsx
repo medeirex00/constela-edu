@@ -15,6 +15,7 @@ import {
   useCallback,
   useContext,
   useEffect,
+  useRef,
   useState,
   type ReactNode,
 } from "react";
@@ -23,7 +24,12 @@ import { aoExpirarSessao } from "../api";
 import { esquecerChave } from "../armazenamento/cifra";
 import { lerSessao, limparSessao, salvarSessao, type SessaoSalva } from "../armazenamento/sessao";
 import { clienteQuery, persistidor } from "../cliente-query";
-import { registrarParaPush, removerRegistroPush } from "../notificacoes";
+import {
+  descadastrarPendente,
+  ligarDescadastroAReconexao,
+  registrarParaPush,
+  removerRegistroPush,
+} from "../notificacoes";
 
 interface ContextoAutenticacao {
   usuario: Usuario | null;
@@ -42,7 +48,10 @@ export function ProvedorAutenticacao({ children }: { children: ReactNode }) {
   const [escolas, setEscolas] = useState<Escola[]>([]);
   const [escolaId, setEscolaId] = useState<number | null>(null);
   const [carregando, setCarregando] = useState(true);
-  const [tokenPush, setTokenPush] = useState<string | null>(null);
+  // Muda a cada sessão encerrada: uma resposta da rede que chega DEPOIS do "Sair"
+  // (um refresh do boot que estava pendurado) não pode pôr a sessão de volta.
+  const geracao = useRef(0);
+  const limpezaLocal = useRef<Promise<void> | null>(null);
 
   // Toda mudança de sessão é persistida CIFRADA — é o que permite o boot offline.
   useEffect(() => {
@@ -57,42 +66,65 @@ export function ProvedorAutenticacao({ children }: { children: ReactNode }) {
 
   // Refresh a partir da REDE. Mantém a escola atual se ainda válida.
   const atualizarSessao = useCallback(async (preferidaId: number | null) => {
+    const desta = geracao.current;
     const [eu, lista] = await Promise.all([
       api<Usuario>("/auth/me"),
       api<Escola[]>("/escolas"),
     ]);
+    if (desta !== geracao.current) return; // a sessão acabou enquanto esperava a rede
     const valido = preferidaId !== null && lista.some((escola) => escola.id === preferidaId);
     const escolhido = valido ? preferidaId : lista[0]?.id ?? null;
     setUsuario(eu);
     setEscolas(lista);
     setEscolaId(escolhido);
-    if (escolhido !== null) registrarParaPush(escolhido).then(setTokenPush);
+    // O token registrado fica guardado no aparelho (notificacoes.ts): o "Sair" o
+    // encontra mesmo numa abertura sem rede, quando este registro não roda.
+    if (escolhido !== null) void registrarParaPush(escolhido);
   }, []);
 
   // Encerra a sessão LOCAL: estado, sessão salva, cache das telas e chave de
   // cifra (rotacionada para o cache antigo virar ilegível num aparelho partilhado).
-  const encerrarLocal = useCallback(async () => {
+  const encerrarLocal = useCallback(() => {
+    if (limpezaLocal.current) return limpezaLocal.current;
+    geracao.current += 1;
+    // Marca o descadastro antes de exibir o formulário da conta seguinte.
+    const descadastro = removerRegistroPush();
     setUsuario(null);
     setEscolas([]);
     setEscolaId(null);
-    setTokenPush(null);
     clienteQuery.clear();
-    await Promise.allSettled([limparSessao(), persistidor.removeClient()]);
-    await esquecerChave();
+    const limpeza = (async () => {
+      await Promise.allSettled([limparSessao(), persistidor.removeClient()]);
+      await esquecerChave();
+      await descadastro;
+    })().finally(() => { limpezaLocal.current = null; });
+    limpezaLocal.current = limpeza;
+    return limpeza;
   }, []);
 
   useEffect(() => {
-    // Token inválido/expirado (401 no cliente HTTP): aí sim desloga de fato.
+    // Token inválido/expirado (401 no cliente HTTP): aí sim desloga de fato — e o
+    // aparelho sai do push, como no "Sair".
     aoExpirarSessao(() => {
-      void limparToken();
-      void encerrarLocal();
+      void encerrarLocal().catch(() => undefined);
     });
+
+    // Descadastro do push que ficou pendente (saída sem rede): tenta agora e a
+    // cada volta da rede.
+    void descadastrarPendente();
+    const desligarReconexao = ligarDescadastroAReconexao();
 
     (async () => {
       try {
         if (!(await obterToken())) return; // sem token → tela de login
         const salva = await lerSessao();
-        if (salva) aplicarSessao(salva); // abre offline na hora, com o cache
+        if (salva) {
+          // Abre na hora, com o cache: o refresh abaixo segue em segundo plano. A
+          // rede pode não responder por minutos (o fetch do React Native não tem
+          // tempo-limite) e a tela não espera por ela.
+          aplicarSessao(salva);
+          setCarregando(false);
+        }
         // Refresh da rede. Se falhar por ESTAR OFFLINE, seguimos com o cache
         // (o catch não desloga); só o 401 (acima) encerra a sessão.
         await atualizarSessao(salva?.escolaId ?? null);
@@ -103,10 +135,12 @@ export function ProvedorAutenticacao({ children }: { children: ReactNode }) {
         setCarregando(false);
       }
     })();
+    return desligarReconexao;
   }, [aplicarSessao, atualizarSessao, encerrarLocal]);
 
   const entrar = useCallback(
     async (email: string, senha: string) => {
+      await limpezaLocal.current;
       const resposta = await loginRequest(email, senha);
       await guardarToken(resposta.access_token);
       await atualizarSessao(null);
@@ -114,11 +148,13 @@ export function ProvedorAutenticacao({ children }: { children: ReactNode }) {
     [atualizarSessao],
   );
 
+  // Primeiro a sessão LOCAL (token, dados salvos, tela), que não depende da rede;
+  // depois o push: o descadastro fica marcado no aparelho e vai ao servidor em
+  // segundo plano (notificacoes.ts) — uma rede pendurada não segura a saída.
   const sair = useCallback(async () => {
-    if (escolaId !== null) await removerRegistroPush(escolaId, tokenPush);
     await limparToken();
     await encerrarLocal();
-  }, [escolaId, tokenPush, encerrarLocal]);
+  }, [encerrarLocal]);
 
   const selecionarEscola = useCallback((id: number) => {
     setEscolaId(id); // o efeito de persistência salva a sessão com a nova escola

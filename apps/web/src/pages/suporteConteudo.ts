@@ -41,6 +41,10 @@ export const SINCRONIZACAO_GESTAO: Pergunta[] = [
     resposta: "A plataforma mandou dados, mas nenhuma conta já ligada a um aluno da escola veio na coleta: todas as linhas ficaram em Dados e integrações › Revisões de identidade. Isso não conta como dado em dia — passado o prazo da agenda, aparece “Dados desatualizados”. Se a escola já tinha alunos ligados, confira primeiro em “Configurar conexão” se o acesso cadastrado é o desta escola (o acesso de outra escola dá exatamente isso) e não resolva as revisões antes. Se é a primeira coleta, confirme que os nomes são desta escola e resolva as revisões.",
   },
   {
+    pergunta: "Sem atualização: tempo ou questões não vieram",
+    resposta: "A última coleta terminou sem erro e nenhum aluno foi atualizado, mas a plataforma deixou de mandar parte dos números (tempo de leitura ou questões). Eles ficaram com o valor da coleta anterior, e sincronizar de novo não os traz de volta: quem resolve é a equipe do Constela, ajustando a coleta dessa plataforma. O alerta “Formato do relatório mudou”, no mesmo cartão, diz quais números faltaram; avise o suporte. Se faltaram as questões, o Relatório por Período avisa que essa coleta não as mediu, em vez de mostrar zero.",
+  },
+  {
     pergunta: "Dados desatualizados",
     resposta: "Não há sincronização bem-sucedida recente (o selo mostra há quanto tempo; a frase, desde quando). Se a frase disser que a atualização automática está “pausada no servidor”, os dados só chegam quando alguém clica em “Sincronizar”. Confira a conexão e a agenda em “Configurar conexão” e use “Sincronizar agora”.",
   },
@@ -49,12 +53,16 @@ export const SINCRONIZACAO_GESTAO: Pergunta[] = [
     resposta: "O selo diz o tipo da falha. Senha recusada ou expirada: corrija em “Configurar conexão”. Plataforma fora do ar ou bloqueando o acesso: tente mais tarde ou envie o relatório manualmente. Erro ao processar: sincronize de novo; se continuar, copie o detalhe técnico da falha para o suporte.",
   },
   {
+    pergunta: "Falhou: escola sem administrador ou coordenador ativo",
+    resposta: "A sincronização automática grava os dados em nome de um administrador ou coordenador ativo da escola. Sem nenhum, ela nem começa e nada foi coletado: não é problema da senha nem da plataforma. Cadastre ou reative um em Minha Escola › Usuários e peça a sincronização de novo.",
+  },
+  {
     pergunta: "Coleta indisponível neste servidor",
     resposta: "O servidor não consegue abrir a plataforma para coletar (por exemplo, o navegador automático não está disponível). Não é problema da senha da escola: envie o relatório manualmente e avise o suporte.",
   },
   {
     pergunta: "O aluno não aparece, ou a conta dele não foi ligada",
-    resposta: "Os casos claros são ligados sozinhos. Quando há dúvida (dois alunos parecidos, nome que só casa em outra turma, duas contas para a mesma ficha), a linha vai para Dados e integrações › Revisões de identidade; escolhida a ficha, as próximas sincronizações já ligam aquela conta sozinhas — uma linha descartada volta se a plataforma mandá-la de novo. Se a escola permite que a sincronização crie fichas, um nome sem nenhum candidato vira ficha nova: junte-a à certa em Minha Escola › Alunos › “Fundir duplicatas”.",
+    resposta: "Os casos claros são ligados sozinhos. Quando há dúvida (dois alunos parecidos, nome que só casa em outra turma, duas contas para a mesma ficha), a linha vai para Dados e integrações › Revisões de identidade; escolhida a ficha, as próximas sincronizações já ligam aquela conta sozinhas — uma linha descartada volta se a plataforma mandá-la de novo. Se a escola permite que a sincronização crie fichas, um nome sem nenhum candidato vira ficha nova: junte-a à certa em Minha Escola › Alunos › “Fundir duplicatas”. A exceção é o nome abreviado (como “ZEFA Q”) e duas contas com o mesmo nome na mesma sincronização: essas linhas não viram ficha e esperam em Revisões de identidade.",
   },
 ];
 
@@ -97,7 +105,7 @@ const FAQ_GESTAO_BASE: Pergunta[] = [
   },
   {
     pergunta: "O certificado de um aluno não sai.",
-    resposta: "A tela diz o motivo: aluno arquivado, transferido ou fora da Lista Piloto, turma de Educação Infantil, ficha ainda não confirmada pela Lista Piloto ou, no certificado “Geral”, aluno ainda sem nota. Para confirmar a ficha, use Dados e integrações › Integrações › “Atualizar Lista Piloto”, ou funda a ficha repetida em Minha Escola › Alunos › “Fundir duplicatas”.",
+    resposta: "A tela diz o motivo: aluno arquivado, transferido ou fora da Lista Piloto, turma de Educação Infantil, ficha ainda não confirmada pela Lista Piloto ou, no certificado “Geral”, aluno ainda sem nota. Para confirmar a ficha, importe ou atualize a Lista Piloto em Dados e integrações › Integrações (botão “Importar Lista Piloto” ou “Atualizar Lista Piloto”), ou funda a ficha repetida em Minha Escola › Alunos › “Fundir duplicatas”.",
   },
   {
     pergunta: "Como premio um bimestre que já terminou?",
@@ -125,7 +133,7 @@ const FAQ_GESTAO_BASE: Pergunta[] = [
   },
   {
     pergunta: "Dá para usar no celular?",
-    resposta: "Sim, pelo navegador, no mesmo endereço. Em tela pequena, o menu abre pelo botão de três linhas no canto superior esquerdo; a pesquisa do topo e algumas colunas só aparecem em telas maiores.",
+    resposta: "Sim, pelo navegador, no mesmo endereço. Em tela pequena, o menu abre pelo botão de três linhas no canto superior esquerdo e a pesquisa continua no topo; a linha do topo que mostra em que página você está e algumas colunas das tabelas só aparecem em telas maiores.",
   },
 ];
 

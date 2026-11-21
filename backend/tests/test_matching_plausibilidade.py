@@ -240,17 +240,27 @@ def test_previa_typo_primeiro_nome_mostra_revisar(db):
 
 
 def test_previa_bloqueado_por_conflito_de_identidade(db):
-    """PONTO 2: nome casa (M. EDUARDA → MARIA EDUARDA) mas o nascimento diverge →
-    prévia mostra 'bloqueado' (não vincula; cria como criança diferente)."""
+    """PONTO 2: nome casa mas o nascimento diverge → prévia mostra 'bloqueado'
+    (não vincula; cria como criança diferente).
+
+    Com o nome ABREVIADO (M. EDUARDA → MARIA EDUARDA) continua sem vincular, mas,
+    desde a trava de nome abreviado (A2), a criança diferente não nasce com esse
+    nome: a prévia mostra 'revisar' (nome_incompleto)."""
     esc, turma = _escola_turma(db)
     m = _matricular(db, esc, turma, "MARIA EDUARDA SILVA")
     m.data_nascimento = date(2016, 5, 1)
     db.commit()
-    linhas = [svc.LinhaImportacao(numero=1, nome="M. EDUARDA",
+    linhas = [svc.LinhaImportacao(numero=1, nome="MARIA EDUARDA SILVA",
+                                  dados={"turma_relatorio": "5ºA",
+                                         "data_nascimento": "2017-09-20"}),
+              svc.LinhaImportacao(numero=2, nome="M. EDUARDA",
                                   dados={"turma_relatorio": "5ºA",
                                          "data_nascimento": "2017-09-20"})]
     svc.casar_nomes(db, esc.id, linhas)
     assert linhas[0].correspondencia["status"] == "bloqueado"
+    assert linhas[1].correspondencia["status"] == "revisar"
+    assert linhas[1].correspondencia["motivo"] == "nome_incompleto"
+    assert linhas[1].correspondencia["aluno_id"] is None     # nada é vinculado
 
 
 def test_inicial_primeiro_nome_reimport_idempotente(db):

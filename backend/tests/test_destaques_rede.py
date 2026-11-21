@@ -58,8 +58,11 @@ def _escola(db, rede, nome, criancas, *, status="ativa"):
                                 data_referencia=QUANDO, livros_unicos=livros,
                                 tempo_leitura_min=tempo, questoes_tentativas=0,
                                 questoes_acertos=0, livros_por_nivel={}))
+        # Atividades bastantes para as estrelas caberem no teto (5 por atividade):
+        # acima dele, a rede soma só as que contam.
         db.add(SnapshotMatific(escola_id=escola.id, aluno_id=aluno.id, importacao_id=imp.id,
-                               data_referencia=QUANDO, atividades=10 if estrelas else 0,
+                               data_referencia=QUANDO,
+                               atividades=max(10, -(-estrelas // 5)) if estrelas else 0,
                                estrelas=estrelas))
     db.flush()
     return escola

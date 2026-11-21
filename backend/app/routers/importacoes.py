@@ -4,6 +4,7 @@ Fluxo em duas etapas: `analisar` devolve a prévia (nada é gravado) e
 `confirmar` grava somente as linhas aprovadas pelo usuário, registrando
 tudo em `importacoes` e guardando o arquivo original em /uploads (§15).
 """
+import itertools
 import json
 import logging
 import re
@@ -16,6 +17,7 @@ from pathlib import Path
 
 from fastapi import (
     APIRouter,
+    BackgroundTasks,
     Depends,
     File,
     Form,
@@ -24,11 +26,12 @@ from fastapi import (
     UploadFile,
     status,
 )
+from pydantic import PrivateAttr
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
-from starlette.concurrency import run_in_threadpool
 
+from app.core import expurgo_arquivos
 from app.core.config import settings
 from app.core.database import bloquear_escola_para_importacao, get_db
 from app.core.deps import escola_autorizada, exigir_papeis
@@ -68,13 +71,16 @@ from app.schemas.importacao import (
 )
 from app.services import elegibilidade, identidade_aluno as ida
 from app.services import importacao as svc
-from app.services import lista_piloto, matching, matriculas, perfis_pdf, planilhas
-from app.services import dificuldade_livro, professores, push, scoring
+from app.services import lista_piloto, matching, matific_destaque, matriculas, perfis_pdf, planilhas
+from app.services import dificuldade_livro, livros_homonimos_saneamento
+from app.services import professores, push, scoring
 from app.services import identidade_efetiva, politica_sync, triagem_revisoes
 from app.services import turma_arquivada
 from app.services import modulos as svc_modulos
 from app.services.audit import registrar
+from app.services.codificacao import ILEGIVEL, decodificar_texto
 from app.models.base import agora
+from app.models.plataformas import IMPORTACAO_SEM_QUESTOES
 
 router = APIRouter(prefix="/escolas/{escola_id}/importacoes", tags=["Importações"])
 
@@ -85,35 +91,38 @@ logger_sync = logging.getLogger("constela.sync")
 
 def _num(valor, tipo):
     """Coerção de um valor NUMÉRICO vindo do payload do cliente: um valor não
-    numérico (cliente adulterado, bug de front) vira 400, não 500."""
+    numérico (cliente adulterado, bug de front) vira 400, não 500. O valor não finito
+    (``Infinity`` estourava o ``int``) ou acima de ``svc.VALOR_MAXIMO`` (o RA caído na
+    coluna de atividades estourava o ``integer`` do PostgreSQL) também."""
     try:
-        return tipo(valor)
-    except (ValueError, TypeError) as erro:
+        numero = tipo(valor)
+    except (ValueError, TypeError, OverflowError) as erro:
         raise HTTPException(
             status.HTTP_400_BAD_REQUEST,
             "O relatório contém um valor numérico inválido.",
         ) from erro
+    if not svc.valor_plausivel(numero):
+        raise HTTPException(status.HTTP_400_BAD_REQUEST,
+                            "O relatório contém um valor numérico inválido.")
+    return numero
 
 TAMANHO_MAXIMO = 10 * 1024 * 1024  # 10 MB
-IDADE_MAXIMA_TEMP_S = 24 * 3600     # PDFs de prévia não confirmados expiram em 24h
-_TOKEN_VALIDO = re.compile(r"^[0-9a-f]{32}\.(pdf|xlsx)$")
+# Teto de linhas do relatório em TEXTO (colado ou .txt/.csv): o parse custa ~1,5 ms
+# por linha, e os 10 MB deixavam ~200 mil linhas (minutos de uma thread presa). Um
+# relatório de turma tem dezenas de linhas; o de leituras da escola, milhares.
+LINHAS_MAXIMAS_TEXTO = 20_000
+# O prazo da prévia não confirmada (24 h) e o nome do token que a rota grava são os do
+# expurgo de fundo (``app/core/expurgo_arquivos.py``): uma regra só.
+IDADE_MAXIMA_TEMP_S = expurgo_arquivos.IDADE_MAXIMA_TEMP_S
+_TOKEN_VALIDO = expurgo_arquivos.NOME_DA_PREVIA
 
 
 def _limpar_temporarios_orfaos() -> None:
     """Remove arquivos de prévia abandonados (usuário fechou sem confirmar).
-    Chamado a cada nova análise — barato e evita crescimento sem limite."""
-    import itertools
-
-    pasta = settings.UPLOADS_DIR / "temporarios"
-    if not pasta.exists():
-        return
-    limite = time.time() - IDADE_MAXIMA_TEMP_S
-    for arquivo in itertools.chain(pasta.glob("*.pdf"), pasta.glob("*.xlsx")):
-        try:
-            if arquivo.stat().st_mtime < limite:
-                arquivo.unlink(missing_ok=True)
-        except OSError:
-            pass
+    Chamado a cada nova análise — barato e evita crescimento sem limite. A mesma
+    regra do expurgo de fundo: só a prévia com o nome que o app grava
+    (``NOME_DA_PREVIA``); um PDF/XLSX de outro nome em ``temporarios`` fica."""
+    expurgo_arquivos.limpar_temporarios()
 
 
 def _guardar_temporario(conteudo: bytes, extensao: str) -> str | None:
@@ -136,12 +145,64 @@ def _guardar_temporario(conteudo: bytes, extensao: str) -> str | None:
         return None
 
 
-def _snapshot_atual(db: Session, escola_id: int, aluno_id: int, modelo, *, ate=None):
+#: Um nome de arquivo no Linux do contêiner (NAME_MAX) tem até 255 BYTES — e o nome
+#: do original vem do navegador (o relatório individual traz o nome da criança, e
+#: cada letra acentuada conta 2 bytes).
+_NOME_ARQUIVO_MAX_BYTES = 255
+#: ``importacoes.arquivo_original`` (o caminho arquivado ou o nome mandado pelo
+#: navegador): o tamanho da coluna, lido do modelo.
+_REGISTRO_ORIGINAL_MAX = Importacao.__table__.c.arquivo_original.type.length
+
+
+def _nome_arquivado(base_nome: str, momento: datetime) -> str:
+    """O nome definitivo do original: ``AAAAMMDD_HHMMSS_<nome>``, cortado para caber
+    num nome de arquivo (``_NOME_ARQUIVO_MAX_BYTES``) sem perder a extensão e sem
+    partir uma letra acentuada ao meio."""
+    prefixo = f"{momento:%Y%m%d_%H%M%S}_"
+    caminho = Path(base_nome)
+    extensao = caminho.suffix
+    sobra = _NOME_ARQUIVO_MAX_BYTES - len(prefixo.encode()) - len(extensao.encode())
+    raiz = caminho.stem.encode("utf-8")[:sobra].decode("utf-8", errors="ignore")
+    return f"{prefixo}{raiz}{extensao}"
+
+
+def _registro_do_original(texto: str | None) -> str | None:
+    """O que ``importacoes.arquivo_original`` guarda, no tamanho da coluna."""
+    return texto[:_REGISTRO_ORIGINAL_MAX] if texto else texto
+
+
+def _arquivar_original(origem: Path, destino: Path) -> bool:
+    """Move o original de /temporarios para a pasta definitiva (§15). MELHOR ESFORÇO,
+    como ``_guardar_temporario``: um erro de disco (volume cheio ou sem escrita, nome
+    que o sistema de arquivos recusa) não derruba a importação — devolve False, o
+    original fica em /temporarios (o limpador o apaga) e quem chama grava só o nome.
+    Sem o nome do arquivo no log: ele pode trazer o nome da criança."""
+    try:
+        destino.parent.mkdir(parents=True, exist_ok=True)
+        shutil.move(str(origem), str(destino))
+        return True
+    except OSError as erro:
+        # Entre volumes o move copia e depois apaga: a cópia pela metade não fica.
+        if origem.exists():
+            try:
+                destino.unlink(missing_ok=True)
+            except OSError:
+                pass
+        logger.warning(
+            "Não foi possível arquivar o original da importação (errno %s) — os "
+            "dados foram importados sem o arquivo.", erro.errno)
+        return False
+
+
+def _snapshot_atual(db: Session, escola_id: int, aluno_id: int, modelo, *,
+                    desde=None, ate=None):
     # Ordena por data_referencia (id desempata): importar um relatório de um
     # período ANTIGO (backfill mensal do Matific) não pode virar o "estado
     # atual" só por ter id maior. ``ate`` (UTC naive): ignora retratos datados
     # depois dele — ver ``_teto_retrato_valido``.
     consulta = select(modelo).where(modelo.escola_id == escola_id, modelo.aluno_id == aluno_id)
+    if desde is not None:
+        consulta = consulta.where(modelo.data_referencia >= desde)
     if ate is not None:
         consulta = consulta.where(modelo.data_referencia <= ate)
     return db.execute(
@@ -364,7 +425,7 @@ _SEM_PRECARGA = object()
 
 
 def _mapa_snapshot_atual(db: Session, escola_id: int, aluno_ids, modelo, *,
-                         ate=None) -> dict:
+                         desde=None, ate=None) -> dict:
     """Último snapshot (por data_referencia, id) de CADA aluno, numa ÚNICA
     consulta. Equivale a chamar _snapshot_atual por aluno, sem o N+1: ordena
     ascendente e o último visto por aluno é o mais recente. Como a sessão usa
@@ -375,6 +436,8 @@ def _mapa_snapshot_atual(db: Session, escola_id: int, aluno_ids, modelo, *,
         return {}
     mapa: dict = {}
     consulta = select(modelo).where(modelo.escola_id == escola_id, modelo.aluno_id.in_(ids))
+    if desde is not None:
+        consulta = consulta.where(modelo.data_referencia >= desde)
     if ate is not None:
         consulta = consulta.where(modelo.data_referencia <= ate)
     for snap in db.execute(
@@ -395,7 +458,7 @@ def _retrodatado(atual, data_referencia) -> bool:
 
 
 def _mapa_retrato_na_data(db: Session, escola_id: int, aluno_ids, modelo,
-                          data_referencia, *, ate=None) -> dict:
+                          data_referencia, *, desde=None, ate=None) -> dict:
     """O retrato que VALIA na data do relatório, de cada aluno, numa ÚNICA consulta:
     o do MESMO DIA (de Brasília) — que o relatório complementa no lugar, como faz
     com o retrato atual do dia — ou, sem ele, o último ANTES dessa data. Aluno sem
@@ -409,13 +472,14 @@ def _mapa_retrato_na_data(db: Session, escola_id: int, aluno_ids, modelo,
     limite = ref + timedelta(days=1)
     if ate is not None:
         limite = min(limite, ate)
+    consulta = select(modelo).where(modelo.escola_id == escola_id, modelo.aluno_id.in_(ids),
+                                   modelo.data_referencia <= limite)
+    if desde is not None:
+        consulta = consulta.where(modelo.data_referencia >= desde)
     antes: dict = {}
     do_dia: dict = {}
     for snap in db.execute(
-        select(modelo)
-        .where(modelo.escola_id == escola_id, modelo.aluno_id.in_(ids),
-               modelo.data_referencia <= limite)
-        .order_by(modelo.data_referencia.asc(), modelo.id.asc())
+        consulta.order_by(modelo.data_referencia.asc(), modelo.id.asc())
     ).scalars():
         if _mesmo_dia(snap.data_referencia, data_referencia):
             do_dia[snap.aluno_id] = snap
@@ -452,8 +516,16 @@ def _campos_herdados(plataforma: str, dados: dict) -> list[str]:
 
 # --- Etapa 1: prévia (PRD §51) ------------------------------------------------
 
+# As rotas de UPLOAD desta tela são ``def`` (síncronas) DE PROPÓSITO, como as de
+# avaliações: o FastAPI as roda numa thread do pool. Uma rota ``async def`` roda o
+# corpo na thread do event loop — e aqui, depois de ler o arquivo, vêm a Session
+# SÍNCRONA (consultas, a espera da trava da escola, o commit, o recálculo) e a CPU do
+# parse e do casamento de nomes: o worker inteiro parava de atender (até
+# /api/health/live) durante a prévia ou a Lista Piloto. Por isso o arquivo é lido pelo
+# objeto síncrono (``arquivo.file.read``), com o teto, e os parsers são chamados direto.
+
 @router.post("/analisar", response_model=AnaliseOut)
-async def analisar(
+def analisar(
     request: Request,
     escola_id: int = Depends(escola_autorizada),
     arquivo: UploadFile | None = File(default=None),
@@ -471,6 +543,10 @@ async def analisar(
     # e de casar nomes (nada da prévia fica no disco nem no banco).
     modulos = svc_modulos.modulos_da_escola(db, db.get(Escola, escola_id))
     svc_modulos.exigir_plataforma(modulos, plataforma)
+    # Nada foi gravado: encerra a transação que as consultas acima abriram e devolve a
+    # conexão ao pool ANTES do parse (segundos, num arquivo grande) — as consultas do
+    # casamento de nomes, depois dele, abrem outra.
+    db.rollback()
 
     # Rejeita corpos gigantes pelo Content-Length antes de ler o arquivo.
     declarado = request.headers.get("content-length")
@@ -482,7 +558,7 @@ async def analisar(
     arquivo_nome = None
     guardar_como = None     # extensão do original a arquivar (depois do contrato)
     if arquivo is not None:
-        conteudo = await arquivo.read()
+        conteudo = arquivo.file.read(TAMANHO_MAXIMO + 1)  # o teto limita a RAM
         if len(conteudo) > TAMANHO_MAXIMO:
             raise HTTPException(status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
                                 "Arquivo acima de 10 MB.")
@@ -496,13 +572,10 @@ async def analisar(
         if eh_planilha:
             _limpar_temporarios_orfaos()
             try:
-                # Parsing CPU-bound (openpyxl) fora do event loop — não trava os
-                # demais requests durante a leitura da planilha. O teto do
-                # DESCOMPRIMIDO (bomba de descompressão: o limite de 10 MB acima é do
-                # arquivo COMPRIMIDO) e o orçamento de leitura ficam dentro do parser
-                # e chegam aqui como PlanilhaRecusada.
-                analise = await run_in_threadpool(
-                    planilhas.analisar_planilha,
+                # O teto do DESCOMPRIMIDO (bomba de descompressão: o limite de 10 MB
+                # acima é do arquivo COMPRIMIDO) e o orçamento de leitura ficam dentro
+                # do parser e chegam aqui como PlanilhaRecusada.
+                analise = planilhas.analisar_planilha(
                     conteudo, plataforma, nome_arquivo=arquivo_nome or "")
             except planilhas.PlanilhaRecusada as exc:
                 raise HTTPException(exc.status_http, str(exc)) from exc
@@ -523,14 +596,12 @@ async def analisar(
             _limpar_temporarios_orfaos()
             try:
                 # Perfis posicionais (formatos reais) com as 4 estratégias
-                # genéricas de texto como rede de segurança.
-                # Parsing CPU-bound (pdfplumber/pypdf) fora do event loop. O teto do
+                # genéricas de texto como rede de segurança. O teto do
                 # DESCOMPRIMIDO e das páginas (bomba de descompressão: o limite de 10 MB
                 # acima é do arquivo COMPRIMIDO) fica dentro do parser, antes do
                 # pdfplumber, e chega aqui como PdfRecusado (413/422).
-                analise = await run_in_threadpool(
-                    perfis_pdf.analisar_pdf, conteudo, plataforma,
-                    nome_arquivo=arquivo_nome or "")
+                analise = perfis_pdf.analisar_pdf(
+                    conteudo, plataforma, nome_arquivo=arquivo_nome or "")
             except perfis_pdf.PdfRecusado as exc:
                 raise HTTPException(exc.status_http, str(exc)) from exc
             except HTTPException:
@@ -545,16 +616,14 @@ async def analisar(
             guardar_como = "pdf"
             tipo = "pdf"
         else:
-            texto = conteudo.decode("utf-8", errors="replace")
+            # .txt/.csv/.tsv: o "CSV" do Excel em português vem em Windows-1252 e o
+            # "Texto Unicode" em UTF-16 — a mesma regra dos leitores de texto enviado.
+            texto = decodificar_texto(conteudo)
             tipo = "texto"
-            payload_mat = _payload_matific_placar(texto)
-            analise = (svc.analisar_matific_api(payload_mat) if payload_mat is not None
-                       else await run_in_threadpool(svc.analisar_texto, texto, plataforma))
+            analise = _analisar_texto_com_teto(texto, plataforma)
     elif texto and texto.strip():
         tipo = "texto"
-        payload_mat = _payload_matific_placar(texto)
-        analise = (svc.analisar_matific_api(payload_mat) if payload_mat is not None
-                   else await run_in_threadpool(svc.analisar_texto, texto, plataforma))
+        analise = _analisar_texto_com_teto(texto, plataforma)
     else:
         raise HTTPException(status.HTTP_400_BAD_REQUEST,
                             "Envie um arquivo PDF ou cole o texto do relatório.")
@@ -608,6 +677,29 @@ async def analisar(
     )
 
 
+def _analisar_texto_com_teto(texto: str, plataforma: str | None):
+    """A análise do relatório em TEXTO (colado ou .txt/.csv/.json) com o teto de linhas
+    (``LINHAS_MAXIMAS_TEXTO``): acima dele, 413 com o que fazer, antes de analisar e de
+    casar os nomes. No Placar do Matific em JSON (``_payload_matific_placar``) cada
+    conta é uma linha — e o JSON formatado ocupa várias linhas por conta, então ali
+    contam as contas; no texto, as linhas não vazias, como o parser conta."""
+    payload_mat = _payload_matific_placar(texto)
+    if payload_mat is not None:
+        if len(payload_mat["alunos"]) > LINHAS_MAXIMAS_TEXTO:
+            raise _linhas_demais()
+        return svc.analisar_matific_api(payload_mat)
+    if sum(1 for linha in texto.splitlines() if linha.strip()) > LINHAS_MAXIMAS_TEXTO:
+        raise _linhas_demais()
+    return svc.analisar_texto(texto, plataforma)
+
+
+def _linhas_demais() -> HTTPException:
+    return HTTPException(
+        status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+        f"O relatório tem mais de {LINHAS_MAXIMAS_TEXTO:,} linhas".replace(",", ".")
+        + ". Envie em partes (por exemplo, uma turma por vez).")
+
+
 # --- Etapa 2: confirmação -----------------------------------------------------
 
 def _payload_matific_placar(texto: str) -> dict | None:
@@ -620,7 +712,9 @@ def _payload_matific_placar(texto: str) -> dict | None:
         return None
     try:
         dados = json.loads(t)
-    except (ValueError, TypeError):
+    except (ValueError, TypeError, RecursionError):
+        # RecursionError: aninhamento profundo demais (arquivo corrompido ou forjado)
+        # — não é ValueError, e virava 500 na prévia.
         return None
     if (isinstance(dados, dict) and dados.get("fonte") == "matific-placar"
             and isinstance(dados.get("alunos"), list)):
@@ -695,8 +789,10 @@ def _turma_pelo_nome(db: Session, escola_id: int, ano: int, nome: str,
     no mesmo arquivo colapsam.
     ``permitir_criar=False`` (sincronização automática) NÃO cria turma que não exista
     no cadastro — só reaproveita a canônica; turma desconhecida vira aviso p/ análise
-    (gate anti-turma-fantasma). A Lista Piloto e o import manual (opt-in) passam True."""
-    nome_cru = (nome or "").strip()
+    (gate anti-turma-fantasma). A Lista Piloto e o import manual (opt-in) passam True.
+    O caractere de controle invisível do nome (vindo do relatório) vira espaço antes
+    de casar e de criar (``importacao.sem_controle``)."""
+    nome_cru = svc.sem_controle(nome or "").strip()
     if not nome_cru:
         return None
     codigo = matriculas.codigo_externo_do_nome(nome_cru)
@@ -892,6 +988,42 @@ def _casar_no_roster(db: Session, escola_id: int, ano: int, nome: str,
     return None, "baixa"
 
 
+def _aviso_contas_esquecidas(n: int) -> str:
+    """O aviso ANÔNIMO das linhas de conta de criança excluída para sempre
+    (``conta_esquecida``): a contagem, nunca o nome."""
+    return (f"{n} linha(s) de conta(s) de aluno excluído permanentemente foram "
+            "ignoradas: a conta continua ativa na plataforma; peça o encerramento lá.")
+
+
+# VIRADA DO ANO (S_G_VIRADA-1): a coleta de FORA do ano letivo ativo que deixou algo
+# de fora — criança sem ficha que não foi criada, matrícula que não foi mudada. É o
+# motivo das linhas não criadas (``linhas_descartadas``) e o código estável que a
+# sincronização lê em ``avisos_criticos`` para abrir o alerta de mesmo nome.
+MOTIVO_COLETA_FORA_DO_ANO = "coleta_fora_do_ano_letivo"
+
+
+def _fora_do_ano_letivo(ano: int | None, instante: datetime) -> bool:
+    """O dia de Brasília deste instante (naive = UTC) é de outro ano que o ano letivo
+    ativo ``ano``? Sem ano letivo, não há com o que comparar: False."""
+    return ano is not None and para_br(instante).year != ano
+
+
+def _aviso_coleta_fora_do_ano(ano: int, instante: datetime, *, fichas: int = 0,
+                              turmas: int = 0) -> str:
+    """O aviso da coleta de fora do ano letivo ativo: o que ficou de fora (contagem,
+    sem nome de criança) e o que fazer."""
+    partes = []
+    if fichas:
+        partes.append(f"{fichas} linha(s) de criança(s) sem ficha ficaram de fora "
+                      "(nenhuma ficha nem matrícula foi criada)")
+    if turmas:
+        partes.append(f"{turmas} criança(s) aparecem em outra turma na plataforma e a "
+                      "matrícula delas não foi mudada")
+    return (f"A coleta é de {_dia_txt(para_br(instante).date())} e o ano letivo ativo da "
+            f"escola é {ano}: " + "; ".join(partes) + ". Se o ano letivo terminou, vire o "
+            "ano letivo antes de coletar: a coleta seguinte traz quem ficou de fora.")
+
+
 def _resolver_aluno(db: Session, escola_id: int, ano: int, linha, avisos: list[str],
                     criados: dict | None = None,
                     turmas_novas: dict | None = None,
@@ -902,7 +1034,8 @@ def _resolver_aluno(db: Session, escola_id: int, ano: int, linha, avisos: list[s
                     revisoes: "ida.ColetorRevisoes | None" = None,
                     usuario_id: int | None = None,
                     encerrar_revisoes: bool = True,
-                    descartes: dict | None = None) -> Aluno | None:
+                    descartes: dict | None = None,
+                    coleta_fora_do_ano_letivo: bool = False) -> Aluno | None:
     """Aplica à linha a decisão da PORTA ÚNICA de identidade
     (``identidade_aluno.decidir``) — a MESMA que a prévia mostrou:
 
@@ -918,9 +1051,15 @@ def _resolver_aluno(db: Session, escola_id: int, ano: int, linha, avisos: list[s
       * CRIAR    → só quando não há candidato algum: cria a ficha na turma da sala
         (decidida sem chute) e grava a identidade externa já na criação.
 
-    Linha que a ESCOLA já decidiu não aplicar (``MOTIVOS_DESCARTE_DECIDIDO`` —
-    conta aposentada) é contada em ``descartes[motivo]`` quando o chamador passa o
-    dict: o núcleo a tira de ``ignorados`` e de 'sem_vinculo'.
+    Linha que já tem decisão de não ser aplicada (``MOTIVOS_DESCARTE_DECIDIDO`` —
+    conta aposentada pela escola, conta de criança excluída para sempre) é contada
+    em ``descartes[motivo]`` quando o chamador passa o dict: o núcleo a tira de
+    ``ignorados`` e de 'sem_vinculo'.
+
+    ``coleta_fora_do_ano_letivo`` (só a sincronização, ``_fora_do_ano_letivo``):
+    a linha que CRIARIA ficha não cria nada nem vai para a revisão — fica de fora,
+    contada em ``descartes[MOTIVO_COLETA_FORA_DO_ANO]``, e a coleta depois da virada
+    do ano a traz (S_G_VIRADA-1).
 
     ``ctx``/``revisoes`` vêm do /confirmar (estado carregado 1x, fila gravada no
     fim); chamado avulso, carrega o próprio estado e grava a revisão na hora."""
@@ -929,25 +1068,28 @@ def _resolver_aluno(db: Session, escola_id: int, ano: int, linha, avisos: list[s
         ctx = ida.carregar_contexto(db, escola_id, ano)
     turmas_novas = turmas_novas if turmas_novas is not None else {}
 
-    turma_explicita = None
-    if linha.aluno_id is None and linha.criar_em_turma_id is not None:
-        turma_explicita = db.get(Turma, linha.criar_em_turma_id)
-        if turma_explicita is None or turma_explicita.escola_id != escola_id:
-            avisos.append(f"Linha “{linha.nome}”: turma inválida — ignorada.")
-            return None
-    turma_nome = (turma_explicita.nome if turma_explicita is not None
-                  else getattr(linha, "criar_em_turma_nome", None)
-                  or dados.get("turma_relatorio") or "")
-    ident = ida.linha_de_dados(
-        linha.nome, dados, plataforma=plataforma, turma_nome=str(turma_nome),
-        turma_id=turma_explicita.id if turma_explicita is not None else None,
-        aluno_id=linha.aluno_id)
-    if getattr(linha, "numero_chamada", None) is not None:
-        ident = replace(ident, chamada=linha.numero_chamada)
+    ident, turma_nome, turma_invalida = _identidade_da_linha(db, escola_id, linha, plataforma)
+    if turma_invalida:
+        avisos.append(f"Linha “{linha.nome}”: turma inválida — ignorada.")
+        return None
+    longo = svc.texto_longo_demais(linha.nome, ident.id_externo, turma_nome)
+    if longo:
+        # Nada desta linha cabe no banco (nem na fila de revisão): ignorada, com o
+        # mesmo erro que a prévia mostrou. Antes, 500 no PostgreSQL no commit. A letra
+        # ilegível ("�") NÃO entra aqui: ela só barra a criação (CRIAR, abaixo).
+        avisos.append(f"Linha “{(linha.nome or '')[:60]}”: {longo} — ignorada.")
+        return None
     if linha.aluno_id is None and not svc.tokens_nome(linha.nome):
         avisos.append(f"Linha “{linha.nome}”: sem nome utilizável — ignorada.")
         return None
     decisao = ida.decidir(ctx, ident)
+    if getattr(linha, "deixar_para_revisao", False) and decisao.acao in (ida.ASSOCIAR,
+                                                                          ida.CRIAR):
+        # "Deixar para a Revisão" é uma instrução, não um palpite: a linha não
+        # associa nem cria, mesmo quando o contexto mudou desde a prévia (a outra
+        # conta da disputa foi ignorada, por exemplo). Com o motivo do backend quando
+        # ele também revisaria (abaixo); senão, com o pedido de quem confirmou.
+        decisao = replace(decisao, acao=ida.REVISAR, motivo="deixada_para_revisao")
 
     if decisao.acao == ida.IGNORAR:
         if decisao.motivo == "identidade_aposentada":
@@ -960,6 +1102,17 @@ def _resolver_aluno(db: Session, escola_id: int, ano: int, linha, avisos: list[s
                 "existindo na plataforma: a aposentadoria é interna do Constela.)")
             if descartes is not None:
                 descartes[decisao.motivo] = descartes.get(decisao.motivo, 0) + 1
+            return None
+        if decisao.motivo == ida.MOTIVO_CONTA_ESQUECIDA:
+            # Conta de criança EXCLUÍDA PARA SEMPRE (G_LGPD-1): decisão já tomada, e
+            # o nome não volta — nem no aviso da resposta. Contada em
+            # ``descartes`` (fora de ``ignorados`` e de 'sem_vinculo': não é
+            # pendência, e a fila de Revisões não tem nada dela); o /confirmar
+            # junta todas num aviso anônimo no fim (``_aviso_contas_esquecidas``).
+            if descartes is not None:
+                descartes[decisao.motivo] = descartes.get(decisao.motivo, 0) + 1
+            else:
+                avisos.append(_aviso_contas_esquecidas(1))
             return None
         avisos.append(f"Linha “{linha.nome}”: "
                       + ("aluno não pertence a esta escola" if decisao.motivo == "aluno_de_outra_escola"
@@ -1024,8 +1177,28 @@ def _resolver_aluno(db: Session, escola_id: int, ano: int, linha, avisos: list[s
             criados[chave_log] = aluno
         return aluno
 
-    # CRIAR — nenhum candidato plausível. Turma: a decidida pela porta única; se a
-    # sala ainda não tem turma cadastrada, cria (import manual) ou revisa (sync).
+    # CRIAR — nenhum candidato plausível. A coleta de FORA do ano letivo ativo (a
+    # escola ainda no ano que terminou, a plataforma já com o ano novo) não cria: a
+    # criança nasceria matriculada no ano letivo ativo, no ranking e nos certificados
+    # de um ano em que não esteve. Nem vai para a revisão ("Criar novo aluno" a
+    # criaria no mesmo ano): fica de fora, e a coleta depois da virada a traz.
+    if coleta_fora_do_ano_letivo:
+        if descartes is not None:
+            descartes[MOTIVO_COLETA_FORA_DO_ANO] = (
+                descartes.get(MOTIVO_COLETA_FORA_DO_ANO, 0) + 1)
+        return None
+    # Antes de tudo, a LETRA ILEGÍVEL ("�" que a
+    # leitura do arquivo pôs no acento que não conseguiu ler): a ficha nasceria com
+    # ela no nome (e no certificado, no ranking). Só a criação é barrada — a linha
+    # que ASSOCIA (conta já vinculada, aluno escolhido, nome que casa) não grava o
+    # nome em lugar nenhum e recebe os números acima. A MESMA regra da prévia
+    # (``svc.casar_nomes``: erro só na linha que criaria a ficha).
+    ilegivel = svc.texto_ilegivel(linha.nome, ident.id_externo, turma_nome)
+    if ilegivel:
+        avisos.append(f"Linha “{(linha.nome or '')[:60]}”: {ilegivel} — ignorada.")
+        return None
+    # Turma: a decidida pela porta única; se a sala ainda não tem turma cadastrada,
+    # cria (import manual) ou revisa (sync).
     turma = ctx.turmas.get(decisao.turma_id) if decisao.turma_id is not None else None
     if turma is None and decisao.turma_id is not None:
         turma = db.get(Turma, decisao.turma_id)
@@ -1052,12 +1225,13 @@ def _resolver_aluno(db: Session, escola_id: int, ano: int, linha, avisos: list[s
     # Também a ETAPA: "1 ANO A …" não nasce na "1ºA" de ano_escolar "1ª Fase" (é o
     # nome que ``nome_turma_exibicao`` dá a "Fase 1A"/"Pré 1 A"): série e letra
     # batem, a etapa não — antes a ficha nascia na Educação Infantil, sem revisão.
+    # A comparação é entre a turma do RELATÓRIO e a de destino: com a turma
+    # escolhida, ``turma_nome`` é o nome dela — comparar com ele era comparar a
+    # turma com ela mesma.
     motivo_turma = ("turma_fora_do_ano_letivo" if turma.ano_letivo != ano
                     else "turma_arquivada" if not ida.turma_ativa(turma)
-                    else "turma_de_outra_etapa" if (
-                        str(turma_nome).strip()
-                        and matriculas.etapa_da_sala(str(turma_nome))
-                        != matriculas.etapa_da_sala(turma.nome, turma.ano_escolar or ""))
+                    else "turma_de_outra_etapa" if ida.turma_de_outra_etapa(
+                        ident.turma_relatorio, turma)
                     else "")
     if motivo_turma:
         _enfileirar_revisao(db, escola_id, ctx, ident,
@@ -1093,7 +1267,11 @@ def _resolver_aluno(db: Session, escola_id: int, ano: int, linha, avisos: list[s
                             dados, avisos, revisoes, usuario_id)
         return None
 
-    aluno = Aluno(escola_id=escola_id, nome=linha.nome.strip())
+    # A ficha nasce com o nome SEM o sufixo de turma digitado junto ("… LIMA 3A"),
+    # pela mesma regra que já o tirava do casamento; a pendência e o log guardam o
+    # nome recebido.
+    aluno = Aluno(escola_id=escola_id, nome=ida.nome_sem_sufixo_de_turma(
+        linha.nome, decisao.chave_sala, ida.chave_sala(ident.turma_nome)))
     db.add(aluno)
     db.flush()
     db.add(Matricula(escola_id=escola_id, aluno_id=aluno.id,
@@ -1114,6 +1292,34 @@ def _resolver_aluno(db: Session, escola_id: int, ano: int, linha, avisos: list[s
     if criados is not None:
         criados[(svc.chave_nome(linha.nome), turma.id)] = aluno
     return aluno
+
+
+def _identidade_da_linha(db: Session, escola_id: int, linha, plataforma: str | None
+                         ) -> tuple["ida.LinhaIdentidade", str, bool]:
+    """A ``LinhaIdentidade`` de uma linha de confirmação — o MESMO cálculo para a
+    decisão (``_resolver_aluno``) e para o pré-passe das contas em disputa
+    (``ida.marcar_fichas_disputadas``). Devolve (identidade, turma_nome,
+    turma_invalida): turma escolhida que não é desta escola invalida a linha."""
+    dados = getattr(linha, "dados", None) or {}
+    turma_explicita = None
+    if linha.aluno_id is None and getattr(linha, "criar_em_turma_id", None) is not None:
+        turma_explicita = db.get(Turma, linha.criar_em_turma_id)
+        if turma_explicita is None or turma_explicita.escola_id != escola_id:
+            return ida.linha_de_dados(linha.nome, dados, plataforma=plataforma), "", True
+    turma_nome = (turma_explicita.nome if turma_explicita is not None
+                  else getattr(linha, "criar_em_turma_nome", None)
+                  or dados.get("turma_relatorio") or "")
+    # A turma do RELATÓRIO, separada do destino (a escolhida, ou a que o nome
+    # pede): é contra ela que se confere a etapa do destino.
+    turma_relatorio = str(dados.get("turma_relatorio")
+                          or getattr(linha, "criar_em_turma_nome", None) or "")
+    ident = ida.linha_de_dados(
+        linha.nome, dados, plataforma=plataforma, turma_nome=str(turma_nome),
+        turma_id=turma_explicita.id if turma_explicita is not None else None,
+        aluno_id=linha.aluno_id, turma_relatorio=turma_relatorio)
+    if getattr(linha, "numero_chamada", None) is not None:
+        ident = replace(ident, chamada=linha.numero_chamada)
+    return ident, str(turma_nome), False
 
 
 def _marcar_via(linha, via: str) -> None:
@@ -1153,6 +1359,12 @@ _REGRA_DA_VIA = {
 _REGRA_ESCOLHA_HUMANA = ("ficha fixada por quem confirmou a importação "
                          "(prévia aceita ou alternativa escolhida)")
 
+# A13: a pendência aberta só pelo NOME (linha sem a conta) que a linha COM a conta
+# responde. É sempre o sistema que a encerra — ninguém viu essa pendência —, e só
+# quando o nome, sozinho, não aponta para nenhuma outra ficha.
+_REGRA_PENDENCIA_POR_NOME = ("a mesma criança voltou com a conta da plataforma: mesmo "
+                             "nome, mesma sala, e o nome sozinho não aponta outra ficha")
+
 # Vias que NÃO casam pelo nome — a conta da plataforma, a escolha explícita e a
 # memória de uma decisão humana. Só nas outras o sufixo de turma retirado do nome
 # ("… RIBEIRO 2B") fez parte do casamento e cabe na regra.
@@ -1186,8 +1398,21 @@ def _instante(texto) -> datetime | None:
         return None
 
 
+# Os campos do retrato que as Questões do período medem (os mesmos de
+# ``sync.orchestrator.CAMPOS_QUESTOES``, que importa este módulo).
+_CAMPOS_QUESTOES = ("questoes_tentativas", "questoes_acertos")
+
+
+def _guarda_questoes(rev: RevisaoIdentidade) -> bool:
+    """A pendência guarda um retrato com as questões (alguma linha traz o campo)?"""
+    return any(isinstance(linha, dict) and any(linha.get(c) is not None
+                                               for c in _CAMPOS_QUESTOES)
+               for linha in rev.linhas or [])
+
+
 def _linha_substitui_o_congelado(rev: RevisaoIdentidade, chaves_da_linha: set[str],
-                                 coletor: "ida.ColetorRevisoes") -> bool:
+                                 coletor: "ida.ColetorRevisoes", *,
+                                 sem_questoes: bool = False) -> bool:
     """Esta linha traz o MESMO dado que a pendência guardava, tão novo quanto ou
     mais? Só então encerrar sem aplicar o congelado não perde nada — é o mesmo
     juízo que o /resolver faz com ``_retrato_superado``, antecipado.
@@ -1217,11 +1442,20 @@ def _linha_substitui_o_congelado(rev: RevisaoIdentidade, chaves_da_linha: set[st
         mesmo dia, que o /resolver nunca reaplicaria. Data LEGADA fora do
         calendário (``0001-01-01T00:00:00+00:00``, que estoura na conversão para
         Brasília): a pendência fica para o gestor — antes o ``OverflowError``
-        derrubava a sincronização da escola inteira."""
+        derrubava a sincronização da escola inteira;
+      * QUESTÕES QUE NÃO VIERAM (S9, ``sem_questoes``: a importação desta linha é
+        ``IMPORTACAO_SEM_QUESTOES``): a linha não traz as questões, então não
+        substitui o retrato guardado que as traz — a medida dele é a última das
+        questões. Encerrada aqui, ela sumia: com ``sem_retrato_repetido`` nada novo
+        era gravado (ou o retrato novo só repetia as questões de antes) e o
+        Relatório por Período perdia o ponto. Fica para o /resolver, ou para a
+        próxima coleta que trouxer as questões."""
     if rev.chave not in chaves_da_linha or rev.motivo in _SO_O_GESTOR_ENCERRA:
         return False
     if rev.formato == "leituras":
         return coletor.origem == "sincronizacao"
+    if sem_questoes and _guarda_questoes(rev):
+        return False
     congelada = _instante((rev.contexto or {}).get("data_referencia"))
     if congelada is None:
         return True          # sem data: o /resolver nunca reaplicaria esse retrato
@@ -1329,7 +1563,8 @@ def _encerrar_revisoes_respondidas(db: Session, escola_id: int, ctx: "ida.Contex
 
     Os DADOS CONGELADOS na revisão NÃO são aplicados: só se encerra a pendência
     cujo dado ESTA linha substitui (``_linha_substitui_o_congelado`` — mesmo tipo
-    de dado, retrato não mais antigo, leituras só pela sincronização). Retrato:
+    de dado, retrato não mais antigo, leituras só pela sincronização; na coleta
+    sem as questões (S9), só o retrato guardado que também não as tem). Retrato:
     vale o desta linha, e o /resolver descartaria o congelado
     (``_retrato_superado``). Leituras: a lista LIFETIME da sincronização contém
     os livros guardados (e a UNIQUE de Leitura impede duplicar). Pendência que esta
@@ -1352,14 +1587,34 @@ def _encerrar_revisoes_respondidas(db: Session, escola_id: int, ctx: "ida.Contex
     chaves = list(dict.fromkeys(
         c[:400] for c in (ida.chave_identidade(ident, decisao.chave_sala),
                           ida.chave_identidade(ident, ida.chave_sala(ident.turma_nome)))))
+    # A13: a linha que agora traz a CONTA da plataforma responde também a pendência
+    # aberta por NOME (mesmo nome, mesma sala) quando ela chegou SEM a conta — antes
+    # a chave mudava de nome+sala para id e a pendência ficava aberta para sempre.
+    # Mesmas guardas de sempre (``_linha_substitui_o_congelado``, D10) e mais duas:
+    # a pendência por nome só fecha se não apontava para OUTRA ficha e se o nome
+    # sozinho, decidido hoje, também não aponta. E fecha sempre como AUTOMÁTICA, sem
+    # virar memória nome+sala (nem nesta importação, nem nas próximas).
+    chaves_por_nome: list[str] = []
+    if ident.id_externo:
+        sem_conta = replace(ident, id_externo="")
+        chaves_por_nome = [c for c in dict.fromkeys(
+            c[:400] for c in (ida.chave_identidade(sem_conta, decisao.chave_sala),
+                              ida.chave_identidade(sem_conta, ida.chave_sala(ident.turma_nome))))
+            if c not in chaves]
     ids = [rid for c in chaves for rid in ctx.pendentes.pop(c, [])]
+    ids_por_nome = {rid for c in chaves_por_nome for rid in ctx.pendentes.pop(c, [])}
+    ids += sorted(ids_por_nome)
     if not ids:
         return []
+    # S9: a importação desta linha veio sem as questões? (a marca é dela, gravada
+    # antes das linhas; ``db.get`` acha a importação já na sessão, sem consulta).
+    importacao = db.get(Importacao, coletor.importacao_id) if coletor.importacao_id else None
+    sem_questoes = importacao is not None and importacao.status == IMPORTACAO_SEM_QUESTOES
     contexto = coletor.contexto or {}
     chaves_da_linha = {ida.chave_pendencia(c, coletor.formato,
                                            str(contexto.get("periodo_inicio") or ""),
                                            str(contexto.get("periodo_fim") or ""))
-                       for c in chaves}
+                       for c in (*chaves, *chaves_por_nome)}
     motor = _motor_escolheria(ctx, ident, aluno) if ident.aluno_id is not None else None
     humana = ident.aluno_id is not None and motor is None
     if motor is not None:
@@ -1373,9 +1628,21 @@ def _encerrar_revisoes_respondidas(db: Session, escola_id: int, ctx: "ida.Contex
                                          ida.chave_sala(ident.turma_nome)) != ident.nome):
             # "… RIBEIRO 2B" casou como nome idêntico: a regra diz que o sufixo saiu.
             regra += ", sem o sufixo de turma digitado junto do nome"
+    # A13: o nome SOZINHO (a linha sem a conta, como a pendência por nome a recebeu)
+    # aponta para outra ficha da escola? Então a pendência por nome pode ser de OUTRA
+    # criança com o mesmo nome (abreviado) na sala: não fecha — fica para um humano,
+    # com o retrato que ela guarda. Decidido uma vez, só se houver pendência por nome.
+    nome_aponta_outra = False
+    if ids_por_nome:
+        pelo_nome = ida.decidir(ctx, replace(ident, id_externo="", aluno_id=None))
+        nome_aponta_outra = bool(
+            {i for i in (*pelo_nome.candidatos, pelo_nome.aluno_id) if i is not None}
+            - {aluno.id})
     preteridos = _preteridos(ctx, decisao.preteridos)
     momento = agora()
     encerradas: list[int] = []
+    encerradas_por_humano = 0
+    regras_automaticas: list[str] = []
     ficaram: list[RevisaoIdentidade] = []
     retidas_d10: list[RevisaoIdentidade] = []
     contas_de_outra_escola: dict[tuple[str, str], bool] = {}
@@ -1386,17 +1653,35 @@ def _encerrar_revisoes_respondidas(db: Session, escola_id: int, ctx: "ida.Contex
         if _retida_pelo_d10(db, escola_id, ctx, ident, rev, contas_de_outra_escola):
             retidas_d10.append(rev)      # D10/D11: só o Admin Global encerra
             continue
-        if not _linha_substitui_o_congelado(rev, chaves_da_linha, coletor):
+        por_nome = rid in ids_por_nome
+        if por_nome and (nome_aponta_outra or any(
+                c.get("aluno_id") not in (None, aluno.id) for c in (rev.candidatos or [])
+                if isinstance(c, dict))):
+            ficaram.append(rev)          # a pendência por nome pode ser de outra ficha
+            continue
+        if not _linha_substitui_o_congelado(rev, chaves_da_linha, coletor,
+                                            sem_questoes=sem_questoes):
             ficaram.append(rev)
             continue
+        # A pendência por NOME nunca é encerrada como decisão de gente, nem quando a
+        # ficha da linha foi fixada por quem confirmou: essa pessoa escolheu a ficha
+        # da CONTA e nunca viu a pergunta "de quem é este nome nesta sala". Encerrada
+        # como humana, viraria memória nome+sala (``carregar_contexto``) e toda linha
+        # SEM conta com esse nome iria sozinha para a ficha — mesmo com um homônimo
+        # abreviado na sala.
+        humana_rev = humana and not por_nome
+        regra_rev = _REGRA_PENDENCIA_POR_NOME if por_nome else regra
         dados_superados = {"motivo": "substituidos_pela_linha_desta_importacao",
                            "formato": rev.formato, "plataforma": rev.plataforma,
                            "data_congelada": (rev.contexto or {}).get("data_referencia") or None,
                            "data_desta_importacao": contexto.get("data_referencia") or None}
-        resolucao = {"acao": "associar", "aluno_id": aluno.id, "automatica": not humana,
-                     "via": decisao.via, "regra": regra, "dados_superados": dados_superados}
-        if humana:
+        resolucao = {"acao": "associar", "aluno_id": aluno.id, "automatica": not humana_rev,
+                     "via": decisao.via, "regra": regra_rev,
+                     "dados_superados": dados_superados}
+        if humana_rev:
             resolucao["resolvida_na"] = "confirmacao_da_importacao"
+        if por_nome:
+            resolucao["pendencia_por_nome"] = True
         if preteridos:
             # Só o id: a revisão não passa pela redação LGPD da exclusão
             # permanente (os logs passam, e lá o nome fica).
@@ -1405,12 +1690,16 @@ def _encerrar_revisoes_respondidas(db: Session, escola_id: int, ctx: "ida.Contex
             resolucao["importacao_id"] = coletor.importacao_id
         rev.status = "resolvida"
         rev.aluno_escolhido_id = aluno.id
-        rev.resolvida_por_id = usuario_id if humana else None
+        rev.resolvida_por_id = usuario_id if humana_rev else None
         rev.resolvida_em = momento
         rev.resolucao = resolucao
-        ctx.resolvidas[rev.chave_identidade] = aluno.id
+        if not por_nome:
+            # Memória desta importação só para a chave da PRÓPRIA linha; a chave
+            # nome+sala da pendência por nome continua decidida pela regra.
+            ctx.resolvidas[rev.chave_identidade] = aluno.id
         candidatos = [c.get("aluno_id") for c in (rev.candidatos or [])]
-        if humana:
+        if humana_rev:
+            encerradas_por_humano += 1
             registrar(db, "identidade.revisao_resolvida", escola_id=escola_id,
                       usuario_id=usuario_id, entidade="aluno", entidade_id=aluno.id,
                       detalhes={"revisao_id": rev.id, "plataforma": rev.plataforma,
@@ -1427,15 +1716,24 @@ def _encerrar_revisoes_respondidas(db: Session, escola_id: int, ctx: "ida.Contex
                       detalhes={"revisao_id": rev.id, "plataforma": rev.plataforma,
                                 "formato": rev.formato, "motivo": rev.motivo,
                                 "origem": rev.nome_recebido, "aluno": aluno.nome,
-                                "via": decisao.via, "regra": regra,
+                                "via": decisao.via, "regra": regra_rev,
                                 "preteridos": preteridos,
                                 "dados_superados": dados_superados,
                                 "importacao_id": coletor.importacao_id,
                                 "candidatos": candidatos})
+            if regra_rev not in regras_automaticas:
+                regras_automaticas.append(regra_rev)
         encerradas.append(rev.id)
     if encerradas:
-        como = ("resolvidas pela sua confirmação" if humana
-                else f"encerradas automaticamente ({regra})")
+        automaticas = len(encerradas) - encerradas_por_humano
+        if not automaticas:
+            como = "resolvidas pela sua confirmação"
+        elif not encerradas_por_humano:
+            como = f"encerradas automaticamente ({'; '.join(regras_automaticas)})"
+        else:
+            como = (f"resolvidas pela sua confirmação ({encerradas_por_humano}) ou "
+                    f"encerradas automaticamente ({automaticas}: "
+                    f"{'; '.join(regras_automaticas)})")
         aviso = (f"“{ident.nome}”: {len(encerradas)} pendência(s) de revisão desta "
                  f"identidade foram {como} — o dado desta importação foi para "
                  f"{aluno.nome} e substitui o que elas guardavam.")
@@ -1469,7 +1767,10 @@ def _enfileirar_revisao(db: Session, escola_id: int, ctx: "ida.Contexto",
     if len(coletor.pendencias) > antes:
         texto = ida.MOTIVOS.get(decisao.motivo, decisao.motivo)
         cands = ida.descrever_candidatos(ctx, decisao.candidatos)
-        if cands:
+        if decisao.motivo == "deixada_para_revisao":
+            # Pedido de quem confirmou: não é "correspondência insegura".
+            avisos.append(f"“{ident.nome}”: {texto}.")
+        elif cands:
             quem = ", ".join(
                 c["nome"] + (f" (ficha “{c['status']}”)" if c["status"] != "ativo" else "")
                 for c in cands)
@@ -1515,14 +1816,33 @@ def _vincular_identidade(db: Session, escola_id: int, aluno_id: int,
                          ctx: "ida.Contexto | None" = None,
                          usuario_id: int | None = None) -> bool:
     """Grava o vínculo aluno ↔ id externo (UUID do Matific / studentId do
-    Elefante). Idempotente e seguro sob concorrência (savepoint na unique).
+    Elefante). Idempotente e seguro sob concorrência (a unique decide a corrida).
 
     NUNCA tira a identidade de outra ficha existente (ativa ou inativa) — isso só
     acontece por decisão explícita de um gestor na fila de revisão. A única
     reatribuição automática é a de uma ficha EXCLUÍDA (que não é reutilizada e,
-    portanto, não pode segurar a identidade) — e fica auditada."""
+    portanto, não pode segurar a identidade) — e fica auditada.
+
+    Com o ``ctx`` da importação (lido sob a trava da escola, com TODOS os vínculos
+    dela e mantido a cada vínculo gravado), o caso de toda linha não vai ao banco: o
+    vínculo que já é desta ficha devolve True e a conta aposentada, False — antes
+    era um SELECT por criança, ~0,2 s cada em produção. A conta que o contexto não
+    conhece vira INSERT direto (``_inserir_vinculo``); só a ligada a OUTRA ficha
+    segue pela consulta abaixo."""
     if not (plataforma and id_externo):
         return False
+    if ctx is not None:
+        chave = (plataforma, id_externo)
+        if chave in ctx.aposentadas:
+            return False
+        dono_no_contexto = ctx.identidade.get(chave)
+        if dono_no_contexto == aluno_id:
+            return True
+        if dono_no_contexto is None:
+            if not _inserir_vinculo(db, escola_id, aluno_id, plataforma, id_externo):
+                return False  # corrida: outro processo vinculou primeiro — não rouba
+            ctx.vincular(aluno_id, plataforma, id_externo)
+            return True
     ja = db.execute(select(IdentidadeExterna).where(
         IdentidadeExterna.escola_id == escola_id,
         IdentidadeExterna.plataforma == plataforma,
@@ -1548,15 +1868,45 @@ def _vincular_identidade(db: Session, escola_id: int, aluno_id: int,
         if ctx is not None:
             ctx.vincular(aluno_id, plataforma, id_externo)
         return True
-    try:
-        with db.begin_nested():
-            db.add(IdentidadeExterna(escola_id=escola_id, aluno_id=aluno_id,
-                                     plataforma=plataforma, id_externo=id_externo))
-            db.flush()
-    except IntegrityError:
+    if not _inserir_vinculo(db, escola_id, aluno_id, plataforma, id_externo):
         return False  # corrida: outro processo vinculou primeiro — não rouba
     if ctx is not None:
         ctx.vincular(aluno_id, plataforma, id_externo)
+    return True
+
+
+def _inserir_vinculo(db: Session, escola_id: int, aluno_id: int, plataforma: str,
+                     id_externo: str) -> bool:
+    """INSERT do vínculo novo; False se a conta já tem vínculo na escola (a unique
+    ``uq_identidade_externa`` decide a corrida — quem chegou primeiro fica).
+
+    No PostgreSQL e no SQLite, ``INSERT ... ON CONFLICT DO NOTHING``: uma ida ao
+    banco, em vez de SAVEPOINT + INSERT + RELEASE (três) por conta nova. O que está
+    pendente na sessão (a ficha recém-criada, a matrícula) vai antes, como o
+    SAVEPOINT fazia — o vínculo aponta para a ficha."""
+    db.flush()
+    valores = {"escola_id": escola_id, "aluno_id": aluno_id, "plataforma": plataforma,
+               "id_externo": id_externo}
+    dialeto = db.get_bind().dialect.name
+    if dialeto in ("postgresql", "sqlite"):
+        if dialeto == "postgresql":
+            from sqlalchemy.dialects.postgresql import insert as insert_do_banco
+        else:
+            from sqlalchemy.dialects.sqlite import insert as insert_do_banco
+        tabela = IdentidadeExterna.__table__
+        comando = (insert_do_banco(tabela).values(**valores)
+                   .on_conflict_do_nothing(
+                       index_elements=["escola_id", "plataforma", "id_externo"])
+                   .returning(tabela.c.id))
+        # No conflito nada volta. (O ``rowcount`` não serve de prova: no PostgreSQL
+        # ele não dizia 1 mesmo com a linha gravada.)
+        return db.execute(comando).scalar_one_or_none() is not None
+    try:
+        with db.begin_nested():
+            db.add(IdentidadeExterna(**valores))
+            db.flush()
+    except IntegrityError:
+        return False
     return True
 
 
@@ -1595,10 +1945,24 @@ def _turma_existente_por_tokens(db: Session, escola_id: int, ano: int,
     return candidatas[0][1]
 
 
+def _mesma_serie(atual: Turma | None, nova: Turma) -> bool:
+    """As duas turmas são da MESMA série (``matriculas.serie_da_sala``, a leitura
+    única de série do sistema: o ``ano_escolar`` e, sem ele, o nome)? Série que não
+    se lê num dos lados ("Turma Azul", "EJA 2") não prova que é a mesma: False —
+    mover criança de sala sem supervisão exige certeza."""
+    if atual is None:
+        return False
+    serie = matriculas.serie_da_sala(atual.nome, atual.ano_escolar or "")
+    return serie is not None and serie == matriculas.serie_da_sala(
+        nova.nome, nova.ano_escolar or "")
+
+
 def _sincronizar_turma_matific(db: Session, escola_id: int, ano: int,
                                resolvidos: dict, avisos: list[str], *,
                                ctx: "ida.Contexto | None" = None,
-                               movidos_ids: list[int] | None = None) -> int:
+                               movidos_ids: list[int] | None = None,
+                               data_coleta: datetime | None = None,
+                               retidos_fora_do_ano: list[int] | None = None) -> int:
     """Na sync AUTOMÁTICA do Matific: vincula o UUID (identificação confiável) e
     MOVE a matrícula quando a turma reportada mudou. Regras de segurança (mexe em
     dado de criança, sem humano no loop):
@@ -1616,18 +1980,29 @@ def _sincronizar_turma_matific(db: Session, escola_id: int, ano: int,
       INTEGRAL" × "4º Ano", única turma ativa da série e da etapa) é a MESMA
       turma: não move nem avisa (antes saía um aviso falso a cada coleta);
     * destino só turma ATIVA e da mesma ETAPA (``_turma_existente_por_tokens``);
+    * e da mesma SÉRIE (``_mesma_serie``): mudar de série é a virada do ano
+      letivo, não troca de sala — a turma de outra série vira aviso e a matrícula
+      fica onde está (S_G_VIRADA-1: na virada, o Placar já com as turmas do ano
+      seguinte levava o 3º A inteiro para o 4º A do ano que terminou);
     * com a política ``bloquear`` (``politica_sync.pode_mover_matricula``) a
       matrícula segue a Lista Piloto, pela mesma regra que impede a sync de criar
       ficha (a plataforma não matricula; P15 é a recomendação de 26/10, aplicada por
       decorrer dessa regra — o dono pode objetar): vincula o UUID, mas NÃO move — a
       turma divergente vira aviso. Antes a coleta movia e o reenvio da Lista
       Piloto devolvia: a matrícula ia e voltava. A trava fica AQUI, e não só no
-      chamador, para nenhum caminho que chame esta rotina furar a política.
+      chamador, para nenhum caminho que chame esta rotina furar a política;
+    * coleta de FORA do ano letivo ativo (``data_coleta``, pelo dia de Brasília):
+      não move ninguém — em fevereiro, com a escola ainda no ano que terminou, a
+      turma que o Matific mostra é a do ano novo (quem repetiu e está no "3 ANO B"
+      ia do 3º A para o 3º B do ano que terminou). Um aviso só, com a contagem;
+      ``retidos_fora_do_ano`` (quando passado) recebe os ids (S_G_VIRADA-1).
 
     Devolve quantos alunos foram movidos; ``movidos_ids`` (quando passado) recebe
     os ids — a matrícula movida é dado alterado (ranking por turma, posição), e o
     /confirmar os conta como aplicados para a sync recalcular as notas."""
     movidos = 0
+    fora_do_ano = data_coleta is not None and _fora_do_ano_letivo(ano, data_coleta)
+    retidos: list[int] = []
     mover: bool | None = None   # a política só é lida quando há o que mover
     if ctx is None and resolvidos:
         ctx = ida.carregar_contexto(db, escola_id, ano)
@@ -1639,7 +2014,8 @@ def _sincronizar_turma_matific(db: Session, escola_id: int, ano: int,
         via = getattr(linha, "via", None)
         if not via:
             continue  # não passou pela porta única de identidade: não toca em nada
-        _vincular_identidade(db, escola_id, aluno.id, "matific", uuid)  # idempotente
+        _vincular_identidade(db, escola_id, aluno.id, "matific", uuid,  # idempotente
+                             ctx=ctx)
         if via != "identidade":
             continue  # 1ª vez (casou por nome): só vincula; move pela identidade
         if (linha.dados or {}).get("turma_ambigua"):
@@ -1661,6 +2037,9 @@ def _sincronizar_turma_matific(db: Session, escola_id: int, ano: int,
                 or ctx.sala_efetiva(ida.chave_sala(turma_nome), turma_nome)
                 == ida.chave_sala(atual.nome)):
             continue
+        if fora_do_ano:
+            retidos.append(aluno.id)   # a turma da plataforma é de outro ano
+            continue
         nova = _turma_existente_por_tokens(db, escola_id, ano, turma_nome)
         if nova is None:
             avisos.append(
@@ -1669,6 +2048,19 @@ def _sincronizar_turma_matific(db: Session, escola_id: int, ano: int,
                 "automaticamente).")
             continue
         if nova.id == matricula.turma_id:
+            continue
+        if not _mesma_serie(atual, nova):
+            # Mudança de SÉRIE é a virada do ano letivo, não troca de sala: o Placar
+            # com as turmas do ano seguinte (a escola ainda no ano que terminou) ou
+            # ainda com as do ano anterior (a escola já virada) levava a turma
+            # inteira para a série errada dentro do ano letivo ativo.
+            avisos.append(
+                f"{aluno.nome}: o Matific indica a turma “{nova.nome}”, de outra série "
+                f"que a turma da matrícula (“{atual.nome if atual is not None else '—'}”) "
+                "— não movi: a coleta não muda a série de ninguém. Se o ano letivo "
+                "virou, a matrícula do ano novo vem da Lista Piloto; se a turma no "
+                "Matific está desatualizada, corrija-a lá; se a criança mudou mesmo de "
+                "série, troque a turma dela em Alunos.")
             continue
         if mover is None:
             mover = politica_sync.pode_mover_matricula(db, escola_id)
@@ -1690,11 +2082,17 @@ def _sincronizar_turma_matific(db: Session, escola_id: int, ano: int,
         movidos += 1
         if movidos_ids is not None:
             movidos_ids.append(aluno.id)
+    if retidos:
+        avisos.append(_aviso_coleta_fora_do_ano(ano, data_coleta, turmas=len(retidos)))
+        if retidos_fora_do_ano is not None:
+            retidos_fora_do_ano.extend(retidos)
     return movidos
 
 
 def _importar_matific(db, escola_id, importacao, aluno, dados, data_referencia,
                       anterior=_SEM_PRECARGA):
+    # O recorte do contador e a data persistida usam o mesmo instante UTC.
+    data_referencia = _instante_utc(data_referencia)
     # Cada relatório do Matific traz um subconjunto das métricas: o PDF de
     # estrelas tem "estrelas"; o Excel por turma NÃO tem. Preservamos o valor
     # anterior de cada campo AUSENTE — assim os dois relatórios se COMPLEMENTAM
@@ -1703,7 +2101,10 @@ def _importar_matific(db, escola_id, importacao, aluno, dados, data_referencia,
     # num relatório RETRODATADO, é o retrato que valia NA DATA dele
     # (``_mapa_retrato_na_data``), nunca o mais novo.
     if anterior is _SEM_PRECARGA:
-        anterior = _snapshot_atual(db, escola_id, aluno.id, SnapshotMatific)
+        inicio_ano, fim_ano = matific_destaque.janela_ano_letivo(
+            data_referencia.year)
+        anterior = _snapshot_atual(db, escola_id, aluno.id, SnapshotMatific,
+                                   desde=inicio_ano, ate=fim_ano)
     atividades = (_num(dados["atividades"], int) if "atividades" in dados
                   else (anterior.atividades if anterior else 0))
     estrelas = (_num(dados["estrelas"], int) if "estrelas" in dados
@@ -1801,14 +2202,15 @@ def _importar_matific_periodo(db, escola_id, importacao, aluno, dados,
 
     Os números do relatório são o que o aluno fez DENTRO do intervalo — nada
     de substituir o acumulado. Regras:
-      * base = último snapshot ANTERIOR ao início do intervalo;
+      * base = último snapshot do ano ANTERIOR ao início do intervalo;
       * candidato = base + valores do relatório (média PONDERADA por
         atividades);
       * PISO anti-regressão: o novo snapshot nunca fica abaixo do maior
         acumulado já registrado ATÉ o fim do intervalo — um relatório
         acumulado antigo datado dentro do período (a migração do fluxo
         antigo para o mensal) jamais derruba o estado atual;
-      * sem base: nasce um snapshot-base na véspera do início valendo
+      * sem base: para intervalos que começam depois da virada do ano, nasce
+        um snapshot-base na véspera do início valendo
         exatamente (novo − ganhos) — premiações e evolução do período
         enxergam o ganho do relatório, nunca zero nem o acumulado de
         outra época;
@@ -1864,7 +2266,8 @@ def _importar_matific_periodo(db, escola_id, importacao, aluno, dados,
     # Mudou = nasce um retrato do período (não havia um datado neste fim) ou o
     # que havia muda de valor (ver "mudou" em ``_importar_matific``).
     mudou = True
-    if base is None:
+    inicio_ano, _ = matific_destaque.janela_ano_letivo(inicio.year)
+    if base is None and inicio > inicio_ano:
         # Snapshot-base na véspera do início valendo (novo − ganhos): o delta
         # do período é exatamente o ganho do relatório, e um acumulado antigo
         # que caiu dentro do intervalo não é atribuído a este período.
@@ -1896,9 +2299,8 @@ def _importar_matific_periodo(db, escola_id, importacao, aluno, dados,
         # com a data acompanhando.
         mesmo_fim = ultimo_ate_fim
     if mesmo_fim is not None:
-        mudou = base is None or (mesmo_fim.atividades, mesmo_fim.estrelas,
-                                 mesmo_fim.pontuacao_media) != (novo_ativ, novo_estrelas,
-                                                                novo_media)
+        mudou = (mesmo_fim.atividades, mesmo_fim.estrelas, mesmo_fim.pontuacao_media) != (
+            novo_ativ, novo_estrelas, novo_media)
         mesmo_fim.atividades = novo_ativ
         mesmo_fim.estrelas = novo_estrelas
         mesmo_fim.pontuacao_media = novo_media
@@ -1926,7 +2328,8 @@ def _importar_matific_periodo(db, escola_id, importacao, aluno, dados,
 
 
 def _importar_elefante_resumo(db, escola_id, importacao, aluno, dados, data_referencia,
-                              anterior=_SEM_PRECARGA, avisos: list | None = None):
+                              anterior=_SEM_PRECARGA, avisos: list | None = None,
+                              sem_retrato_repetido: bool = False):
     # `anterior` pode vir pré-carregado em lote pelo /confirmar (evita o N+1) — e,
     # num relatório RETRODATADO, é o retrato que valia NA DATA dele
     # (``_mapa_retrato_na_data``), nunca o mais novo.
@@ -1965,6 +2368,12 @@ def _importar_elefante_resumo(db, escola_id, importacao, aluno, dados, data_refe
         anterior.livros_unicos, anterior.tempo_leitura_min, anterior.questoes_tentativas,
         anterior.questoes_acertos, anterior.livros_por_nivel or {},
     ) != (livros_unicos, tempo, tentativas, acertos, por_nivel or {})
+    if sem_retrato_repetido and anterior is not None and not mudou:
+        # A resposta perdeu tempo/questões (S9): um retrato com os MESMOS números e a
+        # data de hoje diria que foram medidos hoje — as Questões do período o
+        # leriam como "0 no período". Sem ele, a última medida continua a de antes
+        # e o relatório declara a cobertura como ela é.
+        return False
     if anterior is not None and _mesmo_dia(anterior.data_referencia, data_referencia):
         anterior.livros_unicos = livros_unicos
         anterior.tempo_leitura_min = tempo
@@ -1998,7 +2407,7 @@ def _id_oficial(valor) -> int | None:
         return None
     if isinstance(valor, float) and valor.is_integer():
         valor = int(valor)
-    if isinstance(valor, str) and valor.strip().isdigit():
+    if isinstance(valor, str) and valor.strip().isdecimal():   # "12²": isdigit, não int
         valor = int(valor.strip())
     return valor if isinstance(valor, int) and valor > 0 else None
 
@@ -2050,10 +2459,61 @@ class _AcervoEscola:
         self.restaurados = 0
         self.divergentes = 0
         self.fora_catalogo = 0     # livros SEM casamento no catálogo com nível divergente
+        # Títulos homônimos do catálogo oficial ("Cadê?" B/BB, "Chapeuzinho
+        # Vermelho" I/K) e as leituras que a coleta deixou de gravar porque a
+        # MESMA leitura já estava na outra linha do título (regra PROVADA do
+        # saneamento) — auditadas de forma agregada em ``finalizar``.
+        self.ambiguos = livros_homonimos_saneamento.titulos_auditados()
+        self.homonimas_evitadas: list[dict] = []
         for livro in db.execute(
             select(Livro).where(Livro.escola_id == escola_id).order_by(Livro.id)
         ).scalars():
             self._indexar(livro)
+
+    def livros_homonimos(self) -> dict[int, Livro]:
+        """Livros JÁ gravados da escola cujo título é homônimo no catálogo."""
+        return {l.id: l for chave, grupo in self.por_titulo.items()
+                if chave in self.ambiguos for l in grupo if l.id is not None}
+
+    def e_homonimo(self, livro: Livro) -> bool:
+        """O título do livro é um dos homônimos do catálogo oficial?"""
+        return dificuldade_livro.normalizar_titulo(livro.titulo) in self.ambiguos
+
+    def leitura_homonima_provada(self, livro: Livro, quando, tempo, existentes, *,
+                                 aceitar_tempo_ausente: bool = False):
+        """A leitura que a coleta traz para ``livro`` JÁ está gravada na OUTRA
+        linha do mesmo título homônimo? É a regra PROVADA do saneamento
+        (``livros_homonimos_saneamento.recusa_do_par``): uma linha ``legado`` e
+        uma ``fonte``, mesmo segundo, mesmo tempo de leitura. Sem esta conferência
+        a coleta recriava o par que o saneamento remove — a deduplicação de
+        releitura compara só o ``livro_id``.
+
+        ``aceitar_tempo_ausente``: o tempo que NÃO VEIO num dos lados (ou nos dois)
+        não impede a prova — o mesmo segundo basta para não gravar de novo (o par
+        sem tempo é INDETERMINADO para o saneamento, que nunca o remove). Tempos
+        diferentes continuam sendo duas leituras.
+
+        ``existentes``: ``(livro, leitura_id, data, tempo)`` das leituras do aluno
+        em livros homônimos, lidas antes do lote. Devolve a que forma o par, ou
+        None."""
+        chave = dificuldade_livro.normalizar_titulo(livro.titulo)
+        if chave not in self.ambiguos:
+            return None
+        nova = livros_homonimos_saneamento.LadoDoPar(
+            livro.id, livro.origem_nivel, livro.elefante_id, quando, tempo)
+        for existente in existentes:
+            outro, _leitura_id, data, tempo_existente = existente
+            if outro is livro or dificuldade_livro.normalizar_titulo(outro.titulo) != chave:
+                continue
+            gravada = livros_homonimos_saneamento.LadoDoPar(
+                outro.id, outro.origem_nivel, outro.elefante_id, data, tempo_existente)
+            legado, fonte = ((gravada, nova) if outro.origem_nivel == "legado"
+                             else (nova, gravada))
+            if not livros_homonimos_saneamento.recusa_do_par(
+                    chave, legado, fonte, ambiguos=self.ambiguos,
+                    aceitar_tempo_ausente=aceitar_tempo_ausente):
+                return existente
+        return None
 
     def _indexar(self, livro: Livro) -> None:
         chave = dificuldade_livro.normalizar_titulo(livro.titulo)
@@ -2244,6 +2704,21 @@ class _AcervoEscola:
     def finalizar(self, db, importacao, avisos: list) -> None:
         """Auditoria AGREGADA por importação dos vínculos à identidade oficial
         (uma linha, não uma por livro) e avisos-resumo das reconciliações."""
+        if self.homonimas_evitadas:
+            registrar(db, "leitura.duplicata_homonima_evitada", escola_id=self.escola_id,
+                      usuario_id=importacao.usuario_id, entidade="importacao",
+                      entidade_id=importacao.id,
+                      detalhes={"qtd": len(self.homonimas_evitadas),
+                                "qtd_tempo_ausente": sum(
+                                    1 for i in self.homonimas_evitadas
+                                    if i.get("tempo_ausente")),
+                                "regra": "mesmo aluno, mesmo título homônimo do "
+                                         "catálogo, uma linha 'legado' e uma "
+                                         "'fonte', instante idêntico ao segundo e "
+                                         "mesmo tempo de leitura (ou o tempo ausente "
+                                         "num dos lados: tempo_ausente): a leitura "
+                                         "já constava e não foi gravada de novo",
+                                "itens": self.homonimas_evitadas[:500]})
         if self.vinculados:
             registrar(db, "livro.vinculado_catalogo", escola_id=self.escola_id,
                       usuario_id=importacao.usuario_id, entidade="importacao",
@@ -2311,6 +2786,26 @@ def _ja_lidos_por_aluno(db, aluno_ids) -> dict:
     return mapa
 
 
+def _leituras_homonimas_por_aluno(db, aluno_ids, acervo: _AcervoEscola) -> dict:
+    """{aluno_id: [(livro, leitura_id, data, tempo)]} das leituras já gravadas em
+    livros de título HOMÔNIMO no catálogo — UMA consulta em lote, só nesses
+    livros (são dois títulos). É o que ``_AcervoEscola.leitura_homonima_provada``
+    confere antes de gravar uma leitura nova."""
+    mapa: dict[int, list] = {}
+    ids = list(aluno_ids)
+    livros = acervo.livros_homonimos()
+    if not ids or not livros:
+        return mapa
+    for leitura_id, aid, lid, data, tempo in db.execute(
+        select(Leitura.id, Leitura.aluno_id, Leitura.livro_id, Leitura.data,
+               Leitura.tempo_leitura_min)
+        .where(Leitura.aluno_id.in_(ids), Leitura.livro_id.in_(list(livros)))
+        .order_by(Leitura.id)
+    ).all():
+        mapa.setdefault(aid, []).append((livros[lid], leitura_id, data, tempo))
+    return mapa
+
+
 def _data_do_retrato_das_leituras(data_referencia, ultima_leitura):
     """Data do retrato DERIVADO do relatório individual: max(data do relatório,
     leitura mais nova do aluno), nunca depois de agora. O retrato é o TOTAL de todas
@@ -2331,7 +2826,8 @@ def _data_do_retrato_das_leituras(data_referencia, ultima_leitura):
 
 def _importar_elefante_leituras(db, escola_id, importacao, aluno, linhas,
                                 data_referencia, avisos, catalogo, ja_lidos,
-                                codigos_faixa):
+                                codigos_faixa, *, sem_retrato_repetido: bool = False,
+                                homonimas=()):
     """Formato "uma linha por livro concluído": registra leituras únicas (§35).
 
     Todo o trabalho de banco é feito EM LOTE. O ``catalogo`` (livros da escola),
@@ -2346,6 +2842,13 @@ def _importar_elefante_leituras(db, escola_id, importacao, aluno, linhas,
     conflito). A deduplicação de releitura é pela IDENTIDADE do livro, não pelo
     título — homônimos oficiais ("Cadê?" B e BB) são livros distintos e as duas
     leituras contam. A linha do tempo usa a MESMA resolução.
+
+    EXCEÇÃO PROVADA (homônimos): a linha ``legado`` antiga de um título homônimo
+    guarda leitura das duas obras. Quando a coleta traz a MESMA leitura (mesmo
+    segundo, mesmo tempo) e a resolve para a linha ``fonte`` do outro nível (ou o
+    contrário), ela "já constava": não é gravada de novo — aviso e auditoria
+    agregada. ``homonimas`` são as leituras do aluno nesses livros, lidas UMA vez
+    por lote (``_leituras_homonimas_por_aluno``); a regra é a do saneamento.
 
     NÍVEL CONGELADO: toda leitura nova nasce com ``Leitura.nivel_codigo`` = o
     nível EFETIVO do livro NESTE momento — que, depois da reconciliação do
@@ -2368,8 +2871,10 @@ def _importar_elefante_leituras(db, escola_id, importacao, aluno, linhas,
     vistos: set[int] = set()            # id() dos livros já processados NESTE lote
     resolvidos: dict[int, Livro] = {}   # nº da linha → livro resolvido (linha do tempo)
     rejeitadas: set[int] = set()        # nível fora do vocabulário: sem leitura nem evento
-    # (livro, quando, tempo, nível congelado) de cada leitura nova deste aluno.
-    novas: list[tuple] = []
+    # id() do livro → (livro, quando, tempo, nível congelado) de cada leitura nova
+    # deste aluno (dict: uma leitura pendente sai se a prova homônima vier depois).
+    novas: dict[int, tuple] = {}
+    evitados: set[int] = set()          # id() dos livros cuja leitura já constava no homônimo
     # Versão do catálogo VIGENTE nesta importação — carimbo idêntico ao que a
     # nota grava em ``detalhes.elefante.dificuldade.catalogo``. None sem arquivo.
     versao_cat = dificuldade_livro.versao_catalogo().get("versao")
@@ -2386,16 +2891,6 @@ def _importar_elefante_leituras(db, escola_id, importacao, aluno, linhas,
         if livro is None:
             continue
         resolvidos[indice] = livro
-        # Releitura no MESMO relatório (livro repetido): dedup em memória —
-        # senão a UniqueConstraint derrubaria a importação (autoflush=False).
-        if id(livro) in vistos:
-            avisos.append(f"“{titulo}” aparece mais de uma vez no relatório de "
-                          f"{aluno.nome} — contado uma vez (§35).")
-            continue
-        if livro.id is not None and livro.id in ja_lidos:
-            avisos.append(f"“{titulo}” já constava para {aluno.nome} — releitura não pontua (§35).")
-            continue
-        vistos.add(id(livro))
         # Relatórios individuais informam a data e o HORÁRIO reais da conclusão.
         quando = data_referencia
         try:
@@ -2409,11 +2904,60 @@ def _importar_elefante_leituras(db, escola_id, importacao, aluno, linhas,
         if quando.tzinfo is not None:
             quando = quando.replace(tzinfo=None)
         tempo_livro = linha.dados.get("tempo_livro_min")
+        ja_lido = livro.id is not None and livro.id in ja_lidos
+        if not ja_lido and id(livro) not in evitados and catalogo.e_homonimo(livro):
+            # A MESMA leitura já está na outra linha do título homônimo (regra
+            # PROVADA do saneamento): já constava. Vale para qualquer linha do
+            # relatório — a releitura listada antes da leitura provada também sai.
+            # O tempo que NÃO VEIO (a plataforma não o mandou) não impede a prova: o
+            # mesmo segundo basta para não gravar de novo. O tempo ILEGÍVEL não é
+            # tempo ausente: sem prova, a linha segue o caminho de sempre.
+            tempo_legivel = True
+            try:
+                tempo = _num(tempo_livro, int) if tempo_livro is not None else None
+            except HTTPException:
+                tempo, tempo_legivel = None, False
+            existente = catalogo.leitura_homonima_provada(
+                livro, quando, tempo, homonimas, aceitar_tempo_ausente=tempo_legivel)
+            if existente is not None:
+                evitados.add(id(livro))
+                vistos.add(id(livro))
+                novas.pop(id(livro), None)
+                outro, leitura_id, _, tempo_existente = existente
+                tempo_ausente = tempo is None or tempo_existente is None
+                catalogo.homonimas_evitadas.append({
+                    "aluno_id": aluno.id, "titulo": titulo, "data": quando.isoformat(),
+                    "tempo_min": tempo, "tempo_ausente": tempo_ausente,
+                    "leitura_existente_id": leitura_id,
+                    "livro_existente_id": outro.id,
+                    "livro_existente_origem": outro.origem_nivel,
+                    "livro_existente_elefante_id": outro.elefante_id,
+                    "livro_da_coleta_id": livro.id,
+                    "livro_da_coleta_origem": livro.origem_nivel,
+                    "livro_da_coleta_elefante_id": livro.elefante_id})
+                avisos.append(
+                    f"“{titulo}” já constava para {aluno.nome} no outro livro com o "
+                    + ("mesmo título (mesmo horário; o tempo de leitura não veio num "
+                       "dos registros) — não foi contado de novo. Registrado na "
+                       "auditoria." if tempo_ausente else
+                       "mesmo título (mesmo horário e mesmo tempo de leitura) — não foi "
+                       "contado de novo. Registrado na auditoria."))
+                continue
+        # Releitura no MESMO relatório (livro repetido): dedup em memória —
+        # senão a UniqueConstraint derrubaria a importação (autoflush=False).
+        if id(livro) in vistos:
+            avisos.append(f"“{titulo}” aparece mais de uma vez no relatório de "
+                          f"{aluno.nome} — contado uma vez (§35).")
+            continue
+        if ja_lido:
+            avisos.append(f"“{titulo}” já constava para {aluno.nome} — releitura não pontua (§35).")
+            continue
+        vistos.add(id(livro))
         # O nível é lido AQUI, depois da reconciliação desta linha: é o nível
         # efetivo do livro no instante em que a leitura passa a existir.
-        novas.append((livro, quando,
-                      _num(tempo_livro, int) if tempo_livro is not None else None,
-                      livro.nivel_codigo))
+        novas[id(livro)] = (livro, quando,
+                            _num(tempo_livro, int) if tempo_livro is not None else None,
+                            livro.nivel_codigo)
 
     # Persiste PRIMEIRO os livros novos (ganham id) e então grava todas as
     # leituras num único INSERT executemany — uma ida ao banco, não N.
@@ -2425,7 +2969,7 @@ def _importar_elefante_leituras(db, escola_id, importacao, aluno, linhas,
              "data": quando, "tempo_leitura_min": tempo,
              # NÍVEL CONGELADO + versão do catálogo que o resolveu.
              "nivel_codigo": nivel or None, "catalogo_versao": versao_cat}
-            for livro, quando, tempo, nivel in novas
+            for livro, quando, tempo, nivel in novas.values()
         ])
 
     # ESPELHO evento a evento (linha do tempo): 1 EventoAluno por leitura do
@@ -2536,6 +3080,11 @@ def _importar_elefante_leituras(db, escola_id, importacao, aluno, linhas,
             anterior.livros_por_nivel = por_nivel
             anterior.importacao_id = importacao.id
             _avancar_data(anterior, data_retrato)
+    elif sem_retrato_repetido and anterior is not None and not retrato_mudou:
+        # S9: a resposta desta coleta perdeu tempo/questões. Um retrato novo aqui só
+        # repetiria os números de antes com a data de hoje (as Questões do período o
+        # leriam como "0 no período"); as leituras novas já ficaram gravadas acima.
+        pass
     else:
         db.add(SnapshotElefante(
             escola_id=escola_id, aluno_id=aluno.id, importacao_id=importacao.id,
@@ -2551,36 +3100,74 @@ def _importar_elefante_leituras(db, escola_id, importacao, aluno, linhas,
     return bool(novas) or n_eventos > 0 or retrato_mudou
 
 
-def _finalizar_importacao(db: Session, escola_id: int, *, corpo: str) -> int:
+def _finalizar_importacao(db: Session, escola_id: int, *, corpo: str,
+                          tarefas: BackgroundTasks | None = None) -> int:
     """Fecha uma importação: recalcula notas/rankings, invalida o cache do painel
     público e notifica a escola. Ponto ÚNICO de finalização — usado pelo
     /confirmar (recalcular=true) e pelo /recalcular (fim do lote), para os dois
-    nunca divergirem no que fazem ao terminar."""
+    nunca divergirem no que fazem ao terminar. ``tarefas``: as da requisição — o
+    push sai depois da resposta (``_pos_commit_importacao``)."""
     n = scoring.recalcular_escola(db, escola_id)
     # Recálculo que deu certo fecha a pendência que uma sincronização deixou
     # (dado gravado, notas não recalculadas) — vale também para o /recalcular.
     from app.sync import service as sync_service
     if sync_service.resolver_recalculo_pendente(db, escola_id):
         db.commit()
-    _pos_commit_importacao(db, escola_id, corpo=corpo)
+    _pos_commit_importacao(db, escola_id, corpo=corpo, tarefas=tarefas)
     return n
 
 
+_TITULO_PUSH_DADOS = "Novos dados no Constela Edu"
+
+
+def _notificar_depois_da_resposta(banco, escola_id: int, corpo: str,
+                                  aluno_id: int | None) -> None:
+    """O push da importação como TAREFA depois da resposta, numa sessão PRÓPRIA: a
+    da requisição já foi fechada quando a tarefa roda. ``banco`` é o mesmo da
+    requisição (``db.get_bind()``) — o engine do app, com a configuração de
+    ``SessionLocal``. Melhor esforço: uma falha aqui não tem mais resposta a
+    derrubar, então vai para o log e a sessão é desfeita e fechada."""
+    from app.core.database import SessionLocal
+
+    sessao = SessionLocal(bind=banco)
+    try:
+        push.notificar_escola(
+            sessao, escola_id, titulo=_TITULO_PUSH_DADOS,
+            corpo=corpo, dados={"tela": "ranking"}, aluno_id=aluno_id)
+    except Exception:  # noqa: BLE001 — melhor esforço, depois da resposta
+        sessao.rollback()
+        logger.exception("Push da importação falhou depois da resposta (escola %s)",
+                         escola_id)
+    finally:
+        sessao.close()
+
+
 def _pos_commit_importacao(db: Session, escola_id: int, *, corpo: str,
-                           aluno_id: int | None = None) -> None:
+                           aluno_id: int | None = None,
+                           tarefas: BackgroundTasks | None = None) -> None:
     """Efeitos que NÃO pertencem à transação: cache em memória do processo e push
     para os aparelhos. Ficam DEPOIS do commit de propósito — notificar antes de
     a transação fechar avisaria sobre dado que pode nem existir, e o próprio
     ``notificar_escola`` commita ao limpar token morto (o que abriria a transação
     do chamador no meio). Não é reversível por rollback: é melhor esforço.
 
+    ``tarefas`` (as ``BackgroundTasks`` da requisição): o push vira tarefa DEPOIS da
+    resposta, com sessão própria (``_notificar_depois_da_resposta``) — antes quem
+    importava esperava a chamada ao Expo (até 15 s por lote de 100 aparelhos) para
+    ver o resultado. Sem ``tarefas`` (a sincronização automática, que não é uma
+    requisição), o push sai na hora, na sessão de quem chama.
+
     ``aluno_id``: o aviso é de UMA criança (leva o primeiro nome) e só vai a quem a
     enxerga pela API (``push.notificar_escola``)."""
     from app.routers.publico import invalidar_cache_painel
 
     invalidar_cache_painel(escola_id)  # painel público reflete os novos dados
+    if tarefas is not None:
+        tarefas.add_task(_notificar_depois_da_resposta, db.get_bind(), escola_id,
+                         corpo, aluno_id)
+        return
     push.notificar_escola(
-        db, escola_id, titulo="Novos dados no Constela Edu",
+        db, escola_id, titulo=_TITULO_PUSH_DADOS,
         corpo=corpo, dados={"tela": "ranking"}, aluno_id=aluno_id)
 
 
@@ -2591,14 +3178,74 @@ class _ConfirmacaoDaSincronizacao(ImportacaoConfirm):
     ``ImportacaoConfirm``). ``sincronizar_turma`` não serve de prova — é um campo
     aberto do schema, que qualquer admin/coordenador pode mandar pela API."""
 
+    # A resposta perdeu tempo/questões em TODAS as linhas (S9): o retrato que só
+    # repetiria os números de antes com a data de hoje não é gravado.
+    _sem_retrato_repetido: bool = PrivateAttr(default=False)
+    # As questões não vieram nesta execução (S9): os retratos desta importação levam
+    # as da coleta anterior — a importação é marcada (``IMPORTACAO_SEM_QUESTOES``) e
+    # as Questões do período não os usam como borda.
+    _questoes_herdadas: bool = PrivateAttr(default=False)
 
-def confirmacao_da_sincronizacao(dados: ImportacaoConfirm) -> ImportacaoConfirm:
+
+def confirmacao_da_sincronizacao(dados: ImportacaoConfirm, *,
+                                 sem_retrato_repetido: bool = False,
+                                 questoes_herdadas: bool = False) -> ImportacaoConfirm:
     """Marca o pedido montado pela sincronização automática (só o orquestrador
     chama). Os valores já foram validados ao montar ``dados``: nada é revalidado e
     os campos informados continuam os mesmos."""
-    return _ConfirmacaoDaSincronizacao.model_construct(
+    marcado = _ConfirmacaoDaSincronizacao.model_construct(
         _fields_set=set(dados.model_fields_set),
         **{campo: getattr(dados, campo) for campo in ImportacaoConfirm.model_fields})
+    marcado._sem_retrato_repetido = bool(sem_retrato_repetido)
+    marcado._questoes_herdadas = bool(questoes_herdadas)
+    return marcado
+
+
+def _exigir_uma_linha_por_ficha_fixada(db: Session, escola_id: int,
+                                       dados: ImportacaoConfirm) -> None:
+    """DUAS LINHAS FIXADAS NA MESMA FICHA, com contas da plataforma diferentes ou com
+    números diferentes no retrato: 422 antes de gravar qualquer coisa.
+
+    A escolha explícita (``aluno_id``) sempre associa (``identidade_aluno.decidir``,
+    passo 0); o núcleo agrupa as linhas por aluno e grava só a ÚLTIMA do retrato
+    (``linhas_aluno[-1]``). Com a mesma ficha escolhida em duas linhas, o retrato
+    dependia da ordem do arquivo, sem aviso, e as duas contas iam para a ficha (as
+    coletas seguintes mandavam as duas para a Revisão). É a guarda que o /resolver já
+    tem (``linhas_divergentes_do_mesmo_id``), aqui na entrada: quem confirma escolhe
+    a linha que vale. A mesma linha repetida (mesma conta, mesmos números — a
+    criança em duas turmas do Placar) e as linhas de livro (leituras, que somam) de
+    uma conta só seguem normais. Só a escolha explícita entra: a sincronização não
+    fixa ficha, e a linha deixada para a Revisão não associa."""
+    por_aluno: dict[int, list] = {}
+    for linha in dados.linhas:
+        if linha.aluno_id is not None and not getattr(linha, "deixar_para_revisao", False):
+            por_aluno.setdefault(linha.aluno_id, []).append(linha)
+    suspeitos = {aid for aid, linhas in por_aluno.items() if len(linhas) > 1}
+    if not suspeitos:
+        return
+    em_conflito = []
+    for aid in sorted(suspeitos):
+        linhas = por_aluno[aid]
+        contas = {conta for ids in ida.contas_das_linhas(linhas, dados.plataforma).values()
+                  for conta in ids}
+        if len(contas) > 1 or ida.linhas_divergentes([l.dados or {} for l in linhas]):
+            em_conflito.append(aid)
+    if not em_conflito:
+        return
+    # Só fichas DESTA escola entram no texto (a de outra escola a linha ignora).
+    nomes = db.execute(select(Aluno.nome).where(
+        Aluno.escola_id == escola_id, Aluno.id.in_(em_conflito)).order_by(Aluno.nome)
+    ).scalars().all()
+    if not nomes:
+        return
+    raise HTTPException(
+        status.HTTP_422_UNPROCESSABLE_ENTITY,
+        "Mais de uma linha do relatório foi ligada ao mesmo aluno ("
+        + ", ".join(f"“{n}”" for n in nomes)
+        + "), com contas da plataforma ou números diferentes. Só uma linha pode ir "
+        "para cada aluno: a importação guardaria apenas a última e ligaria as duas "
+        "contas à mesma ficha. Ligue o aluno a uma linha só e escolha outro destino "
+        "para a outra. Nada foi gravado.")
 
 
 @router.post("/confirmar", response_model=ImportacaoResultadoOut)
@@ -2607,6 +3254,7 @@ def confirmar(
     escola_id: int = Depends(escola_autorizada),
     usuario: Usuario = Depends(exigir_papeis("admin", "coordenador")),
     db: Session = Depends(get_db),
+    tarefas: BackgroundTasks = None,  # type: ignore[assignment]  # o FastAPI injeta
 ):
     """Aplica a importação e COMMITA. O trabalho em si está em
     ``_confirmar_sem_commit``; aqui só se fecha a transação, recalcula quando
@@ -2618,10 +3266,15 @@ def confirmar(
     coisa (a mesma trava da prévia; a sincronização tem a dela no serviço)."""
     svc_modulos.exigir_plataforma(
         svc_modulos.modulos_da_escola(db, db.get(Escola, escola_id)), dados.plataforma)
+    _exigir_uma_linha_por_ficha_fixada(db, escola_id, dados)
+    da_sync = isinstance(dados, _ConfirmacaoDaSincronizacao)
     nucleo = _confirmar_sem_commit(
         dados=dados, escola_id=escola_id, usuario=usuario, db=db,
-        da_sincronizacao=isinstance(dados, _ConfirmacaoDaSincronizacao))
+        da_sincronizacao=da_sync,
+        sem_retrato_repetido=da_sync and dados._sem_retrato_repetido,
+        questoes_herdadas=da_sync and dados._questoes_herdadas)
     db.commit()
+    _arquivar_depois_do_commit(db, nucleo)
 
     # No modo lote, o recálculo/push acontece UMA vez ao final (via /recalcular),
     # não a cada arquivo — economiza dezenas de recálculos numa turma inteira.
@@ -2642,7 +3295,7 @@ def confirmar(
                      "As notas já foram recalculadas.")
         else:
             corpo = f"Notas recalculadas com os dados já gravados da {plataforma_nome}."
-        _finalizar_importacao(db, escola_id, corpo=corpo)
+        _finalizar_importacao(db, escola_id, corpo=corpo, tarefas=tarefas)
         mensagem = (f"Importação concluída: {n_aplicados} alunos atualizados{resto}. "
                     "Notas recalculadas automaticamente.")
     else:
@@ -2701,6 +3354,9 @@ class _NucleoImportacao:
     ids_de_outra_escola: list[str] = field(default_factory=list)
     # Pendências 'criacao_bloqueada_por_politica' (ficha nova barrada pela política).
     criacao_bloqueada: int = 0
+    # O original a levar de /temporarios para a pasta definitiva DEPOIS do commit
+    # (``_arquivar_depois_do_commit``): (origem, destino, nome mandado pelo cliente).
+    original_a_arquivar: tuple[Path, Path, str | None] | None = None
 
 
 # Campos SEM os quais uma linha da SINCRONIZAÇÃO não vira retrato: o retrato
@@ -2740,6 +3396,8 @@ def _confirmar_sem_commit(
     encerrar_revisoes: bool = True,
     da_sincronizacao: bool = False,
     piso_da_data: bool = True,
+    sem_retrato_repetido: bool = False,
+    questoes_herdadas: bool = False,
 ) -> _NucleoImportacao:
     """TODO o trabalho do /confirmar, SEM commit e SEM efeito externo.
 
@@ -2747,6 +3405,13 @@ def _confirmar_sem_commit(
     eventos e a fila de revisão. Nada de ``db.commit()`` — quem chama decide
     quando fechar. Assim o ``/resolver`` aplica várias pendências irmãs e fecha
     tudo numa transação única: falhou no meio, nada fica.
+
+    O ORIGINAL também não sai de /temporarios aqui: o núcleo só o confere e devolve
+    em ``original_a_arquivar``; quem commita o move depois do commit
+    (``_arquivar_depois_do_commit``). Movido antes, uma falha no meio (valor
+    inválido, erro do banco, o próprio commit) desfazia o banco e deixava o relatório
+    — com nomes de crianças — fora de /temporarios e sem linha em ``importacoes``:
+    nem o limpador nem a exclusão de aluno o achavam.
 
     ``encerrar_revisoes``: linha ASSOCIADA encerra a revisão pendente da mesma
     identidade e do mesmo tipo de dado (``_encerrar_revisoes_respondidas``). O
@@ -2763,7 +3428,11 @@ def _confirmar_sem_commit(
 
     ``piso_da_data``: o /resolver passa False — a data da pendência é a que a
     importação original gravou (registro do servidor, não digitada agora): uma
-    pendência antiga não fica sem solução porque a escola avançou o ano letivo."""
+    pendência antiga não fica sem solução porque a escola avançou o ano letivo.
+
+    ``questoes_herdadas`` (só a sincronização, S9): as questões não vieram da
+    plataforma nesta execução; a importação nasce com o status
+    ``IMPORTACAO_SEM_QUESTOES`` e os retratos dela não medem as questões."""
     inicio = time.monotonic()
     from app.models import Escola
 
@@ -2772,11 +3441,16 @@ def _confirmar_sem_commit(
     # regras do total acumulado (a recusa sem data olha o formato "resumo").
     if dados.plataforma == "matific" and dados.formato == "leituras":
         raise HTTPException(422, "O Matific não tem relatório individual de leituras.")
+    if not dados.linhas:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Nenhuma linha para importar.")
+
+    # Serializa importações, fusões e a troca do ano letivo. A escola pode ter
+    # entrado na sessão antes da espera pela trava, então releia o ano ativo.
+    bloquear_escola_para_importacao(db, escola_id)
     escola = db.get(Escola, escola_id)
     if escola is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Escola não encontrada.")
-    if not dados.linhas:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Nenhuma linha para importar.")
+    db.refresh(escola, ["ano_letivo_ativo"])
     agora_utc = _agora_utc()
     # DATA DO RELATÓRIO (upload manual): no futuro, o retrato viraria o "atual" até
     # lá, por cima de toda coleta; de 1990 (ou do ano 1, que estourava em 500),
@@ -2787,13 +3461,6 @@ def _confirmar_sem_commit(
             data_informada = _conferir_data_do_relatorio(data_informada, escola, agora_utc,
                                                          com_piso=piso_da_data)
         _conferir_periodo_do_relatorio(dados, escola, agora_utc, com_piso=piso_da_data)
-
-    # Serializa importações concorrentes desta escola. A trava (Postgres; no-op
-    # em SQLite) garante que o 2º envio sobreposto leia o que o 1º commitou;
-    # combinada com o re-casamento contra o banco — turma via índice único +
-    # _inserir_turma, aluno via _aluno_existente_na_turma — um double-click/retry
-    # do MESMO relatório reaproveita em vez de duplicar turmas/alunos.
-    bloquear_escola_para_importacao(db, escola_id)
 
     data_referencia = data_informada or agora_utc.replace(tzinfo=timezone.utc)
     avisos: list[str] = []
@@ -2827,6 +3494,10 @@ def _confirmar_sem_commit(
         periodo_fim = dados.periodo_fim.replace(tzinfo=None)
         if periodo_fim.time() == hora_zero(0, 0):
             periodo_fim -= timedelta(seconds=1)
+        if periodo_fim.year != periodo_inicio.year:
+            raise HTTPException(
+                422, "O contador do Matific reinicia na virada do ano. Importe um relatório "
+                "de cada ano separadamente. Nada foi gravado.")
         # Período EM ANDAMENTO (relatório do mês corrente): o snapshot é
         # datado agora, nunca no futuro — uma data futura ficaria acima de
         # qualquer edição manual feita depois, escondendo-a dos rankings.
@@ -2842,11 +3513,12 @@ def _confirmar_sem_commit(
     # Move o arquivo original de /temporarios para a pasta definitiva (§15).
     # arquivo_token e arquivo_nome vêm do cliente: ambos são saneados contra
     # path traversal antes de tocar o disco (nunca escapar de UPLOADS_DIR). O
-    # caminho é validado AQUI, mas o arquivo só é movido depois das recusas da
-    # importação (``mover_original``): recusada, o original fica em /temporarios e
-    # o mesmo token serve para confirmar de novo (ex.: com a data do relatório).
+    # caminho é validado AQUI, mas o arquivo só é movido depois do COMMIT
+    # (``original_a_arquivar``): recusada ou desfeita, a importação deixa o original
+    # em /temporarios e o mesmo token serve para confirmar de novo (ex.: com a data
+    # do relatório).
     arquivo_final = None
-    mover_original: tuple[Path, Path] | None = None
+    mover_original: tuple[Path, Path, str | None] | None = None
     if dados.arquivo_token:
         if not _TOKEN_VALIDO.match(dados.arquivo_token):
             raise HTTPException(status.HTTP_400_BAD_REQUEST,
@@ -2864,19 +3536,19 @@ def _confirmar_sem_commit(
             base_nome = Path(dados.arquivo_nome or "").name
             if not base_nome or not base_nome.lower().endswith((".pdf", ".xlsx")):
                 base_nome = dados.arquivo_token
-            nome = f"{datetime.now(timezone.utc):%Y%m%d_%H%M%S}_{base_nome}"
+            nome = _nome_arquivado(base_nome, datetime.now(timezone.utc))
             destino = (base_uploads / dados.plataforma / nome).resolve()
             if not destino.is_relative_to(base_uploads):
                 raise HTTPException(status.HTTP_400_BAD_REQUEST,
                                     "Nome de arquivo inválido.")
-            mover_original = (origem, destino)
+            mover_original = (origem, destino, dados.arquivo_nome)
             arquivo_final = f"uploads/{dados.plataforma}/{nome}"
 
     importacao = Importacao(
         escola_id=escola_id, usuario_id=usuario.id,
         plataforma=dados.plataforma, tipo=dados.tipo,
-        arquivo_original=arquivo_final or dados.arquivo_nome,
-        status="concluida",
+        arquivo_original=_registro_do_original(arquivo_final or dados.arquivo_nome),
+        status=IMPORTACAO_SEM_QUESTOES if questoes_herdadas else "concluida",
     )
     db.add(importacao)
     db.flush()
@@ -2899,6 +3571,18 @@ def _confirmar_sem_commit(
     # aviso e auditoria em ``_resolver_aluno``); a escolha da gestão da escola vai
     # para a revisão, como no /resolver.
     ctx_identidade.confirma_conta_de_outra_escola = bool(getattr(usuario, "is_global", False))
+    # Duas contas AINDA SEM VÍNCULO que levariam a MESMA ficha neste relatório:
+    # nenhuma leva (revisão para as duas), em vez de a primeira linha do arquivo
+    # vencer — a mesma marca da prévia, depois das duas acima.
+    idents_da_importacao = []
+    for linha in dados.linhas:
+        ident, turma_linha, invalida = _identidade_da_linha(db, escola_id, linha,
+                                                            dados.plataforma)
+        if (not invalida
+                and not svc.texto_longo_demais(linha.nome, ident.id_externo, turma_linha)
+                and (linha.aluno_id is not None or svc.tokens_nome(linha.nome))):
+            idents_da_importacao.append(ident)
+    ida.marcar_fichas_disputadas(ctx_identidade, idents_da_importacao)
     coletor = ida.ColetorRevisoes(
         formato=dados.formato, contexto=contexto_revisao,
         origem="sincronizacao" if getattr(dados, "sincronizar_turma", False) else "importacao",
@@ -2916,6 +3600,13 @@ def _confirmar_sem_commit(
     pode_criar_aluno = (politica_sync.pode_criar_aluno(db, escola_id)
                         and getattr(dados, "permitir_criar_aluno", None) is not False)
     pode_criar_turma = bool(getattr(dados, "permitir_criar_turma", True)) and pode_criar_aluno
+    # VIRADA DO ANO (S_G_VIRADA-1): a COLETA feita fora do ano letivo ativo da escola
+    # (dia de Brasília de agora — o instante em que a plataforma foi lida diz de que
+    # ano são as turmas e as crianças que ela mostra) grava os números de quem já tem
+    # ficha, mas não cria ficha: em fevereiro, com a escola ainda no ano que
+    # terminou, a criança nova do ano seguinte nascia matriculada nele. A importação
+    # manual tem prévia e as regras da data do relatório; não muda.
+    fora_do_ano = da_sincronizacao and _fora_do_ano_letivo(escola.ano_letivo_ativo, agora_utc)
     for linha in dados.linhas:
         faltam = [c for c in exigidos or () if (linha.dados or {}).get(c) is None]
         if faltam:
@@ -2937,6 +3628,7 @@ def _confirmar_sem_commit(
             continue
         na_fila = sum(len(p.linhas) for p in coletor.pendencias.values())
         decididas = sum(linhas_descartadas.get(m, 0) for m in ida.MOTIVOS_DESCARTE_DECIDIDO)
+        fora_antes = linhas_descartadas.get(MOTIVO_COLETA_FORA_DO_ANO, 0)
         aluno = _resolver_aluno(db, escola_id, escola.ano_letivo_ativo, linha,
                                 avisos, criados, turmas_novas,
                                 permitir_criar_turma=pode_criar_turma,
@@ -2944,19 +3636,26 @@ def _confirmar_sem_commit(
                                 plataforma=dados.plataforma, ctx=ctx_identidade,
                                 revisoes=coletor, usuario_id=usuario.id,
                                 encerrar_revisoes=encerrar_revisoes,
-                                descartes=linhas_descartadas)
+                                descartes=linhas_descartadas,
+                                coleta_fora_do_ano_letivo=fora_do_ano)
         if aluno is None:
             if sum(linhas_descartadas.get(m, 0)
                    for m in ida.MOTIVOS_DESCARTE_DECIDIDO) > decididas:
-                # A ESCOLA já decidiu (conta aposentada): descarte com motivo
-                # próprio, já contado. Fora de ``ignorados`` — o nome da conta
-                # aposentada é o da criança, e a sync desfazia o cursor DELA a
-                # cada coleta — e fora de 'sem_vinculo' (pendência permanente que
-                # nunca deixava a integração chegar a "nada mudou").
+                # Já decidido (conta aposentada pela escola; conta de criança
+                # excluída para sempre): descarte com motivo próprio, já contado.
+                # Fora de ``ignorados`` — o nome da conta aposentada é o da
+                # criança, e a sync desfazia o cursor DELA a cada coleta — e fora
+                # de 'sem_vinculo' (pendência permanente que nunca deixava a
+                # integração chegar a "nada mudou").
                 continue
             chave_ign = svc.chave_nome(linha.nome)
             if chave_ign not in ignorados:
                 ignorados.append(chave_ign)
+            if linhas_descartadas.get(MOTIVO_COLETA_FORA_DO_ANO, 0) > fora_antes:
+                # Criança sem ficha numa coleta de fora do ano letivo: já contada no
+                # motivo próprio. Em ``ignorados`` (a sync não avança o cursor dela e
+                # a coleta depois da virada a traz), mas não é pendência de vínculo.
+                continue
             # Foi para a fila de revisão (linha preservada) ou ficou sem vínculo?
             if sum(len(p.linhas) for p in coletor.pendencias.values()) > na_fila:
                 linhas_em_revisao += 1
@@ -2974,33 +3673,55 @@ def _confirmar_sem_commit(
                             if p.motivo == "criacao_bloqueada_por_politica")
     avisos_criticos: list[str] = []
     if ausentes_sync:
+        # Código ESTÁVEL (lido pelo serviço da sincronização) × texto para quem usa
+        # (com os rótulos dos campos, nunca o nome interno).
         avisos_criticos.append("campos_ausentes:" + ",".join(sorted(ausentes_sync)))
+        rotulos_ausentes = ", ".join(_ROTULO_CAMPO_RETRATO.get(c, c.replace("_", " "))
+                                     for c in sorted(ausentes_sync))
         avisos.append(
             f"{linhas_descartadas['campos_ausentes']} linha(s) sem "
-            f"{', '.join(sorted(ausentes_sync))} na resposta da plataforma — dado não "
+            f"{rotulos_ausentes} na resposta da plataforma — dado não "
             "gravado (o valor anterior não é repetido com a data de hoje).")
+    if linhas_descartadas.get(ida.MOTIVO_CONTA_ESQUECIDA):
+        avisos.append(_aviso_contas_esquecidas(linhas_descartadas[ida.MOTIVO_CONTA_ESQUECIDA]))
 
     # MUDANÇA AUTOMÁTICA DE TURMA (só na sync automática do Matific): vincula o
     # UUID e move a matrícula de quem trocou de sala — só com a política
     # 'permitir'; com 'bloquear' a matrícula segue a Lista Piloto e a turma
     # divergente vira aviso (P15). Antes do recálculo para o ranking já refletir a
     # turma nova.
+    # Coleta de FORA do ano letivo ativo: ninguém é movido (a turma que a plataforma
+    # mostra é a de outro ano) — ``data_coleta``.
     movidos_ids: list[int] = []
+    retidos_fora_do_ano: list[int] = []
     if getattr(dados, "sincronizar_turma", False) and dados.plataforma == "matific" \
             and resolvidos:
         _sincronizar_turma_matific(
             db, escola_id, escola.ano_letivo_ativo, resolvidos, avisos,
-            ctx=ctx_identidade, movidos_ids=movidos_ids)
+            ctx=ctx_identidade, movidos_ids=movidos_ids, data_coleta=agora_utc,
+            retidos_fora_do_ano=retidos_fora_do_ano)
+    fichas_fora_do_ano = linhas_descartadas.get(MOTIVO_COLETA_FORA_DO_ANO, 0)
+    if fichas_fora_do_ano:
+        avisos.append(_aviso_coleta_fora_do_ano(escola.ano_letivo_ativo, agora_utc,
+                                                fichas=fichas_fora_do_ano))
+    if fichas_fora_do_ano or retidos_fora_do_ano:
+        # Código ESTÁVEL para a sincronização abrir o alerta de mesmo nome.
+        avisos_criticos.append(MOTIVO_COLETA_FORA_DO_ANO)
 
     # Import por período: as séries de snapshots dos alunos envolvidos vêm
     # numa ÚNICA consulta (212 alunos = 1 ida ao banco, não 212).
     series: dict[int, list] = {}
     contadores = {"reimportados": 0, "historico": 0, "preservados": 0}
+    inicio_ano_matific = fim_ano_matific = None
+    if dados.plataforma == "matific":
+        inicio_ano_matific, fim_ano_matific = matific_destaque.janela_ano_letivo(
+            _instante_utc(data_referencia).year)
     if periodo_inicio is not None and resolvidos:
         for snap in db.execute(
             select(SnapshotMatific)
             .where(SnapshotMatific.escola_id == escola_id,
-                   SnapshotMatific.aluno_id.in_(list(resolvidos)))
+                   SnapshotMatific.aluno_id.in_(list(resolvidos)),
+                   SnapshotMatific.data_referencia.between(inicio_ano_matific, fim_ano_matific))
             .order_by(SnapshotMatific.data_referencia, SnapshotMatific.id)
         ).scalars():
             series.setdefault(snap.aluno_id, []).append(snap)
@@ -3015,7 +3736,8 @@ def _confirmar_sem_commit(
     if resolvidos:
         if dados.plataforma == "matific" and periodo_inicio is None:
             anteriores = _mapa_snapshot_atual(db, escola_id, resolvidos.keys(), SnapshotMatific,
-                                              ate=teto_retrato)
+                                              desde=inicio_ano_matific,
+                                              ate=min(teto_retrato, fim_ano_matific))
         elif dados.plataforma != "matific" and dados.formato != "leituras":
             anteriores = _mapa_snapshot_atual(db, escola_id, resolvidos.keys(), SnapshotElefante,
                                               ate=teto_retrato)
@@ -3035,14 +3757,23 @@ def _confirmar_sem_commit(
     # dia complementa o retrato no lugar e apaga a primeira — uma execução da sync
     # iniciada no dia do retrato atual, ou depois (``_alunos_com_sincronizacao_desde_o_retrato``).
     if (dados.data_referencia is None and not da_sincronizacao and periodo_inicio is None
-            and (dados.formato == "resumo" or dados.plataforma == "matific") and anteriores):
+            and (dados.formato == "resumo" or dados.plataforma == "matific")):
+        anteriores_para_conferir = anteriores
+        if dados.plataforma == "matific":
+            # Sem a data não sabemos se o relatório é do ano corrente. Um retrato
+            # de outro ano ainda prova a necessidade da data, sem emprestar o seu
+            # acumulado ao ano novo.
+            sem_retrato_do_ano = resolvidos.keys() - anteriores.keys()
+            anteriores_para_conferir = {**_mapa_snapshot_atual(
+                db, escola_id, sem_retrato_do_ano, SnapshotMatific, ate=teto_retrato),
+                **anteriores}
         da_sync = _importacoes_da_sincronizacao(
             db, escola_id, dados.plataforma,
-            {snap.importacao_id for snap in anteriores.values() if snap is not None})
-        cobertos = {aid for aid, snap in anteriores.items()
+            {snap.importacao_id for snap in anteriores_para_conferir.values() if snap is not None})
+        cobertos = {aid for aid, snap in anteriores_para_conferir.items()
                     if snap is not None and snap.importacao_id in da_sync}
         cobertos |= _alunos_com_sincronizacao_desde_o_retrato(
-            db, escola_id, dados.plataforma, anteriores)
+            db, escola_id, dados.plataforma, anteriores_para_conferir)
         if cobertos:
             raise HTTPException(
                 422,
@@ -3074,7 +3805,9 @@ def _confirmar_sem_commit(
     if retro:
         modelo_retrato = SnapshotMatific if dados.plataforma == "matific" else SnapshotElefante
         na_data = _mapa_retrato_na_data(db, escola_id, retro, modelo_retrato, data_referencia,
-                                        ate=teto_retrato)
+                                        desde=inicio_ano_matific,
+                                        ate=(min(teto_retrato, fim_ano_matific)
+                                             if fim_ano_matific else teto_retrato))
         sem_base: set[int] = set()
         campos_sem_base: set[str] = set()
         for aid in retro:
@@ -3116,19 +3849,18 @@ def _confirmar_sem_commit(
                 "relatório, importe antes, com a mesma data, um relatório que traga esses "
                 "dados, ou confira a data informada. Nada foi gravado.")
 
-    if mover_original is not None:
-        origem, destino = mover_original
-        destino.parent.mkdir(parents=True, exist_ok=True)
-        shutil.move(str(origem), str(destino))
-
     # PERFORMANCE das leituras (Elefante): catálogo de livros, faixas de nível e
     # "já lidos" carregados UMA vez para o arquivo inteiro — antes eram relidos
     # por aluno (~190× numa escola de 10 turmas), o gargalo da sync de ~15 min.
-    cat_livros = cod_faixa = ja_lidos_map = None
+    cat_livros = cod_faixa = ja_lidos_map = homonimas_map = None
     if dados.formato == "leituras" and resolvidos:
         cat_livros = _catalogo_livros(db, escola_id)
         cod_faixa = _codigos_faixa_escola(db, escola_id)
-        ja_lidos_map = _ja_lidos_por_aluno(db, [a.id for a, _ in resolvidos.values()])
+        ids_lote = [a.id for a, _ in resolvidos.values()]
+        ja_lidos_map = _ja_lidos_por_aluno(db, ids_lote)
+        # Leituras já gravadas nos títulos homônimos do catálogo: a coleta não
+        # grava de novo a que já está na outra linha do título (regra provada).
+        homonimas_map = _leituras_homonimas_por_aluno(db, ids_lote, cat_livros)
 
     aplicados: list[int] = []        # alunos cujo dado MUDOU nesta importação
     for aluno, linhas_aluno in resolvidos.values():
@@ -3146,12 +3878,15 @@ def _confirmar_sem_commit(
             mudou = _importar_elefante_leituras(db, escola_id, importacao, aluno,
                                                 linhas_aluno, data_referencia, avisos,
                                                 cat_livros, ja_lidos_map.get(aluno.id, set()),
-                                                cod_faixa)
+                                                cod_faixa,
+                                                sem_retrato_repetido=sem_retrato_repetido,
+                                                homonimas=homonimas_map.get(aluno.id, ()))
         else:
             mudou = _importar_elefante_resumo(db, escola_id, importacao, aluno,
                                               linhas_aluno[-1].dados, data_referencia,
                                               anterior=base_retrato.get(aluno.id),
-                                              avisos=avisos)
+                                              avisos=avisos,
+                                              sem_retrato_repetido=sem_retrato_repetido)
         if mudou:
             aplicados.append(aluno.id)
     # Matrícula movida pela sync também é dado alterado (turma do ranking,
@@ -3181,7 +3916,17 @@ def _confirmar_sem_commit(
             "meses seguintes em ordem.")
 
     importacao.qtd_alunos = len(resolvidos)
-    importacao.qtd_erros = len(dados.linhas) - sum(len(l) for _, l in resolvidos.values())
+    # ERROS = só as linhas descartadas por DEFEITO (sem nome utilizável, turma
+    # inválida, aluno de outra escola ou excluído, campos ausentes). A linha que foi
+    # para a Revisão de identidade não é erro — está guardada esperando uma decisão
+    # (``linhas_em_revisao``) — nem a da conta que a escola aposentou (decisão dela).
+    # Antes era "linhas que não viraram dado", e o histórico mostrava em vermelho,
+    # como "Erros", as linhas em revisão de um arquivo sem nenhum defeito. Nem a da
+    # criança sem ficha que a coleta de fora do ano letivo deixou para depois da
+    # virada (``MOTIVO_COLETA_FORA_DO_ANO``): a linha não tem defeito.
+    importacao.qtd_erros = sum(int(n or 0) for motivo, n in linhas_descartadas.items()
+                               if motivo not in ida.MOTIVOS_DESCARTE_DECIDIDO
+                               and motivo != MOTIVO_COLETA_FORA_DO_ANO)
     importacao.tempo_ms = int((time.monotonic() - inicio) * 1000)
 
     # LGPD/§15: o log de auditoria é permanente — não persistir os avisos brutos,
@@ -3208,7 +3953,23 @@ def _confirmar_sem_commit(
         contas_em_revisao=len(contas_em_revisao),
         ids_de_outra_escola=ids_de_outra_escola,
         criacao_bloqueada=criacao_bloqueada,
+        original_a_arquivar=mover_original,
     )
+
+
+def _arquivar_depois_do_commit(db: Session, nucleo: _NucleoImportacao) -> None:
+    """Leva o original da importação JÁ COMMITADA para a pasta definitiva (§15).
+    Melhor esforço (``_arquivar_original``): sem o arquivo arquivado, o registro passa
+    a guardar só o nome mandado pelo cliente, e não um caminho que não existe."""
+    if nucleo.original_a_arquivar is None:
+        return
+    origem, destino, nome_enviado = nucleo.original_a_arquivar
+    if _arquivar_original(origem, destino):
+        return
+    importacao = db.get(Importacao, nucleo.importacao_id)
+    if importacao is not None:
+        importacao.arquivo_original = _registro_do_original(nome_enviado)
+        db.commit()
 
 
 @router.post("/recalcular", response_model=dict)
@@ -3216,22 +3977,26 @@ def recalcular_agora(
     escola_id: int = Depends(escola_autorizada),
     usuario: Usuario = Depends(exigir_papeis("admin", "coordenador")),
     db: Session = Depends(get_db),
+    tarefas: BackgroundTasks = None,  # type: ignore[assignment]  # o FastAPI injeta
 ):
     """Recalcula notas/rankings da escola uma única vez — usado ao final de
     uma importação em lote, depois de vários /confirmar com recalcular=false."""
     n = _finalizar_importacao(
         db, escola_id,
-        corpo="Importação em lote concluída. As notas já foram recalculadas.")
+        corpo="Importação em lote concluída. As notas já foram recalculadas.",
+        tarefas=tarefas)
     return {"mensagem": f"Notas recalculadas para {n} aluno(s).", "alunos": n}
 
 
 # --- Planilha de matrículas da escola ("Lista Piloto") -----------------------
 
-async def _ler_planilha_matriculas(request: Request, arquivo: UploadFile) -> tuple[bytes, str]:
+def _ler_planilha_matriculas(request: Request, arquivo: UploadFile) -> tuple[bytes, str]:
+    """Lê a planilha pelo objeto síncrono (as rotas da Lista Piloto são ``def``: rodam
+    no threadpool, fora do event loop), com o teto de 10 MB."""
     declarado = request.headers.get("content-length")
     if declarado and declarado.isdigit() and int(declarado) > TAMANHO_MAXIMO + 1_000_000:
         raise HTTPException(status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, "Arquivo acima de 10 MB.")
-    conteudo = await arquivo.read()
+    conteudo = arquivo.file.read(TAMANHO_MAXIMO + 1)  # o teto limita a RAM
     if len(conteudo) > TAMANHO_MAXIMO:
         raise HTTPException(status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, "Arquivo acima de 10 MB.")
     nome = arquivo.filename or "matriculas"
@@ -3244,18 +4009,18 @@ async def _ler_planilha_matriculas(request: Request, arquivo: UploadFile) -> tup
         # Teto do DESCOMPRIMIDO antes do openpyxl. Aqui, e não só no serviço: lá a
         # falha de leitura vira aviso com 200; a planilha inflada merece a recusa.
         try:
-            await run_in_threadpool(planilhas.exigir_xlsx_contido, conteudo)
+            planilhas.exigir_xlsx_contido(conteudo)
         except planilhas.PlanilhaRecusada as exc:
             raise HTTPException(exc.status_http, str(exc)) from exc
     return conteudo, nome
 
 
-async def _analisar_lista_piloto(conteudo: bytes, nome: str):
+def _analisar_lista_piloto(conteudo: bytes, nome: str):
     """A análise do serviço. A planilha que estoura o orçamento de leitura (linhas
     e células percorridas, ``planilhas.OrcamentoLeitura``) também é recusada com a
     mensagem (413), e não vira aviso com 200."""
     try:
-        return await run_in_threadpool(lista_piloto.analisar_matriculas, conteudo, nome)
+        return lista_piloto.analisar_matriculas(conteudo, nome)
     except planilhas.PlanilhaRecusada as exc:
         raise HTTPException(exc.status_http, str(exc)) from exc
 
@@ -3267,7 +4032,7 @@ _chave_turma = matriculas.chave_turma
 
 
 @router.post("/matriculas/analisar", response_model=MatriculasAnaliseOut)
-async def analisar_matriculas(
+def analisar_matriculas(
     request: Request,
     escola_id: int = Depends(escola_autorizada),
     arquivo: UploadFile = File(...),
@@ -3276,8 +4041,8 @@ async def analisar_matriculas(
 ):
     """Prévia da planilha de matrículas: turmas e alunos detectados, com quais
     turmas já existem — nada é gravado."""
-    conteudo, nome = await _ler_planilha_matriculas(request, arquivo)
-    analise = await _analisar_lista_piloto(conteudo, nome)
+    conteudo, nome = _ler_planilha_matriculas(request, arquivo)
+    analise = _analisar_lista_piloto(conteudo, nome)
     escola = db.get(Escola, escola_id)
     if escola is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Escola não encontrada.")
@@ -3322,37 +4087,63 @@ async def analisar_matriculas(
         for a in t.alunos:
             ra = lista_piloto.ra_util(a.ficha.get("ra"))
             identidades.add(ra or (_norm(a.nome), _chave_turma(t.nome)))
+    avisos = list(analise.avisos) + avisos_colunas + avisos_arquivadas
 
-    # Resumo novos × atualizar (casamento LEVE, só para a prévia — a confirmação
-    # usa o casamento completo em services/matriculas). Existe por RA, senão por
-    # (nome normalizado, turma) do ano ativo.
-    ras_existentes: set[str] = set()
-    nome_turma_existentes: set = set()
-    for aluno, turma_nome in db.execute(
-        select(Aluno, Turma.nome)
-        .join(Matricula, Matricula.aluno_id == Aluno.id)
-        .join(Turma, Turma.id == Matricula.turma_id)
-        .where(Aluno.escola_id == escola_id, Matricula.ano_letivo == ano)
-    ):
-        ra = lista_piloto.ra_util((aluno.ficha or {}).get("ra"))
-        if ra:
-            ras_existentes.add(ra)
-        nome_turma_existentes.add((_norm(aluno.nome), _chave_turma(turma_nome)))
-    def _ja_cadastrado(ident) -> bool:
-        if isinstance(ident, str):
-            return ident in ras_existentes
-        return ident in nome_turma_existentes
-    atualizar = sum(1 for ident in identidades if _ja_cadastrado(ident))
+    # Resumo novos × atualizar × em revisão: a MESMA confirmação, desfeita. Antes
+    # era um casamento LEVE próprio (RA, ou nome idêntico + mesma sala), e o modal
+    # prometia "N aluno(s) novo(s)" para quem a confirmação reconhece (nome completo
+    # × abreviado, mudança de sala, grafia) ou manda para revisão.
+    simulado = _simular_lista_piloto(db, escola_id, ano, usuario, analise)
+    # Quais linhas ficam para revisão (o motivo e o caminho de cada uma), não só
+    # quantas: os mesmos avisos que a confirmação dará, na redação de prévia. E as
+    # fichas novas parecidas com uma ficha do ano anterior sem turma no ano.
+    avisos = avisos + simulado.avisos_revisao + simulado.avisos_conferir
 
     return MatriculasAnaliseOut(
         escola_detectada=analise.escola_detectada, ano_letivo=analise.ano_letivo,
         total_turmas=len(turmas), total_alunos=len(identidades),
         total_registros=analise.total_alunos,
-        alunos_novos=len(identidades) - atualizar, alunos_atualizar=atualizar,
+        alunos_novos=simulado.criados, alunos_atualizar=simulado.atualizados,
+        alunos_em_revisao=simulado.em_revisao,
         turmas_existentes=sum(1 for t in turmas if t.ja_existe),
         turmas=turmas,
-        avisos=list(analise.avisos) + avisos_colunas + avisos_arquivadas,
+        avisos=avisos,
+        # Lista de OUTRO ano letivo (ou com uma aba de outro ano): a confirmação a
+        # recusa (``confirmar_matriculas``); a prévia já avisa e a tela não deixa
+        # gravar. Sem o ano, pede para conferir.
+        ano_divergente=matriculas.ano_da_lista_diverge(
+            analise.ano_letivo, ano, analise.anos_por_aba),
+        aviso_ano=matriculas.aviso_ano_da_lista(
+            analise.ano_letivo, analise.ano_letivo_origem, ano, previa=True,
+            anos_por_aba=analise.anos_por_aba),
     )
+
+
+def _simular_lista_piloto(db: Session, escola_id: int, ano: int, usuario: Usuario,
+                          analise) -> "_Resultado":
+    """PRÉVIA = CONFIRMAÇÃO na Lista Piloto, SÓ LENDO: passa pelas MESMAS etapas e
+    decisões da confirmação (turmas que faltam, a porta única de identidade
+    ``matriculas.resolver_linha`` com as disputas do lote, linha a linha, cada uma
+    vendo as anteriores) com ``simular=True`` — dela só sai a contagem (criados,
+    atualizados, em revisão). Um segundo motor "leve" voltaria a divergir da
+    confirmação; rodar a confirmação de verdade e desfazer escrevia no banco a
+    cada criança, consumia as sequências e prendia as travas da turma e das fichas
+    (a prévia esperava quem estivesse gravando a mesma turma, e vice-versa).
+
+    Na simulação, a turma nova e a ficha nova são objetos FORA da sessão (id
+    negativo), a ficha existente que a linha alteraria é copiada para fora da
+    sessão antes de alterar, e nada de matrícula, conta de professor ou auditoria:
+    só as consultas de ``_carregar_estado`` e ``_resolver_turmas``, que não crescem
+    com o tamanho da lista."""
+    if not analise.turmas:
+        return _Resultado()
+    estado = _carregar_estado(db, escola_id, ano)
+    resolvidas, _criadas, _profs = _resolver_turmas(
+        db, escola_id, ano, analise.turmas, simular=True)
+    linhas = [(resolvidas[i], parsed)
+              for i, t in enumerate(analise.turmas) if resolvidas[i] is not None
+              for parsed in t.alunos]
+    return _persistir_linhas(db, escola_id, ano, usuario, linhas, estado, simular=True)
 
 
 # --- Importação da planilha de matrículas (Lista Piloto) --------------------
@@ -3365,6 +4156,10 @@ class _EstadoEscola:
     alunos_por_id: dict[int, Aluno]                # ORM — usado na persistência
     matricula_ano: dict[int, Matricula | None]
     ctx: matriculas.ContextoCasamento              # índices do MOTOR ÚNICO
+    # Turma da matrícula mais RECENTE de cada aluno (a do ano ativo, quando houver):
+    # é por ela que o aviso diz como abrir a ficha que não está ativa (a pesquisa do
+    # topo da página só acha as ativas) — ver ``_ficha_candidata``.
+    turma_recente: dict[int, Turma] = field(default_factory=dict)
 
     def registrar(self, aluno: Aluno, chave_sala: str | None = None) -> None:
         """Reflete no índice do motor o aluno recém-criado/alterado — as linhas
@@ -3384,8 +4179,20 @@ def _carregar_estado(db: Session, escola_id: int, ano: int) -> _EstadoEscola:
         recebe, idêntico ao dos imports de plataforma. Indexar por chave de SALA
         (e não por ``turma_id``) faz o aluno criado pelo Matific numa linha de
         turma paralela ("1 ANO A MANHA (300…)") ser candidato da linha da Lista
-        Piloto ("1ºA") — era por aí que a duplicata entrava;
-      * nome → alunos da escola, para reconhecer MUDANÇA DE SALA.
+        Piloto ("1ºA") — era por aí que a duplicata entrava. SÓ quem tem
+        matrícula NO ANO ATIVO entra nele: a mesma chave série+letra de outro ano
+        é OUTRA coorte (na virada todos avançam uma série — o "4º A" de 2026 está
+        no 5º A em 2027), e o roster aceita abreviação sem identificador nenhum:
+        a criança nova do 4º A de 2027 herdava a ficha (e a conta da plataforma)
+        de quem era do 4º A em 2026;
+      * nome → alunos da escola, para reconhecer MUDANÇA DE SALA. Quem só tem
+        matrícula de ano anterior (ou nenhuma) é reconhecido por aqui (nome
+        idêntico, com prova de identidade) ou pelo RA — nunca pelo roster;
+      * roster da SALA DO ANO ANTERIOR — quem não tem matrícula no ano ativo, pela
+        sala da matrícula mais recente de ano anterior: reaproveita só com
+        identificador forte; só pelo nome, a ficha nova nasce com o aviso da
+        parecida (``matriculas._sala_do_ano_anterior``) — quem repetiu ou passou de
+        ano com a ficha abreviada da coleta não ganha uma 2ª ficha calada.
     """
     # order_by garante escolha determinística de por_ra quando há RA repetido.
     alunos_todos = db.execute(
@@ -3398,22 +4205,34 @@ def _carregar_estado(db: Session, escola_id: int, ano: int) -> _EstadoEscola:
             select(Matricula).where(Matricula.escola_id == escola_id,
                                     Matricula.ano_letivo == ano)).scalars()
     }
-    chave_da_turma: dict[int, str] = {
-        t.id: _chave_turma(t.nome) for t in db.execute(
+    turmas_da_escola: dict[int, Turma] = {
+        t.id: t for t in db.execute(
             select(Turma).where(Turma.escola_id == escola_id)).scalars()
     }
-    # Sala ATUAL de cada aluno: a do ano ativo; quem não tem matrícula no ano
-    # herda a da matrícula mais recente (aluno de anos anteriores sendo
-    # rematriculado na MESMA sala continua sendo a mesma pessoa).
-    sala_de: dict[int, str] = {}
-    for aid, tid, _ano_m in db.execute(
+    chave_da_turma: dict[int, str] = {
+        tid: _chave_turma(t.nome) for tid, t in turmas_da_escola.items()}
+    # Turma da matrícula mais recente de cada aluno; a do ano ativo vale sobre as outras.
+    # E a sala da matrícula mais recente de ANO ANTERIOR (o roster do ano anterior).
+    turma_recente: dict[int, Turma] = {}
+    sala_anterior: dict[int, str] = {}
+    for aid, tid, ano_m in db.execute(
         select(Matricula.aluno_id, Matricula.turma_id, Matricula.ano_letivo)
         .where(Matricula.escola_id == escola_id)
-        .order_by(Matricula.ano_letivo)).all():
-        sala_de[aid] = chave_da_turma.get(tid, "")
+        .order_by(Matricula.ano_letivo, Matricula.id)).all():
+        if tid in turmas_da_escola:
+            turma_recente[aid] = turmas_da_escola[tid]
+            if ano_m < ano:
+                sala_anterior[aid] = chave_da_turma[tid]
     for aid, m in matricula_ano.items():
-        if m is not None:
-            sala_de[aid] = chave_da_turma.get(m.turma_id, "")
+        if m is not None and m.turma_id in turmas_da_escola:
+            turma_recente[aid] = turmas_da_escola[m.turma_id]
+    # Sala de cada aluno: SÓ a do ano ativo. Quem não tem matrícula no ano fica sem
+    # sala (não herda a da matrícula de um ano anterior: a mesma série+letra, no ano
+    # novo, é outra turma de crianças) e é reconhecido pelo RA ou pela mudança de
+    # sala (nome idêntico, com prova) — ver ``matriculas.resolver_linha``.
+    sala_de: dict[int, str] = {
+        aid: chave_da_turma.get(m.turma_id, "")
+        for aid, m in matricula_ano.items() if m is not None}
 
     ctx = matriculas.ContextoCasamento()
     for a in alunos_todos:
@@ -3422,11 +4241,30 @@ def _carregar_estado(db: Session, escola_id: int, ano: int) -> _EstadoEscola:
             ctx.registrar_ra(ident)     # só o RA identifica um excluído
             continue
         ctx.registrar(ident, sala_de.get(a.id))
-    return _EstadoEscola(alunos_por_id, matricula_ano, ctx)
+        if a.id not in sala_de and a.id in sala_anterior:
+            ctx.registrar_ano_anterior(ident, sala_anterior[a.id])
+    return _EstadoEscola(alunos_por_id, matricula_ano, ctx, turma_recente)
+
+
+def _ficha_candidata(estado: _EstadoEscola, aluno_id: int | None,
+                     ano: int) -> matriculas.FichaCandidata | None:
+    """Onde está a ficha que o aviso manda abrir: a situação e a turma da matrícula
+    mais recente (``matriculas.como_abrir_ficha_inativa`` diz o caminho até ela)."""
+    aluno = estado.alunos_por_id.get(aluno_id) if aluno_id is not None else None
+    if aluno is None:
+        return None
+    turma = estado.turma_recente.get(aluno.id)
+    return matriculas.FichaCandidata(
+        nome=aluno.nome, status=aluno.status,
+        turma=turma.nome if turma is not None else None,
+        ano=turma.ano_letivo if turma is not None else None,
+        turma_a_vista=(turma is not None and ida.turma_ativa(turma)
+                       and turma.ano_letivo == ano))
 
 
 def _resolver_turmas(db: Session, escola_id: int, ano: int, turmas_analise,
-                     avisos: list[str] | None = None,
+                     avisos: list[str] | None = None, *,
+                     simular: bool = False,
                      ) -> tuple[list[Turma | None], int, int]:
     """Cria as turmas que faltam (chave insensível a º/acento/caixa) e devolve,
     na ordem da análise, a Turma resolvida de cada uma + quantas turmas foram
@@ -3435,7 +4273,12 @@ def _resolver_turmas(db: Session, escola_id: int, ano: int, turmas_analise,
     A turma NOVA que não cabe nas colunas (``lista_piloto.conferir_turma_nova``:
     nome longo demais, ou série que não dá para cortar sem mudar a leitura) não
     é criada: sai ``None`` na posição dela e o motivo vai para ``avisos`` — no
-    PostgreSQL ela derrubava o arquivo inteiro com 500."""
+    PostgreSQL ela derrubava o arquivo inteiro com 500.
+
+    ``simular=True`` (a prévia, ``_simular_lista_piloto``): a mesma resolução, só
+    lendo — a turma que falta é uma ``Turma`` FORA da sessão, com id negativo; nada
+    de completar o código externo nem de criar conta de professor."""
+    ids_simulados = itertools.count(-1, -1)
     turmas_por_nome: dict[str, Turma] = {}
     # Duas turmas com a mesma chave (uma arquivada, outra ativa): vale a ATIVA —
     # a arquivada não recebe matrícula nova (ver ``_persistir_linhas``).
@@ -3456,15 +4299,24 @@ def _resolver_turmas(db: Session, escola_id: int, ano: int, turmas_analise,
             if serie is None:
                 resolvidas.append(None)       # não cabe: a aba fica de fora
                 continue
-            turma, criada = _inserir_turma(
-                db, escola_id, ano, t.nome, serie, turno=t.turno,
-                observacoes=(f"Nº da classe (SED): {t.sed}" if t.sed else None),
-                codigo_externo=(t.sed or None))
+            if simular:
+                turma, criada = Turma(
+                    id=next(ids_simulados), escola_id=escola_id, nome=t.nome,
+                    ano_letivo=ano, ano_escolar=serie, turno=t.turno,
+                    codigo_externo=(t.sed or None), status="ativa"), True
+            else:
+                turma, criada = _inserir_turma(
+                    db, escola_id, ano, t.nome, serie, turno=t.turno,
+                    observacoes=(f"Nº da classe (SED): {t.sed}" if t.sed else None),
+                    codigo_externo=(t.sed or None))
             turmas_por_nome[chave] = turma
             if criada:
                 criadas += 1
-        elif t.sed and not turma.codigo_externo:
+        elif t.sed and not turma.codigo_externo and not simular:
             turma.codigo_externo = t.sed          # completa o código em reimports
+        if simular:                               # prévia (``_simular_lista_piloto``)
+            resolvidas.append(turma)
+            continue
         # Cria a conta de login de cada professor da turma (idempotente) e
         # vincula o titular para o RBAC. O SAVEPOINT garante que QUALQUER falha
         # aqui desfaça só o professor — nunca polui a transação nem derruba a
@@ -3498,6 +4350,12 @@ class _Resultado:
     em_revisao: int = 0
     vistos: set[int] = field(default_factory=set)
     avisos: list[str] = field(default_factory=list)
+    # Os avisos das linhas em REVISÃO (também em ``avisos``): a prévia mostra só
+    # estes da simulação, na redação de prévia — quais nomes, não só quantos.
+    avisos_revisao: list[str] = field(default_factory=list)
+    # Os avisos das fichas NOVAS que se parecem com uma ficha do ano anterior sem turma
+    # no ano (também em ``avisos``): a prévia também os mostra, na redação de prévia.
+    avisos_conferir: list[str] = field(default_factory=list)
     # Linhas NÃO aplicadas por estarem numa turma ARQUIVADA: turma_id → (turma, n).
     em_turma_arquivada: dict[int, tuple[Turma, int]] = field(default_factory=dict)
     # Fichas EXCLUÍDAS que a linha reativaria, mas cuja conta da plataforma hoje é
@@ -3511,7 +4369,8 @@ class _Resultado:
 
 def _reter_reativacao_conta_de_outra_escola(
         db: Session, escola_id: int, usuario: Usuario, res: _Resultado, existente: Aluno,
-        turma: Turma, conflitos: list["identidade_efetiva.ContaDeOutraEscola"]) -> None:
+        turma: Turma, conflitos: list["identidade_efetiva.ContaDeOutraEscola"], *,
+        auditar: bool = True) -> None:
     """D10 pela ficha, no caminho AUTOMÁTICO (Lista Piloto). A linha reconheceu
     pelo RA uma ficha EXCLUÍDA e a reativaria, mas a conta da plataforma dessa
     ficha hoje é a identidade efetiva de um aluno de OUTRA escola
@@ -3536,14 +4395,15 @@ def _reter_reativacao_conta_de_outra_escola(
 
     A ficha entra em ``vistos`` (está na lista; a reconciliação não mexe em
     excluída de qualquer forma) e o aviso/auditoria saem uma vez por ficha, mesmo
-    que ela apareça em mais de uma turma."""
+    que ela apareça em mais de uma turma. ``auditar=False``: a prévia (nada é
+    gravado, nem a auditoria)."""
     res.vistos.add(existente.id)
     if existente.id in res.retidas_conta_de_outra_escola:
         return
     res.retidas_conta_de_outra_escola.add(existente.id)
     res.avisos.append(matriculas.aviso_reativacao_retida_conta_de_outra_escola(
         existente.nome, turma.nome))
-    for c in conflitos:
+    for c in (conflitos if auditar else ()):
         registrar(db, "aluno.reativacao_retida_conta_de_outra_escola",
                   escola_id=escola_id, usuario_id=usuario.id, entidade="aluno",
                   entidade_id=existente.id,
@@ -3554,9 +4414,22 @@ def _reter_reativacao_conta_de_outra_escola(
                             "origem": "importacao_matriculas"})
 
 
+def _ficha_simulada(aluno: Aluno) -> Aluno:
+    """Cópia da ficha FORA da sessão, para a prévia (``_persistir_linhas`` com
+    ``simular=True``) aplicar nela as mesmas alterações da confirmação (nome,
+    status, ficha, nascimento, nº de chamada) e as linhas seguintes as enxergarem
+    pelo índice — sem marcar a ficha real como alterada, que a consulta seguinte
+    (autoflush) gravaria. Os campos são os que a persistência e o motor
+    (``_identidade_do_aluno``) leem."""
+    return Aluno(id=aluno.id, escola_id=aluno.escola_id, nome=aluno.nome,
+                 status=aluno.status, numero_chamada=aluno.numero_chamada,
+                 data_nascimento=aluno.data_nascimento, ficha=dict(aluno.ficha or {}),
+                 da_lista_piloto=aluno.da_lista_piloto)
+
+
 def _persistir_linhas(db: Session, escola_id: int, ano: int, usuario: Usuario,
                       linhas: list[tuple[Turma, object]],
-                      estado: _EstadoEscola) -> _Resultado:
+                      estado: _EstadoEscola, *, simular: bool = False) -> _Resultado:
     """Grava na ORDEM do arquivo (preserva a 1ª ocorrência de cada aluno).
 
     IDENTIDADE é decidida pela PORTA ÚNICA (``matriculas.resolver_linha`` →
@@ -3573,9 +4446,22 @@ def _persistir_linhas(db: Session, escola_id: int, ano: int, usuario: Usuario,
     ficha EXCLUÍDA (o RA a reconhece) cuja conta da plataforma hoje é a
     identidade efetiva de um aluno de OUTRA escola NÃO reativa nada — vale para
     qualquer usuário, inclusive o Admin Global, porque a planilha não é uma
-    decisão sobre a conta. Ver ``_reter_reativacao_conta_de_outra_escola``."""
+    decisão sobre a conta. Ver ``_reter_reativacao_conta_de_outra_escola``.
+
+    ``simular=True`` — a PRÉVIA (``_simular_lista_piloto``): as MESMAS decisões e a
+    mesma contagem, sem escrever nada. A ficha nova é um ``Aluno`` FORA da sessão
+    (id negativo); a ficha existente que a linha alteraria é trocada, no estado, por
+    uma cópia fora da sessão (``_ficha_simulada``) na primeira vez que é tocada; e
+    matrícula, auditoria e ``flush`` não acontecem."""
     res = _Resultado()
     ja_alocado: set[int] = set()
+    ids_simulados = itertools.count(-1, -1)
+    simuladas: set[int] = set()      # fichas já trocadas pela cópia fora da sessão
+
+    def auditar(acao: str, **campos) -> None:
+        if not simular:
+            registrar(db, acao, **campos)
+
     planas = [_linha_matricula(turma, parsed) for turma, parsed in linhas]
     # Unicidade 1:1 do LOTE: um cadastro abreviado que serve a DUAS linhas não
     # pode ser entregue à primeira do arquivo (seria um chute que gruda os dados
@@ -3590,20 +4476,25 @@ def _persistir_linhas(db: Session, escola_id: int, ano: int, usuario: Usuario,
             # NÃO cria e NÃO altera: correspondência insegura/ambígua. Os candidatos
             # entram em `vistos` para a reconciliação não marcá-los "fora da lista"
             # (a linha diz que alguém DAQUELE grupo está na lista — só não se sabe
-            # quem), e o gestor decide em Alunos › Fundir duplicatas.
+            # quem), e o gestor decide pelo caminho que o aviso do MOTIVO indica
+            # (Fundir duplicatas; na mudança de sala sem prova, a própria ficha).
             res.em_revisao += 1
             res.vistos.update(decisao.candidatos)
             nomes = ", ".join(sorted(
                 estado.alunos_por_id[i].nome for i in decisao.candidatos
                 if i in estado.alunos_por_id)) or "cadastro já existente"
-            res.avisos.append(matriculas.aviso_revisao(parsed.nome, turma.nome, nomes))
-            registrar(db, "aluno.revisao_necessaria", escola_id=escola_id,
-                      usuario_id=usuario.id, entidade="aluno",
-                      entidade_id=decisao.aluno_id,
-                      detalhes={"origem": parsed.nome, "turma": turma.nome,
-                                "decisao": "REVIEW_REQUIRED", "motivo": decisao.motivo,
-                                "candidatos": list(decisao.candidatos),
-                                "fonte": "importacao_matriculas"})
+            aviso = matriculas.aviso_revisao(
+                parsed.nome, turma.nome, nomes, decisao.motivo, previa=simular,
+                ficha=_ficha_candidata(estado, decisao.aluno_id, ano))
+            res.avisos.append(aviso)
+            res.avisos_revisao.append(aviso)
+            auditar("aluno.revisao_necessaria", escola_id=escola_id,
+                    usuario_id=usuario.id, entidade="aluno",
+                    entidade_id=decisao.aluno_id,
+                    detalhes={"origem": parsed.nome, "turma": turma.nome,
+                              "decisao": "REVIEW_REQUIRED", "motivo": decisao.motivo,
+                              "candidatos": list(decisao.candidatos),
+                              "fonte": "importacao_matriculas"})
             continue
 
         if not ida.turma_ativa(turma):
@@ -3626,17 +4517,41 @@ def _persistir_linhas(db: Session, escola_id: int, ano: int, usuario: Usuario,
                           numero_chamada=parsed.numero_chamada,
                           data_nascimento=nasc, ficha=dict(parsed.ficha),
                           da_lista_piloto=True)
-            db.add(aluno)
-            db.flush()
-            db.add(Matricula(escola_id=escola_id, aluno_id=aluno.id,
-                             turma_id=turma.id, ano_letivo=ano))
+            if simular:
+                # Fora da sessão, com id negativo: o índice do motor a enxerga nas
+                # linhas seguintes, e nada vai ao banco.
+                aluno.id = next(ids_simulados)
+                simuladas.add(aluno.id)
+            else:
+                db.add(aluno)
+                # Só a ficha, para o id (o índice do motor o usa nas linhas
+                # seguintes): a matrícula e a auditoria pendentes vão juntas no fim,
+                # agrupadas — o flush completo aqui as mandava uma a uma, por criança.
+                db.flush([aluno])
+                db.add(Matricula(escola_id=escola_id, aluno_id=aluno.id,
+                                 turma_id=turma.id, ano_letivo=ano))
             res.criados += 1
-            registrar(db, "aluno.criado_auto", escola_id=escola_id,
-                      usuario_id=usuario.id, entidade="aluno", entidade_id=aluno.id,
-                      detalhes={"origem": parsed.nome, "turma": turma.nome,
+            detalhes_criacao = {"origem": parsed.nome, "turma": turma.nome,
                                 "decisao": "NEW_STUDENT", "motivo": decisao.motivo,
-                                "fonte": "importacao_matriculas"})
+                                "fonte": "importacao_matriculas"}
+            parecidas = [f for f in (_ficha_candidata(estado, i, ano)
+                                     for i in decisao.parecidos_ano_anterior)
+                         if f is not None]
+            if parecidas:
+                # A ficha nova nasce (o nome sozinho não atravessa o ano), mas não
+                # calada: a ficha parecida do ano anterior pode ser a mesma criança
+                # (quem repetiu ou passou de ano), com a conta e o histórico.
+                aviso = matriculas.aviso_parecido_do_ano_anterior(
+                    parsed.nome, turma.nome, parecidas, previa=simular)
+                res.avisos.append(aviso)
+                res.avisos_conferir.append(aviso)
+                detalhes_criacao["parecidos_ano_anterior"] = list(
+                    decisao.parecidos_ano_anterior)
+            auditar("aluno.criado_auto", escola_id=escola_id,
+                    usuario_id=usuario.id, entidade="aluno", entidade_id=aluno.id,
+                    detalhes=detalhes_criacao)
             estado.matricula_ano[aluno.id] = None
+            estado.turma_recente[aluno.id] = turma
             ja_alocado.add(aluno.id)
             res.vistos.add(aluno.id)
             estado.registrar(aluno, linha.chave_sala)
@@ -3644,6 +4559,12 @@ def _persistir_linhas(db: Session, escola_id: int, ano: int, usuario: Usuario,
             continue
 
         existente = estado.alunos_por_id[decisao.aluno_id]   # REUSAR
+        if simular and existente.id not in simuladas:
+            # A prévia altera a CÓPIA (as linhas seguintes a veem pelo índice); a
+            # ficha real fica intocada.
+            existente = _ficha_simulada(existente)
+            estado.alunos_por_id[existente.id] = existente
+            simuladas.add(existente.id)
         estado.ctx.reivindicados.add(existente.id)
         if (existente.status == identidade_efetiva.EXCLUIDO
                 and elegibilidade.participa_de_premiacao(turma.ano_escolar)):
@@ -3653,7 +4574,8 @@ def _persistir_linhas(db: Session, escola_id: int, ano: int, usuario: Usuario,
                 db, escola_id, [existente], "ativo")
             if conflitos:
                 _reter_reativacao_conta_de_outra_escola(
-                    db, escola_id, usuario, res, existente, turma, conflitos)
+                    db, escola_id, usuario, res, existente, turma, conflitos,
+                    auditar=not simular)
                 continue
         nome_antigo = existente.nome
         # O Excel é a fonte da verdade do nome — exceto para ENCURTAR: uma linha
@@ -3673,14 +4595,14 @@ def _persistir_linhas(db: Session, escola_id: int, ano: int, usuario: Usuario,
             # para conferir depois que a tela foi fechada.
             res.avisos.append(matriculas.aviso_nascimento_divergente(
                 existente.nome, turma.nome, existente.data_nascimento, nasc))
-            registrar(db, "aluno.nascimento_divergente", escola_id=escola_id,
-                      usuario_id=usuario.id, entidade="aluno",
-                      entidade_id=existente.id,
-                      detalhes={"nome": existente.nome, "turma": turma.nome,
-                                "na_ficha": str(existente.data_nascimento),
-                                "na_planilha": str(nasc),
-                                "acao": "preservado o da ficha; nada foi alterado",
-                                "origem": "importacao_matriculas"})
+            auditar("aluno.nascimento_divergente", escola_id=escola_id,
+                    usuario_id=usuario.id, entidade="aluno",
+                    entidade_id=existente.id,
+                    detalhes={"nome": existente.nome, "turma": turma.nome,
+                              "na_ficha": str(existente.data_nascimento),
+                              "na_planilha": str(nasc),
+                              "acao": "preservado o da ficha; nada foi alterado",
+                              "origem": "importacao_matriculas"})
         if parsed.ficha:
             existente.ficha = {**(existente.ficha or {}), **parsed.ficha}
         if existente.status == "transferido":
@@ -3713,26 +4635,28 @@ def _persistir_linhas(db: Session, escola_id: int, ano: int, usuario: Usuario,
                 existente.numero_chamada = parsed.numero_chamada
             mat = estado.matricula_ano.get(existente.id)
             if mat is None and existente.id not in estado.matricula_ano:
-                db.add(Matricula(escola_id=escola_id, aluno_id=existente.id,
-                                 turma_id=turma.id, ano_letivo=ano))
+                if not simular:
+                    db.add(Matricula(escola_id=escola_id, aluno_id=existente.id,
+                                     turma_id=turma.id, ano_letivo=ano))
                 estado.matricula_ano[existente.id] = None
-            elif mat is not None and mat.turma_id != turma.id:
+            elif mat is not None and mat.turma_id != turma.id and not simular:
                 mat.turma_id = turma.id   # a planilha é a fonte da verdade
+            estado.turma_recente[existente.id] = turma
             ja_alocado.add(existente.id)
             # Auditoria: todo vínculo que TROCA a identidade fica rastreável.
             # Compara com o nome REALMENTE gravado (a linha pode ter sido
             # recusada por encurtar) — o log nunca anuncia uma troca que não houve.
             if _norm(nome_antigo) != _norm(existente.nome):
                 res.vinculados += 1
-                registrar(db, "aluno.identidade_vinculada", escola_id=escola_id,
-                          usuario_id=usuario.id, entidade="aluno",
-                          entidade_id=existente.id,
-                          detalhes={"nome_antigo": nome_antigo,
-                                    "nome_novo": existente.nome,
-                                    "origem_linha": parsed.nome,
-                                    "ra": linha.ra or None,
-                                    "motivo": decisao.motivo,
-                                    "origem": "importacao_matriculas"})
+                auditar("aluno.identidade_vinculada", escola_id=escola_id,
+                        usuario_id=usuario.id, entidade="aluno",
+                        entidade_id=existente.id,
+                        detalhes={"nome_antigo": nome_antigo,
+                                  "nome_novo": existente.nome,
+                                  "origem_linha": parsed.nome,
+                                  "ra": linha.ra or None,
+                                  "motivo": decisao.motivo,
+                                  "origem": "importacao_matriculas"})
             # Conta o aluno DISTINTO uma vez (não a cada turma em que aparece).
             res.atualizados += 1
             estado.registrar(existente, linha.chave_sala)
@@ -3740,10 +4664,10 @@ def _persistir_linhas(db: Session, escola_id: int, ano: int, usuario: Usuario,
             estado.registrar(existente)    # 2ª turma: identidade sim, sala não
     for turma, n in res.em_turma_arquivada.values():
         res.avisos.append(matriculas.aviso_turma_arquivada(turma.nome, n))
-        registrar(db, "matriculas.turma_arquivada_ignorada", escola_id=escola_id,
-                  usuario_id=usuario.id, entidade="turma", entidade_id=turma.id,
-                  detalhes={"turma": turma.nome, "linhas_nao_aplicadas": n,
-                            "origem": "importacao_matriculas"})
+        auditar("matriculas.turma_arquivada_ignorada", escola_id=escola_id,
+                usuario_id=usuario.id, entidade="turma", entidade_id=turma.id,
+                detalhes={"turma": turma.nome, "linhas_nao_aplicadas": n,
+                          "origem": "importacao_matriculas"})
     return res
 
 
@@ -3782,7 +4706,7 @@ def _marcar_fora_da_lista(db: Session, escola_id: int, ano: int, usuario: Usuari
 
 
 @router.post("/matriculas/confirmar", response_model=MatriculasResultadoOut)
-async def confirmar_matriculas(
+def confirmar_matriculas(
     request: Request,
     escola_id: int = Depends(escola_autorizada),
     arquivo: UploadFile = File(...),
@@ -3795,21 +4719,30 @@ async def confirmar_matriculas(
     ``services.matching``), que reusa quando é seguro, manda para revisão quando
     é inseguro e só cria quando não há candidato. Orquestra: analisar → travar a
     escola → carregar estado → criar turmas → persistir → recalcular."""
-    conteudo, nome = await _ler_planilha_matriculas(request, arquivo)
-    analise = await _analisar_lista_piloto(conteudo, nome)
+    conteudo, nome = _ler_planilha_matriculas(request, arquivo)
+    analise = _analisar_lista_piloto(conteudo, nome)
     if not analise.turmas:
         raise HTTPException(status.HTTP_400_BAD_REQUEST,
                             "Nenhuma turma reconhecida na planilha.")
+    # A trava é compartilhada com a virada do ano. Valide o ano e carregue o
+    # estado depois dela, para o envio não gravar matrículas no ano anterior.
+    bloquear_escola_para_importacao(db, escola_id)
     escola = db.get(Escola, escola_id)
     if escola is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Escola não encontrada.")
+    db.refresh(escola, ["ano_letivo_ativo"])
     ano = escola.ano_letivo_ativo
+    if matriculas.ano_da_lista_diverge(analise.ano_letivo, ano, analise.anos_por_aba):
+        # A lista de OUTRO ano letivo não é aplicada ao ano ativo: moveria as
+        # matrículas para as turmas do outro ano, criaria as turmas dele neste,
+        # marcaria quem não está nela "fora da lista piloto" e recalcularia as Notas —
+        # sem volta (a matrícula não guarda histórico). Recusa antes de tocar no banco.
+        # Vale para CADA aba: uma aba de outro ano basta para recusar o arquivo.
+        raise HTTPException(status.HTTP_409_CONFLICT, matriculas.aviso_ano_da_lista(
+            analise.ano_letivo, analise.ano_letivo_origem, ano, previa=False,
+            anos_por_aba=analise.anos_por_aba))
     avisos = list(analise.avisos)
 
-    # Serializa importações concorrentes desta escola ANTES de ler o estado: o
-    # casamento roda contra o estado carregado uma vez, então dois envios
-    # sobrepostos duplicariam turmas/alunos sem esta trava (no-op em SQLite).
-    bloquear_escola_para_importacao(db, escola_id)
     estado = _carregar_estado(db, escola_id, ano)
     resolvidas, turmas_criadas, profs_criados = _resolver_turmas(
         db, escola_id, ano, analise.turmas, avisos)
@@ -3903,10 +4836,51 @@ async def confirmar_matriculas(
 # pipeline normal de importação e audita. A fusão de fichas duplicadas continua
 # sendo a ação separada de Alunos › Fundir duplicatas.
 
-def _revisao_out(rev: RevisaoIdentidade, triagem: dict | None = None) -> RevisaoIdentidadeOut:
+# A listagem da fila devolve no máximo as N revisões mais recentes.
+LIMITE_LISTA_REVISOES = 500
+
+
+def _revisao_out(rev: RevisaoIdentidade, triagem: dict | None = None,
+                 nomes: tuple[str, dict[str, str]] | None = None) -> RevisaoIdentidadeOut:
     saida = RevisaoIdentidadeOut.model_validate(rev)
     saida.motivo_texto = ida.MOTIVOS.get(rev.motivo, rev.motivo)
     saida.triagem = triagem
+    if nomes is not None:
+        saida.nome_ficha_nova, saida.nome_ficha_nova_por_turma = nomes
+    return saida
+
+
+def _nome_da_ficha_nova(rev: RevisaoIdentidade, turma_nome: str) -> str:
+    """O nome que "Criar novo aluno" grava na turma escolhida: o recebido, sem o
+    sufixo de turma digitado junto (A10) — o da sala da turma escolhida ou o da sala
+    que a linha informou (a mesma regra da criação pela importação). Sem caractere de
+    controle invisível: uma pendência antiga pode guardar o nome recebido com ele."""
+    return ida.nome_sem_sufixo_de_turma(svc.sem_controle(rev.nome_recebido),
+                                        ida.chave_sala(turma_nome),
+                                        ida.chave_sala(rev.turma_informada or ""))
+
+
+def _nomes_da_ficha_nova(db: Session, escola_id: int, revisoes: list[RevisaoIdentidade],
+                         ) -> dict[int, tuple[str, dict[str, str]]]:
+    """Para a tela prometer o nome que o /resolver grava: por pendência, o nome padrão
+    e ``{turma_id: nome}`` só das turmas em que ele muda (o sufixo daquela sala sai).
+    Sufixo de turma tem dígito: nome sem dígito é o recebido, sem conta nenhuma."""
+    saida = {r.id: (svc.sem_controle(r.nome_recebido or "").strip(), {}) for r in revisoes}
+    com_digito = [r for r in revisoes if any(c.isdigit() for c in (r.nome_recebido or ""))]
+    if not com_digito:
+        return saida
+    salas: dict[str, tuple[str, list[int]]] = {}
+    for tid, nome in db.execute(select(Turma.id, Turma.nome)
+                                .where(Turma.escola_id == escola_id)).all():
+        salas.setdefault(ida.chave_sala(nome), (nome, []))[1].append(tid)
+    for r in com_digito:
+        padrao = _nome_da_ficha_nova(r, "")
+        por_turma: dict[str, str] = {}
+        for nome_turma, tids in salas.values():
+            nome = _nome_da_ficha_nova(r, nome_turma)
+            if nome != padrao:
+                por_turma.update({str(t): nome for t in tids})
+        saida[r.id] = (padrao, por_turma)
     return saida
 
 
@@ -3933,15 +4907,39 @@ def listar_revisoes(
         consulta = consulta.where(RevisaoIdentidade.status == situacao)
     revisoes = db.execute(
         consulta.order_by(RevisaoIdentidade.atualizada_em.desc(),
-                          RevisaoIdentidade.id.desc()).limit(500)).scalars().all()
-    # Cada pendência vem com a TRIAGEM: dá para encerrar com segurança, e por quê.
-    # Só leitura e determinística — não decide nada, apenas explica.
+                          RevisaoIdentidade.id.desc()).limit(LIMITE_LISTA_REVISOES)).scalars().all()
+    # Cada PENDÊNCIA vem com a TRIAGEM (o selo da tela de Revisões): dá para
+    # encerrar com segurança, e por quê. Só leitura e determinística — não decide
+    # nada, apenas explica. Ela precisa do estado da escola inteiro (contas, fichas,
+    # turmas, decisões), então o contexto só é carregado quando há pendência na
+    # página: a lista de resolvidas/descartadas não paga esse custo.
+    pendentes = [r for r in revisoes if r.status == "pendente"]
     triagens: dict[int, dict] = {}
-    if revisoes:
+    nomes: dict[int, tuple[str, dict[str, str]]] = {}
+    if pendentes:
         ctx = ida.carregar_contexto(db, escola_id)
         triagens = {rid: t.como_dict() for rid, t in triagem_revisoes.triar_revisoes(
             ctx, list(revisoes)).items()}
-    return [_revisao_out(r, triagens.get(r.id)) for r in revisoes]
+        nomes = _nomes_da_ficha_nova(db, escola_id, pendentes)
+    return [_revisao_out(r, triagens.get(r.id), nomes.get(r.id)) for r in revisoes]
+
+
+@router.get("/contagem-revisoes", response_model=dict)
+def contar_revisoes(
+    escola_id: int = Depends(escola_autorizada),
+    usuario: Usuario = Depends(exigir_papeis("admin", "coordenador")),
+    db: Session = Depends(get_db),
+):
+    """O TOTAL de pendências da escola, por motivo. A lista de /revisoes para em
+    ``LIMITE_LISTA_REVISOES`` (as mais recentes) e o contador da tela saturava
+    nesse número; aqui é uma contagem, sem carregar fila nem triagem."""
+    por_motivo = {motivo: int(n) for motivo, n in db.execute(
+        select(RevisaoIdentidade.motivo, func.count())
+        .where(RevisaoIdentidade.escola_id == escola_id,
+               RevisaoIdentidade.status == "pendente")
+        .group_by(RevisaoIdentidade.motivo)).all()}
+    return {"pendentes": sum(por_motivo.values()), "por_motivo": por_motivo,
+            "limite_da_lista": LIMITE_LISTA_REVISOES}
 
 
 def _confirmacao_da_revisao(rev: RevisaoIdentidade, aluno_id: int,
@@ -4008,12 +5006,43 @@ def _retrato_superado(db: Session, escola_id: int, aluno_id: int,
         # Sem data, o pipeline gravaria com a data de HOJE e a linha velha viraria
         # o estado atual. É o pior caso: nunca reaplicar.
         return {**base, "motivo": "data_referencia_ausente"}
+    congelada = _instante_utc(congelada)     # UTC naive (ver ``_superado_pela_data``)
+    if modelo is SnapshotElefante and _guarda_questoes_medidas(db, rev):
+        # QUESTÕES QUE NÃO VIERAM (S9): o retrato gravado por uma coleta sem as
+        # questões (``IMPORTACAO_SEM_QUESTOES``) tem a data da coleta, mas as
+        # questões HERDADAS do anterior — não supera, nas questões, o guardado que as
+        # mediu. Antes ele contava como "o mais recente": quem leu um livro novo
+        # ganhava esse retrato no dia da coleta, e o /resolver descartava o guardado
+        # (``snapshot_mais_recente``) — a medida sumia e o Relatório por Período
+        # ficava sem número. A comparação é com o último retrato que MEDE as
+        # questões; o guardado entra como ponto do histórico (o pipeline o grava
+        # retrodatado, sem virar o estado atual) e os retratos S9 posteriores passam
+        # a herdar dele (``_retratos_sem_questoes_herdam_do_aplicado``).
+        medido = _ultimo_retrato_que_mede_as_questoes(db, escola_id, aluno_id)
+        superado = (_superado_pela_data(base, medido, congelada)
+                    if medido is not None else None)
+        if superado is not None:
+            return superado
+        do_dia = next((s for s in _retratos_sem_questoes(db, escola_id, aluno_id)
+                       if _mesmo_dia(s.data_referencia, congelada)), None)
+        if do_dia is not None:
+            # A mesma regra do "mesmo dia" contra o retrato S9: o pipeline
+            # atualizaria NO LUGAR o retrato da coleta daquele dia, e os livros e o
+            # tempo dele (medidos) virariam os do guardado, talvez mais antigos.
+            return {**base, "motivo": "mesmo_dia_de_retrato_sem_questoes",
+                    "data_retrato_sem_questoes": do_dia.data_referencia.isoformat()}
+        return None
+    return _superado_pela_data(base, snap, congelada)
+
+
+def _superado_pela_data(base: dict, snap, congelada: datetime) -> dict | None:
+    """O juízo de DATA de ``_retrato_superado`` contra um retrato gravado
+    (``congelada`` já em UTC naive)."""
     # Os dois INSTANTES, convertidos (naive = UTC; com fuso, para UTC). Antes o
     # fuso era só cortado: a data congelada "01h de 24/10 -03:00" (04h UTC, dia 24
     # em Brasília) virava "01h UTC" — dia 23 em Brasília e mais antiga que um
     # retrato das 02h UTC, e a pendência MAIS NOVA era descartada como superada.
     atual = _instante_utc(snap.data_referencia)
-    congelada = _instante_utc(congelada)
     if _mesmo_dia(atual, congelada):
         # Mesmo dia: o pipeline atualizaria o retrato NO LUGAR, e o valor novo
         # desapareceria sem deixar linha no histórico. É o caso mais perigoso,
@@ -4024,6 +5053,73 @@ def _retrato_superado(db: Session, escola_id: int, aluno_id: int,
     return None
 
 
+def _guarda_questoes_medidas(db: Session, rev: RevisaoIdentidade) -> bool:
+    """A pendência guarda um retrato que MEDIU as questões: alguma linha traz o
+    campo e a importação que a abriu não é uma coleta S9 (sem as questões)."""
+    if not _guarda_questoes(rev):
+        return False
+    origem = db.get(Importacao, rev.importacao_id) if rev.importacao_id else None
+    return origem is None or origem.status != IMPORTACAO_SEM_QUESTOES
+
+
+def _retratos_elefante_com_status(db: Session, escola_id: int, aluno_id: int, *,
+                                  depois_de: datetime | None = None):
+    """(retrato, status da importação) do Elefante do aluno, do mais antigo ao mais
+    novo (data, id). ``depois_de``: só os de data posterior."""
+    consulta = (select(SnapshotElefante, Importacao.status)
+                .outerjoin(Importacao, Importacao.id == SnapshotElefante.importacao_id)
+                .where(SnapshotElefante.escola_id == escola_id,
+                       SnapshotElefante.aluno_id == aluno_id))
+    if depois_de is not None:
+        consulta = consulta.where(SnapshotElefante.data_referencia > depois_de)
+    return db.execute(consulta.order_by(SnapshotElefante.data_referencia.asc(),
+                                        SnapshotElefante.id.asc())).all()
+
+
+def _ultimo_retrato_que_mede_as_questoes(db: Session, escola_id: int, aluno_id: int):
+    """O retrato do Elefante mais recente que não veio de uma coleta S9."""
+    medem = [s for s, situacao in _retratos_elefante_com_status(db, escola_id, aluno_id)
+             if situacao != IMPORTACAO_SEM_QUESTOES]
+    return medem[-1] if medem else None
+
+
+def _retratos_sem_questoes(db: Session, escola_id: int, aluno_id: int) -> list:
+    """Os retratos do Elefante gravados por coletas S9 (questões herdadas)."""
+    return [s for s, situacao in _retratos_elefante_com_status(db, escola_id, aluno_id)
+            if situacao == IMPORTACAO_SEM_QUESTOES]
+
+
+def _retratos_sem_questoes_herdam_do_aplicado(db: Session, escola_id: int, aluno_id: int,
+                                              importacao_id: int) -> int:
+    """Depois de o /resolver gravar, retrodatado, o retrato guardado que MEDIU as
+    questões: os retratos S9 POSTERIORES a ele herdaram as questões do retrato que
+    valia na hora da coleta (o anterior ao guardado). Passam a herdar do aplicado —
+    o que teriam herdado se a pendência já estivesse resolvida na coleta —, até o
+    próximo retrato que mede as questões. Sem isto o estado atual (o retrato S9 mais
+    novo) continuava com as questões de antes, e a série "caía" depois do ponto
+    aplicado. Só as QUESTÕES mudam (livros e tempo desses retratos são medidos).
+    Devolve quantos retratos mudaram."""
+    aplicado = db.execute(
+        select(SnapshotElefante)
+        .where(SnapshotElefante.escola_id == escola_id,
+               SnapshotElefante.aluno_id == aluno_id,
+               SnapshotElefante.importacao_id == importacao_id)
+        .order_by(SnapshotElefante.data_referencia.desc(), SnapshotElefante.id.desc())
+        .limit(1)).scalar_one_or_none()
+    if aplicado is None:
+        return 0
+    questoes = (aplicado.questoes_tentativas, aplicado.questoes_acertos)
+    mudaram = 0
+    for snap, situacao in _retratos_elefante_com_status(
+            db, escola_id, aluno_id, depois_de=aplicado.data_referencia):
+        if situacao != IMPORTACAO_SEM_QUESTOES:
+            break                    # mede as questões: dali em diante herdam dele
+        if (snap.questoes_tentativas, snap.questoes_acertos) != questoes:
+            snap.questoes_tentativas, snap.questoes_acertos = questoes
+            mudaram += 1
+    return mudaram
+
+
 @router.post("/revisoes/{revisao_id}/resolver", response_model=ResolucaoRevisaoOut)
 def resolver_revisao(
     revisao_id: int,
@@ -4031,6 +5127,7 @@ def resolver_revisao(
     escola_id: int = Depends(escola_autorizada),
     usuario: Usuario = Depends(exigir_papeis("admin", "coordenador")),
     db: Session = Depends(get_db),
+    tarefas: BackgroundTasks = None,  # type: ignore[assignment]  # o FastAPI injeta
 ):
     """Decisão EXPLÍCITA do gestor sobre uma pendência: ``aluno_id`` (a ficha dona
     dos dados) OU ``criar_em_turma_id`` (é outra criança: ficha nova nessa turma).
@@ -4122,6 +5219,17 @@ def resolver_revisao(
                           "reativado em Alunos.")
         acao = "associar"
     else:
+        if svc.texto_ilegivel(rev.nome_recebido or ""):
+            # Letra ilegível ("�", acento perdido no arquivo): a ficha nova nasceria
+            # com ela — a mesma trava da criação pela importação (``_resolver_aluno``).
+            # A pendência continua pendente para o gestor ESCOLHER o aluno. 400, não
+            # 409: na tela de Revisões o 409 é "a pendência já não está pendente"
+            # (fecha o painel e relê a fila); o 400 mostra o motivo ali mesmo.
+            raise HTTPException(
+                status.HTTP_400_BAD_REQUEST,
+                f"O nome recebido tem letra ilegível (“{ILEGIVEL}”, acento perdido no "
+                "arquivo) e a ficha nova nasceria com ela. Cadastre a criança em Alunos "
+                "com o nome certo e escolha-a nesta pendência.")
         turma = db.get(Turma, corpo.criar_em_turma_id)
         if turma is None or turma.escola_id != escola_id:
             raise HTTPException(status.HTTP_400_BAD_REQUEST, "Turma inválida.")
@@ -4132,7 +5240,10 @@ def resolver_revisao(
         turma_arquivada.exigir_turma_ativa(turma)
         # Nem turma de OUTRO ano letivo: a matrícula que nasce é a do ano ativo.
         turma_arquivada.exigir_destino_do_ano_ativo(turma, escola.ano_letivo_ativo)
-        aluno = Aluno(escola_id=escola_id, nome=rev.nome_recebido.strip())
+        # Sem o sufixo de turma digitado junto do nome (a mesma regra da criação
+        # pela importação); a pendência continua guardando o nome recebido. É o
+        # nome que a listagem mostra (``_nomes_da_ficha_nova``).
+        aluno = Aluno(escola_id=escola_id, nome=_nome_da_ficha_nova(rev, turma.nome))
         db.add(aluno)
         db.flush()
         db.add(Matricula(escola_id=escola_id, aluno_id=aluno.id, turma_id=turma.id,
@@ -4228,19 +5339,39 @@ def resolver_revisao(
     # a cada chamada, e um erro na 2ª irmã deixaria a 1ª gravada para sempre.
     # Falhou em qualquer ponto -> ROLLBACK e tudo continua pendente.
     importacoes: list[int] = []
+    nucleos: list[_NucleoImportacao] = []
+    herdadas: dict[int, int] = {}    # pendência -> retratos S9 que herdaram as questões
     for r in com_dados:
         conf = _confirmacao_da_revisao(r, aluno.id, recalcular=False)
+        # S9: a linha guardada veio de uma coleta em que a plataforma NÃO mandou as
+        # questões (a importação de origem está marcada). Reaplicada sem a marca, o
+        # retrato nascia numa importação "concluida" e virava borda das Questões do
+        # período ("0 no período", ou o contador vitalício na coleta seguinte, com
+        # cobertura "completa"). Herda a marca e a regra de não repetir retrato — as
+        # mesmas que a sincronização aplicou às linhas que entraram direto.
+        origem = db.get(Importacao, r.importacao_id) if r.importacao_id else None
+        sem_questoes = origem is not None and origem.status == IMPORTACAO_SEM_QUESTOES
         # encerrar_revisoes=False: estas pendências são fechadas logo abaixo, pelo
         # gestor — não como "encerradas automaticamente".
         # piso_da_data=False: a data é a da importação original (registro do servidor).
         nucleo = _confirmar_sem_commit(dados=conf, escola_id=escola_id,
                                        usuario=usuario, db=db, encerrar_revisoes=False,
-                                       piso_da_data=False)
+                                       piso_da_data=False,
+                                       sem_retrato_repetido=sem_questoes,
+                                       questoes_herdadas=sem_questoes)
         importacoes.append(nucleo.importacao_id)
+        nucleos.append(nucleo)
         avisos.extend(nucleo.avisos)
+        if (r.plataforma == "elefante" and r.formato != "leituras"
+                and _guarda_questoes_medidas(db, r)):
+            herdaram = _retratos_sem_questoes_herdam_do_aplicado(
+                db, escola_id, aluno.id, nucleo.importacao_id)
+            if herdaram:
+                herdadas[r.id] = herdaram
 
     # Recálculo DENTRO da transação (uma vez só, no fim das irmãs, e não a cada
-    # uma): `commit=False` deixa o fechamento para o commit único lá embaixo.
+    # uma): `commit=False` mantém o fechamento no commit único. A trava da
+    # escola (4711) já está tomada antes da aplicação dos dados.
     if com_dados:
         scoring.recalcular_escola(db, escola_id, commit=False)
 
@@ -4254,22 +5385,29 @@ def resolver_revisao(
                        "revisao_origem": rev.id}
         if r.id in superadas:
             r.resolucao["dados_superados"] = superadas[r.id]
+        detalhes = {"revisao_id": r.id, "plataforma": r.plataforma,
+                    "formato": r.formato, "motivo": r.motivo, "acao": acao,
+                    "nome_recebido": r.nome_recebido,
+                    "dados_superados": superadas.get(r.id),
+                    "candidatos": [c.get("aluno_id") for c in (r.candidatos or [])]}
+        if r.id in herdadas:
+            # Retratos S9 posteriores que passaram a herdar as questões do aplicado.
+            r.resolucao["retratos_sem_questoes_atualizados"] = herdadas[r.id]
+            detalhes["retratos_sem_questoes_atualizados"] = herdadas[r.id]
         registrar(db, "identidade.revisao_resolvida", escola_id=escola_id,
                   usuario_id=usuario.id, entidade="aluno", entidade_id=aluno.id,
-                  detalhes={"revisao_id": r.id, "plataforma": r.plataforma,
-                            "formato": r.formato, "motivo": r.motivo, "acao": acao,
-                            "nome_recebido": r.nome_recebido,
-                            "dados_superados": superadas.get(r.id),
-                            "candidatos": [c.get("aluno_id") for c in (r.candidatos or [])]})
+                  detalhes=detalhes)
     db.commit()                      # <- ÚNICO commit de todo o fluxo
+    for nucleo in nucleos:           # o original (se houver) só sai de /temporarios agora
+        _arquivar_depois_do_commit(db, nucleo)
 
     # DEPOIS do commit: cache do painel e push. Fora da transação de propósito —
     # avisar a escola sobre dado que ainda pode sofrer rollback seria mentira, e
-    # o próprio push commita ao limpar token morto.
+    # o próprio push commita ao limpar token morto. O push sai depois da resposta.
     if com_dados:
         _pos_commit_importacao(
             db, escola_id, corpo=push.corpo_dados_atualizados(aluno.nome),
-            aluno_id=aluno.id)
+            aluno_id=aluno.id, tarefas=tarefas)
     db.refresh(rev)
     return ResolucaoRevisaoOut(
         revisao=_revisao_out(rev), aluno_id=aluno.id,
@@ -4312,8 +5450,11 @@ def definir_identidade_efetiva(
     escola diz qual vale no Constela.
 
     A conta escolhida passa a ser a identidade EFETIVA; as outras ficam
-    APOSENTADAS — preservadas com todo o histórico, mas fora da importação, do
-    retrato e da pontuação, e sem voltar a se associar sozinha. Nada é apagado.
+    APOSENTADAS — preservadas com todo o histórico, fora da importação (não chega
+    dado novo delas) e sem voltar a se associar sozinha. O que já veio delas
+    continua na ficha (nem o retrato nem a leitura guardam a conta de origem): as
+    leituras continuam contando, e o retrato atual só muda quando entrar uma coleta
+    da conta efetiva — ver ``identidade_efetiva``. Nada é apagado.
 
     Isto é decisão INTERNA do Constela: a conta continua existindo na plataforma
     externa, e nada é desativado lá. A operação é reversível (``/reativar``) e
@@ -4385,6 +5526,7 @@ def descartar_revisao(
     """O gestor decide que estes dados NÃO devem ir para ninguém (linha de teste,
     aluno que não é da escola…). Nada é associado nem criado; fica auditado. Se a
     mesma linha voltar numa importação futura, abre uma pendência nova."""
+    bloquear_escola_para_importacao(db, escola_id)
     rev = _revisao_da_escola(db, escola_id, revisao_id)
     if rev.status != "pendente":
         raise HTTPException(status.HTTP_409_CONFLICT,

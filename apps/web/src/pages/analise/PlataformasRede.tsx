@@ -20,7 +20,7 @@ import { TabelaRolavel } from "../../components/TabelaRolavel";
 import { Badge } from "../../components/ui";
 import { TEXTO_SUPRESSAO_PADRAO } from "./Plataformas";
 import { TD, TH } from "./comum";
-import { decimal, diaBR, porNome, rotuloCobertura } from "./formato";
+import { decimal, diaBR, numeroProtegido, porNome, rotuloCobertura } from "./formato";
 import type { EscolaPlataformas, MetricasElefante, MetricasMatific, RespostaPlataformas } from "./tipos";
 
 const CINZA = "text-zinc-600 dark:text-zinc-400";
@@ -29,12 +29,12 @@ const PRESA = "presa-esquerda-celular"; // index.css: a coluna da escola fica pr
 export const pct = (v: number | null | undefined) => (v == null ? null : `${decimal(v, 1)}%`);
 const inteiro = (n: number) => n.toLocaleString("pt-BR");
 
-/** Métrica nula: "protegido" quando escondida em complemento; senão "sem dado". Nunca 0. */
+/** Métrica nula: "protegido" quando escondida para proteger (`numeroProtegido`); senão "sem dado". Nunca 0. */
 export function Valor({ texto, campo, bloco }: {
   texto: string | null; campo: string; bloco: MetricasElefante | MetricasMatific;
 }) {
   if (texto != null) return <>{texto}</>;
-  const protegido = (bloco.metricas_protegidas ?? []).includes(campo);
+  const protegido = numeroProtegido(bloco, campo);
   return (
     <span className={`text-[11px] ${CINZA}`} title={protegido ? bloco.texto_metricas_protegidas ?? undefined : undefined}>
       {protegido ? "protegido" : "sem dado"}
@@ -63,6 +63,15 @@ export function semDadoDo(m: MetricasElefante | MetricasMatific | null, situacao
     return m.texto_sem_dado ?? rotuloCobertura(situacao) ?? "sem dado no período";
   }
   return null;
+}
+
+/** O mesmo bloco sem número, por extenso e com o nome certo: "Protegido: …" quando o número existe
+ *  e não aparece, para proteger as crianças (poucos alunos medidos ou todas as séries pequenas —
+ *  `numeroProtegido`, a regra da legenda e do Panorama); "Sem dado: …" quando falta de verdade. */
+export function semNumeroDo(m: MetricasElefante | MetricasMatific | null, situacao: string | null | undefined): string | null {
+  const porque = semDadoDo(m, situacao);
+  if (porque == null) return null;
+  return `${numeroProtegido(m) ? "Protegido" : "Sem dado"}: ${porque}`;
 }
 
 /** O selo da escola INATIVA no cadastro (o mesmo texto da tabela das Avaliações externas): a
@@ -168,8 +177,8 @@ export function TabelaEscolasNoPeriodo({ dados, linkDaEscola, comparar, inativas
           </thead>
           <tbody>
             {escolas.map((e) => {
-              const semElefante = semDadoDo(e.elefante, e.cobertura?.elefante);
-              const semMatific = semDadoDo(e.matific, e.cobertura?.matific);
+              const semElefante = semNumeroDo(e.elefante, e.cobertura?.elefante);
+              const semMatific = semNumeroDo(e.matific, e.cobertura?.matific);
               const link = linkDaEscola?.(e.escola_id);
               return (
                 <tr key={e.escola_id} data-testid={`escola-periodo-${e.escola_id}`}
@@ -198,7 +207,7 @@ export function TabelaEscolasNoPeriodo({ dados, linkDaEscola, comparar, inativas
                       <td className={TD}>{e.alunos == null ? <span className={CINZA}>—</span> : inteiro(e.alunos)}</td>
                       {comElefante && (semElefante ? (
                         <>
-                          <td colSpan={4} className={`${TD} ${CINZA}`}>Sem dado: {semElefante}</td>
+                          <td colSpan={4} className={`${TD} ${CINZA}`}>{semElefante}</td>
                           <td className={TD}><Coleta e={e} p="elefante" /></td>
                         </>
                       ) : e.elefante && (
@@ -212,7 +221,7 @@ export function TabelaEscolasNoPeriodo({ dados, linkDaEscola, comparar, inativas
                       ))}
                       {comMatific && (semMatific ? (
                         <>
-                          <td colSpan={3} className={`${TD} ${CINZA}`}>Sem dado: {semMatific}</td>
+                          <td colSpan={3} className={`${TD} ${CINZA}`}>{semMatific}</td>
                           <td className={TD}><Coleta e={e} p="matific" /></td>
                         </>
                       ) : e.matific && (

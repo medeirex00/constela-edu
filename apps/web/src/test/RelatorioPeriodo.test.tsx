@@ -16,6 +16,7 @@
 import { describe, expect, it } from "vitest";
 
 import RelatorioPeriodo from "../pages/RelatorioPeriodo";
+import relatorioReal from "./fixtures/relatorio_periodo/setembro_inicio_sem_questoes.json";
 import {
   ApiError,
   apiDownload,
@@ -30,6 +31,20 @@ import {
 } from "./utils";
 
 const texto = () => (document.body.textContent ?? "").replace(/\s+/g, " ").trim();
+
+/** Vocabulário interno que o relatório não mostra a quem o lê (D5): nome de campo,
+ *  classificação técnica, jargão do banco. Vale para TODO texto da tela — inclusive os
+ *  avisos de cobertura que chegaram depois (S9: as questões que não vieram). */
+const TERMOS_INTERNOS = ["SUPORTADO", "Leitura.data", "EventoAluno", "SnapshotMatific",
+  "SnapshotElefante", "NULLABLE", "PISO", "totalTimeSpent", "retrato", "Ressalva",
+  "tempo min por evento", "livros_relidos", "responses", "questoes_tentativas",
+  "campos_nao_atualizados", "conector"];
+function semVocabularioInterno(t: string) {
+  for (const termo of TERMOS_INTERNOS) {
+    expect(t, termo).not.toContain(termo);
+  }
+  expect(t).not.toMatch(/\bde o início/);
+}
 
 const SUPORTE_ELEFANTE = {
   livros_novos: {
@@ -173,15 +188,67 @@ describe("Relatório por Período", () => {
     expect(t).toContain("sem coleta na janela (não contam como zero)");
   });
 
-  it("declara a classificação de suporte de cada número", async () => {
+  it("Questões do Elefante sem número e sem a cobertura (API antiga) também dizem o porquê", async () => {
+    const dados = relatorioFake();
+    Object.assign(dados.elefante as Record<string, unknown>, { alunos_sem_retrato: 0 });
+    montar(dados);
+    await screen.findByText("Tempo de leitura");
+    const ele = textoDaSecao("Elefante Letrado");
+    expect(ele).toContain("Questões—sem número para o período (não é zero)");
+    expect(ele).not.toContain("acertos sobre tentativas");
+  });
+
+  it("declara, em linguagem de professor, se dá para confiar em cada número", async () => {
     montar();
     await screen.findByText("Tempo de leitura");
     const detalhes = await screen.findByText("Como ler estes números");
     detalhes.click();
     const t = texto();
-    expect(t).toContain("SUPORTADO COM RESSALVA");
-    expect(t).toContain("NÃO SUPORTADO");
+    expect(t).toContain("Confiável, com um cuidado");
     expect(t).toContain("O que este relatório NÃO responde");
+    // A mesma informação de antes, dita para quem lê o relatório.
+    expect(t).toContain("É a mesma conta da premiação “Mais livros”");
+    expect(t).toContain("Por isso um livro lido de novo não entra aqui");
+    // A data do livro novo é a de quando ele apareceu no relatório da plataforma (a
+    // 1ª importação dele), não a da primeira leitura.
+    expect(t).toContain("Vale a data em que o livro apareceu pela primeira vez no relatório da plataforma");
+    expect(t).not.toContain("primeira leitura");
+    expect(t).toContain("o total é o mínimo lido no período — o tempo real pode ser maior");
+    // O colapso no mesmo minuto afeta a contagem de vezes (que a tela não mostra), não
+    // o número de livros diferentes: “Livros com atividade” não é um piso.
+    expect(t).not.toContain("Duas leituras do mesmo livro no mesmo minuto");
+    expect(t).not.toContain("o número de leituras é um mínimo");
+    expect(t).toContain("Não dá para saber quanto durou cada leitura");
+    expect(t).toContain("O Matific guarda atividades, estrelas e pontuação média, mas não conta questões");
+    expect(t).toContain("o total no fim menos o de antes do início — a mesma regra das premiações");
+    // Nada de vocabulário interno: nome de campo, classificação técnica, jargão do banco.
+    semVocabularioInterno(t);
+    expect(document.querySelector("code")).toBeNull();
+  });
+
+  it("'Tempo de cada leitura' aparece uma vez só, em 'O que este relatório NÃO responde'", async () => {
+    montar();
+    await screen.findByText("Tempo de leitura");
+    (await screen.findByText("Como ler estes números")).click();
+    const t = texto();
+    const vezes = (s: string) => t.split(s).length - 1;
+    // O backend o manda em `suporte` (NÃO SUPORTADO) e em `nao_suportado`: a tela
+    // explicava duas vezes, com o mesmo texto. Fica o item com o nome da plataforma.
+    expect(vezes("Não dá para saber quanto durou cada leitura")).toBe(1);
+    expect(vezes("Tempo de cada leitura")).toBe(1);
+    expect(t).toContain("Tempo de cada leitura (Elefante Letrado)");
+    expect(t.indexOf("Tempo de cada leitura")).toBeGreaterThan(t.indexOf("O que este relatório NÃO responde"));
+  });
+
+  it("número não calculado que o backend não lista em 'NÃO responde' continua com o selo", async () => {
+    const dados = relatorioFake();
+    dados.nao_suportado = dados.nao_suportado.filter((n) => n.metrica !== "tempo_min_por_evento");
+    montar(dados);
+    await screen.findByText("Tempo de leitura");
+    (await screen.findByText("Como ler estes números")).click();
+    const t = texto();
+    expect(t).toContain("Não calculado");
+    expect(t.split("Não dá para saber quanto durou cada leitura").length - 1).toBe(1);
   });
 
   it("publica a janela EFETIVA quando o número vem de coleta", async () => {
@@ -396,6 +463,19 @@ describe("Questões: período pedido × cobertura das coletas", () => {
     expect(t).not.toContain("INCLUI");
   });
 
+  it("sem coleta-base: 'desde o início do contador', nunca 'coletas de o início'", async () => {
+    montar(comCoberturaDeQuestoes({
+      ...COBERTURA_BASE, coleta_inicio: null, coleta_inicio_mais_tardio: null,
+      coleta_fim: "2026-10-01T03:10:00", coleta_fim_mais_cedo: "2026-10-01T03:10:00",
+      inicio_coberto: true, fim_coberto: true, status: "completa", completa: true,
+      alunos_cobertura_completa: 1, alunos_cobertura_parcial: 0, alunos_sem_inicio: 0, alunos_sem_fim: 0,
+    }, { t: 340, a: 250 }));
+    await screen.findByText("Tempo de leitura");
+    const t = texto();
+    expect(t).toContain("medido pelas coletas desde o início do contador até 01/10/2026, 00:10.");
+    expect(t).not.toMatch(/\bde o início/);
+  });
+
   it("ampliada: a base é bem anterior ao início e o valor INCLUI esse intervalo", async () => {
     montar(comCoberturaDeQuestoes({
       ...COBERTURA_BASE, coleta_inicio: "2026-08-15T12:00:00", coleta_inicio_mais_tardio: null,
@@ -422,6 +502,9 @@ describe("Questões: período pedido × cobertura das coletas", () => {
     const ele = textoDaSecao("Elefante Letrado");
     expect(ele).toContain("Questões—");
     expect(ele).not.toMatch(/Questões\s*0/);
+    // O detalhe do cartão diz POR QUE não há número (o de quando há número não serve).
+    expect(ele).toContain("Questões—sem número: uma única coleta por aluno no período, não é zero — veja o aviso");
+    expect(ele).not.toContain("acertos sobre tentativas");
   });
 
   it("mistura: cada causa diz para quantos alunos vale", async () => {
@@ -497,6 +580,8 @@ describe("Questões: período pedido × cobertura das coletas", () => {
     const t = texto();
     expect(t).toContain("A única coleta do período é a que mede o início; a próxima medirá o que veio depois");
     expect(t).not.toContain("e nenhuma antes");
+    expect(textoDaSecao("Elefante Letrado"))
+      .toContain("Questões—sem número ainda: a única coleta mede o início — veja o aviso");
   });
 
   it("contador que diminui e lacuna no período são ditos", async () => {
@@ -527,6 +612,41 @@ describe("Questões: período pedido × cobertura das coletas", () => {
     expect(t).toContain("cobertura parcial — o valor NÃO representa o período completo");
     expect(t).toContain("2 aluno(s) coletados antes do período e sem nenhuma coleta que entre na conta");
     expect(t).toContain("Turma(s) sem nenhuma coleta no período, fora da conta: 4º Ano B.");
+  });
+
+  it("questões que não vieram da plataforma (S9) são ditas como causa da cobertura parcial", async () => {
+    montar(comCoberturaDeQuestoes({
+      ...COBERTURA_BASE, coleta_inicio: "2026-09-01T03:10:00", coleta_inicio_mais_tardio: null,
+      coleta_fim: "2026-09-20T03:10:00", coleta_fim_mais_cedo: "2026-09-20T03:10:00",
+      inicio_coberto: true, alunos_cobertura_completa: 0, alunos_cobertura_parcial: 1,
+      alunos_sem_inicio: 0, alunos_sem_fim: 1, alunos_medidos: 1, alunos_questoes_nao_vieram: 2,
+    }));
+    await screen.findByText("Tempo de leitura");
+    const t = texto();
+    expect(t).toContain("cobertura parcial — o valor NÃO representa o período completo");
+    expect(t).toContain("2 aluno(s) com coleta no período em que a plataforma não mandou as questões");
+    // O aviso novo também na língua de quem lê o relatório (D5), com o "Como ler" aberto.
+    await userEvent.setup().click(await screen.findByText("Como ler estes números"));
+    semVocabularioInterno(texto());
+  });
+
+  it("sem número porque as questões não vieram: o motivo é esse, não 'uma coleta só'", async () => {
+    montar(comCoberturaDeQuestoes({
+      ...COBERTURA_BASE, coleta_inicio: null, coleta_inicio_mais_tardio: null, coleta_fim: null,
+      coleta_fim_mais_cedo: null, status: "sem_intervalo", alunos_cobertura_parcial: 0,
+      alunos_sem_inicio: 0, alunos_sem_fim: 0, alunos_sem_intervalo: 0, alunos_medidos: 0,
+      alunos_questoes_nao_vieram: 2,
+    }, { t: null, a: null }));
+    await screen.findByText("Tempo de leitura");
+    const t = texto();
+    expect(t).toContain("Questões: sem número para 01/09/2026 a 30/09/2026.");
+    expect(t).toContain("A plataforma não mandou as questões nas coletas do período");
+    expect(t).not.toContain("Há uma única coleta por aluno no período");
+    expect(textoDaSecao("Elefante Letrado"))
+      .toContain("Questões—sem número: a plataforma não mandou as questões — veja o aviso");
+    expect(textoDaSecao("Elefante Letrado")).not.toContain("acertos sobre tentativas");
+    await userEvent.setup().click(await screen.findByText("Como ler estes números"));
+    semVocabularioInterno(texto());
   });
 
   it("Matific: 'para N aluno(s)' usa os alunos medidos, não só os parciais", async () => {
@@ -582,5 +702,50 @@ describe("Questões: período pedido × cobertura das coletas", () => {
     }
     await userEvent.selectOptions(screen.getByLabelText("Plataforma"), "matific");
     expect((screen.getByLabelText("Plataforma") as HTMLSelectElement).value).toBe("matific");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Resposta REAL do backend: fixtures/relatorio_periodo, gravada pela rota de verdade
+// em backend/tests/test_relatorios_periodo_exemplo_tela.py (regravável com
+// GERAR_FIXTURES_RELATORIO=1). Setembro, Elefante e Matific: a coleta do INÍCIO de
+// uma aluna (01/09) veio sem as questões, e a conta dela parte da coleta de 15/08.
+// ---------------------------------------------------------------------------
+describe("resposta real do backend", () => {
+  const real = () => structuredClone(relatorioReal) as unknown as Record<string, unknown>;
+
+  it("coleta do início sem as questões: diz isso e de onde a conta parte, não 'não há coleta perto do início'", async () => {
+    montar(real());
+    await screen.findByText("Tempo de leitura");
+    const t = texto();
+    expect(t).toContain("Questões: o valor INCLUI atividade de antes do período — não é só o período pedido.");
+    expect(t).toContain("A coleta do início veio sem as questões para 1 aluno(s): a conta parte da coleta de "
+      + "15/08/2026, 00:10, 17 dias antes de 01/09/2026, e INCLUI a atividade desse intervalo.");
+    expect(t).not.toContain("Não há coleta perto do início");
+    expect(t).not.toContain("Sem coleta no início do período");
+    await userEvent.setup().click(await screen.findByText("Como ler estes números"));
+    semVocabularioInterno(texto());
+  });
+
+  it("'Como ler': as Questões do Elefante continuam, embora o Matific liste 'questoes' no que NÃO responde", async () => {
+    // A forma real: o Elefante calcula as questões (`suporte.questoes`) e o Matific não as
+    // tem (`nao_suportado` com {plataforma: matific, metrica: questoes}) — a mesma chave.
+    // O filtro do "Como ler" só pula o que o backend lista PARA O ELEFANTE; sem a
+    // plataforma no filtro, a explicação das Questões do Elefante sumia.
+    const dados = real();
+    const ele = dados.elefante as { suporte: Record<string, unknown> };
+    const naoSuportado = dados.nao_suportado as { plataforma: string; metrica: string }[];
+    expect(Object.keys(ele.suporte)).toContain("questoes");
+    expect(naoSuportado).toContainEqual(expect.objectContaining({ plataforma: "matific", metrica: "questoes" }));
+    montar(dados);
+    await screen.findByText("Tempo de leitura");
+    await userEvent.setup().click(await screen.findByText("Como ler estes números"));
+    const t = texto();
+    const vezes = (s: string) => t.split(s).length - 1;
+    expect(t).toContain("A plataforma só informa o total de questões que o aluno já respondeu desde que começou");
+    expect(t).toContain("Só entra quem tem coleta no período; quem não tem fica fora da conta");
+    // E o que o relatório não responde continua uma vez só, no lugar dele.
+    expect(vezes("O Matific guarda atividades, estrelas e pontuação média, mas não conta questões")).toBe(1);
+    expect(vezes("Não dá para saber quanto durou cada leitura")).toBe(1);
   });
 });

@@ -20,10 +20,11 @@ from tests._sync_nucleo_fakes import (NavElefante, PlacarFake, aluno_el, alertas
 from tests.sync_integridade_comum import (aplicar, com_nome, dono, elefante_resumo, fichas,
                                           matific, pendentes, sem_disco, snap_matific, turma,
                                           turmas_de)
+from tests._ano_letivo import no_ano_de_hoje
 
 K_A = "3 ANO A (300396804)"
 K_B = "4 ANO B (300396805)"
-K_6 = "6 ANO B (300396806)"
+K_6 = "3 ANO C (300396806)"   # a outra sala da série (troca de sala na coleta)
 
 
 def _snaps(db, aluno_id):
@@ -198,11 +199,14 @@ def test_uuid_duplicado_na_mesma_turma_com_queda_vai_para_revisao(db, escola_com
 # ---------------------------------------------------------------------------
 # Achado 1 (ALTA, regressão) — troca de turma sem número novo recalcula.
 # ---------------------------------------------------------------------------
-def test_troca_de_turma_sem_numero_novo_recalcula(db, escola_completa, monkeypatch):
+def test_troca_de_turma_sem_numero_novo_recalcula(
+        relogio_no_ano_letivo, db, escola_completa, monkeypatch):
     ec = escola_completa
     eid = ec["escola"].id
     a, b, c = ec["alunos"]
-    t6 = Turma(escola_id=eid, nome="6º Ano B", ano_escolar="6º Ano", ano_letivo=2026)
+    # Sala da MESMA série: mudar de série é a virada do ano letivo, que a coleta não
+    # faz (S_G_VIRADA-1) — antes o destino era o "6º Ano B".
+    t6 = Turma(escola_id=eid, nome="3º Ano C", ano_escolar="3º Ano", ano_letivo=2026)
     db.add(t6)
     db.commit()
     credencial(db, eid, "matific")
@@ -226,6 +230,7 @@ def test_troca_de_turma_sem_numero_novo_recalcula(db, escola_completa, monkeypat
 # ---------------------------------------------------------------------------
 # Achado 3 (regressão de visibilidade) — o processo morre no recálculo.
 # ---------------------------------------------------------------------------
+@no_ano_de_hoje
 def test_processo_que_morre_no_recalculo_deixa_a_marca(db, escola_completa, monkeypatch):
     ec = escola_completa
     eid = ec["escola"].id

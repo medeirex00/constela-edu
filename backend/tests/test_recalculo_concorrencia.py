@@ -25,6 +25,7 @@ from sqlalchemy import event, func, select
 from app.core import database as core_db
 from app.models import Configuracao, Nota, SnapshotElefante, SnapshotMatific
 from app.services import scoring
+from tests._ano_letivo import no_ano_de_hoje
 
 # Tabelas cujo SELECT ALIMENTA o cálculo: se algum destes for lido antes da
 # trava, a trava chegou tarde (o valor lido pode já estar obsoleto).
@@ -112,7 +113,7 @@ def test_trava_adquirida_antes_de_qualquer_leitura_do_calculo(
 
 def test_trava_do_recalculo_e_advisory_lock_so_no_postgres():
     """A trava existe de verdade (e é no-op no SQLite de dev/testes)."""
-    executados: list[str] = []
+    executados: list[tuple[str, int]] = []
 
     class _Sessao:
         def __init__(self, dialeto):
@@ -121,11 +122,21 @@ def test_trava_do_recalculo_e_advisory_lock_so_no_postgres():
         def get_bind(self):
             return type("B", (), {"dialect": type("D", (), {"name": self._dialeto})()})()
 
+        def connection(self):
+            # sessão de gravação (com transação): a trava recusa a em AUTOCOMMIT
+            from types import SimpleNamespace
+            return SimpleNamespace(
+                get_execution_options=lambda: {},
+                connection=SimpleNamespace(dbapi_connection=SimpleNamespace(autocommit=False)))
+
         def execute(self, sql, params=None):
-            executados.append(str(sql))
+            executados.append((str(sql), params["ns"]))
 
     core_db.bloquear_escola_para_recalculo(_Sessao("postgresql"), 7)
-    assert len([s for s in executados if "pg_advisory_xact_lock" in s]) == 1
+    assert executados == [
+        ("SELECT pg_advisory_xact_lock_shared(:ns, :escola)", core_db._NS_IMPORTACAO),
+        ("SELECT pg_advisory_xact_lock(:ns, :escola)", core_db._NS_RECALCULO),
+    ]
 
     executados.clear()
     core_db.bloquear_escola_para_recalculo(_Sessao("sqlite"), 7)
@@ -141,7 +152,7 @@ def test_namespaces_das_travas_nao_colidem():
 
 
 # --------------------------------------------------------------------------
-# 2. HIERARQUIA: nunca pegar 4713 segurando 4711 (senão dá deadlock cruzado).
+# 2. As importações confirmam as alterações antes do recálculo independente.
 # --------------------------------------------------------------------------
 @pytest.fixture()
 def vigia_hierarquia(monkeypatch):
@@ -298,6 +309,7 @@ def test_recalculo_e_idempotente(db, escola_completa):
     assert total == 3, "1 nota por aluno/ano — nada duplicado"
 
 
+@no_ano_de_hoje
 def test_formula_inalterada(db, escola_completa):
     """Valores CONGELADOS antes da introdução da trava. A trava é exclusão
     mútua: não pode mexer em peso, normalização, nota nem desempate. Se este

@@ -34,7 +34,8 @@ class Notificacao(Base):
     rede_id: Mapped[int | None] = mapped_column(
         ForeignKey("redes.id", ondelete="CASCADE"), default=None, index=True)
     tipo: Mapped[str] = mapped_column(String(40), index=True)
-    severidade: Mapped[str] = mapped_column(String(8), default="info")  # info|aviso|critico
+    severidade: Mapped[str] = mapped_column(String(8), default="info",  # info|aviso|critico
+                                            server_default="info")  # o da 0025
     titulo: Mapped[str] = mapped_column(String(200))
     rota: Mapped[str | None] = mapped_column(String(200), default=None)
     entidade: Mapped[str | None] = mapped_column(String(40), default=None)

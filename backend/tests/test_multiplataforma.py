@@ -3,8 +3,12 @@ import pytest
 
 from app.models import DispositivoMovel
 from app.services import push, scoring
+from tests._ano_letivo import escola_no_ano_de_hoje  # noqa: F401 — fixture
 
 TOKEN = "ExponentPushToken[abcdef1234567890]"
+# Tokens no formato do Expo: texto fora dele não é aparelho e não vai ao Expo.
+VIVO = "ExponentPushToken[vivo-0001]"
+MORTO = "ExponentPushToken[morto-0001]"
 
 
 # --- Dispositivos ---------------------------------------------------------------
@@ -52,23 +56,23 @@ def test_notificar_escola_remove_tokens_mortos(db, escola_completa, monkeypatch)
     escola_id = escola_completa["escola"].id
     admin = escola_completa["admin"]
     db.add(DispositivoMovel(escola_id=escola_id, usuario_id=admin.id,
-                            token_push="vivo", plataforma="android"))
+                            token_push=VIVO, plataforma="android"))
     db.add(DispositivoMovel(escola_id=escola_id, usuario_id=admin.id,
-                            token_push="morto", plataforma="android"))
+                            token_push=MORTO, plataforma="android"))
     db.commit()
 
-    monkeypatch.setattr(push, "_enviar_lotes", lambda lotes: ["morto"])
+    monkeypatch.setattr(push, "_enviar_lotes", lambda lotes: [MORTO])
     alvo = push.notificar_escola(db, escola_id, "t", "c")
     assert alvo == 2
     tokens = [d.token_push for d in db.query(DispositivoMovel).all()]
-    assert tokens == ["vivo"]
+    assert tokens == [VIVO]
 
 
 def test_falha_de_rede_no_push_nao_derruba_a_operacao(db, escola_completa, monkeypatch):
     escola_id = escola_completa["escola"].id
     admin = escola_completa["admin"]
     db.add(DispositivoMovel(escola_id=escola_id, usuario_id=admin.id,
-                            token_push="qualquer", plataforma="ios"))
+                            token_push="ExponentPushToken[qualquer-0001]", plataforma="ios"))
     db.commit()
 
     def explode(lotes):
@@ -157,8 +161,9 @@ def test_sincronizacao_devolve_pacote_completo(cliente, db, escola_completa):
     for chave in ("gerado_em", "dashboard", "ranking", "evolucao", "alertas", "mural"):
         assert chave in corpo, f"faltou {chave}"
     assert corpo["dashboard"]["escola"]["nome"] == "ESCOLA TESTE"
-    assert len(corpo["ranking"]) == 3
-    assert corpo["ranking"][0]["nome"] == ana.nome
+    # Só a Ana tem dado: quem não tem dado nenhum não ganha posição nem 0,0 na
+    # aba Ranking Geral (DEC-19) — e continua nos alertas logo abaixo.
+    assert [item["nome"] for item in corpo["ranking"]] == [ana.nome]
     # Alunos sem snapshot geram alertas de sem_dados no mesmo pacote
     assert any(alerta["tipo"] == "sem_dados" for alerta in corpo["alertas"])
 

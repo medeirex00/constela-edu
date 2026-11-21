@@ -23,12 +23,14 @@ import {
   RotateCcw,
   UploadCloud,
   UserPlus,
+  UserSearch,
   Users,
   X,
   XCircle,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, type DragEvent } from "react";
+import { Link } from "react-router-dom";
 
 import { PassosImportacao } from "../components/PassosImportacao";
 import SeletorAlunoDrawer from "../components/SeletorAlunoDrawer";
@@ -45,6 +47,7 @@ import {
 } from "../components/ui";
 import { useApp } from "../context/AppContext";
 import {
+  arquivoVaiParaRevisao,
   importavel,
   useImportacaoLote,
   type EstadoRecalculo,
@@ -125,6 +128,7 @@ export default function ImportacaoLote({ aoConcluir }: { aoConcluir?: () => void
     fase, arquivos, itens, progresso, tempoMs, turmas,
     adicionar, removerArquivo, limparArquivos, analisarTodos, importarTodos,
     alternarIgnorar, vincular, recomecar, recalculo, recalculando, refazerRecalculo,
+    erroTurmas, recarregandoTurmas, recarregarTurmas,
   } = useImportacaoLote();
 
   const [editando, setEditando] = useState<string | null>(null);
@@ -155,12 +159,20 @@ export default function ImportacaoLote({ aoConcluir }: { aoConcluir?: () => void
   const precisam = itens.filter((it) => !it.ignorado && !importavel(it));
   const ignorados = itens.filter((it) => it.ignorado);
   const novos = prontos.filter((it) => it.acao.tipo === "criar").length;
+  // Os que a confirmação manda para Revisões de identidade: nada é criado nem importado
+  // deles (o destino "revisao" e, na política "bloquear", o aluno sem ficha).
+  const paraRevisao = prontos.filter(arquivoVaiParaRevisao).length;
+  const deixadosParaRevisao = prontos.filter((it) => it.acao.tipo === "revisao").length;
   // Política "bloquear" da escola (a matrícula vem da Lista Piloto): o backend
   // não cria ficha para quem não casar — a tela avisa antes de importar.
   const criacaoBloqueada = itens.some((it) => it.analise?.criacao_bloqueada_por_politica);
   const itemEmEdicao = itens.find((it) => it.id === editando) ?? null;
-  const turmaInicialDrawer =
-    itemEmEdicao?.analise ? acharTurmaPorNome(turmas, itemEmEdicao.analise.turma_detectada) : null;
+  // A turma em que o drawer começa: a que a prévia decidiu para o aluno novo; senão a
+  // única turma cadastrada da sala do relatório (série e letra inteiras).
+  const turmaInicialDrawer = itemEmEdicao?.analise
+    ? itemEmEdicao.analise.linhas.find((l) => l.correspondencia)?.correspondencia?.turma_id
+      ?? acharTurmaPorNome(turmas, itemEmEdicao.analise.turma_detectada)
+    : null;
   // Algum arquivo pronto é total acumulado (sem "Intervalo de datas")? Então a data
   // do relatório é obrigatória — o relatório individual (leituras) não precisa.
   const exigeData = prontos.some((it) => it.analise && exigeDataDoRelatorio(it.analise));
@@ -284,6 +296,25 @@ export default function ImportacaoLote({ aoConcluir }: { aoConcluir?: () => void
             {ignorados.length > 0 && <Badge>{ignorados.length} ignorado{ignorados.length === 1 ? "" : "s"}</Badge>}
           </div>
 
+          {/* As turmas da escola não carregaram: o "Corrigir" não as lista. O aluno novo
+              não perde a turma — ela vem da prévia (``correspondencia.turma_id``). Antes
+              a falha era engolida em silêncio. */}
+          {fase === "conferencia" && erroTurmas && (
+            <div className="px-6 pb-4">
+              <div role="alert" className="rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-800 dark:border-rose-500/20 dark:bg-rose-500/10 dark:text-rose-200">
+                <p className="font-semibold">Não foi possível carregar as turmas da escola.</p>
+                <p className="mt-0.5">
+                  Sem elas, “Corrigir” não mostra as turmas para escolher o aluno. Detalhe:{" "}
+                  {erroTurmas}
+                </p>
+                <Botao variante="secundario" tamanho="sm" className="mt-3" disabled={recarregandoTurmas}
+                  onClick={() => { void recarregarTurmas(); }}>
+                  <RotateCcw size={14} aria-hidden /> {recarregandoTurmas ? "Carregando…" : "Tentar de novo"}
+                </Botao>
+              </div>
+            </div>
+          )}
+
           {criacaoBloqueada && (
             <p
               className="mx-6 mb-4 rounded-2xl border border-ouro-200 bg-ouro-50 px-4 py-2.5 text-sm text-zinc-800 dark:border-ouro-400/25 dark:bg-ouro-400/10 dark:text-zinc-100"
@@ -311,6 +342,8 @@ export default function ImportacaoLote({ aoConcluir }: { aoConcluir?: () => void
             {itens.map((it) => {
               const v = VISUAL[it.status];
               const emImport = fase === "importando";
+              // Recusado pelo servidor: o motivo dele, não o texto da análise.
+              const detalhe = textoDoItem(it);
               return (
                 <div
                   key={it.id}
@@ -333,6 +366,11 @@ export default function ImportacaoLote({ aoConcluir }: { aoConcluir?: () => void
                             <CheckCircle2 size={13} aria-hidden /> importado
                           </span>
                         )}
+                        {emImport && it.resultado === "revisao" && (
+                          <span className="inline-flex items-center gap-1 text-xs font-semibold text-ouro-700 dark:text-ouro-300">
+                            <UserSearch size={13} aria-hidden /> em revisão
+                          </span>
+                        )}
                         {emImport && it.resultado === "erro" && (
                           <span className="inline-flex items-center gap-1 text-xs font-semibold text-rose-700 dark:text-rose-400">
                             <XCircle size={13} aria-hidden /> falhou
@@ -353,8 +391,11 @@ export default function ImportacaoLote({ aoConcluir }: { aoConcluir?: () => void
                           </span>
                         )}
                       </p>
-                      {it.detalhe && !it.ignorado && (
-                        <p className="mt-0.5 text-xs text-zinc-500 dark:text-zinc-400">{it.detalhe}</p>
+                      {detalhe && !it.ignorado && (
+                        <p className="mt-0.5 text-xs text-zinc-500 dark:text-zinc-400">{detalhe}</p>
+                      )}
+                      {it.ignorado && it.motivoIgnorado && (
+                        <p className="mt-0.5 text-xs text-zinc-500 dark:text-zinc-400">{it.motivoIgnorado}</p>
                       )}
                     </div>
 
@@ -416,7 +457,8 @@ export default function ImportacaoLote({ aoConcluir }: { aoConcluir?: () => void
             <div className="flex flex-wrap items-center justify-end gap-3 border-t border-zinc-100 bg-zinc-50/60 px-6 py-4 dark:border-zinc-800 dark:bg-zinc-800/30">
               <span className="mr-auto text-sm text-zinc-700 dark:text-zinc-200">
                 {prontos.length > 0
-                  ? `${prontos.length} arquivo(s) serão importados.`
+                  ? `${prontos.length - paraRevisao} arquivo(s) serão importados.`
+                    + (paraRevisao > 0 ? ` ${vaoParaRevisoes(paraRevisao)}.` : "")
                   : "Nenhum arquivo pronto — corrija os pendentes para continuar."}
                 {precisam.length > 0 && ` ${precisam.length} ainda precisam de correção.`}
                 {prontos.length > 0 && !dataOk && " Informe a data dos relatórios para importar."}
@@ -461,6 +503,12 @@ export default function ImportacaoLote({ aoConcluir }: { aoConcluir?: () => void
               {novos} com aluno novo{criacaoBloqueada ? " — pela política da escola, vão para Revisões de identidade" : ""}
             </li>
           )}
+          {deixadosParaRevisao > 0 && (
+            <li className="flex items-center gap-2">
+              <UserSearch size={15} aria-hidden className="shrink-0 text-ouro-700 dark:text-ouro-300" />
+              {vaoParaRevisoes(deixadosParaRevisao)} — nada é criado nem vinculado; um gestor decide lá
+            </li>
+          )}
           {precisam.length > 0 && (
             <li className="flex items-center gap-2">
               <AlertTriangle size={15} aria-hidden className="shrink-0 text-ouro-700 dark:text-ouro-300" />
@@ -484,6 +532,7 @@ export default function ImportacaoLote({ aoConcluir }: { aoConcluir?: () => void
           escolaId={escolaId}
           aberto={editando !== null}
           turmas={turmas}
+          erroTurmas={erroTurmas}
           turmaInicial={turmaInicialDrawer}
           nomePdf={itemEmEdicao ? `${itemEmEdicao.nome}${itemEmEdicao.alunoNome ? ` — ${itemEmEdicao.alunoNome}` : ""}` : ""}
           aoFechar={() => setEditando(null)}
@@ -495,6 +544,17 @@ export default function ImportacaoLote({ aoConcluir }: { aoConcluir?: () => void
       )}
     </div>
   );
+}
+
+/** "1 vai" / "N vão" para Revisões de identidade (rodapé e confirmação). */
+function vaoParaRevisoes(n: number): string {
+  return `${n} ${n === 1 ? "vai" : "vão"} para Revisões de identidade`;
+}
+
+/** O texto de um arquivo: o motivo da recusa do servidor quando o /confirmar falhou;
+ *  senão, o que a análise disse dele. */
+function textoDoItem(it: ItemLote): string {
+  return it.resultado === "erro" && it.erroImportacao ? it.erroImportacao : it.detalhe;
 }
 
 /** Resumo final: blocos com os totais + a lista dos que ficaram de fora. */
@@ -517,6 +577,7 @@ function RelatorioFinal({
   const enviados = itens.length;
   const importados = itens.filter((i) => i.resultado === "importado");
   const corrigidos = importados.filter((i) => i.corrigido);
+  const emRevisao = itens.filter((i) => i.resultado === "revisao");
   const ignorados = itens.filter((i) => i.resultado === "ignorado");
   const erros = itens.filter((i) => i.resultado === "erro");
   const pendentes = itens.filter((i) => i.resultado === "pendente");
@@ -536,6 +597,8 @@ function RelatorioFinal({
       tom: "verde",
       extra: corrigidos.length > 0 ? `${corrigidos.length} corrigido(s) à mão` : undefined,
     },
+    // Gravados como pendência: nada foi criado nem importado até um gestor decidir.
+    { rotulo: "Em revisão", valor: emRevisao.length, icone: UserSearch, tom: "azul" },
     { rotulo: "Ignorados", valor: ignorados.length, icone: Ban, tom: "neutro" },
     { rotulo: "Não resolvidos", valor: pendentes.length, icone: AlertTriangle, tom: "ambar" },
     { rotulo: "Erros", valor: erros.length, icone: XCircle, tom: "rosa" },
@@ -555,7 +618,7 @@ function RelatorioFinal({
         </span>
       </div>
 
-      <div className="grid grid-cols-2 gap-3 px-6 py-4 md:grid-cols-3 xl:grid-cols-5">
+      <div className="grid grid-cols-2 gap-3 px-6 py-4 md:grid-cols-3 xl:grid-cols-6">
         {cartoes.map((c) => (
           <div key={c.rotulo} className="rounded-2xl bg-zinc-50 p-4 dark:bg-zinc-800/50">
             <IconePastel icone={c.icone} tom={c.tom} tamanho="sm" />
@@ -591,6 +654,28 @@ function RelatorioFinal({
         </div>
       )}
 
+      {emRevisao.length > 0 && (
+        <div className="border-t border-zinc-100 px-6 py-4 dark:border-zinc-800">
+          <p className="mb-1 text-sm font-semibold text-ouro-700 dark:text-ouro-300">
+            {emRevisao.length} arquivo(s) foram para Revisões de identidade:
+          </p>
+          <p className="mb-2 text-sm text-zinc-600 dark:text-zinc-300">
+            Nada foi criado nem importado deles: um gestor escolhe o aluno certo lá.{" "}
+            <Link to="/revisoes-identidade" className="font-semibold underline">
+              Ver revisões de identidade
+            </Link>
+          </p>
+          <ul className="space-y-1.5 text-sm text-zinc-700 dark:text-zinc-300">
+            {emRevisao.map((it) => (
+              <li key={it.id} className="flex items-start gap-2">
+                <UserSearch size={15} aria-hidden className="mt-0.5 shrink-0 text-ouro-600" />
+                <span className="min-w-0 font-medium">{it.nome}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
       {naoImportados.length > 0 && (
         <div className="border-t border-zinc-100 px-6 py-4 dark:border-zinc-800">
           <p className="mb-2 text-sm font-semibold text-ouro-700 dark:text-ouro-300">
@@ -606,7 +691,7 @@ function RelatorioFinal({
                 )}
                 <span className="min-w-0">
                   <span className="font-medium">{it.nome}</span>
-                  {it.detalhe && <span className="text-zinc-500 dark:text-zinc-400"> — {it.detalhe}</span>}
+                  {textoDoItem(it) && <span className="text-zinc-500 dark:text-zinc-400"> — {textoDoItem(it)}</span>}
                 </span>
               </li>
             ))}

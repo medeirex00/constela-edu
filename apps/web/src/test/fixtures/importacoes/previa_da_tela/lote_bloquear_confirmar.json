@@ -1,0 +1,21 @@
+{
+  "mensagem": "0 aluno(s) com dado novo importado(s). 1 aluno(s) sem ficha não foram criados: a política desta escola não deixa a plataforma criar ficha (a matrícula vem da Lista Piloto). Eles ficaram em Revisão de identidade para um gestor apontar a ficha certa.",
+  "importacao_id": 1,
+  "qtd_alunos": 0,
+  "qtd_erros": 0,
+  "avisos": [
+    "“CRIANCA FICTICIA SEM FICHA”: nenhum aluno corresponde e a política desta escola não deixa a plataforma criar ficha — nem pela sincronização nem pela importação de relatório (a matrícula vem da Lista Piloto) — nenhum aluno foi associado nem criado. A linha ficou como pendência na fila de revisão de identidade para um gestor decidir."
+  ],
+  "ignorados": [
+    "crianca ficticia sem ficha"
+  ],
+  "qtd_revisoes": 1,
+  "alunos_aplicados_ids": [],
+  "linhas_recebidas": 2,
+  "linhas_em_revisao": 2,
+  "linhas_descartadas": {},
+  "avisos_criticos": [],
+  "contas_em_revisao": 1,
+  "ids_de_outra_escola": [],
+  "criacao_bloqueada": 1
+}

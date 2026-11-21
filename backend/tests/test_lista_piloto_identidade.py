@@ -265,10 +265,17 @@ def test_d2_cadastro_disputado_por_duas_linhas_nao_e_entregue_a_primeira(
     linha a linha, a PRIMEIRA do arquivo levaria o cadastro — e com ele os livros
     lidos da outra criança. Correspondência insegura → revisão, para as duas."""
     escola_id = escola_completa["escola"].id
-    _plataforma(cliente, escola_id, "elefante", [
-        {"nome": "AGATHA V", "dados": {"livros_unicos": 4},
-         "criar_em_turma_nome": "1 ANO A TARDE ANUAL (300396600)"}])
-    stub_id = _alunos(db, escola_id, "AGATHA")[0].id
+    # O stub é PASSIVO: desde a trava de nome abreviado (A2) a plataforma não cria
+    # mais a ficha "AGATHA V". Ele entra direto no banco, na turma que a mesma
+    # importação criaria para o rótulo do relatório.
+    turma = imp._turma_pelo_nome(db, escola_id, ANO, "1 ANO A TARDE ANUAL (300396600)",
+                                 [], {}, permitir_criar=True)
+    stub = Aluno(escola_id=escola_id, nome="AGATHA V")
+    db.add(stub)
+    db.flush()
+    db.add(Matricula(escola_id=escola_id, aluno_id=stub.id, turma_id=turma.id, ano_letivo=ANO))
+    db.commit()
+    stub_id = stub.id
     antes = _conta(db, escola_id)
 
     corpo = _confirmar(cliente, escola_id, _planilha(("1º Ano A", [
@@ -675,6 +682,13 @@ def test_i4_trava_emite_advisory_lock_no_postgres(dialeto, esperado, monkeypatch
     class _Sessao:
         def get_bind(self):
             return _Bind()
+
+        def connection(self):
+            # sessão de gravação (com transação): a trava recusa a em AUTOCOMMIT
+            from types import SimpleNamespace
+            return SimpleNamespace(
+                get_execution_options=lambda: {},
+                connection=SimpleNamespace(dbapi_connection=SimpleNamespace(autocommit=False)))
 
         def execute(self, sql, params=None):
             executados.append(str(sql))

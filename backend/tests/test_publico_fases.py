@@ -310,6 +310,9 @@ NAO_LISTAM_CRIANCA = {
     "/api/v1/quest/perfil/aparencia": "catálogo estático de aparência",
     "/api/v1/quest/perfil/cores": "catálogo estático de cores",
     "/api/v1/quest/perfil/personagens": "catálogo estático de personagens",
+    "/api/v1/escolas/{escola_id}/dispositivos/descadastrar":
+        "tira o aparelho do push pelo token_push; a resposta é a mesma achando ou não "
+        "(não lista nem abre criança)",
 }
 
 

@@ -9,15 +9,15 @@ from datetime import datetime, timezone
 
 from fastapi import (APIRouter, Depends, File, HTTPException, Query, Response,
                      UploadFile, status)
-from sqlalchemy import func, select, update
+from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from app.core.database import get_db
+from app.core.database import get_db, leitura_sem_transacao
 from app.core.deps import exigir_admin_global, exigir_rede, get_usuario_atual
 from app.core.tempo import hoje_br
-from app.models import Escola, Rede, TokenResetSenha, Usuario
-from app.routers.admin import _invalidar_links_emitidos
+from app.models import Escola, Rede, Usuario
+from app.routers.admin import _revogar_acessos
 from app.routers.publico import base_do_link_publico
 from app.schemas import (
     EscolaLocalIn,
@@ -35,10 +35,10 @@ from app.services import frescor_ranking
 from app.services import geocodificacao as svc_geo
 from app.services import modulos as svc_modulos
 from app.services import permissoes
-from app.services import push as svc_push
 from app.services import relatorios as svc_relatorios
 from app.services import rede as svc_rede
 from app.services.audit import registrar
+from app.services.indicadores import ica
 
 _MAX_BYTES_INEP = 150 * 1024 * 1024  # mesmo teto do IDEB (arquivo oficial ~97 MB)
 
@@ -46,6 +46,7 @@ router = APIRouter(prefix="/redes", tags=["Rede / Secretaria"])
 
 
 @router.get("")
+@leitura_sem_transacao
 def listar_redes(
     usuario: Usuario = Depends(get_usuario_atual),
     db: Session = Depends(get_db),
@@ -121,6 +122,8 @@ def criar_rede(
     if repetida is not None:
         raise HTTPException(status.HTTP_409_CONFLICT,
                             f"Já existe uma rede chamada “{repetida.nome}”.")
+    if dados.codigo_ibge:
+        _exigir_ibge_livre(db, None, dados.codigo_ibge)
     rede = Rede(nome=nome, uf=(dados.uf or None), codigo_ibge=(dados.codigo_ibge or None),
                 codigo_municipio_estadual=(dados.codigo_municipio_estadual or None))
     db.add(rede)
@@ -148,6 +151,12 @@ def atualizar_rede(
     if "codigo_municipio_estadual" in alteracoes:
         # "" limpa (o SARESP por município volta a pedir o código na prévia).
         alteracoes["codigo_municipio_estadual"] = alteracoes["codigo_municipio_estadual"] or None
+    if "codigo_ibge" in alteracoes:
+        # "" limpa (a importação dos indicadores oficiais volta a pedir o código).
+        alteracoes["codigo_ibge"] = alteracoes["codigo_ibge"] or None
+        novo = alteracoes["codigo_ibge"]
+        if novo and novo != ica.normalizar_codigo_ibge(rede.codigo_ibge):
+            _exigir_ibge_livre(db, rede.id, novo)
     for campo, valor in alteracoes.items():
         setattr(rede, campo, valor)
     registrar(db, "rede.atualizada", usuario_id=usuario.id, entidade="rede",
@@ -155,6 +164,24 @@ def atualizar_rede(
     db.commit()
     db.refresh(rede)
     return rede
+
+
+def _exigir_ibge_livre(db: Session, rede_id: int | None, codigo: str) -> None:
+    """409 quando o código IBGE (7 dígitos, já validado) é de OUTRA rede. As importações
+    dos indicadores oficiais (Ideb, Saeb, SARESP, ICA) são recortadas pelo município da
+    rede: duas redes com o mesmo código veriam, listariam e desfariam as importações uma
+    da outra, e o Ideb oficial das escolas de uma sumiria a cada importação da outra. A
+    comparação é pelo código normalizado (um cadastro antigo com espaço também conta).
+    Regravar o código que a rede já tem não passa por aqui (redes antigas que já
+    repetem o código continuam editáveis)."""
+    for outra_id, outra_nome, outro_codigo in db.execute(
+            select(Rede.id, Rede.nome, Rede.codigo_ibge).where(Rede.codigo_ibge.isnot(None))):
+        if outra_id != rede_id and ica.normalizar_codigo_ibge(outro_codigo) == codigo:
+            raise HTTPException(
+                status.HTTP_409_CONFLICT,
+                f"O código IBGE {codigo} já é da rede “{outra_nome}” (id {outra_id}). Cada "
+                "rede tem o seu município: confira o código ou, em Gestão de redes, tire-o "
+                "primeiro da outra rede. Nada foi alterado.")
 
 
 @router.get("/{rede_id}/modulos")
@@ -297,8 +324,14 @@ def atualizar_local_escola(
     alteracoes = dados.model_dump(exclude_unset=True)
     if "codigo_inep" in alteracoes:
         bruto = (alteracoes["codigo_inep"] or "").strip()
-        # "" limpa; caso contrário normaliza p/ 8 dígitos (recusa lixo).
-        alteracoes["codigo_inep"] = svc_avaliacoes.normalizar_inep(bruto) if bruto else None
+        # "" limpa. O resto tem de ser um código de 8 dígitos (``inep_digitado``: nunca
+        # corta nem completa); senão, 400 e o código de antes fica.
+        alteracoes["codigo_inep"] = svc_avaliacoes.inep_digitado(bruto) if bruto else None
+        if bruto and alteracoes["codigo_inep"] is None:
+            raise HTTPException(
+                status.HTTP_400_BAD_REQUEST,
+                "O código INEP da escola tem 8 dígitos, só números (ex.: 35012345): "
+                "confira o código digitado. Nada foi alterado.")
         if alteracoes["codigo_inep"]:
             _exigir_inep_livre(db, escola, alteracoes["codigo_inep"])
     for campo, valor in alteracoes.items():
@@ -329,14 +362,21 @@ def casar_inep(
     """Propõe o código INEP oficial para cada escola da rede, casando pelo NOME
     (dentro do mesmo município) contra o arquivo oficial do INEP. NÃO grava —
     devolve as propostas para o gestor conferir e salvar. Layout padrão = IDEB
-    por escola (a coluna do nome/município/INEP já é conhecida)."""
+    por escola (a coluna do nome/município/INEP já é conhecida).
+
+    A planilha que a leitura recusa antes de abrir (.xlsx inflado, compactação que o
+    Excel não gera: ``avaliacoes.ImportacaoRecusada``) responde 400 com o motivo — como
+    as rotas de avaliações e indicadores —, não um erro interno."""
     if db.get(Rede, rede_id) is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Rede não encontrada.")
     conteudo = arquivo.file.read(_MAX_BYTES_INEP + 1)
     if len(conteudo) > _MAX_BYTES_INEP:
         raise HTTPException(status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
                             "Arquivo muito grande.")
-    propostas = svc_inep.casar_inep(db, rede_id, conteudo, arquivo.filename or "")
+    try:
+        propostas = svc_inep.casar_inep(db, rede_id, conteudo, arquivo.filename or "")
+    except svc_avaliacoes.ImportacaoRecusada as exc:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
     casadas = sum(1 for p in propostas if p["inep"] and p["confianca"] == "alta")
     revisar = sum(1 for p in propostas if p["inep"] and p["confianca"] == "revisar")
     return {"propostas": propostas, "total": len(propostas),
@@ -364,8 +404,8 @@ def definir_usuarios(
     global — e o router de administração inteiro nega a Secretaria
     (`deps.negar_secretaria`), independentemente do cargo dela.
 
-    A conta que PASSA A TER o `rede_id` desta rede (promovida a Secretaria, ou
-    vinda de outra rede) muda de alcance: as sessões abertas dela caem
+    Quando uma conta entra, sai ou muda de rede, seu alcance muda: as sessões
+    abertas dela caem
     (`token_version`) e os links de redefinição pendentes deixam de valer — os
     dela e os que ela GEROU para outras contas da escola (a Secretaria não os
     poderia gerar; sem isto voltavam a valer se ela deixasse a rede) —, e
@@ -385,36 +425,24 @@ def definir_usuarios(
     atuais = db.execute(
         select(Usuario).where(Usuario.rede_id == rede_id)
     ).scalars().all()
-    for alvo_u in atuais:
-        if alvo_u.id not in ids_validos:
-            alvo_u.rede_id = None
-    agora = datetime.now(timezone.utc)
     promovidas: list[int] = []
-    for alvo_u in validos:
-        if alvo_u.rede_id != rede_id:
-            # Promoção: alcance novo = sessões antigas caem e links pendentes morrem.
-            rede_anterior = alvo_u.rede_id
-            alvo_u.token_version = (alvo_u.token_version or 0) + 1
-            links = db.execute(
-                update(TokenResetSenha)
-                .where(TokenResetSenha.usuario_id == alvo_u.id,
-                       TokenResetSenha.usado_em.is_(None))
-                .values(usado_em=agora)
-                .execution_options(synchronize_session=False)).rowcount
-            emitidos = _invalidar_links_emitidos(db, alvo_u.id, agora)
-            # Os aparelhos registrados no alcance antigo (push da ESCOLA, com o
-            # primeiro nome de criança) saem junto: a Secretaria não é equipe
-            # da escola.
-            aparelhos = svc_push.remover_aparelhos_da_conta(db, alvo_u.id)
-            promovidas.append(alvo_u.id)
-            registrar(db, "usuario.promovido_a_secretaria", escola_id=alvo_u.escola_id,
-                      usuario_id=usuario.id, entidade="usuario", entidade_id=alvo_u.id,
-                      detalhes={"rede_id": rede_id, "rede_anterior": rede_anterior,
-                                "sessoes_encerradas": True,
-                                "links_pendentes_invalidados": links,
-                                "links_emitidos_invalidados": emitidos,
-                                "dispositivos_removidos": aparelhos})
-        alvo_u.rede_id = rede_id
+    contas = {u.id: u for u in atuais + validos}
+    for conta_id, conta in sorted(contas.items()):
+        proxima_rede = rede_id if conta_id in ids_validos else None
+        if conta.rede_id == proxima_rede:
+            continue
+        rede_anterior = conta.rede_id
+        conta.rede_id = proxima_rede
+        # Ao sair da Secretaria, a conta pode voltar a ter funções na escola.
+        # Exige um novo login também nessa direção da mudança de alcance.
+        revogacao = _revogar_acessos(db, conta, alcance_alterado=True)
+        if proxima_rede is not None:
+            promovidas.append(conta_id)
+        acao = ("usuario.promovido_a_secretaria" if proxima_rede is not None
+                else "usuario.removido_da_secretaria")
+        registrar(db, acao, escola_id=conta.escola_id, usuario_id=usuario.id,
+                  entidade="usuario", entidade_id=conta_id,
+                  detalhes={"rede_id": rede_id, "rede_anterior": rede_anterior, **revogacao})
     registrar(db, "rede.usuarios_definidos", usuario_id=usuario.id, entidade="rede",
               entidade_id=rede_id, detalhes={"usuario_ids": sorted(ids_validos),
                                              "promovidas": sorted(promovidas)})
@@ -455,14 +483,22 @@ def geocodificar(
     lote = db.execute(
         pendentes_apos(depois_de).order_by(Escola.id).limit(limite)
     ).scalars().all()
-    resultado = svc_geo.geocodificar_lote(lote, geocoder, intervalo)
     ultimo_id = lote[-1].id if lote else depois_de
+    usuario_id = usuario.id
+    for escola in lote:
+        db.expunge(escola)
+    db.rollback()  # devolve a conexão antes do intervalo e das chamadas ao OSM
+
+    coordenadas = svc_geo.geocodificar_lote(lote, geocoder, intervalo)
+    encontradas = sum(svc_geo.salvar_coordenadas(db, escola, coord)
+                      for escola, coord in coordenadas)
+    resultado = {"encontradas": encontradas, "falhas": len(lote) - encontradas}
     # Quantas ainda faltam ALÉM deste lote — contadas por id (falha ou sucesso já
     # ficaram para trás do cursor), então este número decresce a cada lote.
     restantes = db.execute(
         select(func.count()).select_from(pendentes_apos(ultimo_id).subquery())
     ).scalar() or 0
-    registrar(db, "rede.geocodificada", usuario_id=usuario.id, entidade="rede",
+    registrar(db, "rede.geocodificada", usuario_id=usuario_id, entidade="rede",
               entidade_id=rede_id,
               detalhes={"processadas": len(lote), "ultimo_id": ultimo_id, **resultado})
     db.commit()
@@ -476,6 +512,7 @@ def geocodificar(
 
 
 @router.get("/{rede_id}/dashboard")
+@leitura_sem_transacao
 def dashboard(
     rede_id: int = Depends(exigir_rede),
     usuario: Usuario = Depends(get_usuario_atual),
@@ -518,6 +555,7 @@ def ranking(
 
 
 @router.get("/{rede_id}/ranking/frescor")
+@leitura_sem_transacao
 def ranking_frescor(
     rede_id: int = Depends(exigir_rede),
     db: Session = Depends(get_db),
@@ -544,6 +582,7 @@ def ranking_frescor(
 
 
 @router.get("/{rede_id}/destaques")
+@leitura_sem_transacao
 def destaques(
     rede_id: int = Depends(exigir_rede),
     usuario: Usuario = Depends(get_usuario_atual),
@@ -603,8 +642,12 @@ def definir_meta(
     db: Session = Depends(get_db),
 ):
     """Cadastra/atualiza uma meta da rede (upsert por métrica). Ação de quem tem a
-    rede (Secretaria) ou o admin global — como a vitrine pública."""
-    svc_rede.definir_meta(db, rede_id, dados.metrica, dados.alvo, dados.descricao)
+    rede (Secretaria) ou o admin global — como a vitrine pública. A meta de uma
+    plataforma cujo módulo a rede não contratou é recusada (400)."""
+    try:
+        svc_rede.definir_meta(db, rede_id, dados.metrica, dados.alvo, dados.descricao)
+    except svc_rede.MetaForaDoPlano as exc:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
     registrar(db, "rede.meta_definida", usuario_id=usuario.id, entidade="rede",
               entidade_id=rede_id, detalhes={"metrica": dados.metrica, "alvo": dados.alvo})
     db.commit()
@@ -699,6 +742,7 @@ def _painel_publico_saida(rede: Rede | None, origem: str | None = None) -> dict:
 
 
 @router.get("/{rede_id}/publico")
+@leitura_sem_transacao
 def painel_publico_config(
     origem: str | None = None,
     rede_id: int = Depends(exigir_rede),

@@ -205,7 +205,9 @@ gating; se a Seção [12](12-seguranca-privacidade.md) fechar **erasure**, a 21 
   diz quem estava nela — para quem saiu da turma antes, regenerar o **individual**.
 - **Tablet compartilhado, "É você?" com nome errado** → o fluxo "quem vai jogar" troca de perfil; não é bug (S7).
 - **Cartão perdido/roubado ou QR vazado** → regenerar o cartão **individual**: código e QR novos, sessões derrubadas
-  (`token_version`); o código antigo deixa de entrar (S6).
+  (`token_version`); o código antigo deixa de entrar (S6). No Edu, o professor faz isso no menu do aluno, no painel da
+  turma: **"Novo cartão do Quest"** (ficha inativa: **"Revogar cartão do Quest"**, sem cartão novo) — o nome que a
+  folha "só do professor" cita.
 - **App não abre / tela velha** → cache do PWA (a API nunca é cacheada; forçar atualização) (S7).
 - **Escola nova sem níveis de dificuldade** → a pontuação por nível fica **sem base** até alguém cadastrar (o casco
   parcial do `POST /escolas` — **gap S4**, §15).
@@ -490,7 +492,9 @@ and gating; if Section [12](12-seguranca-privacidade.md) closes **erasure**, 21 
   before this record does not say who was on it — for whoever left the class before, regenerate the **individual** one.
 - **Shared tablet, "É você?" with wrong name** → the "who's playing" flow switches profile; not a bug (S7).
 - **Lost/stolen card or leaked QR** → regenerate the **individual** card: new code and QR, sessions dropped
-  (`token_version`); the old code stops working (S6).
+  (`token_version`); the old code stops working (S6). In Edu, the teacher does it from the student's menu on the class
+  panel: **"Novo cartão do Quest"** (inactive record: **"Revogar cartão do Quest"**, no new card) — the name the
+  teacher-only sheet cites.
 - **App won't open / stale screen** → PWA cache (the API is never cached; force a refresh) (S7).
 - **New school with no difficulty levels** → per-level scoring has **no basis** until someone registers them (the
   `POST /escolas` partial shell — **gap S4**, §15).

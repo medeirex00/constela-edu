@@ -16,19 +16,17 @@ aprovado: percentil/mediana/auto-referência no lugar de máximo/média):
 """
 from __future__ import annotations
 
-from datetime import date, datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import select
-from sqlalchemy.orm import Session, selectinload
+from sqlalchemy.orm import Session
 
+from app.core.tempo import para_br
 from app.models import (
-    Aluno,
     Escola,
-    Matricula,
     Nota,
     SnapshotElefante,
     SnapshotMatific,
-    Turma,
 )
 from app.services import dificuldade_livro, evolucao, scoring
 from app.services import dimensoes as svc_dimensoes
@@ -70,6 +68,7 @@ def _percentil_rank(ordenados_ativos: list[float], valor: float) -> float:
     return round(100.0 * abaixo / len(ordenados_ativos), 1)
 
 
+@scoring.com_leituras_da_requisicao
 def indices_da_escola(db: Session, escola_id: int,
                       serie_m: dict[int, list] | None = None,
                       serie_e: dict[int, list] | None = None,
@@ -100,17 +99,23 @@ def indices_da_escola(db: Session, escola_id: int,
     if alunos_com_leituras is None:
         alunos_com_leituras = evolucao._alunos_com_leituras(db, escola_id)
 
+    # RÉGUA JUSTA (`base_no_periodo=True`) nas 4 janelas, a mesma do Ranking de
+    # Evolução, do app e do telão: sem retrato ANTERIOR à janela, o acumulado de
+    # vida não vira avanço. Com o padrão antigo, a criança cujo 1º retrato caía
+    # dentro dos 30 dias tinha o MAIOR engajamento sem ter avançado nada nele.
     engajamento_bruto = {
         item.aluno_id: item.nota_evolucao
         for item in evolucao.ranking_evolucao(
             db, escola_id, dias=30, serie_m=serie_m, serie_e=serie_e, mapa_dif=mapa_dif,
-            alunos_com_leituras=alunos_com_leituras)
+            alunos_com_leituras=alunos_com_leituras,
+            base_no_periodo=True)
     }
     crescimento_bruto = {
         item.aluno_id: item.nota_evolucao
         for item in evolucao.ranking_evolucao(
             db, escola_id, dias=90, serie_m=serie_m, serie_e=serie_e, mapa_dif=mapa_dif,
-            alunos_com_leituras=alunos_com_leituras)
+            alunos_com_leituras=alunos_com_leituras,
+            base_no_periodo=True)
     }
     # Só quem avançou (>0) entra na régua percentilar; quem não avançou fica 0.
     ativos_30 = sorted(v for v in engajamento_bruto.values() if v > 0)
@@ -120,17 +125,9 @@ def indices_da_escola(db: Session, escola_id: int,
         valor = bruto.get(aluno_id, 0.0)
         return _percentil_rank(ativos, valor) if valor > 0 else 0.0
 
-    # selectinload(Matricula.aluno): o laço lê matricula.aluno.nome; sem isto,
-    # cada aluno dispararia um SELECT lazy (N+1). Carrega todos em 1 consulta.
-    matriculas = db.execute(
-        select(Matricula, Turma)
-        .join(Turma, Matricula.turma_id == Turma.id)
-        .join(Aluno, Matricula.aluno_id == Aluno.id)
-        .options(selectinload(Matricula.aluno))
-        .where(Matricula.escola_id == escola_id,
-               Matricula.ano_letivo == escola.ano_letivo_ativo,
-               Aluno.status == "ativo")
-    ).all()
+    # O laço lê matricula.aluno.nome: a coorte vem com o aluno carregado (sem um
+    # SELECT por aluno) e é a MESMA das quatro janelas acima (uma ida no bloco).
+    matriculas = evolucao.matriculas_ativas(db, escola_id, escola.ano_letivo_ativo)
 
     # PERSISTÊNCIA SEMANAL pelo ritmo do PRÓPRIO aluno (decisão de produto):
     # compara o crescimento da SEMANA ATUAL (segunda→agora) com o ritmo semanal
@@ -138,22 +135,31 @@ def indices_da_escola(db: Session, escola_id: int,
     # turma fraca não penaliza. Reusa o motor de evolução (que já normaliza as
     # plataformas numa nota) nas séries já carregadas; as duas janelas usam os
     # MESMOS parâmetros, então a razão semana/ritmo é consistente.
-    agora = datetime.now(timezone.utc).replace(tzinfo=None)
-    iso_hoje = agora.isocalendar()
-    inicio_semana = datetime.combine(
-        date.fromisocalendar(iso_hoje[0], iso_hoje[1], 1), datetime.min.time())
+    agora_utc = datetime.now(timezone.utc)
+    agora = agora_utc.replace(tzinfo=None)   # UTC naive: cobre retratos e leituras
+    # A SEMANA ATUAL é a de BRASÍLIA (segunda 00h, horário de parede), a mesma do
+    # preset "Esta semana" (`periodos.resolver` com `hoje_br`): `Leitura.data` é
+    # horário de parede de Brasília. Pela semana do relógio UTC, no domingo depois
+    # das 21h (BRT) o UTC já era segunda, a "semana atual" começava amanhã e a
+    # persistência de todos caía a 0. Como nas demais janelas por período, o
+    # retrato (UTC naive) é comparado com esse mesmo limite.
+    hoje = para_br(agora_utc).date()
+    inicio_semana = datetime.combine(hoje - timedelta(days=hoje.weekday()),
+                                     datetime.min.time())
     inicio_base = agora - timedelta(weeks=SEMANAS_BASE_PERSISTENCIA)
     cresc_semana = {
         i.aluno_id: i.nota_evolucao
         for i in evolucao.ranking_evolucao(db, escola_id, inicio=inicio_semana, fim=agora,
                                            serie_m=serie_m, serie_e=serie_e, mapa_dif=mapa_dif,
-                                           alunos_com_leituras=alunos_com_leituras)
+                                           alunos_com_leituras=alunos_com_leituras,
+                                           base_no_periodo=True)
     }
     cresc_base = {
         i.aluno_id: i.nota_evolucao
         for i in evolucao.ranking_evolucao(db, escola_id, inicio=inicio_base, fim=agora,
                                            serie_m=serie_m, serie_e=serie_e, mapa_dif=mapa_dif,
-                                           alunos_com_leituras=alunos_com_leituras)
+                                           alunos_com_leituras=alunos_com_leituras,
+                                           base_no_periodo=True)
     }
 
     def _persistencia_semanal(aluno_id: int) -> float:
@@ -178,6 +184,7 @@ def indices_da_escola(db: Session, escola_id: int,
     return itens
 
 
+@scoring.com_leituras_da_requisicao
 def alertas_da_escola(db: Session, escola_id: int,
                       serie_m: dict[int, list] | None = None,
                       serie_e: dict[int, list] | None = None) -> list[dict]:
@@ -192,18 +199,10 @@ def alertas_da_escola(db: Session, escola_id: int,
     agora = datetime.now(timezone.utc)
     corte_atividade = agora - timedelta(days=DIAS_SEM_ATIVIDADE)
 
-    # selectinload(Matricula.aluno): idem indices_da_escola — o laço lê
-    # matricula.aluno.nome; evita N+1. Rota também usada pela sincronização
-    # mobile e pelo contexto do Assistente.
-    matriculas = db.execute(
-        select(Matricula, Turma)
-        .join(Turma, Matricula.turma_id == Turma.id)
-        .join(Aluno, Matricula.aluno_id == Aluno.id)
-        .options(selectinload(Matricula.aluno))
-        .where(Matricula.escola_id == escola_id,
-               Matricula.ano_letivo == ano,
-               Aluno.status == "ativo")
-    ).all()
+    # Idem indices_da_escola — o laço lê matricula.aluno.nome; a coorte vem com
+    # o aluno carregado. Rota também usada pela sincronização mobile e pelo
+    # contexto do Assistente (no pacote do app, a mesma coorte do mural).
+    matriculas = evolucao.matriculas_ativas(db, escola_id, ano)
 
     if serie_m is None:
         serie_m = evolucao._series_por_aluno(db, escola_id, SnapshotMatific)
@@ -245,12 +244,20 @@ def alertas_da_escola(db: Session, escola_id: int,
                 else (com_nota[meio - 1] + com_nota[meio]) / 2
             )
 
+    # CONTRATO (o mesmo corte do motor, `scoring._carregar_contexto`): retrato da
+    # plataforma de um módulo que a rede NÃO contratou não é dado do aluno. Sem
+    # isto, um retrato recente do Matific numa rede só com Leitura escondia o
+    # "sem novos dados" de quem parou de ler, e quem só tinha Matific aparecia
+    # "sem novos dados há N dias" em vez de "ainda não tem nenhum dado".
+    fora = {plataforma for dimensao, plataforma in scoring.DIMENSOES.items()
+            if dimensao not in contratadas}
+
     alertas: list[dict] = []
     for matricula, turma in matriculas:
         aluno_id = matricula.aluno_id
         nome = matricula.aluno.nome
-        m = serie_m.get(aluno_id, [])
-        e = serie_e.get(aluno_id, [])
+        m = [] if "matific" in fora else serie_m.get(aluno_id, [])
+        e = [] if "elefante" in fora else serie_e.get(aluno_id, [])
 
         if not m and not e:
             alertas.append({

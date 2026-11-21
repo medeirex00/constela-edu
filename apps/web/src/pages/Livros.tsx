@@ -55,6 +55,10 @@ const NIVEIS_OFICIAIS = [
 ];
 
 const MOTIVO_MINIMO = 5;
+/** Os mesmos limites do servidor (colunas do livro): acima deles, 422. */
+const AUTOR_MAXIMO = 200;
+const CATEGORIA_MAXIMA = 100;
+const PAGINAS_MAXIMAS = 100_000;
 
 /** Usado quando a resposta do PATCH não traz `aviso_correcao` (servidor antigo):
  *  o MESMO conteúdo honesto, para a tela nunca prometer efeito retroativo. */
@@ -87,11 +91,17 @@ interface FormularioLivro {
   /** Ação RETROATIVA explícita: reescreve o nível congelado das leituras deste
    *  livro. Nasce desmarcada — o padrão é não mexer no passado. */
   aplicar_ao_historico: boolean;
+  /** Leituras de um livro FORA do catálogo oficial (0 no catálogo ou sem
+   *  leituras). A coleta reconhece esse livro pelo título que vem da plataforma:
+   *  com outro título, ela criaria um segundo livro e contaria de novo as
+   *  leituras — o servidor recusa (409) e o formulário avisa antes. */
+  leituras_reconhecidas_pelo_titulo: number;
 }
 
 const FORM_VAZIO: FormularioLivro = {
   id: null, titulo: "", autor: "", nivel_codigo: "", nivel_original: "", nivel_oficial: null,
   categoria: "", paginas: "", motivo: "", aplicar_ao_historico: false,
+  leituras_reconhecidas_pelo_titulo: 0,
 };
 
 // No celular (< 640 px) os botões da linha ganham 40 px (alvo de toque).
@@ -153,6 +163,21 @@ export default function Livros() {
   /** Valida e, se for reescrever o histórico, pede a confirmação antes de enviar. */
   function salvar() {
     if (!escolaId || !formulario) return;
+    if (formulario.paginas) {
+      const paginas = Number(formulario.paginas);
+      if (!Number.isInteger(paginas) || paginas < 1 || paginas > PAGINAS_MAXIMAS) {
+        setErro(`As páginas vão de 1 a ${numero(PAGINAS_MAXIMAS)}. Confira o valor digitado.`);
+        return;
+      }
+    }
+    if (formulario.autor.trim().length > AUTOR_MAXIMO) {
+      setErro(`O autor pode ter até ${AUTOR_MAXIMO} caracteres.`);
+      return;
+    }
+    if (formulario.categoria.trim().length > CATEGORIA_MAXIMA) {
+      setErro(`A categoria pode ter até ${CATEGORIA_MAXIMA} caracteres.`);
+      return;
+    }
     const exigeMotivo = nivelMudou || formulario.aplicar_ao_historico;
     if (exigeMotivo && formulario.motivo.trim().length < MOTIVO_MINIMO) {
       setErro(`Informe o motivo da correção de nível (pelo menos ${MOTIVO_MINIMO} caracteres).`);
@@ -429,6 +454,7 @@ export default function Livros() {
                                 paginas: livro.paginas ? String(livro.paginas) : "",
                                 motivo: "",
                                 aplicar_ao_historico: false,
+                                leituras_reconhecidas_pelo_titulo: livro.no_catalogo ? 0 : livro.leituras,
                               });
                               setErro("");
                             }}
@@ -483,8 +509,19 @@ export default function Livros() {
                 <input className={estiloInput} value={formulario.titulo}
                        onChange={(e) => setFormulario({ ...formulario, titulo: e.target.value })} />
               </Campo>
+              {/* Fora do <label>: o nome acessível do campo continua "Título". */}
+              {formulario.leituras_reconhecidas_pelo_titulo > 0 && (
+                <p className="text-xs text-ouro-700 dark:text-ouro-300">
+                  Este livro está fora do catálogo oficial e tem{" "}
+                  {numero(formulario.leituras_reconhecidas_pelo_titulo)}{" "}
+                  {formulario.leituras_reconhecidas_pelo_titulo === 1 ? "leitura" : "leituras"}: a coleta
+                  reconhece o livro pelo título que vem da plataforma. Por isso o título só aceita
+                  correção de acentos, maiúsculas e espaços — outro título faria a próxima coleta
+                  contar essas leituras de novo.
+                </p>
+              )}
               <Campo rotulo="Autor">
-                <input className={estiloInput} value={formulario.autor}
+                <input className={estiloInput} maxLength={AUTOR_MAXIMO} value={formulario.autor}
                        onChange={(e) => setFormulario({ ...formulario, autor: e.target.value })} />
               </Campo>
               <div className="grid grid-cols-2 gap-3">
@@ -498,12 +535,12 @@ export default function Livros() {
                   </select>
                 </Campo>
                 <Campo rotulo="Páginas (opcional)">
-                  <input type="number" min={1} className={estiloInput} value={formulario.paginas}
+                  <input type="number" min={1} max={PAGINAS_MAXIMAS} className={estiloInput} value={formulario.paginas}
                          onChange={(e) => setFormulario({ ...formulario, paginas: e.target.value })} />
                 </Campo>
               </div>
               <Campo rotulo="Categoria (opcional)">
-                <input className={estiloInput} value={formulario.categoria}
+                <input className={estiloInput} maxLength={CATEGORIA_MAXIMA} value={formulario.categoria}
                        onChange={(e) => setFormulario({ ...formulario, categoria: e.target.value })} />
               </Campo>
               {formulario.id !== null && (

@@ -31,8 +31,10 @@ def _notas(db, escola, alunos, fora):
     posicoes = {alunos[0].id: 100, alunos[1].id: 105, alunos[2].id: 110, fora.id: 103}
     valores = {alunos[0].id: 50.0, alunos[1].id: 40.0, alunos[2].id: 30.0, fora.id: 45.0}
     for aid, pos in posicoes.items():
+        # Aferidos em Leitura: nota > 0 só sai de quem tem dado, e o Ranking
+        # Geral só lista quem tem dado de alguma dimensão (DEC-19).
         db.add(Nota(escola_id=escola.id, aluno_id=aid, ano_letivo=2026,
-                    nota_geral=valores[aid], posicao=pos))
+                    nota_geral=valores[aid], posicao=pos, aferido_leitura=True))
     db.commit()
 
 
@@ -87,7 +89,8 @@ def test_professor_sem_posicao_no_perfil_para_quem_o_ranking_nao_lista(
         cenario_professor, escola_completa, db):  # noqa: F811
     """A Nota antiga de uma criança de turma que NÃO concorre (fase) fica no banco;
     o ranking não a lista, então o perfil do professor não inventa uma posição
-    (antes saía a posição carimbada 7). A gestão segue vendo a carimbada."""
+    (antes saía a posição carimbada 7). A gestão também não (achado RANKINGS-5 da
+    auditoria): a posição 7 é de um cálculo antigo e hoje pertence a outra criança."""
     c = cenario_professor
     escola = escola_completa["escola"]
     alunos = escola_completa["alunos"]
@@ -112,7 +115,7 @@ def test_professor_sem_posicao_no_perfil_para_quem_o_ranking_nao_lista(
     r = c["professor"].get(f"{base}/alunos/{pequeno.id}/perfil")
     assert r.status_code == 200, r.text
     assert r.json()["posicao"] is None
-    assert c["coordenador"].get(f"{base}/alunos/{pequeno.id}/perfil").json()["posicao"] == 7
+    assert c["coordenador"].get(f"{base}/alunos/{pequeno.id}/perfil").json()["posicao"] is None
 
 
 def test_professor_sem_nota_fica_sem_posicao(cenario_professor, escola_completa):  # noqa: F811

@@ -17,6 +17,7 @@ from app.models import (
 from app.routers import publico
 from app.services import modulos as svc_modulos
 from app.services import scoring
+from tests._ano_letivo import escola_no_ano_de_hoje  # noqa: F401 — fixture
 
 API = "/api/v1"
 
@@ -234,7 +235,8 @@ def _rede_com_dados(db, escola_completa, token, desligado=None):
         db.add(aluno)
         db.flush()
         db.add(Matricula(escola_id=escola.id, aluno_id=aluno.id,
-                         turma_id=escola_completa["turma"].id, ano_letivo=2026))
+                         turma_id=escola_completa["turma"].id,
+                         ano_letivo=escola.ano_letivo_ativo))
         extras.append(aluno)
     for aluno in [*escola_completa["alunos"], *extras]:
         _snap_matific(db, escola, aluno, imp_m, 40, 30, 70)

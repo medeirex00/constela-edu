@@ -170,7 +170,7 @@ def test_seed_reaproveita_banco_semeado_quando_a_escola_tinha_outro_nome(db, cap
     """Banco de desenvolvimento semeado antes da troca: a escola de demonstração tem o
     nome antigo e o admin inicial já existe. Semear de novo não cria outra escola
     (nem quebra no e-mail único): devolve a escola do admin."""
-    antiga = Escola(nome="ESCOLA SEMEADA ANTES DA TROCA", ano_letivo_ativo=seed.ANO_LETIVO)
+    antiga = Escola(nome="ESCOLA SEMEADA ANTES DA TROCA", ano_letivo_ativo=seed.ano_letivo_corrente())
     db.add(antiga)
     db.flush()
     db.add(Usuario(escola_id=antiga.id, nome="Administrador", email=seed.ADMIN_EMAIL,

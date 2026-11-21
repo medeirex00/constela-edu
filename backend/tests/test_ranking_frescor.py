@@ -39,8 +39,18 @@ from app.models import (
 )
 from app.models.sincronizacao import SincronizacaoExecucao
 from app.services import frescor_ranking, scoring
+from tests._ano_letivo import ANO, escola_no_ano_de_hoje  # noqa: F401 — fixture
 
 API = "/api/v1"
+
+
+@pytest.fixture(autouse=True)
+def _relogio(relogio_no_ano_letivo):
+    """Os retratos daqui são de "N dias atrás" (até 20) contados de ``hoje_br`` e o Matific
+    é contador DO ANO: nas primeiras semanas de janeiro o retrato de N dias atrás seria do
+    ano passado, e o selo diria, com razão, "sem dados" (PERIODOS-9). O relógio fica no
+    ano letivo da escola com folga para trás — e, autouse, antes de qualquer login."""
+    return relogio_no_ano_letivo
 
 
 def _dia(dias_atras: int) -> datetime:
@@ -171,7 +181,7 @@ def test_quem_nao_concorre_nao_deixa_a_escola_em_dia(cliente, db, escola_complet
     for aluno in escola_completa["alunos"]:
         _snap_e(db, escola.id, imp, aluno.id, dias_atras=30)
     fase = Turma(escola_id=escola.id, nome="1ª Fase Z", ano_escolar="1ª Fase",
-                 ano_letivo=2026)
+                 ano_letivo=escola.ano_letivo_ativo)
     db.add(fase)
     db.flush()
     crianca = Aluno(escola_id=escola.id, nome="Crianca Fase Z", status="ativo")
@@ -179,9 +189,10 @@ def test_quem_nao_concorre_nao_deixa_a_escola_em_dia(cliente, db, escola_complet
     db.add_all([crianca, saiu])
     db.flush()
     db.add(Matricula(escola_id=escola.id, aluno_id=crianca.id, turma_id=fase.id,
-                     ano_letivo=2026))
+                     ano_letivo=escola.ano_letivo_ativo))
     db.add(Matricula(escola_id=escola.id, aluno_id=saiu.id,
-                     turma_id=escola_completa["turma"].id, ano_letivo=2026))
+                     turma_id=escola_completa["turma"].id,
+                     ano_letivo=escola.ano_letivo_ativo))
     _snap_e(db, escola.id, imp, crianca.id, dias_atras=0)
     _snap_e(db, escola.id, imp, saiu.id, dias_atras=0)
     db.commit()
@@ -193,13 +204,14 @@ def test_quem_nao_concorre_nao_deixa_a_escola_em_dia(cliente, db, escola_complet
 
 
 def test_matific_de_outro_ano_letivo_e_sem_dados(cliente, db, escola_completa):
-    """Contador do ANO: um retrato de dez/2025 não diz nada sobre 2026 (a mesma
-    definição de aferido do motor) — sem dados no ano, nunca "desatualizado de
-    2025" nem zero."""
+    """Contador do ANO: um retrato de dezembro do ano anterior não diz nada sobre o ano
+    letivo (a mesma definição de aferido do motor) — sem dados no ano, nunca
+    "desatualizado do ano passado" nem zero."""
     escola = escola_completa["escola"]
     imp = _imp(db, escola.id)
     for aluno in escola_completa["alunos"]:
-        _snap_m(db, escola.id, imp, aluno.id, datetime(2025, 12, 10, 10, 0))
+        _snap_m(db, escola.id, imp, aluno.id,
+                datetime(escola.ano_letivo_ativo - 1, 12, 10, 10, 0))
     db.commit()
     assert _frescor(cliente, escola.id)["dimensoes"]["matematica"]["estado"] == "sem_dados"
 
@@ -259,14 +271,14 @@ def test_professor_ve_o_frescor_das_turmas_dele(db, escola_completa):
     for aluno in escola_completa["alunos"]:
         _snap_e(db, escola.id, imp, aluno.id, dias_atras=25)
     outra = Turma(escola_id=escola.id, nome="5º Ano Z", ano_escolar="5º Ano",
-                  ano_letivo=2026)
+                  ano_letivo=escola.ano_letivo_ativo)
     db.add(outra)
     db.flush()
     vizinho = Aluno(escola_id=escola.id, nome="Aluno Vizinho Z", status="ativo")
     db.add(vizinho)
     db.flush()
     db.add(Matricula(escola_id=escola.id, aluno_id=vizinho.id, turma_id=outra.id,
-                     ano_letivo=2026))
+                     ano_letivo=escola.ano_letivo_ativo))
     _snap_e(db, escola.id, imp, vizinho.id, dias_atras=0)
     prof = Professor(escola_id=escola.id, nome="Professora Z", email="prof@frescor.local")
     db.add(prof)
@@ -296,11 +308,11 @@ def rede_com_duas_escolas(db):
     db.flush()
     escolas = []
     for nome, dias in (("ESCOLA RECENTE", 1), ("ESCOLA PARADA", 19)):
-        esc = Escola(nome=nome, ano_letivo_ativo=2026, rede_id=rede.id, status="ativa")
+        esc = Escola(nome=nome, ano_letivo_ativo=ANO, rede_id=rede.id, status="ativa")
         db.add(esc)
         db.flush()
         turma = Turma(escola_id=esc.id, nome="2º Ano A", ano_escolar="2º Ano",
-                      ano_letivo=2026, status="ativa")
+                      ano_letivo=ANO, status="ativa")
         db.add(turma)
         db.flush()
         imp = _imp(db, esc.id)
@@ -309,7 +321,7 @@ def rede_com_duas_escolas(db):
             db.add(a)
             db.flush()
             db.add(Matricula(escola_id=esc.id, aluno_id=a.id, turma_id=turma.id,
-                             ano_letivo=2026))
+                             ano_letivo=ANO))
             _snap_e(db, esc.id, imp, a.id, dias_atras=dias)
             _snap_m(db, esc.id, imp, a.id, _dia(dias))
         escolas.append(esc)

@@ -14,11 +14,11 @@
  */
 import { describe, expect, it } from "vitest";
 
-import CompararEscolas from "../pages/rede/secretaria/CompararEscolas";
+import CompararEscolas, { marcadasAntesDasPlataformas } from "../pages/rede/secretaria/CompararEscolas";
 import { METRICAS_ELEFANTE } from "../pages/rede/secretaria/oQueMede";
 import { TEXTO_SUPRESSAO } from "./AnaliseFixturesDiagnostico";
 import {
-  analiseEscola, indicadorDaEscola, plataformasComEpsilon, renderEscolas, semearEscolas,
+  ESCOLAS_DO_CONTEXTO, analiseEscola, indicadorDaEscola, plataformasComEpsilon, renderEscolas, semearEscolas,
 } from "./EscolasRedeFixtures";
 import {
   admin, antes, caminhosLidos, chamadas, consulta, renderTela, semCausalidade, semJargao,
@@ -77,21 +77,22 @@ describe("Escolas — a lista", () => {
 
   it("o nome da escola leva à ficha, com o período da lista; a ficha volta à lista com a mesma consulta", async () => {
     semearEscolas();
-    abrir("/rede/escolas?periodo=mes&serie=3");
+    // (A Secretaria escolhe o ano letivo ou um bimestre inteiro — G_GRUPO-2.)
+    abrir("/rede/escolas?periodo=bimestre_3&serie=3");
     await screen.findByTestId("tabela-escolas-periodo");
     const link = within(screen.getByTestId("escola-periodo-2")).getByRole("link", { name: "EMEF Sintética Alfa" });
-    expect(link).toHaveAttribute("href", "/rede/escolas/2?periodo=mes");
+    expect(link).toHaveAttribute("href", "/rede/escolas/2?periodo=bimestre_3");
     await userEvent.click(link);
     expect(await screen.findByRole("heading", { level: 1, name: "EMEF Sintética Alfa" })).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "Voltar para Escolas" }))
-      .toHaveAttribute("href", "/rede/escolas?periodo=mes&serie=3");
+      .toHaveAttribute("href", "/rede/escolas?periodo=bimestre_3&serie=3");
   });
 
   it("o período e a série ficam na URL e refazem só a leitura das plataformas", async () => {
     semearEscolas();
-    abrir("/rede/escolas?periodo=mes");
+    abrir("/rede/escolas?periodo=bimestre_3");
     await screen.findByTestId("tabela-escolas-periodo");
-    expect(screen.getByLabelText("Período")).toHaveValue("mes");
+    expect(screen.getByLabelText("Período")).toHaveValue("bimestre_3");
     await userEvent.selectOptions(screen.getByLabelText("Período"), "bimestre_2");
     await waitFor(() => expect(chamadas("/redes/1/analise/plataformas").map((c) => consulta(c).get("periodo")))
       .toContain("bimestre_2"));
@@ -137,13 +138,24 @@ describe("Escolas — a lista", () => {
     for (const i of itens) expect(i).toHaveTextContent("o uso no período não pôde ser carregado");
     expect(within(screen.getByTestId("escola-sem-uso-6")).getByText("inativa no cadastro")).toBeInTheDocument();
     expect(lista.querySelectorAll("[data-escola-inativa]")).toHaveLength(1);
-    // Nada de "sem uso", 0 ou comparação (ela depende do uso), mesmo com escolas na URL.
+    // Nada de "sem uso", 0 ou comparação (ela depende do uso), mesmo com escolas na URL. (As avaliações das
+    // marcadas da rede dela saem junto com as plataformas, antes de saber que elas falharam; nada aparece.)
     expect(lista).not.toHaveTextContent(/sem uso|(^|\D)0(,0)?%/i);
     expect(screen.queryByTestId("tabela-escolas-periodo")).toBeNull();
     expect(screen.queryByTestId("comparacao-lado-a-lado")).toBeNull();
-    expect(leuAnaliseDeEscola()).toBe(false);
+    expect(screen.queryByTestId("comparacao-avaliacoes")).toBeNull();
     semCausalidade(container);
     semJargao(container);
+  });
+
+  it("o uso falha com o admin global: nenhuma escola lida (ele espera as plataformas para saber quais são da rede)", async () => {
+    semearEscolas();
+    responder("GET", "/redes", [{ id: 1, nome: "Rede Sintética Norte" }]);
+    responderErro("GET", "/redes/1/analise/plataformas", 500, "FALHA-DAS-PLATAFORMAS");
+    renderEscolas("/rede/escolas?rede=1&comparar=2,3", { usuario: admin });
+    const lista = await screen.findByTestId("escolas-sem-uso", undefined, { timeout: 3000 });
+    await waitFor(() => expect(lista).toHaveTextContent("FALHA-DAS-PLATAFORMAS"), { timeout: 3000 });
+    expect(leuAnaliseDeEscola()).toBe(false);
   });
 
   it("sem o painel da rede, nenhum selo de inativa é inventado", async () => {
@@ -178,8 +190,8 @@ describe("Escolas — comparar lado a lado", () => {
     expect(colunas).toEqual(["No período", "EMEF Sintética Alfa", "EMEF Sintética Beta"]);
     const participacao = within(plataformas).getAllByRole("row").find((r) => r.textContent?.startsWith("Participação"))!;
     expect(participacao).toHaveTextContent(/Participação70%85%/);
-    // Alfa: o Matific sem dado, com o porquê (nunca 0).
-    expect(plataformas).toHaveTextContent("Sem dado: menos de 5 alunos com dado desta plataforma no período");
+    // Alfa: o Matific escondido por poucos alunos medidos — "Protegido", com o porquê (nunca 0).
+    expect(plataformas).toHaveTextContent("Protegido: menos de 5 alunos com dado desta plataforma no período");
     expect(plataformas).toHaveTextContent("coleta parcial (até 20/09/2026)");
     // A frase dos períodos ENTRE as plataformas e as avaliações.
     const frase = within(lado).getByTestId("frase-separacao");
@@ -305,13 +317,13 @@ describe("Escolas — comparar lado a lado", () => {
     semearEscolas();
     abrir("/rede/escolas?comparar=2,5");
     await screen.findByTestId("comparacao-lado-a-lado");
-    // A leitura do mês (a próxima) responde com a janela do mês.
+    // A leitura do 3º bimestre (a próxima) responde com a janela dele.
     responder("GET", "/redes/1/analise/plataformas", plataformasComEpsilon({
-      janela: { inicio: "2026-10-01", fim: "2026-10-31", rotulo: "Este mês" },
+      janela: { inicio: "2026-07-24", fim: "2026-10-04", rotulo: "3º bimestre (24/07 a 04/10)" },
     }));
-    await userEvent.selectOptions(screen.getByLabelText("Período"), "mes");
+    await userEvent.selectOptions(screen.getByLabelText("Período"), "bimestre_3");
     expect(screen.getByTestId("onde")).toHaveTextContent("comparar=2%2C5");
-    await waitFor(() => expect(screen.getByTestId("recorte-lado-a-lado")).toHaveTextContent("Este mês"));
+    await waitFor(() => expect(screen.getByTestId("recorte-lado-a-lado")).toHaveTextContent("3º bimestre"));
     // As avaliações não dependem do período: a mesma leitura (ano letivo) de cada escola.
     expect(new Set(chamadas("/escolas/2/analise"))).toEqual(new Set(["/escolas/2/analise?periodo=ano_letivo&so_avaliacoes=true"]));
   });
@@ -325,6 +337,64 @@ describe("Escolas — comparar lado a lado", () => {
     expect(screen.getByRole("button", { name: "Ver lado a lado" })).toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: "Ver lado a lado" }));
     expect(within(lado).getByRole("heading", { level: 2, name: /Escolas lado a lado/ })).toHaveFocus();
+  });
+});
+
+describe("Escolas — a comparação da Secretaria não espera as plataformas", () => {
+  const plataformasPresas = () => responder("GET", "/redes/1/analise/plataformas", () => new Promise(() => {}));
+  const lidas = () => [...new Set(api.mock.calls.map(([c]) => String(c)).filter((c) => /^\/escolas\/\d+\/analise/.test(c)))].sort();
+
+  it("as avaliações das marcadas (escolas da lista da sessão) saem antes de as plataformas chegarem", async () => {
+    semearEscolas();
+    plataformasPresas();
+    abrir("/rede/escolas?comparar=5,2");
+    await waitFor(() => expect(lidas()).toEqual([
+      "/escolas/2/analise?periodo=ano_letivo&so_avaliacoes=true", "/escolas/5/analise?periodo=ano_letivo&so_avaliacoes=true"]));
+    // Sem as plataformas, nada da comparação aparece (ela depende do uso).
+    expect(screen.queryByTestId("comparacao-lado-a-lado")).toBeNull();
+  });
+
+  it("uma escola marcada só, ou a 1ª fora da lista da sessão: nada é lido antes das plataformas", async () => {
+    semearEscolas();
+    plataformasPresas();
+    abrir("/rede/escolas?comparar=2");
+    await waitFor(() => expect(chamadas("/redes/1/dashboard").length).toBeGreaterThan(0));
+    await new Promise((r) => setTimeout(r, 50));
+    expect(leuAnaliseDeEscola()).toBe(false);
+  });
+
+  it.each([
+    ["999,2,3", []], ["2,3,999", [2, 3]], ["2,6,3", [2]], ["2,3,4,5,999", [2, 3, 4, 5]], ["5,2,3,4,5", [5, 2, 3, 4]],
+  ])("comparar=%s: lê antes só o começo que a sessão confirma (%j)", (consultaUrl, esperado) => {
+    const ids = consultaUrl.split(",").map(Number).filter((n, i, a) => a.indexOf(n) === i);
+    expect(marcadasAntesDasPlataformas(ids, ESCOLAS_DO_CONTEXTO)).toEqual(esperado);
+  });
+
+  it("as colunas casam a análise pelo id da escola (a URL em outra ordem que a alfabética)", async () => {
+    semearEscolas();
+    abrir("/rede/escolas?comparar=5,2");
+    const avaliacoes = await screen.findByTestId("comparacao-avaliacoes");
+    await waitFor(() => expect(within(avaliacoes).getByTestId("linha-oficial-ideb|anos_iniciais|")).toHaveTextContent("6,1"));
+    const colunas = within(avaliacoes).getAllByRole("columnheader").map((c) => c.textContent);
+    expect(colunas[1]).toContain("EMEF Sintética Alfa");
+    expect(colunas[2]).toContain("EMEF Sintética Delta");
+    // Alfa (1ª coluna) com o SARESP dela; Delta (2ª) com o Ideb dela — nunca trocados.
+    const [alfaSaresp, deltaSaresp] = within(within(avaliacoes).getByTestId("linha-oficial-saresp|5_ano|lp")).getAllByRole("cell");
+    expect(alfaSaresp).toHaveTextContent("219,6");
+    expect(deltaSaresp).not.toHaveTextContent(/\d/);
+    const [alfaIdeb, deltaIdeb] = within(within(avaliacoes).getByTestId("linha-oficial-ideb|anos_iniciais|")).getAllByRole("cell");
+    expect(alfaIdeb).not.toHaveTextContent(/\d/);
+    expect(deltaIdeb).toHaveTextContent("6,1");
+  });
+
+  it("o admin global espera as plataformas para ler as escolas (a lista da sessão não diz a rede delas)", async () => {
+    semearEscolas();
+    plataformasPresas();
+    responder("GET", "/redes", [{ id: 1, nome: "Rede Sintética Norte" }]);
+    renderEscolas("/rede/escolas?rede=1&comparar=2,3", { usuario: admin });
+    await waitFor(() => expect(chamadas("/redes/1/dashboard").length).toBeGreaterThan(0));
+    await new Promise((r) => setTimeout(r, 50));
+    expect(leuAnaliseDeEscola()).toBe(false);
   });
 });
 

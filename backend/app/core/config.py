@@ -141,6 +141,21 @@ class Settings(BaseSettings):
     DB_POOL_SIZE: int = 10
     DB_MAX_OVERFLOW: int = 20
     DB_POOL_RECYCLE: int = 1800
+    # Conexão do pool parada há MAIS que isto (segundos) é testada com um ping antes de
+    # ser entregue; a usada há menos vai direto (em produção cada ida ao banco custa
+    # ~195 ms, e o ping a cada retirada era uma ida a mais em toda requisição). ``0``
+    # = ping em toda retirada (o ``pool_pre_ping`` de antes). Ver
+    # ``database.instalar_ping_por_ociosidade``. Não afeta o SQLite.
+    DB_PING_OCIOSO_S: float = 30
+    # Mantenedor do pool (``app/core/mantenedor_do_pool.py``, só PostgreSQL): uma thread por
+    # worker que, no boot e depois a cada DB_POOL_AQUECIDO_S segundos, retira ao mesmo tempo
+    # DB_POOL_AQUECIDO_CONEXOES conexões, roda ``SELECT 1`` em cada e devolve, reabrindo antes
+    # a que está perto do DB_POOL_RECYCLE. Assim a requisição não paga conexão nova (~0,8 s
+    # com o banco a 195 ms), ping de conexão parada nem reciclagem. O intervalo precisa ficar
+    # abaixo do DB_PING_OCIOSO_S. As conexões ficam limitadas ao DB_POOL_SIZE; o total mantido
+    # é DB_POOL_AQUECIDO_CONEXOES × workers. ``0`` em qualquer das duas desliga.
+    DB_POOL_AQUECIDO_S: float = 20
+    DB_POOL_AQUECIDO_CONEXOES: int = 8
     # Prazo (segundos) para ABRIR uma conexão nova com o PostgreSQL — o
     # ``connect_timeout`` da libpq, passado ao psycopg pelo engine. Sem ele, um
     # banco que não responde (host fora, rede parada) prende o worker no
@@ -209,6 +224,11 @@ class Settings(BaseSettings):
     EDU_LOGIN_TETO_IP_JANELA_S: int = Field(default=300, ge=60, le=3600)
     EDU_LOGIN_TETO_GLOBAL_FALHAS: int = Field(default=400, ge=1)
     EDU_LOGIN_TETO_GLOBAL_JANELA_S: int = Field(default=300, ge=60, le=3600)
+    # Logins do Edu correndo AO MESMO TEMPO em cada processo (o portão de
+    # app/core/rate_limit.py, ``portao_login``): acima disso, 429 na hora, sem tocar no
+    # banco. Lido no boot, como os tetos acima — a produção pode ajustá-lo sem mudar o
+    # código (ver docs/lgpd/SESSAO-E-MFA.md §1.1). Teto ≥ 1 (zero barraria todo login).
+    EDU_LOGIN_SIMULTANEOS: int = Field(default=8, ge=1)
 
     # Teto do corpo da requisição, conferido ANTES da autenticação (o FastAPI lê o
     # corpo antes das dependências). Ver app/core/limite_corpo.py. Formulário
@@ -345,6 +365,12 @@ class Settings(BaseSettings):
             riscos.append(
                 "DOCS_HABILITADOS=true: /docs, /redoc e /openapi.json publicam o mapa da "
                 "API; desligue (remova a variável).")
+        if self.IA_RETENCAO_DIAS < 1:
+            riscos.append(
+                "IA_RETENCAO_DIAS menor que 1: o prazo de guarda das conversas do "
+                "assistente tem de ser de 1 dia ou mais (0 não desliga a purga: ela "
+                "apagaria todas as conversas, e por isso recusa); remova a variável para "
+                "o padrão de 90 dias.")
         return riscos
 
     def _validar_url_do_banco(self) -> None:
@@ -502,7 +528,9 @@ class Settings(BaseSettings):
     AI_MAX_TOKENS: int = 1024
     # LGPD (retenção/minimização): conversas do assistente são apagadas depois
     # de IA_RETENCAO_DIAS a partir de created_at. São dados derivados; a fonte
-    # oficial (notas/snapshots) é a autoritativa.
+    # oficial (notas/snapshots) é a autoritativa. Mínimo 1: diferente das
+    # RETENCAO_*, 0 NÃO desliga (a purga recusa em vez de apagar tudo; o boot
+    # de produção recusa e o de dev avisa — ``riscos_de_producao``).
     IA_RETENCAO_DIAS: int = 90
 
     # --- Diagnóstico do robô no boot (app/core/automacao.py) --------------
@@ -551,6 +579,12 @@ class Settings(BaseSettings):
     # scheduler — evita que muitas fontes (ou uma lenta) estagnem a fila de sync,
     # já que a coleta roda embutida na mesma thread. O resto vai na próxima rodada.
     AVALIACOES_COLETA_POR_RODADA: int = 3
+    # Prazo TOTAL do download de uma fonte do robô de avaliações ("Coletar agora" e a
+    # coleta agendada), em segundos. O timeout do cliente HTTP vale por leitura: sem este
+    # prazo, um servidor que manda o arquivo pouco a pouco seguraria a coleta (a thread, a
+    # conexão do banco e a trava da fonte) por tempo sem limite. O arquivo oficial do INEP
+    # tem ~97 MB: 10 minutos dão folga para um portal lento.
+    AVALIACOES_DOWNLOAD_PRAZO_S: float = Field(default=600.0, gt=0)
     # O robô AUTOMÁTICO de avaliações externas (fontes_avaliacao) grava números
     # SEM prévia e roda embutido no agendador. DESLIGADO por padrão: ligar o
     # agendador não o liga junto. Os indicadores oficiais entram pela importação
@@ -559,13 +593,19 @@ class Settings(BaseSettings):
     # "ligado" = desligado). Como bool, um "sim" ou um valor vazio no painel do
     # deploy levantava ValidationError no import e derrubava a API no boot.
     AVALIACOES_ROBO_HABILITADO: str = "false"
-    # Uma execução presa em "executando" além disso é considerada ÓRFÃ (worker
-    # morto/redeploy no meio) e é recuperada: finalizada como erro e re-enfileirada.
-    # Bem acima do teto real de uma execução, para nunca abortar uma sync viva:
-    # precisa passar do SYNC_TETO_EXECUCAO_S (45 min, só a coleta) com folga para
-    # a aplicação e o recálculo — com 30 min, a limpeza de órfãs finalizava como
-    # "interrompida" uma coleta VIVA entre 30 e 45 min (prerequisitos.teto_coerente).
+    # Janela do pré-requisito do agendador (prerequisitos.teto_coerente e, para a
+    # FILA, execucoes_presas) e do sinal de vida de quem espera na FILA. Bem acima do teto
+    # real de uma execução: precisa passar do SYNC_TETO_EXECUCAO_S (45 min, só a
+    # coleta) com folga para a aplicação e o recálculo. Duas vezes este valor é
+    # também por quanto tempo uma execução viva continua dando sinal de vida.
     SYNC_TRAVADA_S: int = 3600        # 60 min
+    # Uma execução em "executando" sem nenhum registro no log dela há mais que isto
+    # é considerada ÓRFÃ (worker morto/redeploy no meio) e é liberada. Quem está vivo
+    # dá sinal 6 vezes nessa janela (service._sinal_de_vida_enquanto_roda), então uma
+    # coleta longa não é reivindicada e a morta sai em minutos. É também a regra do
+    # pré-requisito execucoes_presas para a execução em "executando"
+    # (prerequisitos._v_execucoes_presas).
+    SYNC_SEM_SINAL_S: int = 900       # 15 min
 
     # Proxy de SAÍDA do robô (Playwright). VAZIO por padrão e sem uso em
     # produção. A Matific protege o login com reCAPTCHA v3, que pontua a sessão

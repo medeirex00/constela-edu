@@ -188,6 +188,10 @@ for (const tela of TELAS) {
         await simularPainel(page);
         await page.goto(URL_TELAO);
         await expect(page.getByRole("heading", { level: 1 })).toBeVisible();
+        // Relógio fixo no pior caso (dados.ts): a data de dia útil mais larga. Com o
+        // relógio real o resultado dependia do dia (o palco encolhe nos dias úteis).
+        await expect(page.locator("header"), "o relógio do teste não está fixo em AGORA_TELAO")
+          .toContainText("Segunda-feira, 09 de novembro");
         await page.evaluate(() => document.fonts.ready);
         for (let volta = 1; volta <= 2; volta++) {
           for (const titulo of SLIDES) {
@@ -451,6 +455,54 @@ test("celulares do contrato caem no modo celular do telão", () => {
   }
   for (const nome of TELAS_TELAO_TV) {
     expect(ehTelaoCelular(TELAS.find((t) => nomeDaTela(t) === nome)!), `${nome} no modo celular`).toBe(false);
+  }
+});
+
+// A conta de "quantas linhas cabem" tem de valer em QUALQUER altura de TV, não só
+// nas do contrato: um erro de poucos px na reserva da linha "+ N" só aparece em
+// algumas alturas (no Mural, a reserva era de 30 px para uma linha de 20 px + vão
+// de 12 px: sobrava 2 px escondidos em 1366x715, 851, 950, 1073...). Varre as
+// alturas de 640 a 1100 px. Abaixo disso a lista mostra no mínimo 3 linhas (as 3
+// medalhas) mesmo sem caber — decisão de layout, fora desta varredura.
+test.describe("telão: o palco não esconde nada em nenhuma altura (1366 de largura)", () => {
+  test.use({ viewport: { width: 1366, height: 768 } });
+
+  // Cada faixa tem seu próprio orçamento de tempo. Juntas, testam todos os
+  // pixels, inclusive os pontos em que a linha "+ N" entra ou sai.
+  for (const titulo of ["Ranking Geral", "Mural da Escola"]) {
+    for (let inicio = 640; inicio <= 1100; inicio += 120) {
+      const fim = Math.min(inicio + 119, 1100);
+      test(`${titulo}: alturas de ${inicio} a ${fim} px`, async ({ page }) => {
+        await simularPainel(page);
+        await page.goto(URL_TELAO);
+        await expect(page.getByRole("heading", { level: 1 })).toBeVisible();
+        await page.evaluate(() => document.fonts.ready);
+        await page.getByRole("button", { name: /Pausar carrossel/ }).click();
+        await expect(page.getByRole("button", { name: /Retomar carrossel/ })).toBeVisible();
+        await page.getByRole("button", { name: `Ir para ${titulo}` }).click();
+        await expect(page.getByRole("heading", { level: 2 })).toHaveText(titulo);
+
+        const escondido: string[] = [];
+        for (let altura = inicio; altura <= fim; altura++) {
+          await page.setViewportSize({ width: 1366, height: altura });
+          // Espera o React aplicar a medida do ResizeObserver para esta altura.
+          // Três quadros fixos por altura estouravam o tempo do teste no CI.
+          const medida = await page.waitForFunction((alturaEsperada) => {
+            const palco = document.querySelector<HTMLElement>("[data-palco]");
+            const conteudo = palco?.firstElementChild;
+            if (innerHeight !== alturaEsperada || !palco || !conteudo) return null;
+            const estilo = getComputedStyle(conteudo);
+            const alturaUtil = palco.clientHeight - parseFloat(estilo.paddingTop) - parseFloat(estilo.paddingBottom);
+            if (palco.dataset.alturaPalco !== String(alturaUtil)) return null;
+            return { sobra: palco.scrollHeight - palco.clientHeight };
+          }, altura, { timeout: 5_000 });
+          const { sobra } = (await medida.jsonValue())!;
+          await medida.dispose();
+          if (sobra > 1) escondido.push(`1366x${altura}: ${sobra} px`);
+        }
+        expect(escondido, `${titulo}: conteúdo escondido no palco`).toEqual([]);
+      });
+    }
   }
 });
 

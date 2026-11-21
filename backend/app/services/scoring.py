@@ -36,11 +36,13 @@ passar a lê-las: a regra é travada por `tests/test_legado_nota_geral.py`
 """
 from __future__ import annotations
 
+import functools
 import math
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import time
 
-from sqlalchemy import func, select
+from sqlalchemy import func, inspect, select, update
 from sqlalchemy.orm import Session, selectinload
 
 from app.core.database import bloquear_escola_para_recalculo
@@ -73,27 +75,42 @@ _JANELAS_TURNO: dict[str, tuple[time, time]] = {
 
 def _bonus_leitura_na_escola(
     db: Session, escola_id: int, turno_por_aluno: dict[int, str | None],
-    pontos_por_livro: float,
+    pontos_por_livro: float, *,
+    turno_por_ano: dict[tuple[int, int], str | None] | None = None,
 ) -> dict[int, float]:
     """Pontos extras de cada aluno = `pontos_por_livro` × (livros lidos DENTRO da
     janela do turno da turma dele, seg–sex). Usa a data+hora real de cada leitura
     (Leitura.data, do relatório individual do Elefante). Livro sem hora conhecida
-    ou fora da janela não gera extra."""
-    alvos = {aid: _JANELAS_TURNO[t] for aid, t in turno_por_aluno.items()
-             if t in _JANELAS_TURNO}
-    if not alvos or pontos_por_livro <= 0:
+    ou fora da janela não gera extra.
+
+    As leituras são de TODOS os anos (o contador do Elefante é vitalício), e cada
+    uma é julgada pelo turno da turma do ANO LETIVO dela (``turno_por_ano``,
+    ``(aluno_id, ano) → turno``, da Matrícula daquele ano): a leitura das 9h de
+    um ano em que a criança estudava à tarde foi feita em casa. Ano sem matrícula
+    conhecida na escola: o turno atual (``turno_por_aluno``)."""
+    turno_por_ano = turno_por_ano or {}
+    com_janela = ({aid for aid, t in turno_por_aluno.items() if t in _JANELAS_TURNO}
+                  | {aid for (aid, _ano), t in turno_por_ano.items()
+                     if aid in turno_por_aluno and t in _JANELAS_TURNO})
+    if not com_janela or pontos_por_livro <= 0:
         return {}
     bonus: dict[int, float] = {}
     for aluno_id, data in db.execute(
         select(Leitura.aluno_id, Leitura.data)
-        .where(Leitura.escola_id == escola_id, Leitura.aluno_id.in_(alvos.keys()))
+        .where(Leitura.escola_id == escola_id, Leitura.aluno_id.in_(com_janela))
     ):
         if data is None:
             continue
         quando = data.replace(tzinfo=None) if data.tzinfo is not None else data
         if quando.weekday() >= 5:                       # só segunda a sexta
             continue
-        ini, fim = alvos[aluno_id]
+        chave = (aluno_id, quando.year)                 # o ano letivo é o ano civil
+        turno = (turno_por_ano[chave] if chave in turno_por_ano
+                 else turno_por_aluno.get(aluno_id))
+        janela = _JANELAS_TURNO.get(turno)
+        if janela is None:
+            continue
+        ini, fim = janela
         if ini <= quando.time() < fim:                  # dentro da janela do turno
             bonus[aluno_id] = bonus.get(aluno_id, 0.0) + pontos_por_livro
     return {aid: round(b, 2) for aid, b in bonus.items()}
@@ -114,9 +131,26 @@ def pontos_dif_com_bonus(db: Session, escola_id: int, matriculas,
                          {"ativo": False, "pontos_por_livro": 0.0})
     if not extra.get("ativo") or float(extra.get("pontos_por_livro", 0) or 0) <= 0:
         return dict(pontos_dif), {}
+    if "elefante" in plataformas_fora_do_contrato(db, db.get(Escola, escola_id)):
+        # Leitura fora do plano: o motor nem lê o Elefante (`_carregar_contexto`);
+        # o bônus por livro lido na escola não pode trazê-lo de volta pela porta
+        # dos fundos (nota de Leitura > 0 numa rede que não a contratou).
+        return dict(pontos_dif), {}
     turno_por_aluno = {m.aluno_id: t.turno for m, t in matriculas}
+    # O turno de CADA ano letivo, pelas matrículas da criança na escola (a Matrícula
+    # guarda o histórico por ano): a leitura de um ano anterior é julgada pelo turno
+    # de então, não pelo de hoje. Uma consulta só.
+    turno_por_ano = {
+        (aluno_id, ano): turno
+        for aluno_id, ano, turno in db.execute(
+            select(Matricula.aluno_id, Matricula.ano_letivo, Turma.turno)
+            .join(Turma, Matricula.turma_id == Turma.id)
+            .where(Matricula.escola_id == escola_id,
+                   Matricula.aluno_id.in_(turno_por_aluno.keys())))
+    } if turno_por_aluno else {}
     bonus_por_aluno = _bonus_leitura_na_escola(
-        db, escola_id, turno_por_aluno, float(extra["pontos_por_livro"]))
+        db, escola_id, turno_por_aluno, float(extra["pontos_por_livro"]),
+        turno_por_ano=turno_por_ano)
     somados = dict(pontos_dif)
     for aid, b in bonus_por_aluno.items():
         somados[aid] = somados.get(aid, 0.0) + b
@@ -222,6 +256,28 @@ def _entrada_nao_negativa(valor):
         return 0.0 if isinstance(valor, float) else 0
     numero = _finito(valor)
     return numero if numero is not None and numero >= 0 else 0
+
+
+def estrelas_que_contam(snapshot):
+    """Estrelas do Matific que CONTAM num retrato (ou num ganho): no máximo 5 por
+    atividade — ``matific_destaque.limitar_estrelas``, a fonte única do teto
+    (decisão do dono 2026-09-15: uma correção de relatório não cria estrela sem
+    atividade).
+
+    Antes só as premiações aplicavam o teto, e a nota oficial, a régua da escola,
+    o Ranking de Matemática, a Evolução, o XP e as conquistas liam o número bruto:
+    10 atividades com 5000 estrelas digitadas punham a criança em 1º num ranking e
+    em último no outro, na mesma tela. O dado coletado nunca passa do teto (a média
+    de estrelas por atividade vai de 0 a 5), então ali nada muda. Dentro do teto o
+    valor sai INTACTO (``12`` continua ``12``); acima dele, o teto."""
+    if snapshot is None:
+        return 0
+    atividades = _entrada_nao_negativa(getattr(snapshot, "atividades", 0))
+    estrelas = _entrada_nao_negativa(getattr(snapshot, "estrelas", 0))
+    teto = matific_destaque.limitar_estrelas(atividades, estrelas)
+    if teto >= estrelas:
+        return estrelas
+    return int(teto) if isinstance(estrelas, int) else teto
 
 
 def _nota_0_100(nota) -> float:
@@ -401,10 +457,77 @@ def referencias_robustas(
 
 
 # ---------------------------------------------------------------------------
+# Leituras que se REPETEM numa requisição de leitura, feitas uma vez só
+# ---------------------------------------------------------------------------
+# Em produção a API fica a ~0,2 s do banco por consulta. As telas que montam o
+# ranking de evolução várias vezes (o pacote do app: mural do dia, da semana e do
+# mês + a aba de 30 dias; o /insights; o mural da web) reliam, a CADA chamada, a
+# mesma configuração da escola (perfil de scoring e pesos: quatro namespaces), o
+# mesmo contrato da rede (`modulos_rede`), as mesmas turmas que concorrem e o
+# mesmo elenco (matrículas e alunos, quem tem leitura) — 69 idas no pacote do
+# app, 42 delas repetidas. Dentro de ``leituras_da_requisicao(db)`` essas
+# leituras saem do banco uma vez e são servidas da memória (em ``db.info``, o
+# mesmo padrão de ``indicadores.leituras_da_requisicao``); FORA dele (as rotas
+# que gravam, o recálculo, os importadores), cada função consulta o banco como
+# sempre — nada fica velho depois de uma gravação. O bloco só pode envolver
+# LEITURA: quem grava configuração, contrato, turma ou matrícula não o abre.
+_MEMORIA_DO_MOTOR = "motor_leituras_da_requisicao"
+
+
+@contextmanager
+def leituras_da_requisicao(db: Session):
+    """Liga a leitura única durante o bloco. Aninhado, o bloco de dentro não faz
+    nada: a memória é de quem abriu o primeiro e some quando ele fecha."""
+    info = getattr(db, "info", None)
+    if not isinstance(info, dict) or _MEMORIA_DO_MOTOR in info:
+        yield
+        return
+    info[_MEMORIA_DO_MOTOR] = {}
+    try:
+        yield
+    finally:
+        info.pop(_MEMORIA_DO_MOTOR, None)
+
+
+def com_leituras_da_requisicao(funcao):
+    """Decorador: a função (de LEITURA, ``db`` como 1º argumento) roda dentro de
+    ``leituras_da_requisicao`` — o que ela relê várias vezes sai do banco uma vez,
+    e quem a chama dentro de um bloco maior reaproveita a memória dele."""
+    @functools.wraps(funcao)
+    def _dentro_do_bloco(db, *args, **kwargs):
+        with leituras_da_requisicao(db):
+            return funcao(db, *args, **kwargs)
+    return _dentro_do_bloco
+
+
+def memoria_da_requisicao(db: Session, compartimento: str) -> dict | None:
+    """O ``compartimento`` da memória do bloco aberto (um dicionário que quem chama
+    preenche), ou ``None`` fora de ``leituras_da_requisicao`` — e aí quem chama
+    consulta o banco como sempre."""
+    info = getattr(db, "info", None)
+    memoria = info.get(_MEMORIA_DO_MOTOR) if isinstance(info, dict) else None
+    return None if memoria is None else memoria.setdefault(compartimento, {})
+
+
+# ---------------------------------------------------------------------------
 # Leitura de configurações
 # ---------------------------------------------------------------------------
 
 def obter_config(db: Session, escola_id: int, namespace: str, chave: str, padrao):
+    memoria = memoria_da_requisicao(db, "configuracoes")
+    if memoria is not None:
+        # Dentro do bloco: TODAS as configurações da escola numa ida só (o perfil
+        # de scoring, os quatro namespaces de pesos, o desempate e a gamificação
+        # saíam uma consulta cada, a cada chamada). Mesma linha que a consulta
+        # direta acharia — (escola, namespace, chave) é única (`uq_config`).
+        if escola_id not in memoria:
+            memoria[escola_id] = {
+                (row.namespace, row.chave): row for row in db.execute(
+                    select(Configuracao).where(Configuracao.escola_id == escola_id)
+                ).scalars()
+            }
+        row = memoria[escola_id].get((namespace, chave))
+        return row.valor if row is not None else padrao
     row = db.execute(
         select(Configuracao).where(
             Configuracao.escola_id == escola_id,
@@ -839,7 +962,9 @@ def _referencias_auto(
     listas = {
         "atividades": [s.atividades for s in matific.values()],
         "media": [s.pontuacao_media for s in matific.values()],
-        "estrelas": [s.estrelas for s in matific.values()],
+        # Só as estrelas que contam (5 por atividade): um número digitado acima
+        # do teto não pode virar a régua de todo mundo.
+        "estrelas": [estrelas_que_contam(s) for s in matific.values()],
         "livros": [s.livros_unicos for s in elefante.values()],
         # `pontos_dificuldade` tem uma entrada por aluno PONTUADO (inclusive quem
         # não tem snapshot do Elefante, com 0). Os zeros são descartados de
@@ -950,7 +1075,7 @@ def calcular_matific(
     # inexistente vale 0 (nota 0 no indicador, nunca KeyError); nota em [0, 100].
     atividades = _entrada_nao_negativa(snapshot.atividades) if snapshot else 0
     media = _entrada_nao_negativa(snapshot.pontuacao_media) if snapshot else 0.0
-    estrelas = _entrada_nao_negativa(snapshot.estrelas) if snapshot else 0
+    estrelas = estrelas_que_contam(snapshot)   # no máximo 5 por atividade
     refs = refs or {}
     ref_atividades = _entrada_nao_negativa(refs.get("max_atividades", 0.0))
     ref_media = _entrada_nao_negativa(refs.get("max_media", 0.0))
@@ -1094,6 +1219,20 @@ def _chave_ordenacao_dimensao(resultado: ResultadoAluno, criterios: list[str]):
 # Recalculo integral (PRD §43)
 # ---------------------------------------------------------------------------
 
+def no_ranking_vigente(aluno: Aluno, turma_do_ano: Turma | None) -> bool:
+    """A criança está na POPULAÇÃO do ranking do ano — a mesma de
+    ``_carregar_contexto``: ficha ativa, com matrícula no ano letivo ativo
+    (``turma_do_ano`` é a turma dessa matrícula, ou None), numa turma que concorre
+    (1º ao 5º ano, ``elegibilidade``).
+
+    Fora dela, a Nota pode continuar com a posição de um cálculo antigo (a linha
+    gravada antes de o recálculo limpar a posição de quem sai fica até o próximo
+    recálculo da escola) — que hoje pertence a outra criança. Quem lê a posição
+    de UMA criança confere aqui antes de mostrá-la."""
+    return (aluno.status == "ativo" and turma_do_ano is not None
+            and elegibilidade.participa_de_premiacao(turma_do_ano.ano_escolar))
+
+
 def _carregar_contexto(db: Session, escola_id: int):
     """Carrega tudo que o cálculo precisa: matrículas do ano ativo,
     snapshots mais recentes por aluno e pontos de dificuldade por série."""
@@ -1141,10 +1280,22 @@ def _carregar_contexto(db: Session, escola_id: int):
     # quem só tem coleta de ano anterior NÃO é aferido em Matemática (ausência no
     # ano, não zero). O Elefante NÃO recebe este corte: o contador dele é
     # vitalício (livros lidos não "zeram" na virada do ano).
-    matific = {aid: s for aid, s in snapshots_matific_do_ano(db, escola_id, ano).items()
-               if aid in ids_pontuados}
-    elefante = {aid: s for aid, s in _snapshots_atuais(db, escola_id, SnapshotElefante).items()
-                if aid in ids_pontuados}
+    #
+    # CONTRATO DE MÓDULOS: a plataforma de um módulo que a rede NÃO contratou
+    # não existe para a escola — nem como dado de entrada. Um retrato antigo
+    # dela (o contrato mudou no meio do ano, ou a escola veio de uma rede com os
+    # dois módulos) não pode gravar nota, atividades ou livros na Nota: a ordem
+    # legada (`Nota.posicao` — Ranking Geral, Top 10, telão, cartaz, certificado
+    # "Geral") desempata por `nota_elefante → nota_matific → livros → atividades`
+    # e o produto que a rede não assinou decidiria quem sai em 1º. Cortar aqui,
+    # na entrada, vale para o motor E para o simulador (`contexto_normalizacao`).
+    fora = plataformas_fora_do_contrato(db, escola)
+    matific = {} if "matific" in fora else {
+        aid: s for aid, s in snapshots_matific_do_ano(db, escola_id, ano).items()
+        if aid in ids_pontuados}
+    elefante = {} if "elefante" in fora else {
+        aid: s for aid, s in _snapshots_atuais(db, escola_id, SnapshotElefante).items()
+        if aid in ids_pontuados}
 
     # DIFICULDADE pela FONTE ÚNICA (services/dificuldade_livro): v1 global por
     # livro (A3 × ajuste intrínseco × série) — ou a régua legada por faixa quando
@@ -1158,7 +1309,10 @@ def _carregar_contexto(db: Session, escola_id: int):
     # itemização (nunca a soma — a mesma leitura não conta duas vezes); quem só
     # tem leituras também vira insumo (ausência de snapshot não é nota zero);
     # quem não tem nada fica fora (ausência de dado). Nunca é o objeto ORM.
-    leituras = _dl.leituras_por_aluno(db, escola_id, ids_pontuados)
+    # (Leitura fora do plano: nem as leituras itemizadas entram — sem elas a
+    # dificuldade de todo mundo é 0 e nenhum insumo do Elefante nasce.)
+    leituras = ({} if "elefante" in fora
+                else _dl.leituras_por_aluno(db, escola_id, ids_pontuados))
     elefante = _dl.insumos_elefante(elefante, leituras, ids_pontuados)
     pontos_dif: dict[int, float] = {}
     for matricula, turma in matriculas:
@@ -1233,6 +1387,16 @@ def dimensoes_contratadas(db: Session, escola) -> list[str]:
 
     contratados = svc_modulos.modulos_da_escola(db, escola)
     return [dim for dim in DIMENSOES if dim in contratados] or list(DIMENSOES)
+
+
+def plataformas_fora_do_contrato(db: Session, escola) -> set[str]:
+    """Plataformas (``"matific"``/``"elefante"``) das dimensões que a rede da
+    escola NÃO contratou — o que o motor trata como inexistente desde a entrada
+    (``_carregar_contexto``). Mesma cascata e mesma degradação segura de
+    ``dimensoes_contratadas``: contrato sem nenhum módulo → nada fica de fora."""
+    contratadas = dimensoes_contratadas(db, escola)
+    return {plataforma for dimensao, plataforma in DIMENSOES.items()
+            if dimensao not in contratadas}
 
 
 def _ordenar_por_dimensao(db: Session, escola_id: int, escola,
@@ -1426,11 +1590,16 @@ def recalcular_escola(db: Session, escola_id: int, *, commit: bool = True) -> in
     confirma. Chamador que não passa nada continua com o commit de sempre, e a
     trava de recálculo cai junto com a transação do chamador."""
     # PRIMEIRA linha, antes de QUALQUER leitura que entre no cálculo: daqui até
-    # o `db.commit()` do fim, esta escola é só desta transação. Sem isso, dois
-    # recálculos sobrepostos leem o mesmo estado e gravam um por cima do outro
-    # — 500 por uq_nota_aluno_ano quando inserem, e nota errada em silêncio
-    # quando atualizam. Transacional: cai sozinha no commit (no-op no SQLite).
+    # o commit final, a população fica estável e só este recálculo escreve
+    # as notas da escola. As travas caem com a transação (no-op no SQLite).
     bloquear_escola_para_recalculo(db, escola_id)
+    # A autorização pode ter guardado a escola antes de esperar pela trava.
+    # Releia o ano após a espera, preservando alterações ainda não gravadas.
+    escola_em_memoria = db.identity_map.get(db.identity_key(Escola, escola_id))
+    if escola_em_memoria is not None:
+        ano_em_memoria = inspect(escola_em_memoria).attrs.ano_letivo_ativo
+        if not ano_em_memoria.history.has_changes():
+            db.expire(escola_em_memoria, ["ano_letivo_ativo"])
     contexto = _carregar_contexto(db, escola_id)
     if contexto is None:
         return 0
@@ -1534,7 +1703,9 @@ def recalcular_escola(db: Session, escola_id: int, *, commit: bool = True) -> in
                 atividades=snap_m.atividades if snap_m else 0,
                 pct_acertos=round(acertos / tentativas * 100, 2) if tentativas else 0.0,
                 pontos_dificuldade=pontos_dif[aluno.id],
-                estrelas=snap_m.estrelas if snap_m else 0,
+                # As estrelas que CONTAM (5 por atividade): são critério de
+                # desempate da Matemática e não podem passar do teto da nota.
+                estrelas=estrelas_que_contam(snap_m),
                 pontuacao_media=snap_m.pontuacao_media if snap_m else 0.0,
                 # AFERIDO por dimensão = a MESMA noção de "dimensão com dado" do
                 # C-01, traduzida para o vocabulário do produto. Uma definição só
@@ -1552,7 +1723,7 @@ def recalcular_escola(db: Session, escola_id: int, *, commit: bool = True) -> in
                     },
                     "matematica": {
                         "atividades": snap_m.atividades if snap_m else 0,
-                        "estrelas": snap_m.estrelas if snap_m else 0,
+                        "estrelas": estrelas_que_contam(snap_m),
                         "pontuacao_media": snap_m.pontuacao_media if snap_m else 0.0,
                     },
                 },
@@ -1610,10 +1781,12 @@ def recalcular_escola(db: Session, escola_id: int, *, commit: bool = True) -> in
     # contexto interno da escola.
     if personalizado:
         # A régua da REDE é a v1 global: precisa das leituras itemizadas (uma query).
+        # Leitura fora do plano: sem leituras (o mesmo corte de `_carregar_contexto`).
         ids_pontuados = {m.aluno_id for m, _t in matriculas}
+        leituras_inst = ({} if "elefante" in plataformas_fora_do_contrato(db, escola)
+                         else _dl.leituras_por_aluno(db, escola_id, ids_pontuados))
         notas_inst = _notas_institucionais(
-            matriculas, matific, elefante,
-            leituras_por_aluno=_dl.leituras_por_aluno(db, escola_id, ids_pontuados))
+            matriculas, matific, elefante, leituras_por_aluno=leituras_inst)
     else:
         notas_inst = {r.aluno.id: (r.nota_matific, r.nota_elefante)
                       for r in resultados}
@@ -1644,33 +1817,68 @@ def recalcular_escola(db: Session, escola_id: int, *, commit: bool = True) -> in
             select(Nota).where(Nota.escola_id == escola_id, Nota.ano_letivo == ano)
         ).scalars()
     }
+    # GRAVAÇÃO EM LOTE. A linha que já existe (o caso comum) vai num UPDATE em
+    # lote por chave primária — as MESMAS colunas em todas, então um comando só
+    # (no PostgreSQL, um executemany em pipeline). Trocar atributo por atributo
+    # fazia o flush mandar um UPDATE para cada sequência de linhas com o mesmo
+    # conjunto de colunas alteradas: como cada criança muda coisas diferentes (só
+    # o carimbo, a posição, a nota), eram dezenas de idas por recálculo (~98 para
+    # 300 crianças), com a trava da escola presa. Os objetos já carregados nesta
+    # sessão recebem os valores novos (a sincronização do lote), então quem segue
+    # na mesma transação (``commit=False``) lê o que foi gravado.
+    atualizacoes: list[dict] = []
     for posicao, resultado in enumerate(resultados, start=1):
-        nota_row = notas_existentes.get(resultado.aluno.id)
-        if nota_row is None:
-            nota_row = Nota(escola_id=escola_id, aluno_id=resultado.aluno.id, ano_letivo=ano)
-            db.add(nota_row)
-        nota_row.nota_matific = resultado.nota_matific
-        nota_row.nota_elefante = resultado.nota_elefante
         # Colunas INSTITUCIONAIS — a régua da rede, imune à config local.
         nm_inst, ne_inst = notas_inst.get(resultado.aluno.id, (0.0, 0.0))
-        nota_row.nota_matific_institucional = nm_inst
-        nota_row.nota_elefante_institucional = ne_inst
-        nota_row.nota_geral = resultado.nota_geral
-        nota_row.posicao = posicao
-        nota_row.aferido_leitura = bool(resultado.aferido.get("leitura"))
-        nota_row.aferido_matematica = bool(resultado.aferido.get("matematica"))
-        nota_row.posicao_leitura = resultado.posicao_dimensao.get("leitura")
-        nota_row.posicao_matematica = resultado.posicao_dimensao.get("matematica")
-        # CARIMBO INSTITUCIONAL (visível em SQL via JSON path): prova que as
-        # colunas `*_institucional` desta linha foram calculadas por este motor.
-        # A rede só agrega notas carimbadas — uma linha antiga (migração 0028 com
-        # default 0,0 e sem backfill) NÃO vira "zero" na média: fica PENDENTE de
-        # recálculo até `scripts.recalcular_institucional --pendentes`.
-        # (sem timestamp aqui: o conteúdo da Nota tem de ser DETERMINÍSTICO —
-        # recalcular duas vezes não pode mudar nota, posição nem detalhes; o
-        # instante fica SÓ em `Nota.calculada_em`, logo abaixo.)
-        nota_row.detalhes = {**resultado.detalhes, **carimbo_institucional(personalizado)}
-        nota_row.calculada_em = instante
+        valores = {
+            "nota_matific": resultado.nota_matific,
+            "nota_elefante": resultado.nota_elefante,
+            "nota_matific_institucional": nm_inst,
+            "nota_elefante_institucional": ne_inst,
+            "nota_geral": resultado.nota_geral,
+            "posicao": posicao,
+            "aferido_leitura": bool(resultado.aferido.get("leitura")),
+            "aferido_matematica": bool(resultado.aferido.get("matematica")),
+            "posicao_leitura": resultado.posicao_dimensao.get("leitura"),
+            "posicao_matematica": resultado.posicao_dimensao.get("matematica"),
+            # CARIMBO INSTITUCIONAL (visível em SQL via JSON path): prova que as
+            # colunas `*_institucional` desta linha foram calculadas por este
+            # motor. A rede só agrega notas carimbadas — uma linha antiga
+            # (migração 0028 com default 0,0 e sem backfill) NÃO vira "zero" na
+            # média: fica PENDENTE de recálculo até
+            # `scripts.recalcular_institucional --pendentes`.
+            # (sem timestamp aqui: o conteúdo da Nota tem de ser DETERMINÍSTICO —
+            # recalcular duas vezes não pode mudar nota, posição nem detalhes; o
+            # instante fica SÓ em `Nota.calculada_em`, logo abaixo.)
+            "detalhes": {**resultado.detalhes, **carimbo_institucional(personalizado)},
+            "calculada_em": instante,
+        }
+        nota_row = notas_existentes.get(resultado.aluno.id)
+        if nota_row is None:
+            db.add(Nota(escola_id=escola_id, aluno_id=resultado.aluno.id, ano_letivo=ano,
+                        **valores))
+        else:
+            atualizacoes.append({"id": nota_row.id, **valores})
+
+    # QUEM SAIU NÃO GUARDA POSIÇÃO. A Nota de quem não concorre mais (transferido,
+    # arquivado, sem matrícula no ano, Fase) não é apagada — a nota é histórico —,
+    # mas a posição dela é de um cálculo antigo: sem limpar, "1º lugar" continuava
+    # carimbado numa criança fora do ranking, e cada leitor precisava lembrar de
+    # filtrá-la (o leitor que esquecesse mostrava duas crianças em 1º). Ela volta a
+    # ter posição no primeiro recálculo em que voltar a concorrer.
+    # Também em lote, e só a linha que ainda tem alguma posição (a já limpa não é
+    # regravada a cada recálculo).
+    pontuados = {resultado.aluno.id for resultado in resultados}
+    sem_posicao = [
+        {"id": nota_row.id, "posicao": None, "posicao_leitura": None,
+         "posicao_matematica": None}
+        for aluno_id, nota_row in notas_existentes.items()
+        if aluno_id not in pontuados and (
+            nota_row.posicao is not None or nota_row.posicao_leitura is not None
+            or nota_row.posicao_matematica is not None)]
+    for lote in (atualizacoes, sem_posicao):
+        if lote:
+            db.execute(update(Nota), lote)
 
     if commit:
         db.commit()

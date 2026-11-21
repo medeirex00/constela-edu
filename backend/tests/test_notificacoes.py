@@ -119,3 +119,31 @@ def test_professor_nao_toma_403_no_feed(db, escola_completa):
     prof = _login("prof@notif.local")
     assert prof.get("/api/v1/notificacoes").status_code == 200
     assert prof.get("/api/v1/notificacoes/contador").status_code == 200
+
+
+def test_fusao_nao_leva_a_professora_a_ficha_apagada(db, escola_completa):
+    """A coordenação funde a ficha de OUTRA turma na de uma criança da professora. O aviso
+    "Novo aluno cadastrado" da ficha absorvida passa para a que ficou (e entra no sino da
+    professora): o link tem de abrir a ficha que existe, não a apagada (404)."""
+    ids = _cenario(db, escola_completa)
+    eid = ids["escola"]
+    outra = db.query(Turma).filter_by(escola_id=eid, nome="Outra Turma").one()
+    stub = Aluno(escola_id=eid, nome="Ana Beatriz Souza", status="ativo")
+    db.add(stub)
+    db.flush()
+    db.add(Matricula(escola_id=eid, aluno_id=stub.id, turma_id=outra.id, ano_letivo=2026))
+    audit.registrar(db, "aluno.criado", escola_id=eid, entidade="aluno", entidade_id=stub.id)
+    db.commit()
+    stub_id = stub.id
+
+    admin = _login("admin@teste.local")
+    r = admin.post(f"/api/v1/escolas/{eid}/alunos/fundir",
+                   json={"manter_id": ids["aluno_prof"], "remover_id": stub_id,
+                         "confirmacao": "FUNDIR"})
+    assert r.status_code == 200, r.text
+
+    for cliente in (_login("prof@notif.local"), admin):
+        rotas = [n["rota"] for n in cliente.get("/api/v1/notificacoes").json()
+                 if n["tipo"] == "aluno.criado"]
+        assert f"/alunos/{stub_id}" not in rotas, rotas
+        assert f"/alunos/{ids['aluno_prof']}" in rotas, rotas

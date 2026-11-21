@@ -573,8 +573,10 @@ def test_vi_nome_so_de_digitos_nao_vira_nome_vazio(db, rede):
     db.commit()
     assert ida._nome_para_casar("2B 4A") == "2B 4A"
     assert ida._nome_para_casar("BEATRIZ HELENA CAMPOS") == "BEATRIZ HELENA CAMPOS"
+    # O nome não some (nada de nome vazio). E "2B" sozinho é um nome de uma palavra
+    # só: desde a trava de nome abreviado (A2) não vira ficha — vai para a revisão.
     d = _decidir(db, esc, "2B", SALA_2B)
-    assert d.acao == ida.CRIAR
+    assert (d.acao, d.motivo) == (ida.REVISAR, "nome_incompleto")
 
 
 @pytest.mark.parametrize("recebido,chave,para_casar", [

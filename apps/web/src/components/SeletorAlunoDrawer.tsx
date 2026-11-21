@@ -18,6 +18,7 @@ export default function SeletorAlunoDrawer({
   nomePdf,
   aoFechar,
   aoConfirmar,
+  erroTurmas = null,
 }: {
   escolaId: number;
   aberto: boolean;
@@ -26,6 +27,9 @@ export default function SeletorAlunoDrawer({
   nomePdf: string;
   aoFechar: () => void;
   aoConfirmar: (aluno: Aluno, turmaNome: string) => void;
+  /** A lista de turmas da escola NÃO carregou (o GET /turmas falhou): sem turmas,
+   *  o seletor não pode dizer "Nenhuma turma cadastrada" — a escola tem turmas. */
+  erroTurmas?: string | null;
 }) {
   const [turmaId, setTurmaId] = useState<number | null>(turmaInicial);
   const [busca, setBusca] = useState("");
@@ -89,7 +93,9 @@ export default function SeletorAlunoDrawer({
               value={turmaId ?? ""}
               onChange={(e) => setTurmaId(Number(e.target.value))}
             >
-              {turmas.length === 0 && <option value="">Nenhuma turma cadastrada</option>}
+              {turmas.length === 0 && (
+                <option value="">{erroTurmas ? "As turmas não carregaram" : "Nenhuma turma cadastrada"}</option>
+              )}
               {turmas.map((turma) => (
                 <option key={turma.id} value={turma.id}>{turma.nome}</option>
               ))}

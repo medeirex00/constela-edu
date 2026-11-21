@@ -533,14 +533,22 @@ def test_posicao_das_plataformas_contra_a_rede(db, cliente_global):
     a = _escola(dados, m["escolas"]["a"])["plataformas"]["elefante"]
     b = _escola(dados, m["escolas"]["b"])["plataformas"]["elefante"]
     e = _escola(dados, m["escolas"]["e"])["plataformas"]
-    assert (a["participacao_pct"], a["posicao_participacao"], a["posicao_intensidade"]) == (
-        100.0, "acima", "acima")
-    assert (b["posicao_participacao"], b["posicao_intensidade"]) == ("abaixo", "abaixo")
-    assert (e["elefante"]["posicao_participacao"], e["elefante"]["posicao_intensidade"]) == (
-        "na_media", "na_media")
-    # Matific: 10,00 × 10,67 é −6,3% (menor que 15%): na média.
-    assert e["matific"]["diferenca_intensidade_pct"] == -6.3
-    assert e["matific"]["posicao_intensidade"] == "na_media"
+    assert (a["participacao_pct"], a["posicao_participacao"]) == (100.0, "acima")
+    assert b["posicao_participacao"] == "abaixo"
+    assert e["elefante"]["posicao_participacao"] == "na_media"
+    # A intensidade (livros e atividades por aluno) das escolas com 2 e com 4 crianças somando
+    # é protegida (G_GRUPO-4: "média × medidos" seria a soma delas) — e sobram 2 escolas com o
+    # número, menos que as 3 que a comparação exige. (A régua da intensidade tem o teste de
+    # fronteira abaixo.)
+    for p in ("elefante", "matific"):
+        assert refs[p]["escolas_com_intensidade"] == 2, p
+    assert a["posicao_intensidade"] is None and "só 2 escola(s)" in a["motivo_sem_comparacao"]
+    assert b["posicao_intensidade"] is None and b["motivo_sem_comparacao"] == (
+        svc.TEXTO_METRICA_PROTEGIDA)
+    assert "livros_por_aluno" in b["metricas_protegidas"]
+    assert e["elefante"]["posicao_intensidade"] is None
+    assert e["matific"]["diferenca_intensidade_pct"] is None
+    assert "atividades_por_aluno" in e["matific"]["metricas_protegidas"]
     # Os números de cada escola são os da rota de plataformas (nada recalculado).
     plat = cliente_global.get(f"/api/v1/redes/{m['rede'].id}/analise/plataformas").json()
     por_id = {e["id"]: e for e in dados["escolas"]}

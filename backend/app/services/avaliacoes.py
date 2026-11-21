@@ -13,18 +13,24 @@ import csv
 import io
 import ipaddress
 import logging
+import re
 import socket
+import time
+import zipfile
 from datetime import datetime, timedelta, timezone
 from itertools import islice
-from typing import Callable, Iterator
+from typing import Any, Callable, Iterator
 from urllib.parse import urlparse
 
+import httpcore
 import httpx
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.models import AvaliacaoExterna, Escola, FonteAvaliacao, ResultadoAvaliacao
+from app.services import planilhas
+from app.services.codificacao import decodificar_texto
 
 logger = logging.getLogger(__name__)
 
@@ -142,6 +148,18 @@ SO_REFERENCIA = frozenset({"ica", "iee"})
 # SAEB e SARESP gravam a SÉRIE avaliada como etapa (0035): "5_ano" (e "2_ano" no
 # SARESP). "anos_iniciais" fica para o IDEB — numa série do SAEB/SARESP ele criaria
 # uma série paralela à normalizada (e, no SARESP, misturaria o 2º com o 5º ano).
+# A faixa possível de cada unidade (mínimo, máximo, como a mensagem diz): um número fora
+# dela não é deste indicador (a coluna errada, ou o arquivo que mudou de formato) e a
+# importação recusa o arquivo inteiro. As mesmas faixas do pacote oficial (``ideb._FAIXAS``
+# e o SARESP da SEDUC); a escala do Saeb vai a 1000 porque a do 2º ano (alfabetização) passa
+# de 500. Unidade fora daqui: sem conferência.
+_FAIXA_DA_UNIDADE: dict[str, tuple[float, float, str]] = {
+    "indice": (0.0, 10.0, "de 0 a 10"),
+    "percentual": (0.0, 100.0, "de 0 a 100%"),
+    "escala_saresp": (0.0, 500.0, "de 0 a 500"),
+    "escala_saeb": (0.0, 1000.0, "de 0 a 1000"),
+}
+
 _ETAPA_POR_SERIE = frozenset({"saeb", "saresp"})
 _MSG_ETAPA_POR_SERIE = ("Para o SAEB e o SARESP, a etapa é a SÉRIE avaliada: use “5_ano” (ou "
                         "“2_ano” no SARESP), não “anos_iniciais” — esse rótulo fica para o "
@@ -186,15 +204,119 @@ def _nao_vazia(linha: list) -> bool:
 # oficiais por escola têm poucos MB; 150MB é folga larga).
 _MAX_ZIP_INTERNO = 150 * 1024 * 1024
 
+# Planilha inflada (bomba de descompressão) — a defesa única é
+# ``planilhas.exigir_xlsx_contido``, conferida ANTES do openpyxl, com teto próprio:
+# o .xlsx do Ideb por escola é GRANDE (~50 MB comprimidos, 126 colunas, ~65 mil
+# escolas). Numa planilha fictícia no mesmo formato, o XML descomprimido dá ~8x o
+# comprimido — ~400 MB para o arquivo real —; 1 GB dá folga e ainda barra o abuso. A
+# razão de compressão (``planilhas.XLSX_MAX_RAZAO``) vale sempre. A aba é lida em
+# streaming (``read_only``); o que o openpyxl carrega INTEIRO é a tabela de textos
+# (sharedStrings) — nomes de escola e de município, alguns MB no arquivo real —, que
+# tem teto próprio: dentro do 1 GB, uma tabela de centenas de MB derrubaria o worker.
+_MB = 1024 * 1024
+_XLSX_MAX_DESCOMPRIMIDO = 1024 * _MB
+_XLSX_MAX_TEXTOS = 64 * _MB
+_MAX_TIPOS_DE_CONTEUDO = _MB     # [Content_Types].xml: poucos KB numa planilha real
+# A leitura das linhas não passa do limite do Excel (a dimensão declarada e o número
+# da linha no XML são do próprio arquivo) nem de ``planilhas.MAX_COLUNAS_LIDAS``
+# colunas (o arquivo do INEP tem 126).
+_MAX_LINHAS_EXCEL = 1_048_576
+
+
+def exigir_xlsx_contido(conteudo: bytes, max_total: int | None = None) -> None:
+    """Recusa (``ImportacaoRecusada``, 400 nas rotas) o .xlsx inflado ANTES de o
+    openpyxl abri-lo: ``planilhas.exigir_xlsx_contido`` (partes, compactação, razão e
+    o descomprimido real) com o teto ``max_total`` (padrão: o das avaliações), e a
+    tabela de textos (sharedStrings) até ``_XLSX_MAX_TEXTOS``. O que não é zip legível
+    passa: o openpyxl recusa como sempre."""
+    if max_total is None:
+        max_total = _XLSX_MAX_DESCOMPRIMIDO
+    try:
+        with zipfile.ZipFile(io.BytesIO(conteudo)) as pacote:
+            declarado = sum(info.file_size for info in pacote.infolist())
+    except Exception:  # noqa: BLE001 — não é zip legível: o leitor da planilha recusa
+        return
+    if declarado > max_total:
+        raise ImportacaoRecusada(
+            f"A planilha passa de {max_total // _MB} MB depois de descompactada e foi "
+            "recusada. Confira se é o arquivo oficial, como baixado, e envie de novo. "
+            "Nada foi gravado.")
+    try:
+        planilhas.exigir_xlsx_contido(conteudo, max_total=max_total)
+    except planilhas.PlanilhaRecusada as exc:
+        raise ImportacaoRecusada(f"{exc} Nada foi gravado.") from exc
+    _exigir_textos_contidos(conteudo)
+
+
+def _exigir_textos_contidos(conteudo: bytes) -> None:
+    """A tabela de textos que o openpyxl vai carregar inteira — achada como ele a acha
+    (``ExcelReader.read_strings``: o Override de [Content_Types].xml com o tipo de
+    sharedStrings) — não passa de ``_XLSX_MAX_TEXTOS``. O tamanho declarado basta: a
+    leitura do zip para nele (e confere o CRC). Roda DEPOIS da guarda única, que já
+    recusou a compactação sem teto por leitura."""
+    from openpyxl.packaging.manifest import Manifest
+    from openpyxl.xml.constants import ARC_CONTENT_TYPES, SHARED_STRINGS
+    from openpyxl.xml.functions import fromstring
+
+    try:
+        with zipfile.ZipFile(io.BytesIO(conteudo)) as pacote:
+            with pacote.open(ARC_CONTENT_TYPES) as entrada:
+                tipos = entrada.read(_MAX_TIPOS_DE_CONTEUDO + 1)
+            if len(tipos) > _MAX_TIPOS_DE_CONTEUDO:
+                raise ImportacaoRecusada(
+                    "A planilha tem a estrutura interna fora do normal e foi recusada. "
+                    "Abra o arquivo no Excel, salve de novo e envie outra vez. Nada foi "
+                    "gravado.")
+            parte = Manifest.from_tree(fromstring(tipos)).find(SHARED_STRINGS)
+            if parte is None:
+                return
+            tamanho = pacote.getinfo(parte.PartName[1:]).file_size
+    except ImportacaoRecusada:
+        raise
+    except Exception:  # noqa: BLE001 — pacote incompleto/ilegível: o openpyxl recusa
+        return
+    if tamanho > _XLSX_MAX_TEXTOS:
+        raise ImportacaoRecusada(
+            f"A tabela de textos da planilha passa de {_XLSX_MAX_TEXTOS // _MB} MB e foi "
+            "recusada — muito maior que a de um arquivo oficial. Confira se é o arquivo "
+            "certo, como baixado, e envie de novo. Nada foi gravado.")
+
+
+def _linhas_xlsx(conteudo: bytes) -> Iterator[list]:
+    """As linhas da 1ª aba com teto do que é PERCORRIDO: no máximo
+    ``_MAX_LINHAS_EXCEL`` linhas e ``planilhas.MAX_COLUNAS_LIDAS`` colunas, passados
+    ao openpyxl — a dimensão declarada (A1:XFD1048576 em 2 KB) e o número da linha no
+    XML não alargam a leitura. Com dimensão declarada, cada linha tem a largura dela
+    (até o teto), como antes; sem, vai até a última célula preenchida. A linha toda
+    vazia é pulada sem custo em Python (``count`` roda em C)."""
+    from openpyxl import load_workbook
+
+    wb = load_workbook(io.BytesIO(conteudo), read_only=True, data_only=True)
+    try:
+        aba = wb.active
+        declaradas = aba.max_column
+        max_col = min(declaradas or planilhas.MAX_COLUNAS_LIDAS, planilhas.MAX_COLUNAS_LIDAS)
+        max_row = min(aba.max_row or _MAX_LINHAS_EXCEL, _MAX_LINHAS_EXCEL)
+        for row in aba.iter_rows(values_only=True, max_row=max_row, max_col=max_col):
+            fim = len(row)
+            if row.count(None) == fim:
+                continue
+            if not declaradas:
+                while row[fim - 1] is None:
+                    fim -= 1
+            yield list(row[:fim])
+    finally:
+        wb.close()
+
 
 def _iterar_grade(conteudo: bytes, nome: str) -> Iterator[list]:
     """GERA as linhas não-vazias do arquivo (1ª aba do XLSX, ou CSV) em STREAMING
     — não materializa a grade inteira (senão um XLSX comprimido explodiria em
     memória). Arquivos oficiais do INEP vêm em ZIP: extrai o 1º XLSX/CSV de dentro.
-    Nunca levanta por conteúdo: arquivo ilegível → não gera nada."""
+    Arquivo ilegível → não gera nada. LEVANTA ``ImportacaoRecusada`` (antes da 1ª
+    linha, nada gravado) só para o .xlsx inflado (``exigir_xlsx_contido``)."""
     nome_l = (nome or "").lower()
     if nome_l.endswith(".zip"):
-        import zipfile
         try:
             with zipfile.ZipFile(io.BytesIO(conteudo)) as zf:
                 interno = next(
@@ -209,19 +331,18 @@ def _iterar_grade(conteudo: bytes, nome: str) -> Iterator[list]:
             return
         yield from _iterar_grade(dados, interno)  # recursa com o arquivo de dentro
         return
+    eh_xlsx = nome_l.endswith((".xlsx", ".xlsm"))
+    if eh_xlsx:
+        exigir_xlsx_contido(conteudo)   # fora do try: a recusa chega a quem chamou
     try:
-        if nome_l.endswith((".xlsx", ".xlsm")):
-            from openpyxl import load_workbook
-            wb = load_workbook(io.BytesIO(conteudo), read_only=True, data_only=True)
-            try:
-                for row in wb.active.iter_rows(values_only=True):
-                    linha = list(row)
-                    if _nao_vazia(linha):
-                        yield linha
-            finally:
-                wb.close()
+        if eh_xlsx:
+            for linha in _linhas_xlsx(conteudo):
+                if _nao_vazia(linha):
+                    yield linha
         else:
-            texto = conteudo.decode("utf-8-sig", errors="replace")
+            # O CSV do Excel em português vem em Windows-1252 (e o "Texto Unicode" em
+            # UTF-16): o componente lido da coluna é chave gravada.
+            texto = decodificar_texto(conteudo)
             delim = ";" if texto[:8192].count(";") >= texto[:8192].count(",") else ","
             for r in csv.reader(io.StringIO(texto), delimiter=delim):
                 if _nao_vazia(r):
@@ -259,6 +380,27 @@ def normalizar_inep(valor) -> str | None:
     if not s:
         return None
     return s.zfill(8)[-8:]
+
+
+_SEPARADORES_INEP = re.compile(r"[\s./-]")
+
+
+def inep_digitado(valor) -> str | None:
+    """O código INEP DIGITADO no cadastro, com os seus 8 dígitos — ou None quando o texto
+    não é um código INEP. Ao contrário de ``normalizar_inep`` (que casa a célula da
+    planilha e por isso corta para os 8 últimos dígitos, completa com zeros e ignora
+    letras), aqui nada é cortado, completado ou ignorado: só saem os separadores (ponto,
+    traço, barra e espaço), o '.0' de um número colado do Excel e o '0' à esquerda do
+    cadastro antigo com 9 dígitos. Um dígito a mais, a menos ou uma letra: None."""
+    if valor is None:
+        return None
+    s = str(valor).strip()
+    if s.endswith(".0"):
+        s = s[:-2]
+    s = _SEPARADORES_INEP.sub("", s)
+    if len(s) == 9 and s.startswith("0"):
+        s = s[1:]
+    return s if re.fullmatch(r"[0-9]{8}", s) else None
 
 
 def _num(valor):
@@ -451,6 +593,11 @@ def importar_resultados(
     mantidos_oficiais = 0
     inep_nao_casados: set[str] = set()
     truncado = False
+    faixa = _FAIXA_DA_UNIDADE.get((unidade or "").strip().lower())
+    # As linhas casadas são gravadas DEPOIS de ler o arquivo todo: um número fora da
+    # faixa recusa o arquivo inteiro antes de a 1ª linha entrar na sessão (o robô não
+    # desfaz o que já entrou).
+    a_gravar: list[tuple] = []
 
     # Streaming: pula o pré-âmbulo (linha_dados) e processa até o teto anti-OOM.
     for linha in islice(_iterar_grade(conteudo, nome), linha_dados, None):
@@ -468,12 +615,17 @@ def importar_resultados(
             nao_casados += 1
             inep_nao_casados.add(inep)   # TODOS (a tela decide quanto mostrar)
             continue
-        escola_id, rede_id = alvo
-        etapa = _dimensao(linha, col_etapa, etapa_fixa)
-        componente = _dimensao(linha, col_componente, componente_fixo)
-        turma = _dimensao(linha, col_turma, None)
+        if faixa is not None and not faixa[0] <= valor <= faixa[1]:
+            raise ImportacaoRecusada(
+                f"O valor {valor:g} (código INEP {inep}) está fora da faixa da unidade "
+                f"“{unidade}” ({faixa[2]}): a coluna do valor não é a deste indicador ou o "
+                "arquivo mudou. Confira o mapeamento. Nada foi gravado.")
+        a_gravar.append((alvo, inep, valor, _dimensao(linha, col_etapa, etapa_fixa),
+                         _dimensao(linha, col_componente, componente_fixo),
+                         _dimensao(linha, col_turma, None)))
         casados += 1
 
+    for (escola_id, rede_id), inep, valor, etapa, componente, turma in a_gravar:
         chave = (escola_id, etapa, componente, turma)
         atual = existentes.get(chave)
         if atual is not None and atual.importacao_id is not None:
@@ -628,8 +780,8 @@ def correlacao_rede(db: Session, rede_id: int, *, avaliacao_chave: str, indicado
     pontos = []
     for eid, valor in valores.items():
         c = engaj.get(eid)
-        if c is None or c.get("alunos_com_dados", 0) <= 0:
-            continue  # sem engajamento com dados: não entra na correlação
+        if c is None or not svc_rede.tem_dado_de_quem_concorre(c):
+            continue  # a correlação usa a mesma coorte comparável do painel da rede
         x = float(c[metrica])
         pontos.append({"escola_id": eid, "nome": c["nome"], "x": round(x, 1),
                        "y": round(float(valor), 2)})
@@ -701,56 +853,401 @@ def _agora() -> datetime:
 
 _MAX_REDIRECTS = 5
 
+# Mensagem ÚNICA para qualquer falha de conexão com a fonte (recusa, queda, tempo
+# esgotado, TLS). O texto do erro de rede diferenciava porta aberta de porta fechada
+# no destino e, gravado em ``fonte.ultimo_erro`` (o painel mostra), servia para varrer
+# uma rede às cegas. O detalhe vai só para o log do servidor. Por ser única, ela tem de
+# ser verdadeira para TUDO o que agrupa — inclusive o servidor que respondeu, mas cujo
+# certificado HTTPS não foi aceito (um portal com a cadeia incompleta, por exemplo).
+# Cabe na coluna (String(300)) sem corte.
+ERRO_CONEXAO_FONTE = ("Falha de conexão com a fonte: o endereço não respondeu, recusou ou "
+                      "interrompeu a conexão, ou a conexão segura (HTTPS) falhou, por exemplo "
+                      "por um certificado inválido. Confira o endereço e tente de novo mais "
+                      "tarde; o detalhe técnico fica no registro do servidor.")
 
-def _exigir_destino_publico(url: str) -> None:
-    """Anti-SSRF: só https e host que resolve para IP PÚBLICO (rejeita privado/
-    loopback/link-local/reservado/multicast — inclui 169.254.169.254 de metadata).
-    Aplicado ANTES de cada conexão, inclusive a cada redirect (revalida o salto)."""
+
+def _ip_publico(ip: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
+    """IP da internet PÚBLICA (``is_global``): recusa privado, loopback, link-local
+    (169.254.169.254, de metadados de nuvem), a faixa 100.64.0.0/10 (CGNAT, onde também
+    ficam metadados de nuvem, como 100.100.100.200: não é ``is_private``, mas também
+    não é global), reservado, multicast e não especificado. O IPv4 mapeado num IPv6
+    (``::ffff:a.b.c.d``) é conferido pelo IPv4."""
+    mapeado = getattr(ip, "ipv4_mapped", None)
+    if mapeado is not None and not _ip_publico(mapeado):
+        return False
+    return ip.is_global and not (ip.is_private or ip.is_loopback or ip.is_link_local
+                                 or ip.is_reserved or ip.is_multicast or ip.is_unspecified)
+
+
+# Recusa ÚNICA da guarda para o nome que não resolve e para o nome que resolve para
+# fora da internet pública. Ela chega a ``fonte.ultimo_erro`` (o painel mostra): se
+# dissesse o IP resolvido, ou separasse "não existe" de "existe e é interno", o
+# "coletar agora" serviria para mapear os nomes e os IPs da rede interna. O IP e o
+# motivo exato vão só para o log do servidor.
+_RECUSA_DESTINO = "o endereço não foi encontrado ou aponta para uma rede não-pública: {host}"
+
+
+def _resolver_publico(host: str, porta: int) -> list[str]:
+    """Resolve o host UMA vez e devolve os IPs dele, todos públicos (um só que não seja
+    público já recusa o host inteiro). A recusa é a mesma para os dois motivos
+    (``_RECUSA_DESTINO``); o detalhe vai para o log."""
+    try:
+        infos = socket.getaddrinfo(host, porta, proto=socket.IPPROTO_TCP)
+    except socket.gaierror as exc:
+        logger.warning("Guarda anti-SSRF: host %s não resolvido (%s)", host, exc)
+        raise ValueError(_RECUSA_DESTINO.format(host=host)) from exc
+    ips: list[str] = []
+    for info in infos:
+        ip = ipaddress.ip_address(info[4][0])
+        if not _ip_publico(ip):
+            logger.warning("Guarda anti-SSRF: host %s aponta para rede não-pública (%s)",
+                           host, ip)
+            raise ValueError(_RECUSA_DESTINO.format(host=host))
+        if str(ip) not in ips:
+            ips.append(str(ip))
+    if not ips:
+        logger.warning("Guarda anti-SSRF: host %s não resolvido (sem endereço)", host)
+        raise ValueError(_RECUSA_DESTINO.format(host=host))
+    return ips
+
+
+def _exigir_destino_publico(url: str) -> list[str]:
+    """Anti-SSRF: só https e host que resolve para IP PÚBLICO (``_ip_publico``).
+    Aplicado ANTES de cada requisição, inclusive a cada redirect (revalida o salto).
+    Devolve os IPs conferidos. Sozinha, a guarda não basta para quem conecta depois:
+    o cliente HTTP resolveria o nome de novo (DNS rebinding) — ``baixar_url`` conecta
+    pelo ``_TransporteSoIpPublico``, que confere e fixa o IP na própria conexão."""
     partes = urlparse(url)
     if partes.scheme != "https":
         raise ValueError(f"esquema não permitido (só https): {partes.scheme or 'vazio'}")
     host = partes.hostname
     if not host:
         raise ValueError("URL sem host")
-    try:
-        infos = socket.getaddrinfo(host, partes.port or 443, proto=socket.IPPROTO_TCP)
-    except socket.gaierror as exc:
-        raise ValueError(f"host não resolvido: {host}") from exc
-    for info in infos:
-        ip = ipaddress.ip_address(info[4][0])
-        if (ip.is_private or ip.is_loopback or ip.is_link_local
-                or ip.is_reserved or ip.is_multicast or ip.is_unspecified):
-            raise ValueError(f"host aponta para rede não-pública ({ip}): {host}")
+    return _resolver_publico(host, partes.port or 443)
+
+
+def _duracao(segundos: float) -> str:
+    return f"{segundos / 60:g} min" if segundos >= 60 else f"{segundos:g} s"
+
+
+class _PrazoTotal:
+    """O prazo do download INTEIRO (``AVALIACOES_DOWNLOAD_PRAZO_S``), medido com
+    ``time.monotonic``, e se foi ele — e não a espera por operação — que fez uma operação
+    de rede desistir (``estourou``)."""
+
+    def __init__(self, segundos: float) -> None:
+        self.segundos = segundos
+        self.fim = time.monotonic() + segundos
+        self.estourou = False
+
+    def erro(self) -> ValueError:
+        return ValueError(
+            f"o download passou do prazo total de {_duracao(self.segundos)} sem terminar: o "
+            "servidor está respondendo devagar demais. Tente de novo mais tarde.")
+
+    def conferir(self) -> None:
+        if time.monotonic() >= self.fim:
+            raise self.erro()
+
+    def espera(self, timeout: float | None, esgotado: type[Exception]
+               ) -> tuple[float | None, bool]:
+        """A espera de UMA operação de rede: o menor entre ``timeout`` e o que resta do
+        prazo, e se foi o prazo que a limitou. Sem tempo restante, levanta ``esgotado`` (a
+        exceção de tempo esgotado do httpcore para a operação) sem esperar nada."""
+        resta = self.fim - time.monotonic()
+        if resta <= 0:
+            self.estourou = True
+            raise esgotado("o download passou do prazo total")
+        if timeout is None or resta < timeout:
+            return resta, True
+        return timeout, False
+
+    def limitar(self, operacao: Callable[[float | None], Any], timeout: float | None,
+                esgotado: type[Exception]):
+        """Roda ``operacao(espera)`` com a espera limitada pelo prazo e marca ``estourou``
+        quando a operação desistiu por causa dele."""
+        espera, pelo_prazo = self.espera(timeout, esgotado)
+        try:
+            return operacao(espera)
+        except httpcore.TimeoutException:
+            if pelo_prazo:
+                self.estourou = True
+            raise
+
+
+class _ConexaoComPrazo(httpcore.NetworkStream):
+    """A conexão aberta pelo ``_RedeSoIpPublico`` com o prazo total do download em CADA
+    leitura e escrita: o cabeçalho HTTP, a conexão segura (TLS) e o corpo. O ``timeout`` do
+    httpx vale por operação (cada leitura recomeça a contagem); conferir o prazo só entre
+    os pedaços do corpo deixava de fora o cabeçalho — o httpcore aceita até 100 KB dele —,
+    e um servidor que o gotejasse seguraria a coleta por semanas (REV3-INDIC-1)."""
+
+    def __init__(self, conexao: httpcore.NetworkStream, prazo: _PrazoTotal) -> None:
+        self._conexao, self._prazo = conexao, prazo
+
+    def read(self, max_bytes: int, timeout: float | None = None) -> bytes:
+        return self._prazo.limitar(lambda espera: self._conexao.read(max_bytes, espera),
+                                   timeout, httpcore.ReadTimeout)
+
+    def write(self, buffer: bytes, timeout: float | None = None) -> None:
+        self._prazo.limitar(lambda espera: self._conexao.write(buffer, espera),
+                            timeout, httpcore.WriteTimeout)
+
+    def close(self) -> None:
+        self._conexao.close()
+
+    def start_tls(self, ssl_context, server_hostname=None, timeout=None):
+        try:
+            segura = self._prazo.limitar(
+                lambda espera: self._conexao.start_tls(ssl_context, server_hostname, espera),
+                timeout, httpcore.ConnectTimeout)
+        except Exception:
+            self._conexao.close()   # como o start_tls do httpcore: não fica conexão aberta
+            raise
+        return _ConexaoComPrazo(segura, self._prazo)
+
+    def get_extra_info(self, info: str):
+        return self._conexao.get_extra_info(info)
+
+
+class _RedeSoIpPublico(httpcore.SyncBackend):
+    """Backend de rede do httpcore que abre o socket SÓ no IP conferido: o nome é
+    resolvido uma vez, na hora da conexão, cada IP passa por ``_ip_publico`` e a
+    conexão TCP vai ao IP conferido — não a uma 2ª resolução, que um DNS com TTL 0
+    poderia apontar para a rede interna. O TLS continua verificando o certificado pelo
+    NOME do endereço (o SNI e o cabeçalho Host são os do URL). A conexão aberta leva o
+    prazo total do download (``_ConexaoComPrazo``)."""
+
+    def __init__(self, prazo: _PrazoTotal) -> None:
+        self._prazo = prazo
+
+    def connect_tcp(self, host, port, timeout=None, local_address=None, socket_options=None):
+        abrir = super().connect_tcp
+        erro: Exception | None = None
+        for ip in _resolver_publico(host, port):
+            try:
+                conexao = self._prazo.limitar(
+                    lambda espera, ip=ip: abrir(ip, port, timeout=espera,
+                                                local_address=local_address,
+                                                socket_options=socket_options),
+                    timeout, httpcore.ConnectTimeout)
+                return _ConexaoComPrazo(conexao, self._prazo)
+            except (httpcore.ConnectError, httpcore.ConnectTimeout) as exc:
+                erro = exc                       # tenta o próximo IP do host, como o socket
+        raise erro
+
+
+class _TransporteSoIpPublico(httpx.HTTPTransport):
+    """O transporte padrão do httpx (TLS verificado) com a conexão aberta pelo
+    ``_RedeSoIpPublico``. Passado ao cliente, ele também deixa de fora o proxy das
+    variáveis de ambiente: a conexão vai direto ao IP conferido."""
+
+    def __init__(self, prazo: _PrazoTotal) -> None:
+        super().__init__()
+        pool = getattr(self, "_pool", None)
+        if not hasattr(pool, "_network_backend"):
+            # Fecha em vez de abrir: sem o ponto de extensão, o IP não ficaria fixado.
+            raise RuntimeError("httpx/httpcore sem o backend de rede configurável: a coleta "
+                               "não conecta sem fixar o IP conferido pela guarda anti-SSRF.")
+        pool._network_backend = _RedeSoIpPublico(prazo)
 
 
 def baixar_url(url: str, *, timeout: float = 30.0) -> bytes:
     """Baixa o arquivo oficial (User-Agent de navegador — os portais oficiais
-    bloqueiam clientes 'crus'). Guarda anti-SSRF: só https para host público, e os
+    bloqueiam clientes 'crus'). Guarda anti-SSRF: só https para host público, os
     redirects são seguidos MANUALMENTE revalidando cada destino (o alvo final não
-    fica a cargo do upstream). LEVANTA em erro; o chamador registra o status."""
+    fica a cargo do upstream) e cada conexão abre no IP conferido
+    (``_TransporteSoIpPublico``: sem DNS rebinding). LEVANTA em erro; o chamador
+    registra o status.
+
+    ``timeout`` vale por operação de rede (cada leitura recomeça a contagem); o download
+    INTEIRO tem o prazo ``AVALIACOES_DOWNLOAD_PRAZO_S``, que limita cada operação da
+    conexão (``_ConexaoComPrazo``): a abertura, a conexão segura (TLS), o pedido, o
+    cabeçalho e o corpo da resposta, em todos os redirects. Um servidor que goteja a
+    resposta seguraria a coleta (a thread, a conexão do banco e a trava da fonte) por tempo
+    sem limite. Passou do prazo: ``ValueError`` com a causa (e não a falha de conexão).
+    A resolução do nome (DNS) fica com o resolvedor do sistema, que tem os próprios
+    limites."""
+    prazo = _PrazoTotal(settings.AVALIACOES_DOWNLOAD_PRAZO_S)
     cabecalhos = {"User-Agent": _UA_NAVEGADOR, "Accept": "*/*"}
-    with httpx.Client(timeout=timeout, follow_redirects=False, headers=cabecalhos) as cli:
-        for _ in range(_MAX_REDIRECTS + 1):
-            _exigir_destino_publico(url)
-            with cli.stream("GET", url) as r:
-                if r.is_redirect:
-                    destino = r.headers.get("location")
-                    if not destino:
-                        raise ValueError("redirect sem destino")
-                    url = str(r.url.join(destino))  # resolve relativo → absoluto
-                    continue
-                r.raise_for_status()
-                buf = bytearray()
-                for chunk in r.iter_bytes():
-                    buf += chunk
-                    if len(buf) > _MAX_DOWNLOAD:
-                        raise ValueError("arquivo excede o teto de download")
-                return bytes(buf)
+    try:
+        with httpx.Client(timeout=timeout, follow_redirects=False, headers=cabecalhos,
+                          transport=_TransporteSoIpPublico(prazo)) as cli:
+            for _ in range(_MAX_REDIRECTS + 1):
+                prazo.conferir()
+                _exigir_destino_publico(url)
+                with cli.stream("GET", url) as r:
+                    if r.is_redirect:
+                        destino = r.headers.get("location")
+                        if not destino:
+                            raise ValueError("redirect sem destino")
+                        url = str(r.url.join(destino))  # resolve relativo → absoluto
+                        continue
+                    r.raise_for_status()
+                    buf = bytearray()
+                    for chunk in r.iter_bytes():
+                        buf += chunk
+                        if len(buf) > _MAX_DOWNLOAD:
+                            raise ValueError("arquivo excede o teto de download")
+                        prazo.conferir()
+                    return bytes(buf)
+    except httpx.TimeoutException as exc:
+        if prazo.estourou:
+            raise prazo.erro() from exc
+        raise
     raise ValueError("excesso de redirects")
 
 
 def _nome_do_url(url: str) -> str:
     return url.rstrip("/").split("/")[-1] or "arquivo"
+
+
+# --- Conferência do arquivo do robô ------------------------------------------
+
+# As colunas que o mapeamento de uma fonte aponta (as que ``importar_resultados`` lê).
+COLUNAS_MAPEADAS = ("col_inep", "col_valor", "col_etapa", "col_componente", "col_turma")
+# A etapa que o TOPO do arquivo oficial do INEP declara: os nomes das variáveis são os
+# mesmos nos arquivos de cada etapa (os marcadores de Anos Iniciais são os do 1 clique).
+_ETAPAS_DO_ARQUIVO_INEP: dict[str, tuple[str, ...]] = {
+    "anos_iniciais": ("Anos Iniciais", "1º ao 5º ano"),
+    "anos_finais": ("Anos Finais", "6º ao 9º ano"),
+    "ensino_medio": ("Ensino Médio",),
+}
+# A etapa fixa da fonte → o arquivo do INEP (por etapa) que a traz.
+_ARQUIVO_INEP_DA_ETAPA = {"anos_iniciais": "anos_iniciais", "5_ano": "anos_iniciais",
+                          "anos_finais": "anos_finais", "9_ano": "anos_finais",
+                          "ensino_medio": "ensino_medio"}
+_REFAZER_FONTE = ("Confira se a URL ainda serve o mesmo arquivo; se o arquivo oficial mudou "
+                  "de formato, monte a fonte de novo com ele. Nada foi gravado.")
+
+
+def _texto_celula(valor) -> str:
+    return "" if valor is None else str(valor).strip()
+
+
+def colunas_do_cabecalho(mapeamento: dict, cabecalho: dict | None) -> dict[str, str] | None:
+    """O texto do cabeçalho de cada coluna mapeada, como a tela o mostrou no arquivo
+    conferido ao montar a fonte — só quando cobre exatamente as colunas mapeadas (senão
+    ``None``: veja em ``conferir_arquivo_da_fonte`` o que a 1ª coleta faz sem ele)."""
+    mapeadas = {c for c in COLUNAS_MAPEADAS if mapeamento.get(c) is not None}
+    colunas = {c: _texto_celula(t) for c, t in (cabecalho or {}).items()}
+    return colunas if colunas and set(colunas) == mapeadas else None
+
+
+def etapa_do_arquivo_inep(linhas: list[list[str]] | None, linha_dados: int) -> str | None:
+    """A etapa do arquivo oficial do INEP que a tela conferiu ao montar a fonte, tirada das
+    linhas do topo que ela mostrou (``linhas``: do começo do arquivo até a linha antes dos
+    dados). Os nomes das variáveis são os mesmos nos arquivos de cada etapa: só o topo diz
+    a etapa (REV3-INDIC-2). Devolve a etapa quando a linha antes dos dados é a linha técnica
+    (com ID_ESCOLA) e as de cima trazem os marcadores de UMA etapa só
+    (``_ETAPAS_DO_ARQUIVO_INEP``); senão ``None`` (outro arquivo, ou topo sem etapa)."""
+    if not linhas or len(linhas) != linha_dados:
+        return None
+    if "ID_ESCOLA" not in (_texto_celula(c).upper() for c in linhas[-1]):
+        return None
+    celulas = [_texto_celula(c).casefold() for ln in linhas[:-1] for c in ln]
+    etapas = [e for e, marcas in _ETAPAS_DO_ARQUIVO_INEP.items()
+              if any(mc.casefold() in c for c in celulas for mc in marcas)]
+    return etapas[0] if len(etapas) == 1 else None
+
+
+def conferir_arquivo_da_fonte(conteudo: bytes, nome: str, mapeamento: dict, *, edicao: int
+                              ) -> tuple[dict, dict]:
+    """Confere o arquivo baixado pelo robô com o que foi conferido quando a fonte foi
+    montada e devolve ``(o mapeamento que lê ESTE arquivo, o conferido a guardar)``.
+    LEVANTA ``ImportacaoRecusada`` quando não confere (nada é gravado).
+
+    O robô baixa sempre a mesma URL, e o arquivo dela pode mudar: uma retificação com
+    colunas a mais ou a menos, ou o arquivo de outra etapa. Ler pelas posições do
+    mapeamento gravaria outra variável (ou o Ideb de outra etapa) com status 'ok'.
+
+    * Arquivo oficial do INEP (a linha técnica, com ID_ESCOLA, no topo): as colunas são
+      achadas pelo NOME da variável e a etapa é conferida pelo topo
+      (``localizar_colunas_inep``, como no 1 clique). A etapa esperada é a do arquivo que
+      a tela conferiu (``etapa_do_arquivo_inep``) ou a que a etapa fixa da fonte pede
+      (``_ARQUIVO_INEP_DA_ETAPA``) — nunca a que o topo do arquivo BAIXADO declara, que é
+      justamente o que se confere. Sem os nomes conferidos, a 1ª coleta só aceita os da
+      posição mapeada se forem os que o 1 clique exige: ID_ESCOLA no código e uma variável
+      da ``edicao`` da fonte no valor (VL_OBSERVADO_2023...) — senão a vizinha de uma
+      coluna a menos (VL_PROJECAO_2007, dentro da faixa do Ideb) viraria o valor e a
+      referência das coletas seguintes (REV3-INDIC-2).
+    * Outro arquivo: o texto do cabeçalho (a linha antes da 1ª linha de dados) nas
+      colunas mapeadas tem de ser o conferido. Sem linha de cabeçalho (``linha_dados`` 0),
+      só a faixa da unidade (``importar_resultados``) protege.
+
+    O conferido (``mapeamento['cabecalho']``: ``colunas`` e, no INEP, ``etapa_do_arquivo``)
+    vem da tela que montou a fonte ou, numa fonte sem ele, desta coleta (no INEP, só os
+    nomes que passaram na conferência acima)."""
+    m = {k: v for k, v in mapeamento.items() if k != "cabecalho"}
+    conferido = dict(mapeamento.get("cabecalho") or {})
+    mapeadas = {c: int(m[c]) for c in COLUNAS_MAPEADAS if m.get(c) is not None}
+    linha_dados = int(m.get("linha_dados", 0))
+    nomes = conferido.get("colunas") or {}
+    if set(nomes) != set(mapeadas):
+        nomes = {}                  # não cobre o mapeamento: esta coleta refaz a referência
+    topo = list(islice(_iterar_grade(conteudo, nome), max(linha_dados, _LINHAS_TOPO_INEP)))
+    tecnica = next((i for i, ln in enumerate(topo[:_LINHAS_TOPO_INEP])
+                    if "ID_ESCOLA" in (_texto_celula(c).upper() for c in ln)), None)
+
+    if tecnica is None:
+        if conferido.get("etapa_do_arquivo"):
+            raise ImportacaoRecusada(
+                "O arquivo da URL não é mais o arquivo oficial do INEP com que a fonte foi "
+                "conferida (não tem a linha técnica com ID_ESCOLA). " + _REFAZER_FONTE)
+        if linha_dados < 1 or not mapeadas:
+            return m, conferido
+        if len(topo) < linha_dados:
+            raise ImportacaoRecusada(
+                f"O arquivo da URL tem menos de {linha_dados} linha(s) antes dos dados: não "
+                "é o arquivo com que a fonte foi montada. " + _REFAZER_FONTE)
+        cabecalho = topo[linha_dados - 1]
+        atuais = {c: _texto_celula(_cel(cabecalho, i)) for c, i in mapeadas.items()}
+        mudaram = [f"a coluna {mapeadas[c]} era “{nomes[c]}” e agora é “{atuais[c]}”"
+                   for c in mapeadas
+                   if nomes and nomes[c].casefold() != atuais[c].casefold()]
+        if mudaram:
+            raise ImportacaoRecusada(
+                "O cabeçalho do arquivo da URL mudou desde que a fonte foi montada: "
+                + "; ".join(mudaram) + ". " + _REFAZER_FONTE)
+        return m, {**conferido, "colunas": nomes or atuais}
+
+    # Arquivo oficial do INEP.
+    etapa = (conferido.get("etapa_do_arquivo")
+             or _ARQUIVO_INEP_DA_ETAPA.get(_texto_celula(m.get("etapa_fixa")).lower()))
+    if etapa not in _ETAPAS_DO_ARQUIVO_INEP:
+        # O topo do arquivo BAIXADO não serve: ele diz a etapa do arquivo que a URL serve
+        # agora, não a do arquivo que o gestor conferiu.
+        raise ImportacaoRecusada(
+            "A fonte não guarda a etapa do arquivo do INEP (Anos Iniciais, Anos Finais ou "
+            "Ensino Médio) nem tem etapa fixa: o robô não tem como conferir o arquivo da URL. "
+            "Monte a fonte de novo em “Automatizar”, com o arquivo oficial ou a etapa fixa. "
+            "Nada foi gravado.")
+    if not nomes:
+        if tecnica != linha_dados - 1:
+            raise ImportacaoRecusada(
+                f"A 1ª linha de dados da fonte ({linha_dados}) não é a seguinte à linha "
+                f"técnica do arquivo do INEP ({tecnica + 1}): o mapeamento não é deste "
+                "arquivo. " + _REFAZER_FONTE)
+        nomes = {c: _texto_celula(_cel(topo[tecnica], i)) for c, i in mapeadas.items()}
+        # Sem referência, os nomes da posição mapeada só valem se forem os que o 1 clique
+        # exige (ID_ESCOLA e uma variável da edição, como VL_OBSERVADO_2023).
+        estranhas = [f"a coluna {mapeadas[c]} é “{nomes[c]}”, não {esperado}"
+                     for c, ok, esperado in (
+                         ("col_inep", nomes.get("col_inep", "").upper() == "ID_ESCOLA",
+                          "ID_ESCOLA"),
+                         ("col_valor", nomes.get("col_valor", "").endswith(f"_{edicao}"),
+                          f"uma variável de {edicao}"))
+                     if c in mapeadas and not ok]
+        if estranhas:
+            raise ImportacaoRecusada(
+                "No arquivo do INEP da URL, " + "; ".join(estranhas) + ". " + _REFAZER_FONTE)
+    linha, indices = localizar_colunas_inep(
+        conteudo, nome, [n.upper() for n in nomes.values()],
+        marcadores_etapa=_ETAPAS_DO_ARQUIVO_INEP[etapa],
+        arquivo_esperado=(f"o arquivo do INEP ({etapa.replace('_', ' ')}) com que a fonte "
+                          "foi montada"))
+    efetivo = {**m, "linha_dados": linha, **{c: indices[n.upper()] for c, n in nomes.items()}}
+    return efetivo, {"colunas": nomes, "etapa_do_arquivo": etapa}
 
 
 def coletar_fonte(db: Session, fonte: FonteAvaliacao,
@@ -765,9 +1262,13 @@ def coletar_fonte(db: Session, fonte: FonteAvaliacao,
     from app.core.database import bloquear_fonte_para_coleta
     bloquear_fonte_para_coleta(db, fonte.id)
     av = db.get(AvaliacaoExterna, fonte.avaliacao_id)
-    m = fonte.mapeamento or {}
+    original = fonte.mapeamento or {}
     try:
         conteudo = baixador(fonte.url)
+        # Confere o arquivo (colunas pelo nome no INEP, etapa, cabeçalho) ANTES de gravar
+        # e lê pelas colunas que ESTE arquivo tem (``conferir_arquivo_da_fonte``).
+        m, conferido = conferir_arquivo_da_fonte(conteudo, _nome_do_url(fonte.url), original,
+                                                 edicao=fonte.edicao)
         resumo = importar_resultados(
             db, conteudo, _nome_do_url(fonte.url),
             avaliacao_chave=av.chave, edicao=fonte.edicao,
@@ -778,12 +1279,22 @@ def coletar_fonte(db: Session, fonte: FonteAvaliacao,
             col_turma=m.get("col_turma"),
             etapa_fixa=m.get("etapa_fixa"), componente_fixo=m.get("componente_fixo"),
             escopo_escolas=None)  # global: casa qualquer escola da base por código INEP
+        if conferido and conferido != original.get("cabecalho"):
+            # A referência das próximas coletas (só depois de uma coleta que conferiu).
+            fonte.mapeamento = {**original, "cabecalho": conferido}
         # Persistido (e relido a cada listagem): contagem + amostra, como antes.
         resumo = resumo_para_auditoria(resumo)
         fonte.ultimo_status, fonte.ultimo_erro, fonte.ultimo_resumo = "ok", None, resumo
     except Exception as exc:  # noqa: BLE001 — nunca quebra: registra o erro
         fonte.ultimo_status = "erro"
-        fonte.ultimo_erro = f"{type(exc).__name__}: {exc}"[:300]
+        if isinstance(exc, (httpx.TransportError, OSError)):
+            # Falha de CONEXÃO: o painel recebe a mensagem única (o texto do erro de
+            # rede diria se a porta do destino existe); o detalhe fica no log.
+            logger.warning("Coleta da fonte de avaliação %s: falha de conexão (%s: %s)",
+                           fonte.id, type(exc).__name__, exc)
+            fonte.ultimo_erro = ERRO_CONEXAO_FONTE
+        else:
+            fonte.ultimo_erro = f"{type(exc).__name__}: {exc}"[:300]
         fonte.ultimo_resumo = {"erro": fonte.ultimo_erro}
     fonte.ultima_coleta = _agora()
     fonte.proxima_coleta = (_agora() + timedelta(days=30)) if fonte.cadencia == "mensal" else None

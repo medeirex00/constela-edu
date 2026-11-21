@@ -7,15 +7,18 @@ final "só do professor" (uma folha ou mais, conforme a turma): tabela nome →
 código da turma inteira e o roteiro da primeira aula (cartão perdido deixa de
 ser suporte).
 
-Mesmas restrições dos demais PDFs do projeto (services/relatorios.py):
-fontes nativas latin-1.
+Fontes nativas do fpdf2 (Helvetica/Courier), que o PDF declara em WinAnsi
+(cp1252): o texto é codificado em cp1252 — que tem o apóstrofo tipográfico
+(Sant’Anna), as aspas curvas, o travessão e as reticências — e o que ainda
+ficar de fora vira a letra sem o sinal antes de cair no '?' (_texto_pdf).
 """
 from __future__ import annotations
 
 import io
-from datetime import datetime, timezone
 
 from app.core.config import settings
+from app.core.tempo import agora_br
+from app.services import texto_pdf
 
 _LARGURA_CARTAO = 92.0
 _ALTURA_CARTAO = 64.0
@@ -24,8 +27,16 @@ _MARGEM_Y = 10.0
 _ESPACO = 4.0
 
 
-def _latin1(texto) -> str:
-    return str(texto).encode("latin-1", "replace").decode("latin-1")
+# A fonte única do texto para as fontes nativas em cp1252 (também a dos PDFs de
+# reserva dos relatórios): ``services.texto_pdf``.
+_CODIFICACAO = texto_pdf.CODIFICACAO
+_texto_pdf = texto_pdf.texto_pdf
+
+
+def _juntar(*partes: str) -> str:
+    """Partes do cabeçalho separadas por " - ", sem as vazias: o cartão individual
+    não tem turma e não pode sair com "ESCOLA -" nem "acesso -  - gerado em"."""
+    return " - ".join(p for p in partes if p and p.strip())
 
 
 def _hex_para_rgb(cor: str) -> tuple[int, int, int]:
@@ -57,6 +68,46 @@ def _endereco_app() -> str:
         "http://", "").rstrip("/")
 
 
+def _quebrar_em_linhas(pdf, texto: str, largura: float,
+                       max_linhas: int) -> list[str]:
+    """Quebra ``texto`` por palavra em até ``max_linhas`` linhas que cabem em
+    ``largura`` (na fonte atual). Palavra maior que a linha é cortada por letra; o
+    que sobrar depois da última linha vira "..." no fim dela."""
+    resto = texto.split()
+    linhas: list[str] = []
+    while resto and len(linhas) < max_linhas:
+        linha = resto.pop(0)
+        if pdf.get_string_width(linha) > largura:
+            corte = len(linha) - 1
+            while corte > 1 and pdf.get_string_width(linha[:corte]) > largura:
+                corte -= 1
+            resto.insert(0, linha[corte:])
+            linha = linha[:corte]
+        while resto and pdf.get_string_width(f"{linha} {resto[0]}") <= largura:
+            linha = f"{linha} {resto.pop(0)}"
+        linhas.append(linha)
+    if resto and linhas:
+        ultima = linhas[-1]
+        while len(ultima) > 1 and pdf.get_string_width(ultima.rstrip() + "...") > largura:
+            ultima = ultima[:-1]
+        linhas[-1] = ultima.rstrip() + "..."
+    return linhas
+
+
+def _nome_em_duas_linhas(pdf, nome: str, x: float, y: float,
+                         largura: float) -> None:
+    """Nome que não cabe numa linha nem a 7 pt: duas linhas, no maior tamanho
+    (de 9 a 7 pt) em que ele sai inteiro; a 7 pt, o que ainda sobrar vira "...".
+    Ocupa de ``y`` a ``y`` + 8 mm, acima do "Meu codigo magico:" (``y`` + 9,5)."""
+    pdf.set_font_size(9)
+    while (pdf.font_size_pt > 7
+           and _quebrar_em_linhas(pdf, nome, largura, 3)[2:]):
+        pdf.set_font_size(pdf.font_size_pt - 0.5)
+    for indice, linha in enumerate(_quebrar_em_linhas(pdf, nome, largura, 2)):
+        pdf.set_xy(x, y + indice * 4)
+        pdf.cell(largura, 4, linha)
+
+
 def _desenhar_cartao(pdf, x: float, y: float, escola_nome: str,
                      turma_nome: str, cor: str, cartao: dict) -> None:
     r, g, b = _hex_para_rgb(cor)
@@ -77,7 +128,7 @@ def _desenhar_cartao(pdf, x: float, y: float, escola_nome: str,
     pdf.cell(0, 5, "CONSTELA QUEST")
     pdf.set_font("helvetica", "", 7)
     pdf.set_xy(x + 3, y + 6.2)
-    pdf.cell(0, 3, _latin1(f"{escola_nome} - {turma_nome}"))
+    pdf.cell(0, 3, _texto_pdf(_juntar(escola_nome, turma_nome)))
 
     # QR à direita
     lado_qr = 26.0
@@ -91,14 +142,19 @@ def _desenhar_cartao(pdf, x: float, y: float, escola_nome: str,
 
     largura_texto = _LARGURA_CARTAO - lado_qr - 11
 
-    # Nome do aluno (encolhe até caber)
+    # Nome do aluno: encolhe até caber numa linha (até 7 pt). O fpdf2 não corta o
+    # texto que passa da célula: o que não cabe nem a 7 pt quebra em duas linhas e,
+    # se ainda sobrar, termina em "..." — nunca invade o QR à direita.
     pdf.set_text_color(30, 30, 30)
     pdf.set_font("helvetica", "B", 11)
-    nome = _latin1(cartao["nome"])
+    nome = _texto_pdf(cartao["nome"])
     while pdf.get_string_width(nome) > largura_texto and pdf.font_size_pt > 7:
         pdf.set_font_size(pdf.font_size_pt - 0.5)
-    pdf.set_xy(x + 3.5, y + 12.5)
-    pdf.cell(largura_texto, 5, nome)
+    if pdf.get_string_width(nome) <= largura_texto:
+        pdf.set_xy(x + 3.5, y + 12.5)
+        pdf.cell(largura_texto, 5, nome)
+    else:
+        _nome_em_duas_linhas(pdf, nome, x + 3.5, y + 12.5, largura_texto)
 
     # Código falável, o herói do cartão — bem grande
     pdf.set_font("helvetica", "", 8)
@@ -108,7 +164,7 @@ def _desenhar_cartao(pdf, x: float, y: float, escola_nome: str,
     pdf.set_font("courier", "B", 21)
     pdf.set_text_color(r, g, b)
     pdf.set_xy(x + 3.5, y + 27)
-    codigo = _latin1(cartao["codigo"])
+    codigo = _texto_pdf(cartao["codigo"])
     while pdf.get_string_width(codigo) > largura_texto and pdf.font_size_pt > 12:
         pdf.set_font_size(pdf.font_size_pt - 1)
     pdf.cell(largura_texto, 10, codigo)
@@ -117,14 +173,14 @@ def _desenhar_cartao(pdf, x: float, y: float, escola_nome: str,
     pdf.set_font("helvetica", "B", 8)
     pdf.set_text_color(60, 60, 60)
     pdf.set_xy(x + 3.5, y + 42)
-    pdf.cell(largura_texto, 4, _latin1(f"Jogue em casa: {_endereco_app()}"))
+    pdf.cell(largura_texto, 4, _texto_pdf(f"Jogue em casa: {_endereco_app()}"))
 
     # Rodapé
     pdf.set_font("helvetica", "I", 6.5)
     pdf.set_text_color(140, 140, 140)
     pdf.set_xy(x + 3.5, y + _ALTURA_CARTAO - 9)
     pdf.cell(_LARGURA_CARTAO - 8, 3.5,
-             _latin1(f"Apelido no jogo: {cartao['apelido']}"))
+             _texto_pdf(f"Apelido no jogo: {cartao['apelido']}"))
     pdf.set_xy(x + 3.5, y + _ALTURA_CARTAO - 5.5)
     pdf.cell(_LARGURA_CARTAO - 8, 3.5,
              "Guarde este cartao como um tesouro!")
@@ -151,10 +207,10 @@ def _folha_professor(pdf, escola_nome: str, turma_nome: str, cor: str,
     pdf.set_font("helvetica", "B", 13)
     pdf.set_xy(10, 5)
     titulo = "SO DO PROFESSOR - nao pendurar no mural"
-    pdf.cell(0, 6, _latin1(titulo + (" (continuacao)" if continuacao else "")))
+    pdf.cell(0, 6, _texto_pdf(titulo + (" (continuacao)" if continuacao else "")))
     pdf.set_font("helvetica", "", 9)
     pdf.set_xy(10, 12)
-    pdf.cell(0, 5, _latin1(f"{escola_nome} - {turma_nome} - códigos de acesso"))
+    pdf.cell(0, 5, _texto_pdf(_juntar(escola_nome, turma_nome, "códigos de acesso")))
     pdf.set_y(26)
     pdf.set_text_color(30, 30, 30)
 
@@ -164,7 +220,7 @@ def _cabecalho_tabela(pdf) -> None:
     pdf.set_font("helvetica", "B", 9)
     pdf.set_fill_color(238, 238, 238)
     pdf.cell(120, 7, "Aluno", border=1, fill=True)
-    pdf.cell(50, 7, _latin1("Código"), border=1, fill=True)
+    pdf.cell(50, 7, _texto_pdf("Código"), border=1, fill=True)
     pdf.ln()
     pdf.set_font("helvetica", "", 9)
 
@@ -183,12 +239,12 @@ def _pagina_professor(pdf, escola_nome: str, turma_nome: str, cor: str,
         if pdf.get_y() + _ALTURA_LINHA_TABELA > _LIMITE_INFERIOR:
             _folha_professor(pdf, escola_nome, turma_nome, cor, continuacao=True)
             _cabecalho_tabela(pdf)
-        nome = _latin1(cartao["nome"])
+        nome = _texto_pdf(cartao["nome"])
         while pdf.get_string_width(nome) > 116 and len(nome) > 4:
             nome = nome[:-4] + "..."
         pdf.cell(120, _ALTURA_LINHA_TABELA, nome, border=1)
         pdf.set_font("courier", "B", 10)
-        pdf.cell(50, _ALTURA_LINHA_TABELA, _latin1(cartao["codigo"]), border=1)
+        pdf.cell(50, _ALTURA_LINHA_TABELA, _texto_pdf(cartao["codigo"]), border=1)
         pdf.set_font("helvetica", "", 9)
         pdf.ln()
 
@@ -197,9 +253,10 @@ def _pagina_professor(pdf, escola_nome: str, turma_nome: str, cor: str,
         f"1. Abra {_endereco_app()} nos tablets (ou aponte a camera para o QR do cartao).",
         "2. Cada crianca digita o proprio codigo e confirma 'Sou eu!'. Na primeira vez,",
         "   ela escolhe como quer ser chamada e a cor do traje do astronauta.",
-        # Regenerar troca código E QR (o cartão traz os dois): é o que revoga.
+        # A ação do menu do aluno no painel da turma (TurmaDetalhe.tsx) regenera o
+        # cartão individual: troca código E QR (o cartão traz os dois), o que revoga.
         "3. Esqueceu o cartao? Consulte o codigo nesta folha. Perdeu ou caiu em maos erradas?",
-        "   Gere o cartao dela com 'regenerar': codigo e QR novos; os antigos param de entrar.",
+        "   Use 'Novo cartao do Quest' no menu do aluno, na turma: codigo e QR novos; os antigos param de entrar.",
     ]
     altura_roteiro = 4 + 7 + len(passos) * _ALTURA_LINHA_ROTEIRO
     if pdf.get_y() + altura_roteiro > _LIMITE_INFERIOR:
@@ -210,7 +267,7 @@ def _pagina_professor(pdf, escola_nome: str, turma_nome: str, cor: str,
     pdf.ln(7)
     pdf.set_font("helvetica", "", 9)
     for linha in passos:
-        pdf.cell(0, _ALTURA_LINHA_ROTEIRO, _latin1(linha))
+        pdf.cell(0, _ALTURA_LINHA_ROTEIRO, _texto_pdf(linha))
         pdf.ln()
 
 
@@ -221,6 +278,7 @@ def gerar_cartoes_pdf(escola_nome: str, cor: str, turma_nome: str,
     from fpdf import FPDF
 
     pdf = FPDF(orientation="P", unit="mm", format="A4")
+    pdf.core_fonts_encoding = _CODIFICACAO
     pdf.set_auto_page_break(auto=False)
 
     por_pagina = 8  # 2 colunas × 4 linhas
@@ -230,11 +288,12 @@ def gerar_cartoes_pdf(escola_nome: str, cor: str, turma_nome: str,
             pdf.add_page()
             pdf.set_font("helvetica", "", 7)
             pdf.set_text_color(150, 150, 150)
-            gerado = datetime.now(timezone.utc).strftime("%d/%m/%Y")
+            # Data de Brasília: das 21h à meia-noite o UTC já é o dia seguinte.
+            gerado = agora_br().strftime("%d/%m/%Y")
             pdf.set_xy(_MARGEM_X, 4)
-            pdf.cell(0, 4, _latin1(
-                f"Constela Quest - Cartoes de acesso - {turma_nome} - "
-                f"gerado em {gerado}"))
+            pdf.cell(0, 4, _texto_pdf(_juntar(
+                "Constela Quest", "Cartoes de acesso", turma_nome,
+                f"gerado em {gerado}")))
         coluna = posicao % 2
         linha = posicao // 2
         x = _MARGEM_X + coluna * (_LARGURA_CARTAO + _ESPACO)

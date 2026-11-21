@@ -15,6 +15,9 @@ import { AlertTriangle, UsersRound } from "lucide-react";
 import { useEffect, useState } from "react";
 
 import { ApiError, api } from "../lib/api";
+import {
+  type BimestrePremiacao, nomeBimestrePremiacao, type ResumoLeiturasRepetidas, textoBimestres,
+} from "./LeiturasRepetidas";
 import { estiloCheckbox } from "./PessoasUi";
 import { Botao, Carregando, Mensagem, Modal, Vazio } from "./ui";
 
@@ -41,6 +44,14 @@ interface Impacto {
   plataformas: string[];
 }
 type Confianca = "alta" | "provavel" | "revisar";
+/** O que a fusão faz com o Constela Quest do par (``alunos_fusao.plano_quest``):
+ *  fica o progresso e o cartão que a criança usa; as duas fichas com progresso,
+ *  o servidor recusa o par (``conflito``). ``texto`` já vem em português. */
+interface PlanoQuest {
+  tem_quest: boolean;
+  conflito: boolean;
+  texto: string | null;
+}
 interface CandidatoAluno {
   loser_id: number;
   manter_id: number;
@@ -48,8 +59,16 @@ interface CandidatoAluno {
   manter: string;
   turma: string;
   confianca: Confianca;
-  motivo: "nome_identico" | "subconjunto" | "abreviacao" | "variante";
+  /** `outro_ano`: uma das fichas não tem turma no ano ativo (a do ano anterior) e a
+   *  outra tem o mesmo RA, ou o mesmo nome e nascimento — sempre "revisar". */
+  motivo: "nome_identico" | "subconjunto" | "abreviacao" | "variante" | "outro_ano";
   impacto: Impacto;
+  /** Livros que estão nas duas fichas: fica a data do principal (A7). */
+  leituras?: ResumoLeiturasRepetidas;
+  quest?: PlanoQuest;
+  /** Por que o servidor vai recusar este par (contas diferentes da mesma plataforma,
+   *  ou as duas fichas com progresso no Constela Quest); null = não recusa. */
+  recusa?: string | null;
 }
 interface PreviaAlunos {
   candidatos: CandidatoAluno[];
@@ -87,10 +106,36 @@ function resumoImpacto(i: Impacto): string {
   return partes.length ? partes.join(" · ") : "sem dados vinculados";
 }
 
+/** Linha de aviso do par: só quando há livro repetido com data diferente. */
+function avisoLeituras(c: CandidatoAluno): string | null {
+  const l = c.leituras;
+  if (!l || l.com_data_diferente === 0) return null;
+  const base = `${l.com_data_diferente} livro(s) nas duas fichas com data diferente: fica a data de “${c.manter}”`;
+  return l.por_bimestre.length ? `${base}; deixam de contar ${textoBimestres(l)}.` : `${base}.`;
+}
+
+/** Soma do que os pares SELECIONADOS fazem com as datas (vai no painel de confirmação). */
+function somaLeituras(cands: CandidatoAluno[]) {
+  let diferentes = 0;
+  let noBimestre = 0;
+  let bimestre: BimestrePremiacao | null = null;
+  for (const c of cands) {
+    const l = c.leituras;
+    if (!l) continue;
+    diferentes += l.com_data_diferente;
+    noBimestre += l.no_bimestre ?? 0;
+    bimestre = bimestre ?? l.bimestre ?? null;
+  }
+  return { diferentes, noBimestre, bimestre };
+}
+
 function motivoTexto(c: CandidatoAluno): string {
   if (c.motivo === "nome_identico") return "nome idêntico, mesma turma";
   if (c.motivo === "abreviacao") return "nome abreviado do mais completo";
   if (c.motivo === "variante") return "variação de grafia do mesmo nome";
+  if (c.motivo === "outro_ano") {
+    return "mesmo RA ou mesmo nome e nascimento, e uma das fichas não tem turma neste ano";
+  }
   return "nome contido no nome mais completo";
 }
 
@@ -113,9 +158,11 @@ export default function ModalAlunosDuplicados({ escolaId, aoFechar, aoConcluir }
       .then((r) => {
         if (!vivo) return;
         setPrevia(r);
-        // "alta" já vem marcada; "revisar" DESMARCADA (o gestor confirma).
+        // "alta" já vem marcada; "revisar" DESMARCADA (o gestor confirma). O par
+        // que o servidor vai recusar (`recusa`) nunca vem marcado.
         setSelecionados(new Set(
-          r.candidatos.filter((c) => c.confianca === "alta").map((c) => c.loser_id)));
+          r.candidatos.filter((c) => c.confianca === "alta" && !c.recusa)
+            .map((c) => c.loser_id)));
       })
       .catch((e) => {
         if (vivo) setErro(e instanceof ApiError ? e.message : "Não foi possível carregar.");
@@ -249,6 +296,10 @@ export default function ModalAlunosDuplicados({ escolaId, aoFechar, aoConcluir }
   // CATCH-ALL: garante que nenhum "revisar" de motivo novo/desconhecido suma da
   // tela. Isto é só apresentação: não muda o que o backend sugere.
   const cands = previa?.candidatos ?? [];
+  const marcados = cands.filter((c) => selecionados.has(c.loser_id));
+  const datas = somaLeituras(marcados);
+  const recusados = marcados.filter((c) => c.recusa).length;
+  const questMovidos = marcados.some((c) => !c.recusa && c.quest?.tem_quest);
   const MOTIVOS_REV = ["variante", "nome_identico", "subconjunto", "abreviacao"];
   const especifica: {
     chave: string; rotulo: string; dica: string; lote: boolean; tom: TomFaixa;
@@ -369,7 +420,8 @@ export default function ModalAlunosDuplicados({ escolaId, aoFechar, aoConcluir }
 
           <div className="mt-4 max-h-[50vh] space-y-3 overflow-y-auto pr-1">
             {grupos.filter((g) => g.itens.length > 0).map((grupo) => {
-              const ids = grupo.itens.map((c) => c.loser_id);
+              // "Selecionar todos" deixa de fora o par que o servidor vai recusar.
+              const ids = grupo.itens.filter((c) => !c.recusa).map((c) => c.loser_id);
               const todosMarcados = ids.every((id) => selecionados.has(id));
               return (
               <div key={grupo.chave} className="rounded-2xl border border-zinc-200/80 p-3 dark:border-zinc-800">
@@ -424,6 +476,20 @@ export default function ModalAlunosDuplicados({ escolaId, aoFechar, aoConcluir }
                           <span className="mt-0.5 block text-xs text-zinc-500 dark:text-zinc-400">
                             Será movido: {resumoImpacto(c.impacto)}
                           </span>
+                          {avisoLeituras(c) && (
+                            <span className="mt-0.5 block text-xs font-medium text-amber-800 dark:text-amber-300">
+                              ⚠ {avisoLeituras(c)}
+                            </span>
+                          )}
+                          {c.recusa ? (
+                            <span className="mt-0.5 block text-xs font-medium text-amber-800 dark:text-amber-300">
+                              ⚠ {c.recusa}
+                            </span>
+                          ) : c.quest?.texto && (
+                            <span className="mt-0.5 block text-xs text-zinc-500 dark:text-zinc-400">
+                              {c.quest.texto}
+                            </span>
+                          )}
                         </span>
                       </label>
                     );
@@ -444,6 +510,29 @@ export default function ModalAlunosDuplicados({ escolaId, aoFechar, aoConcluir }
                   Isto vai fundir <strong>{selecionados.size}</strong> par(es) de cadastros
                   num único aluno cada. Os dados são consolidados no principal.
                   <strong> Esta ação é irreversível.</strong>
+                  {questMovidos && (
+                    <span className="mt-1 block">
+                      No Constela Quest, ficam o progresso e o cartão que a criança usa; o outro
+                      cartão deixa de entrar.
+                    </span>
+                  )}
+                  {recusados > 0 && (
+                    <span className="mt-1 block">
+                      {recusados} par(es) marcado(s) não será(ão) unido(s): o motivo está
+                      escrito em cada um.
+                    </span>
+                  )}
+                  {datas.diferentes > 0 && (
+                    <span className="mt-1 block">
+                      Nos pares marcados, {datas.diferentes} livro(s) estão nas duas fichas com data
+                      diferente: fica sempre a data do cadastro principal
+                      {datas.bimestre && datas.noBimestre > 0
+                        ? `, e ${datas.noBimestre} deixa(m) de contar no ${nomeBimestrePremiacao(datas.bimestre)}`
+                        : ""}
+                      . Para manter a outra data, desmarque o par e faça a fusão pela ficha do aluno
+                      (⋮ › Fundir com outro aluno), escolhendo a ficha principal.
+                    </span>
+                  )}
                   {selecionados.size > TAM_LOTE && (
                     <span className="mt-1 block text-xs font-normal">
                       Vou enviar em lotes de {TAM_LOTE} para não travar — pode levar alguns

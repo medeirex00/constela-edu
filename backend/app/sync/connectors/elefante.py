@@ -21,7 +21,7 @@ import json
 import re
 from datetime import datetime, timezone
 
-from app.services.importacao import _int_api, student_id_elefante
+from app.services.importacao import _data_iso_elefante, _int_api, student_id_elefante
 from app.sync import escola_externa, fuso
 from app.sync.connectors.base import (
     ConectorNavegador,
@@ -35,6 +35,7 @@ from app.sync.connectors.base import (
 )
 from app.sync.connectors.navegador import Navegador
 from app.sync.interfaces import (
+    AJUSTE_DA_COLETA,
     ArquivoObtido,
     Contexto,
     Credenciais,
@@ -46,6 +47,27 @@ from app.sync.interfaces import (
 def _assinatura_aluno_resumo(al: dict) -> tuple:
     return tuple(al.get(c) for c in ("studentName", "totalBooksRead", "qtdBooksRead",
                                      "totalReadTime", "responses", "approvedResponses"))
+
+
+def _campos_sumidos_do_livro(b: dict) -> list[str]:
+    """Os campos de que a leitura datada depende (título e data) que SUMIRAM deste
+    livro da resposta do ``overall-student-books-read``: a chave não veio, ou veio
+    com um valor que não se lê (a data que o importador não interpreta, um objeto no
+    lugar do texto). Nulo ou vazio EXPLÍCITO é "sem dado" — a linha é descartada e
+    contada como sempre — e não entra aqui: a mesma regra de
+    ``Analise.campos_sumidos`` do relatório de turma. Em TODOS os livros de uma turma
+    é o sinal de que o formato da resposta mudou (campo renomeado na API)."""
+    sumidos: list[str] = []
+    titulo = b.get("bookTitle")
+    if "bookTitle" not in b or isinstance(titulo, (dict, list)):
+        sumidos.append("título")
+    bruto = b.get("lastReadWhen")
+    if "lastReadWhen" not in b or (
+            bruto is not None and str(bruto).strip() != ""
+            and (isinstance(bruto, (dict, list)) or not _data_iso_elefante(
+                fuso.instante_para_horario_local(bruto)[0]))):
+        sumidos.append("data")
+    return sumidos
 
 
 def _separar_ids_em_varias_turmas(arquivos: list, contexto, log) -> list:
@@ -238,18 +260,31 @@ _JS_FETCH_TMPL = r"""(async () => {
   } finally { clearTimeout(tid); }
 })()"""
 
-# LOTE: chama o MESMO endpoint POST para vários studentIds de uma vez (o navegador
-# limita ~6 conexões simultâneas por host — throttle natural). Usado p/ coletar os
-# livros lidos (com data) de todos os alunos de uma turma numa só ida. Devolve
-# [{studentId, n, books}] (ou status/erro por aluno).
+# LOTE: chama o MESMO endpoint POST para vários studentIds numa só ida ao
+# navegador. Usado p/ coletar os livros lidos (com data) de todos os alunos de uma
+# turma. Devolve [{studentId, n, books}] (ou status/erro por aluno).
+#
+# POOL de ``_LOTE_CONEXOES`` pedidos ao mesmo tempo (o navegador abre ~6 conexões
+# por host em HTTP/1.1) e o prazo de cada um conta a partir de quando ELE SAI. Antes
+# todos os pedidos eram criados de uma vez, com o timer já correndo: os que
+# esperavam conexão na fila do navegador gastavam o prazo parados, e os últimos de
+# uma turma grande eram abortados sem nem terem saído (o aluno ficava sem livros e
+# sem cursor, e a próxima coleta repetia o mesmo).
+# CUSTO no pior caso (plataforma que aceita a conexão e não responde): o lote leva
+# ceil(N / _LOTE_CONEXOES) prazos, não ~1 — 40 alunos, ~140 s por turma (antes ~20 s).
+# Não há prazo total por lote de propósito: escolhê-lo exige a latência e o protocolo
+# reais do Elefante (docs/operacao/COLETA-PLATAFORMAS.md §2.2).
+_LOTE_CONEXOES = 6
+_LOTE_PRAZO_MS = 20000
 _JS_FETCH_LOTE = r"""(async () => {
   const ids = __IDS__, corpoBase = __CORPO__, headers0 = __HEADERS__;
   const out = [];
-  await Promise.all(ids.map(async (sid) => {
-    // timeout por requisição (AbortController): um aluno travado NÃO pode segurar
-    // o Promise.all (e a sync) para sempre.
+  let proximo = 0;
+  async function pedir(sid) {
+    // timeout por requisição (AbortController), criado quando o pedido SAI: um
+    // aluno travado NÃO pode segurar o lote (e a sync) para sempre.
     const ctrl = new AbortController();
-    const tid = setTimeout(() => ctrl.abort(), 20000);
+    const tid = setTimeout(() => ctrl.abort(), __PRAZO_MS__);
     try {
       const body = Object.assign({}, corpoBase, { studentId: sid });
       const r = await fetch(__URL__, { method: 'POST', credentials: __CREDS__,
@@ -261,7 +296,12 @@ _JS_FETCH_LOTE = r"""(async () => {
       out.push({ studentId: sid, n: Array.isArray(j) ? j.length : 0, books: j });
     } catch (e) { out.push({ studentId: sid, erro: String(e).slice(0, 80) }); }
     finally { clearTimeout(tid); }
-  }));
+  }
+  async function trabalhador() {
+    while (proximo < ids.length) { await pedir(ids[proximo++]); }
+  }
+  const n = Math.min(__POOL__, ids.length);
+  await Promise.all(Array.from({ length: n }, trabalhador));
   return out;
 })()"""
 
@@ -536,9 +576,12 @@ class ConectorElefante(ConectorNavegador):
     @staticmethod
     def _js_fetch_lote(url: str, headers: dict, creds: str, corpo_base: dict,
                        ids: list) -> str:
-        """Fetch em LOTE: um POST por studentId (concorrente), corpo = corpo_base +
+        """Fetch em LOTE: um POST por studentId (no máximo ``_LOTE_CONEXOES`` ao
+        mesmo tempo, prazo contado da saída de cada um), corpo = corpo_base +
         {studentId}. Devolve [{studentId, n, books|status|erro}]."""
         return (_JS_FETCH_LOTE
+                .replace("__POOL__", str(int(_LOTE_CONEXOES)))
+                .replace("__PRAZO_MS__", str(int(_LOTE_PRAZO_MS)))
                 .replace("__URL__", json.dumps(url))
                 .replace("__HEADERS__", json.dumps(headers))
                 .replace("__CREDS__", json.dumps(creds))
@@ -1157,9 +1200,10 @@ class ConectorElefante(ConectorNavegador):
                         "enxerga as turmas.", codigo="sem_acesso_ao_dado", recuperavel=False)
                 if not diag.get("lista_vazia_2xx"):
                     raise ErroConector(
-                        "A lista de turmas do Elefante respondeu fora do formato conhecido "
-                        "(não veio a lista de turmas) — a API pode ter mudado. Verifique o "
-                        "conector.", codigo="parser_incompativel", recuperavel=False)
+                        "A lista de turmas do Elefante respondeu num formato que o "
+                        "Constela não reconhece (a plataforma pode ter mudado a resposta). "
+                        f"Avise o suporte: {AJUSTE_DA_COLETA}.",
+                        codigo="parser_incompativel", recuperavel=False)
                 if alvo is None:
                     # 2xx sem turma e sem nenhuma escola identificável: não dá para
                     # dizer de QUAL escola é o "sem dados" (levanta).
@@ -1336,6 +1380,9 @@ class ConectorElefante(ConectorNavegador):
                     leituras: list[dict] = []
                     datas_com_fuso = 0
                     livros_sem_titulo = 0
+                    livros_recebidos = 0          # livros (objetos) que chegaram
+                    livros_com_campo_sumido = 0   # ... sem título ou data por formato
+                    campos_sumidos: set[str] = set()
                     entregues: set[str] = set()   # alunos cujos livros CHEGARAM
                     falhos: set[str] = set()      # alunos cujo pedido de livros FALHOU
                     for item in (lote or []):
@@ -1362,6 +1409,12 @@ class ConectorElefante(ConectorNavegador):
                             continue
                         entregues.add(sid)
                         for b in livros:
+                            if isinstance(b, dict):
+                                livros_recebidos += 1
+                                sumidos_b = _campos_sumidos_do_livro(b)
+                                if sumidos_b:
+                                    livros_com_campo_sumido += 1
+                                    campos_sumidos.update(sumidos_b)
                             if isinstance(b, dict) and not b.get("bookTitle"):
                                 livros_sem_titulo += 1
                             if isinstance(b, dict) and b.get("bookTitle"):
@@ -1393,12 +1446,33 @@ class ConectorElefante(ConectorNavegador):
                                 if id_livro is not None:
                                     item_l["bookId"] = id_livro
                                 leituras.append(item_l)
+                    # FORMATO QUE MUDOU: o título ou a data SUMIU (chave renomeada,
+                    # valor que não se lê) de TODOS os livros desta turma. Não é linha
+                    # com defeito de passagem — nenhuma leitura daria para gravar, e
+                    # avançar o cursor perderia o livro novo de quem leu: a próxima
+                    # coleta veria o mesmo total e não pediria os livros dele. É a
+                    # falha da unidade com o código de formato (alerta crítico
+                    # "Formato do relatório mudou", coleta fora do "em dia"), como a
+                    # resposta dos livros que não é lista; o cursor desses alunos
+                    # não avança. Nulo explícito é "sem dado" e segue a regra de
+                    # sempre (linha descartada contada).
+                    formato_mudou = bool(livros_recebidos) and (
+                        livros_com_campo_sumido == livros_recebidos)
+                    if formato_mudou:
+                        log("download", "warn",
+                            f"[Elefante] turma {cid}: os livros vieram sem "
+                            f"{' e '.join(sorted(campos_sumidos, reverse=True))} em todas "
+                            f"as {livros_recebidos} linha(s) (o formato da resposta "
+                            f"mudou) — leituras de {len(entregues)} aluno(s) NÃO "
+                            "importadas; o cursor deles não avança.")
+                        registrar_falha_coleta(contexto, "lote", cid, "parser_incompativel")
+                        leituras, livros_sem_titulo, datas_com_fuso = [], 0, 0
                     # O CURSOR AVANÇA SÓ APÓS SUCESSO: quem teve os livros entregues
                     # nesta sync recebe o novo total; quem falhou (lote inteiro
                     # falhou, ou o aluno veio sem `books`) fica SEM cursor novo → a
                     # próxima sync o busca de novo. (O serviço ainda desfaz o
                     # cursor de quem o `confirmar` não conseguiu vincular.)
-                    if novos is not None:
+                    if novos is not None and not formato_mudou:
                         for s in entregues:
                             if s in totais_vistos:      # total ilegível: sem cursor novo
                                 novos[s] = totais_vistos[s]

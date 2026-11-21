@@ -14,12 +14,18 @@ APAGADO (é dado da criança e não sustenta nenhuma obrigação):
     (plataforma + id externo) ou com o nome dela quando nenhuma outra criança da
     escola tem o mesmo nome (com homônimo vivo, o nome também é do outro: fica);
   * o arquivo original de um relatório INDIVIDUAL dela (o nome do arquivo traz o
-    nome dela) e todas as cópias em /exports (não dá para saber quais trazem o
+    nome dela) e todas as cópias de relatórios em /exports (não dá para saber quais trazem o
     nome; o download nunca depende delas) — os dois só DEPOIS do commit: se a
     exclusão reverter, nenhum arquivo some. O original só sai se for um arquivo
     que o servidor gravou para ESTA escola (nenhuma importação de outra escola
     aponta para ele) e que não traz dado de criança que continua;
-  * as conversas da IA que citam o nome (``conversas_ia_que_citam``).
+  * as conversas da IA que citam o nome (``conversas_ia_que_citam``);
+  * a conta dela no cursor da coleta incremental (``configuracoes``, namespace
+    ``sync_incremental``: ``{id da conta na plataforma: total}``), que saía também
+    no backup da escola (``_tirar_do_cursor_da_sincronizacao``); a conta marcada
+    como esquecida que volta ao cursor pela coleta seguinte ou pela restauração de
+    um backup anterior sai por ``tirar_contas_esquecidas_do_cursor``, que a
+    sincronização (bloco do cursor) e a restauração (``backup.restaurar``) chamam.
 ANONIMIZADO (o nome vira ``[removido]``; o resto do registro fica):
   * revisão de OUTRA criança que a listava como candidata: a candidata excluída
     sai da lista, o nome dela some dos dados;
@@ -35,28 +41,54 @@ nome — de uma criança que continua na escola. Excluir "Joao Pedro Silva" não
 mexe em "Joao Pedro Silva Testelli" (viva), nem no homônimo vivo "Joao Pedro
 Silva": o texto não prova ser da excluída, e apagar destrói o dado de quem não
 pediu esquecimento.
+FICHAS ABSORVIDAS POR FUSÃO (``fichas_absorvidas``): são a mesma criança. Tudo acima
+vale também para o nome que ela tinha nelas (o do stub da importação ou da coleta,
+"ANA B. SOUZA"), salvo quando esse nome é também o nome — ou parte do nome — de quem
+fica (``nomes_absorvidos_que_contam``, a mesma regra do log); e a candidata de
+revisão que é a ficha absorvida sai da lista, como a da excluída.
 FICA POR OBRIGAÇÃO DE AUDITORIA, SEM NOME: o log de auditoria (o id vira referência
 anônima; inclusive o ``aluno.excluido_permanente``), o registro de cada importação
 (quem, quando, quantos) e o histórico das sincronizações.
 
+MARCA DE ESQUECIMENTO DAS CONTAS (``contas_da_crianca``, ``marcas_para_o_log``): a
+conta da criança no Matific ou no Elefante Letrado continua existindo lá, e a coleta
+seguinte a manda de novo. Sem memória, era uma conta desconhecida: com a política
+padrão a ficha voltava inteira (nome, conta, retrato, ranking); com "bloquear", o
+nome voltava para a fila de revisões e para o log. Por isso a exclusão permanente
+grava no ``aluno.excluido_permanente`` de cada criança (preservado do expurgo,
+``audit.ACOES_PRESERVADAS``) a MARCA de cada conta dela — a vinculada à ficha e a da
+revisão que prova ser dela; a pendência que só tem o nome dela (pode ser de uma
+homônima ainda sem ficha) não marca: a plataforma e o HMAC-SHA256
+do id externo com a chave do servidor — nem o nome nem o id em claro. A porta única
+de identidade (``identidade_aluno.decidir``) ignora a linha de conta marcada antes
+de qualquer outro passo. Linha SEM conta (relatório ou planilha só com o nome) não
+tem como ser reconhecida: a tela avisa.
+
 FORA DO ALCANCE DESTE CÓDIGO (docs/lgpd/RETENCAO-TECNICA.md): backups já feitos,
 originais de relatório de TURMA (várias crianças no mesmo arquivo), prévias não
-confirmadas em uploads/temporarios (expiram sozinhas), logs da aplicação/Sentry,
-cópias fora do sistema e a plataforma de origem, que continua mandando o nome.
+confirmadas em uploads/temporarios (expiram em 24 h: o expurgo de fundo,
+app/core/expurgo_arquivos.py, as apaga em até 25 h, no boot e a cada hora), logs da
+aplicação/Sentry,
+cópias fora do sistema e a plataforma de origem, onde a conta continua ativa até ser
+encerrada lá (o Constela só passa a ignorá-la).
 
 Nada aqui commita: o chamador fecha a transação.
 """
 from __future__ import annotations
 
+import hashlib
+import hmac
 import logging
 import re
 import unicodedata
+from collections.abc import Callable
 from pathlib import Path
 
 from sqlalchemy import event, select
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
+from app.core.security import segredos_da_cifra
 
 logger = logging.getLogger("constela.exclusao")
 
@@ -176,6 +208,20 @@ class NomesAlvo:
 # Revisões de identidade
 # ---------------------------------------------------------------------------
 
+def _revisao_dela(rev, ids: set[int], identidades: set[tuple[str, str]],
+                  alvos: NomesAlvo) -> bool:
+    """A revisão é da criança excluída: resolvida para ela, da conta dela ou, sem
+    ficha escolhida, com o nome dela — este só quando nenhum homônimo continua
+    (``e_o_nome`` já exclui o nome de quem fica: com homônimo vivo, o nome não
+    prova ser dela). Esta regra APAGA a revisão (``_esquecer_revisoes``: ela guarda
+    o nome dela). A marca da conta (``contas_da_crianca``) exige mais: o nome
+    sozinho não prova de quem é a conta (``_donas_pela_pendencia``)."""
+    return (rev.aluno_escolhido_id in ids
+            or (rev.plataforma, rev.id_externo or "") in identidades
+            or (rev.aluno_escolhido_id is None
+                and alvos.e_o_nome(rev.nome_recebido or "")))
+
+
 def _esquecer_revisoes(db: Session, escola_id: int, ids: set[int], vivos_ids: set[int],
                        alvos: NomesAlvo,
                        identidades: set[tuple[str, str]]) -> dict[str, int]:
@@ -184,13 +230,7 @@ def _esquecer_revisoes(db: Session, escola_id: int, ids: set[int], vivos_ids: se
     apagadas = anonimizadas = 0
     for rev in db.execute(select(RevisaoIdentidade)
                           .where(RevisaoIdentidade.escola_id == escola_id)).scalars().all():
-        # Pelo nome só quando nenhum homônimo continua (``e_o_nome`` já exclui o
-        # nome de quem fica: com homônimo vivo, o nome não prova ser dela).
-        dela = (rev.aluno_escolhido_id in ids
-                or (rev.plataforma, rev.id_externo or "") in identidades
-                or (rev.aluno_escolhido_id is None
-                    and alvos.e_o_nome(rev.nome_recebido or "")))
-        if dela:
+        if _revisao_dela(rev, ids, identidades, alvos):
             db.delete(rev)
             apagadas += 1
             continue
@@ -337,11 +377,13 @@ def _esquecer_originais_individuais(
 
 
 def _copias_em_exports() -> list[Path]:
+    from app.core.expurgo_arquivos import NOME_DA_COPIA
+
     pasta = settings.EXPORTS_DIR
     try:
         if not pasta.exists():
             return []
-        return [a for a in pasta.iterdir() if a.is_file() and not a.name.startswith(".")]
+        return [a for a in pasta.iterdir() if NOME_DA_COPIA.fullmatch(a.name) and a.is_file()]
     except OSError:
         return []
 
@@ -424,16 +466,116 @@ def apagar_arquivos_apos_commit(db: Session, caminhos: list[Path],
 
 
 # ---------------------------------------------------------------------------
+# Cursor da coleta incremental
+# ---------------------------------------------------------------------------
+
+# O namespace do cursor (``app/sync/service._NS_INCREMENTAL``): uma linha por escola
+# e plataforma, ``{id da conta na plataforma: total}`` — no Elefante, ``{studentId:
+# totalBooksRead}``. Guarda o id da conta da criança, e o backup leva a linha inteira.
+NAMESPACE_CURSOR_DA_SINCRONIZACAO = "sync_incremental"
+
+
+def _tirar_do_cursor(db: Session, escola_id: int, plataformas: set[str],
+                     sai: Callable[[str, str], bool]) -> int:
+    """Tira do cursor de ``escola_id`` (só as linhas das ``plataformas``) cada conta
+    para a qual ``sai(plataforma, id da conta)`` é verdadeiro, reatribuindo o dict;
+    as demais ficam com os totais. Devolve quantas contas saíram."""
+    from app.models import Configuracao
+
+    if not plataformas:
+        return 0
+    tiradas = 0
+    for linha in db.execute(select(Configuracao).where(
+            Configuracao.escola_id == escola_id,
+            Configuracao.namespace == NAMESPACE_CURSOR_DA_SINCRONIZACAO,
+            Configuracao.chave.in_(sorted(plataformas)))).scalars():
+        if not isinstance(linha.valor, dict):
+            continue
+        fica = {chave: total for chave, total in linha.valor.items()
+                if not sai(linha.chave, str(chave).strip())}
+        if len(fica) != len(linha.valor):
+            tiradas += len(linha.valor) - len(fica)
+            linha.valor = fica   # reatribui → o JSON é regravado
+    return tiradas
+
+
+def _tirar_do_cursor_da_sincronizacao(db: Session, escola_id: int,
+                                      identidades: set[tuple[str, str]]) -> int:
+    """Tira do cursor da coleta incremental de ``escola_id`` as contas
+    ``identidades`` ({(plataforma, id externo)}) da criança. Sem a conta no cursor,
+    a coleta seguinte só a busca inteira (é o que faz com conta nova) — nunca
+    perde nem duplica nada. Devolve quantas contas saíram."""
+    contas: dict[str, set[str]] = {}
+    for plataforma, id_externo in identidades:
+        if plataforma and str(id_externo or "").strip():
+            contas.setdefault(plataforma, set()).add(str(id_externo).strip())
+    return _tirar_do_cursor(db, escola_id, set(contas),
+                            lambda plataforma, conta: conta in contas[plataforma])
+
+
+def tirar_contas_esquecidas_do_cursor(db: Session, escola_id: int, *,
+                                      todas_as_escolas: bool = False) -> int:
+    """Tira do cursor da coleta incremental de ``escola_id`` toda conta marcada como
+    esquecida (``marcas_esquecidas``). A exclusão já a tirou
+    (``_tirar_do_cursor_da_sincronizacao``), mas ela VOLTA ao cursor por dois caminhos,
+    sem a ficha (REV3-LGPD-1):
+
+    * a coleta seguinte: a plataforma continua mandando a conta e a porta de
+      identidade a ignora, mas o conector a conta em ``contadores_novos`` e
+      ``sync.service._salvar_contadores`` faz MERGE com o cursor gravado. A
+      sincronização deve chamar isto DEPOIS de ``_salvar_contadores``: tirar a conta
+      só de ``contadores_novos`` não basta, o merge manteria o id que uma restauração
+      devolveu ao cursor gravado;
+    * a restauração de um backup gerado antes da exclusão: o cursor volta do arquivo.
+      ``backup.restaurar`` deve chamar isto depois de recriar as configurações, com
+      ``todas_as_escolas``: o arquivo pode ser de OUTRA escola e a marca fica no log da
+      escola que excluiu (como a ficha, que não volta pela exclusão feita em qualquer
+      escola: ``backup._excluidos_depois_do_backup``).
+
+    A sincronização confere só as marcas da própria escola, a regra da porta de
+    identidade. Tirar uma conta do cursor nunca perde dado: a coleta seguinte só a
+    busca inteira, como conta nova (e a porta de identidade a ignora). Sem marca, nem
+    lê o cursor. Não commita; devolve quantas contas saíram."""
+    marcas = _marcas_no_log(db, None if todas_as_escolas else escola_id)
+    return _tirar_do_cursor(
+        db, escola_id, {plataforma for plataforma, _ in marcas},
+        lambda plataforma, conta: conta_esquecida(marcas, plataforma, conta))
+
+
+# ---------------------------------------------------------------------------
 # Ponto de entrada
 # ---------------------------------------------------------------------------
 
+def nomes_absorvidos_que_contam(absorvidas: dict[int, set[str]] | None,
+                                vivos) -> list[str]:
+    """Os nomes das fichas absorvidas (``fichas_absorvidas``) que entram como nome
+    da criança excluída: só os que NÃO são também o nome — ou parte do nome — de
+    uma criança que continua na escola (``vivos``). O nome do stub é muitas vezes
+    abreviado ("ANA SOUZA") e, contido no nome de quem fica ("Ana Souza Lima"), não
+    prova ser dela. A mesma regra do log (``_anonimizar_logs_do_aluno``)."""
+    nomes = {n for ns in (absorvidas or {}).values() for n in ns if n and _palavras(n)}
+    if not nomes:
+        return []
+    vivas = [s.split() for s in {_chave(v) for v in vivos if v and _palavras(v)}]
+    return sorted(n for n in nomes
+                  if not any(_ocorrencias([_chave(n).split()], viva) for viva in vivas))
+
+
 def esquecer_fora_do_cadastro(db: Session, escola_id: int, nomes: dict[int, str],
-                              identidades: set[tuple[str, str]]) -> dict[str, int]:
+                              identidades: set[tuple[str, str]],
+                              absorvidas: dict[int, set[str]] | None = None
+                              ) -> dict[str, int]:
     """Fecha as lacunas listadas no cabeçalho para as crianças ``nomes``
     ({aluno_id: nome}) de ``escola_id``. ``identidades`` = {(plataforma,
     id_externo)} delas, lidas ANTES de apagar ``identidades_externas``. Chamar
     ANTES do DELETE em ``alunos`` (a revisão resolvida para ela ainda aponta o id).
-    Não commita; os arquivos somem no commit. Devolve as contagens (sem nome)."""
+    Não commita; os arquivos somem no commit. Devolve as contagens (sem nome).
+
+    ``absorvidas`` ({id: {nomes}}, de ``fichas_absorvidas``, lidas ANTES de
+    anonimizar o log, que é de onde vêm os nomes): as fichas que elas absorveram
+    por fusão são ELAS. Os ids delas contam nas revisões (a candidata que é a
+    ficha absorvida sai da lista) e os nomes delas são procurados como os delas
+    (``nomes_absorvidos_que_contam``)."""
     from app.models import Aluno
 
     ids = set(nomes)
@@ -442,7 +584,10 @@ def esquecer_fora_do_cadastro(db: Session, escola_id: int, nomes: dict[int, str]
     # ids também: a candidata de revisão só é "de quem fica" se a ficha existe.
     vivos = dict(db.execute(select(Aluno.id, Aluno.nome).where(
         Aluno.escola_id == escola_id, Aluno.id.not_in(list(ids)))).all())
-    alvos = NomesAlvo(nomes.values(), preservar=vivos.values())
+    alvos = NomesAlvo([*nomes.values(),
+                       *nomes_absorvidos_que_contam(absorvidas, vivos.values())],
+                      preservar=vivos.values())
+    ids |= set(absorvidas or {})
     contagens = _esquecer_revisoes(db, escola_id, ids, set(vivos), alvos, identidades)
     contagens["mensagens_sync_redigidas"] = (
         _redigir_mensagens_de_sync(db, escola_id, alvos) if alvos else 0)
@@ -450,6 +595,8 @@ def esquecer_fora_do_cadastro(db: Session, escola_id: int, nomes: dict[int, str]
         _esquecer_originais_individuais(db, escola_id, alvos, ids)
         if alvos else (0, [], []))
     contagens["importacoes_redigidas"] = redigidas
+    contagens["contas_tiradas_do_cursor"] = _tirar_do_cursor_da_sincronizacao(
+        db, escola_id, identidades)
     copias = _copias_em_exports()
     contagens["arquivos_a_apagar"] = len(originais) + len(copias)
     if renomear:
@@ -459,9 +606,63 @@ def esquecer_fora_do_cadastro(db: Session, escola_id: int, nomes: dict[int, str]
     return contagens
 
 
-def conversas_ia_que_citam(db: Session, escola_id: int, nomes: dict[int, str]) -> set[int]:
+def fichas_absorvidas(db: Session, escola_id: int, aluno_ids) -> dict[int, set[str]]:
+    """As fichas que ``aluno_ids`` absorveram por FUSÃO — direta ou em cadeia —,
+    com os nomes que elas tinham: ``{id da absorvida: {nomes}}``.
+
+    É a MESMA criança. As entradas antigas dessas fichas no log (o
+    ``aluno.criado_auto`` do stub da importação, a fusão em que elas absorveram
+    outra) ficam com o id DELAS, e a foto pré-fusão da absorvida (nascimento,
+    observações, foto) fica na entrada da fusão. Sem isto, o esquecimento não as
+    alcança. A fonte é o próprio log ``aluno.fundido`` da escola
+    (``mantido.id`` ← ``removido.id``): a ficha absorvida já não existe.
+
+    Id que hoje é de uma ficha VIVA fica de fora: a absorvida foi apagada, então o
+    id em uso é de outra criança (reaproveitamento de id)."""
+    from app.models import Aluno, LogAuditoria
+
+    filhos: dict[int, list[tuple[int, set[str]]]] = {}
+    for entidade_id, detalhes in db.execute(
+        select(LogAuditoria.entidade_id, LogAuditoria.detalhes).where(
+            LogAuditoria.escola_id == escola_id, LogAuditoria.acao == "aluno.fundido")
+        .execution_options(yield_per=500)
+    ):
+        detalhes = detalhes if isinstance(detalhes, dict) else {}
+        mantido = (detalhes.get("mantido") or {}).get("id", entidade_id)
+        removido = detalhes.get("removido") or {}
+        foto = detalhes.get("foto_pre_fusao") or {}
+        if not isinstance(mantido, int) or not isinstance(removido.get("id"), int):
+            continue
+        nomes = {n for n in (removido.get("nome"), foto.get("nome"))
+                 if isinstance(n, str) and n.strip() and n != MARCA_REMOVIDO}
+        filhos.setdefault(mantido, []).append((removido["id"], nomes))
+
+    removidos = {filho for lista in filhos.values() for filho, _ in lista}
+    # Nem entra nem é percorrida: as fusões gravadas com esse id podem ser da
+    # criança viva que o reaproveitou.
+    vivas = set(db.execute(select(Aluno.id).where(
+        Aluno.id.in_(list(removidos)))).scalars()) if removidos else set()
+    alvos = set(aluno_ids)
+    achadas: dict[int, set[str]] = {}
+    pilha = list(alvos)
+    while pilha:
+        for filho, nomes in filhos.get(pilha.pop(), ()):
+            if filho in alvos or filho in vivas:
+                continue
+            if filho not in achadas:
+                pilha.append(filho)
+            achadas.setdefault(filho, set()).update(nomes)
+    return achadas
+
+
+def conversas_ia_que_citam(db: Session, escola_id: int, nomes: dict[int, str],
+                           absorvidas: dict[int, set[str]] | None = None) -> set[int]:
     """Ids das conversas da IA de ``escola_id`` que citam alguma das crianças
     ``nomes`` ({aluno_id: nome}) — o direito ao esquecimento APAGA a conversa.
+    Também pelo nome das fichas que elas absorveram por fusão (``absorvidas``, de
+    ``fichas_absorvidas``): enquanto o stub existia, o assistente o citava por ele.
+    Esse nome só conta quando não é também o nome — ou parte do nome — de quem
+    fica (``nomes_absorvidos_que_contam``; nele, nem o homônimo exato apaga).
 
     Antes era ``conteudo ILIKE %nome%``: excluir "Joao Pedro Silva" apagava a
     conversa sobre "Joao Pedro Silva Testelli", que continua na escola, e "Ana"
@@ -477,13 +678,14 @@ def conversas_ia_que_citam(db: Session, escola_id: int, nomes: dict[int, str]) -
     from app.models import Aluno, ConversaIA, MensagemIA
 
     ids = set(nomes)
-    chaves = {_chave(n) for n in nomes.values() if n and _palavras(n)}
-    maiores_vivos = [n for n in db.execute(select(Aluno.nome).where(
-        Aluno.escola_id == escola_id, Aluno.id.not_in(list(ids)))).scalars()
-        if _chave(n or "") not in chaves]
-    alvos = NomesAlvo(nomes.values(), preservar=maiores_vivos, palavra_unica=True)
+    vivos = [n for n in db.execute(select(Aluno.nome).where(
+        Aluno.escola_id == escola_id, Aluno.id.not_in(list(ids)))).scalars() if n]
+    procurados = [*nomes.values(), *nomes_absorvidos_que_contam(absorvidas, vivos)]
+    chaves = {_chave(n) for n in procurados if n and _palavras(n)}
+    maiores_vivos = [n for n in vivos if _chave(n) not in chaves]
+    alvos = NomesAlvo(procurados, preservar=maiores_vivos, palavra_unica=True)
     achadas: set[int] = set()
-    for nome in sorted({n.strip() for n in nomes.values() if n and n.strip()}):
+    for nome in sorted({n.strip() for n in procurados if n and n.strip()}):
         for conversa_id, conteudo in db.execute(
                 select(MensagemIA.conversa_id, MensagemIA.conteudo)
                 .join(ConversaIA, ConversaIA.id == MensagemIA.conversa_id)
@@ -493,3 +695,163 @@ def conversas_ia_que_citam(db: Session, escola_id: int, nomes: dict[int, str]) -
             if conversa_id not in achadas and alvos.cita(conteudo):
                 achadas.add(conversa_id)
     return achadas
+
+
+# ---------------------------------------------------------------------------
+# Marca de esquecimento das contas da plataforma
+# ---------------------------------------------------------------------------
+
+# A entrada do log que leva as marcas (uma por criança excluída de vez: preservada do
+# expurgo, ``audit.ACOES_PRESERVADAS``) e a chave delas em ``detalhes``.
+ACAO_EXCLUSAO_PERMANENTE = "aluno.excluido_permanente"
+CHAVE_CONTAS_ESQUECIDAS = "contas_esquecidas"
+# Separação de domínio: a chave do servidor gera, para este uso, uma chave HMAC só
+# dele (a marca de uma conta não serve para mais nada, nem para o código do Quest).
+_DOMINIO_MARCA = "constela-conta-esquecida"
+
+
+def marca_da_conta(plataforma: str, id_externo: str, *, segredo: str | None = None) -> str:
+    """HMAC-SHA256 (hex, 64) da conta — plataforma + id externo — com a chave do
+    servidor: o que fica gravado no lugar do id. ``segredo`` só para conferir com
+    outra chave do anel (``marcas_da_conta``)."""
+    segredo = segredo if segredo is not None else segredos_da_cifra()[0]
+    chave = hashlib.sha256(f"{segredo}|{_DOMINIO_MARCA}".encode()).digest()
+    conta = f"{plataforma}\x1f{str(id_externo).strip()}"
+    return hmac.new(chave, conta.encode("utf-8"), hashlib.sha256).hexdigest()
+
+
+def marcas_da_conta(plataforma: str, id_externo: str) -> list[str]:
+    """A marca da conta em CADA chave do anel (``segredos_da_cifra``: a atual grava,
+    todas conferem). A marca gravada antes de uma troca de chave continua
+    reconhecida enquanto a chave antiga estiver no anel — tirá-la do anel apaga a
+    memória dessas contas, e o id em claro não existe mais para regravar
+    (docs/lgpd/RETENCAO-TECNICA.md, seção 3)."""
+    return [marca_da_conta(plataforma, id_externo, segredo=s) for s in segredos_da_cifra()]
+
+
+# Motivos de pendência em que o motor achou a ficha como a ÚNICA correspondência
+# segura e só não associou por uma trava: a ficha já tem outra conta nesta
+# plataforma, a ficha está inativa, ou quem confirmou a importação pediu a revisão.
+# A conta da pendência é da criança dessa ficha. Os demais motivos sem ficha
+# escolhida são dúvida de identidade ("homonimo_em_outra_sala",
+# "nome_casa_em_outra_sala", "candidatos_multiplos", "correspondencia_insegura",
+# "criacao_bloqueada_por_politica", "contas_repetidas_no_relatorio", "sem_turma"…):
+# a conta pode ser de OUTRA criança, de mesmo nome e ainda sem ficha — e a marca a
+# tiraria das coletas da escola para sempre (não há ação para levantá-la).
+_MOTIVOS_DA_PROPRIA_FICHA = frozenset({
+    "outra_identidade_na_plataforma", "ficha_inativa", "deixada_para_revisao",
+})
+
+
+def _donas_pela_pendencia(rev, ids: set[int], vivos: set[int]) -> set[int]:
+    """Das crianças ``ids``, de quem a conta da pendência SEM ficha escolhida
+    provadamente é: só com motivo de ``_MOTIVOS_DA_PROPRIA_FICHA``, o id dela entre
+    os candidatos e nenhuma ficha que continua na escola (``vivos``) entre eles.
+    Vazio quando a pendência não prova de quem é a conta."""
+    if rev.aluno_escolhido_id is not None or rev.motivo not in _MOTIVOS_DA_PROPRIA_FICHA:
+        return set()
+    candidatos = {c.get("aluno_id") for c in (rev.candidatos or []) if isinstance(c, dict)}
+    return set() if candidatos & vivos else candidatos & ids
+
+
+def contas_da_crianca(db: Session, escola_id: int,
+                      nomes: dict[int, str]) -> dict[int, set[tuple[str, str]]]:
+    """As contas da plataforma (plataforma, id externo) de cada criança ``nomes``
+    ({aluno_id: nome}) de ``escola_id``: as vinculadas à ficha (qualquer situação,
+    inclusive a aposentada e as que ela absorveu por fusão) e, das revisões dela
+    (``_revisao_dela``), só as que PROVAM ser dela: a resolvida para ela e a
+    pendência que aponta só para a ficha dela (``_donas_pela_pendencia``) — por
+    exemplo a segunda conta que a coleta mandou para a fila
+    ("outra_identidade_na_plataforma"). Ler ANTES de apagar identidades e revisões.
+
+    A pendência que só tem o nome dela não basta: a de OUTRA criança, homônima e
+    ainda sem ficha ("homonimo_em_outra_sala"), também tem. Ela é apagada (guarda o
+    nome), mas a conta não é marcada e a coleta seguinte a trata como conta nova.
+
+    Conta vinculada a uma ficha que CONTINUA na escola nunca entra: é de outra
+    criança, e marcá-la a apagaria das coletas (a revisão resolvida para a excluída
+    pode citar a conta que depois foi parar em outra ficha)."""
+    from app.models import Aluno, IdentidadeExterna, RevisaoIdentidade
+
+    ids = set(nomes)
+    por_aluno: dict[int, set[tuple[str, str]]] = {aid: set() for aid in ids}
+    if not ids:
+        return por_aluno
+    vinculadas: dict[tuple[str, str], int] = {}
+    for plataforma, id_externo, aluno_id in db.execute(
+            select(IdentidadeExterna.plataforma, IdentidadeExterna.id_externo,
+                   IdentidadeExterna.aluno_id)
+            .where(IdentidadeExterna.aluno_id.in_(list(ids)))):
+        vinculadas[(plataforma, id_externo)] = aluno_id
+    vivos = dict(db.execute(select(Aluno.id, Aluno.nome).where(
+        Aluno.escola_id == escola_id, Aluno.id.not_in(list(ids)))).all())
+    alvos = NomesAlvo(nomes.values(), preservar=vivos.values())
+    contas: dict[tuple[str, str], set[int]] = {
+        conta: {aid} for conta, aid in vinculadas.items()}
+    identidades = set(vinculadas)
+    for rev in db.execute(select(RevisaoIdentidade).where(
+            RevisaoIdentidade.escola_id == escola_id,
+            RevisaoIdentidade.id_externo.is_not(None))).scalars():
+        if not (rev.id_externo or "").strip() or not _revisao_dela(
+                rev, ids, identidades, alvos):
+            continue
+        conta = (rev.plataforma, rev.id_externo)
+        if rev.aluno_escolhido_id in ids:
+            donas = {rev.aluno_escolhido_id}
+        elif conta in vinculadas:
+            donas = {vinculadas[conta]}
+        else:   # sem ficha escolhida: o nome não basta (``_donas_pela_pendencia``)
+            donas = _donas_pela_pendencia(rev, ids, set(vivos))
+        if donas:
+            contas.setdefault(conta, set()).update(donas)
+    de_quem_fica = {(plataforma, id_externo) for plataforma, id_externo in db.execute(
+        select(IdentidadeExterna.plataforma, IdentidadeExterna.id_externo).where(
+            IdentidadeExterna.escola_id == escola_id,
+            IdentidadeExterna.aluno_id.not_in(list(ids))))} if contas else set()
+    for (plataforma, id_externo), donas in contas.items():
+        if not plataforma or (plataforma, id_externo) in de_quem_fica:
+            continue
+        for aid in donas:
+            por_aluno[aid].add((plataforma, str(id_externo).strip()))
+    return por_aluno
+
+
+def marcas_para_o_log(contas: set[tuple[str, str]]) -> list[dict[str, str]]:
+    """``[{"plataforma", "marca"}]`` para ``detalhes`` do ``aluno.excluido_permanente``
+    — o id externo NÃO vai em claro. Ordem estável."""
+    return sorted(({"plataforma": plataforma, "marca": marca_da_conta(plataforma, id_externo)}
+                   for plataforma, id_externo in contas if plataforma and id_externo),
+                  key=lambda m: (m["plataforma"], m["marca"]))
+
+
+def marcas_esquecidas(db: Session, escola_id: int) -> set[tuple[str, str]]:
+    """{(plataforma, marca)} das contas esquecidas de ``escola_id`` — lidas das
+    entradas ``aluno.excluido_permanente`` da escola (poucas: a ação é rara e o
+    índice é por ação)."""
+    return _marcas_no_log(db, escola_id)
+
+
+def _marcas_no_log(db: Session, escola_id: int | None) -> set[tuple[str, str]]:
+    """``marcas_esquecidas`` de ``escola_id``, ou de TODAS as escolas com ``None``."""
+    from app.models import LogAuditoria
+
+    consulta = select(LogAuditoria.detalhes).where(
+        LogAuditoria.acao == ACAO_EXCLUSAO_PERMANENTE)
+    if escola_id is not None:
+        consulta = consulta.where(LogAuditoria.escola_id == escola_id)
+    marcas: set[tuple[str, str]] = set()
+    for detalhes in db.execute(consulta).scalars():
+        itens = detalhes.get(CHAVE_CONTAS_ESQUECIDAS) if isinstance(detalhes, dict) else None
+        for item in itens if isinstance(itens, list) else ():
+            if (isinstance(item, dict) and isinstance(item.get("plataforma"), str)
+                    and isinstance(item.get("marca"), str)):
+                marcas.add((item["plataforma"], item["marca"]))
+    return marcas
+
+
+def conta_esquecida(marcas: set[tuple[str, str]], plataforma: str, id_externo: str) -> bool:
+    """A conta é de uma criança excluída de vez nesta escola (``marcas`` de
+    ``marcas_esquecidas``)?"""
+    if not (marcas and plataforma and str(id_externo or "").strip()):
+        return False
+    return any((plataforma, marca) in marcas for marca in marcas_da_conta(plataforma, id_externo))

@@ -1,0 +1,21 @@
+{
+  "mensagem": "0 aluno(s) com dado novo importado(s).",
+  "importacao_id": 2,
+  "qtd_alunos": 0,
+  "qtd_erros": 0,
+  "avisos": [
+    "“Crianca Ficticia Etapa”: a turma onde a ficha nova nasceria (a da sala do relatório, ou a escolhida) é de outra etapa que a turma do relatório (ex.: Educação Infantil x Fundamental): ficha e matrícula nova não nascem nela. Escolha uma turma da mesma etapa (se ela ainda não existe, cadastre-a com um nome que diga a etapa, como “1º Ano A”: o nome curto “1ºA” pode já ser o da turma da outra etapa) — nenhum aluno foi associado nem criado. A linha ficou como pendência na fila de revisão de identidade para um gestor decidir."
+  ],
+  "ignorados": [
+    "crianca ficticia etapa"
+  ],
+  "qtd_revisoes": 1,
+  "alunos_aplicados_ids": [],
+  "linhas_recebidas": 1,
+  "linhas_em_revisao": 1,
+  "linhas_descartadas": {},
+  "avisos_criticos": [],
+  "contas_em_revisao": 1,
+  "ids_de_outra_escola": [],
+  "criacao_bloqueada": 0
+}

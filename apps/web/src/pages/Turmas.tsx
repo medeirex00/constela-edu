@@ -77,11 +77,12 @@ interface Rascunho {
   observacoes: string;
 }
 
-function rascunhoDe(turma: Turma | null, anoPadrao: number): Rascunho {
+function rascunhoDe(turma: Turma | null, anoPadrao: number | null): Rascunho {
   return {
     nome: turma?.nome ?? "",
     ano_escolar: turma?.ano_escolar ?? "",
-    ano_letivo: String(turma?.ano_letivo ?? anoPadrao),
+    // Sem o ano letivo da escola, o campo vem vazio (quem cria digita): nada é suposto.
+    ano_letivo: String(turma?.ano_letivo ?? anoPadrao ?? ""),
     professor_id: turma?.professor_id ? String(turma.professor_id) : "",
     turno: turma?.turno ?? "",
     capacidade_maxima: turma?.capacidade_maxima ? String(turma.capacidade_maxima) : "",
@@ -122,7 +123,7 @@ function FormularioTurma({
   aberto: boolean;
   turma: Turma | null;
   escolaNome: string;
-  anoPadrao: number;
+  anoPadrao: number | null;
   professores: Professor[];
   aoFechar: () => void;
   aoSalvo: (salva: Turma) => void;
@@ -479,7 +480,12 @@ function CriarVariasTurmas({ escolaId, anoLetivo, existentes, aberto, aoFechar, 
 // --- Consolidação de turmas duplicadas --------------------------------------
 
 type TurmaDup = { id: number; nome: string; turno: string | null; alunos: number };
-type GrupoDup = { chave: string; ano_letivo: number; canonica: TurmaDup; duplicadas: TurmaDup[] };
+type GrupoDup = {
+  chave: string; ano_letivo: number; canonica: TurmaDup; duplicadas: TurmaDup[];
+  /** Por que o servidor recusa este grupo (hoje: a duplicada tem pontuação por nível
+   *  própria, do Admin Global, diferente da turma que fica); null = pode consolidar. */
+  recusa?: string | null;
+};
 
 /** Detecta salas cadastradas com nomes diferentes (ex.: "1 ANO A TARDE ANUAL
  *  (300302821)" e "1ºA") e, ao aplicar, migra os alunos para o nome curto e
@@ -496,9 +502,10 @@ function ModalTurmasDuplicadas({ escolaId, aberto, aoFechar, aoConcluir }: {
   const [aplicando, setAplicando] = useState(false);
   const [erroApi, setErroApi] = useState("");
 
-  // Por padrão, todos os grupos vêm marcados (o gestor pode desmarcar).
+  // Por padrão, todos os grupos vêm marcados (o gestor pode desmarcar) — menos o
+  // que o servidor vai recusar (`recusa`), que voltaria como erro do pedido inteiro.
   useEffect(() => {
-    if (grupos) setEscolhidos(new Set(grupos.map((g) => g.chave)));
+    if (grupos) setEscolhidos(new Set(grupos.filter((g) => !g.recusa).map((g) => g.chave)));
   }, [grupos]);
 
   function alternar(chave: string) {
@@ -583,6 +590,11 @@ function ModalTurmasDuplicadas({ escolaId, aberto, aoFechar, aoConcluir }: {
                       </li>
                     ))}
                   </ul>
+                  {g.recusa && (
+                    <p className="mt-1.5 text-xs font-medium text-amber-800 dark:text-amber-300">
+                      ⚠ {g.recusa}
+                    </p>
+                  )}
                 </div>
               </label>
             ))}
@@ -650,7 +662,12 @@ export default function Turmas() {
   const [mensagem, setMensagem] = useState<{ tipo: "ok" | "erro"; texto: string } | null>(null);
   const temporizador = useRef<number | null>(null);
 
-  const anoAtivo = escolaAtual?.ano_letivo_ativo ?? new Date().getFullYear();
+  // O ano letivo ATIVO da escola — nunca o do relógio. Sem a escola no contexto
+  // (ainda buscando a que está fora da lista da sessão, ou a busca falhou), o ano
+  // fica desconhecido: a tela mostra todas as turmas e não fala de um ano que a
+  // escola pode não estar (em janeiro de 2027, numa escola ainda em 2026, dizia
+  // “Nenhuma turma ativa em 2027” e escondia as de 2026).
+  const anoAtivo: number | null = escolaAtual?.ano_letivo_ativo ?? null;
 
   function avisar(tipo: "ok" | "erro", texto: string) {
     setMensagem({ tipo, texto });
@@ -659,7 +676,8 @@ export default function Turmas() {
   }
 
   const visiveis = (turmas ?? []).filter(
-    (turma) => mostrarTodas || (turma.status === "ativa" && turma.ano_letivo === anoAtivo),
+    (turma) =>
+      mostrarTodas || anoAtivo === null || (turma.status === "ativa" && turma.ano_letivo === anoAtivo),
   );
 
   // Seleção: "todas" refere-se às turmas VISÍVEIS (as que o usuário vê agora).
@@ -678,7 +696,7 @@ export default function Turmas() {
   // Selecionadas de ANO ANTERIOR com alunos: não se esvaziam por “Transferir de
   // turma” (histórico) — a orientação para elas é arquivar.
   const anterioresComAlunos = turmasSelecionadas.filter(
-    (t) => t.ano_letivo < anoAtivo && (t.total_matriculas ?? 0) > 0,
+    (t) => anoAtivo !== null && t.ano_letivo < anoAtivo && (t.total_matriculas ?? 0) > 0,
   ).length;
 
   // Checkbox do cabeçalho fica "traço" (indeterminado) quando só parte está marcada.
@@ -832,7 +850,7 @@ export default function Turmas() {
             <Botao variante="secundario" onClick={() => setDedupAberto(true)}>
               <Combine size={16} aria-hidden /> Corrigir duplicadas
             </Botao>
-            <Botao variante="secundario" onClick={() => setVariasAberto(true)}>
+            <Botao variante="secundario" onClick={() => setVariasAberto(true)} disabled={anoAtivo === null}>
               <LayoutGrid size={16} aria-hidden /> Criar várias
             </Botao>
             <Botao onClick={abrirNova}>
@@ -856,7 +874,7 @@ export default function Turmas() {
         />
       )}
 
-      {escolaId && (
+      {escolaId && anoAtivo !== null && (
         <CriarVariasTurmas
           escolaId={escolaId}
           anoLetivo={anoAtivo}
@@ -875,7 +893,7 @@ export default function Turmas() {
         />
       )}
 
-      {turmas && !erroTurmas && (
+      {turmas && !erroTurmas && anoAtivo !== null && (
         <div className="mb-6 grid grid-cols-2 gap-3 sm:grid-cols-3 sm:gap-5 max-sm:[&>*:last-child:nth-child(odd)]:col-span-2">
           <StatCard icone={<School size={20} />} tom="violeta" rotulo={`Turmas ativas em ${anoAtivo}`}
                     valor={String(ativasDoAno.length)} />
@@ -923,7 +941,7 @@ export default function Turmas() {
 
       <Card className="overflow-hidden">
         <CabecalhoCartao
-          titulo={mostrarTodas ? "Todas as turmas" : `Turmas de ${anoAtivo}`}
+          titulo={mostrarTodas || anoAtivo === null ? "Todas as turmas" : `Turmas de ${anoAtivo}`}
           contagem={turmas && !erroTurmas
             ? `${visiveis.length} turma${visiveis.length === 1 ? "" : "s"}`
             : undefined}
@@ -1108,7 +1126,7 @@ export default function Turmas() {
                               title={
                                 turma.status !== "ativa"
                                   ? "Reativar"
-                                  : turma.ano_letivo >= anoAtivo && turma.total_alunos > 0
+                                  : anoAtivo !== null && turma.ano_letivo >= anoAtivo && turma.total_alunos > 0
                                     ? `Arquivar — antes, transfira os ${turma.total_alunos} aluno(s) ativo(s) desta turma`
                                     : "Arquivar"
                               }
@@ -1172,7 +1190,8 @@ export default function Turmas() {
           // por “Transferir de turma” (ele move a matrícula do ano ativo, da
           // turma atual da criança — a API recusa a partir do painel dela). A
           // saída é arquivar, que o D17 permite para turma de ano passado.
-          const deAnoAnterior = paraExcluir != null && paraExcluir.ano_letivo < anoAtivo;
+          const deAnoAnterior =
+            paraExcluir != null && anoAtivo !== null && paraExcluir.ano_letivo < anoAtivo;
           return (
             <>
               <p className="text-sm text-zinc-600 dark:text-zinc-300">

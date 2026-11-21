@@ -44,8 +44,8 @@ from app.schemas import (
     ReferenciasOut,
     ReferenciasUpdate,
 )
-from app.services import (dificuldade_livro, elegibilidade, matific_destaque,
-                          periodos, politica_sync, provisionamento, scoring)
+from app.services import (bimestres, dificuldade_livro, elegibilidade, matific_destaque,
+                          periodos, permissoes, politica_sync, provisionamento, scoring)
 from app.services import premiacoes as svc_premiacoes
 from app.services.audit import registrar
 
@@ -69,6 +69,8 @@ MODOS_PERFIL_SCORING = {"institucional", "personalizado"}
 # critério já aplicado aos níveis (``/niveis``) e ao perfil. As LEITURAS (GET)
 # continuam abertas a admin/coordenador (e à Secretaria): a escola CONSULTA.
 # Nenhum endpoint foi removido — a escola perde só o botão de gravar.
+# Exceção da Secretaria: ``GET /referencias`` (os valores em uso são números das
+# próprias crianças da escola — ver ``obter_referencias``).
 
 
 # --- Perfil de scoring: institucional (rede) × personalizado (interno) -------
@@ -133,6 +135,26 @@ def definir_perfil_scoring(
     db.commit()
     scoring.recalcular_escola(db, escola_id)
     return PerfilScoringOut(modo=modo)
+
+
+# --- Calendário oficial dos bimestres (somente leitura) -----------------------
+
+@router.get("/calendario-bimestres")
+def calendario_de_bimestres(
+    ano: int | None = Query(default=None, ge=2000, le=2100),
+    escola_id: int = Depends(escola_autorizada),
+):
+    """Os quatro bimestres oficiais do ano (padrão: o ano de hoje em Brasília),
+    da MESMA fonte que o backend usa para "este bimestre" e para o certificado
+    (``services/bimestres``: a constante de 2026 e ``BIMESTRES_CALENDARIO`` para
+    os anos novos). ``bimestres: null`` = o ano não tem calendário cadastrado.
+
+    É daqui que a web tira o bimestre que o certificado abre marcado, o selo
+    "Fim do bimestre" e o chip das Premiações — antes ela só conhecia 2026.
+    Leitura aberta a quem lê a escola (o professor também vê o menu e o
+    Ranking): são só datas do calendário da rede."""
+    ano = ano or hoje_br().year
+    return {"ano": ano, "bimestres": bimestres.calendario_publico(ano)}
 
 
 # --- Dificuldade por LIVRO (regra GLOBAL, somente leitura) ---------------------
@@ -511,7 +533,18 @@ def exemplo_pontuacao_elefante(
     fator de tamanho, fator de série e o valor — pela regra desta escola, a
     mesma das premiações e dos rankings. Use UMA forma de escolher o livro:
     ``livro_id`` (acervo da escola), ``elefante_id`` (catálogo oficial) ou
-    ``nivel`` (+ ``titulo`` opcional)."""
+    ``nivel`` (+ ``titulo`` opcional).
+
+    ``livro_id`` fica com QUEM É DA ESCOLA: a Secretaria recebe 403 em qualquer id
+    (sem dizer se o livro existe), como no ``GET /livros`` (S_G_GRUPO-2). O acervo
+    nasce das leituras das crianças: numa escola em que só uma ou duas leram, varrer
+    ``livro_id`` daria título e nível de tudo o que elas leram. Por nível e pelo
+    catálogo oficial o exemplo segue aberto a ela."""
+    if livro_id is not None and permissoes.e_secretaria(usuario):
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN,
+            "O exemplo com um livro do acervo da escola fica com quem é da escola: o "
+            "acervo é o histórico de leitura das crianças. Escolha o livro pelo nível.")
     numero_serie = _serie_do_exemplo(serie)
     titulo = (titulo or "").strip() or None
     nivel_bruto = (nivel or "").strip()
@@ -780,12 +813,27 @@ def salvar_pesos(
 
 # --- Referências de normalização (PRD §31, §62) -----------------------------
 
+# A régua em uso é feita dos números das crianças da escola: o MAIOR valor de cada
+# indicador quando a plataforma tem menos de ``scoring.MIN_ALUNOS_ROBUSTO`` crianças com
+# dado, senão o P90 — que, com 11, 21, 31… crianças, é exatamente o número de UMA delas.
+# A Secretaria NUNCA vê dado individual de criança (``permissoes.e_secretaria``): na
+# escola de 1 criança a rota entregava todos os números que o cartão da rede esconde pelo
+# grupo pequeno. Ela não edita a régua e nenhuma tela dela chama esta rota (a web só
+# desenha as referências para o Admin Global), por isso a leitura também é negada.
+REFERENCIAS_SEM_SECRETARIA = (
+    "As referências da pontuação são calculadas com os números das crianças da escola e "
+    "podem mostrar o resultado de uma criança. A Secretaria acompanha só os números "
+    "agregados da rede.")
+
+
 @router.get("/referencias", response_model=ReferenciasOut)
 def obter_referencias(
     escola_id: int = Depends(escola_autorizada),
     db: Session = Depends(get_db),
     usuario: Usuario = Depends(exigir_papeis("admin", "coordenador")),
 ):
+    if permissoes.e_secretaria(usuario):
+        raise HTTPException(status.HTTP_403_FORBIDDEN, REFERENCIAS_SEM_SECRETARIA)
     row = db.execute(
         select(ReferenciaNormalizacao).where(ReferenciaNormalizacao.escola_id == escola_id)
     ).scalar_one_or_none()
@@ -1110,10 +1158,17 @@ def obter_pontuacao_turma(
     db: Session = Depends(get_db),
     usuario: Usuario = Depends(exigir_papeis("admin", "coordenador")),
 ):
-    """Catálogo de níveis (com padrões) + a config LIVRE já salva por turma."""
+    """Catálogo de níveis (com padrões) + a config LIVRE já salva por turma.
+
+    Só as turmas do ano letivo ATIVO da escola: a configuração é por ``turma_id`` e as
+    turmas de um ano novo são linhas novas — a de uma turma de outro ano não pesa nas Notas
+    do ano ativo (e o seletor mostraria '3º Ano A · 3º Ano' duas vezes)."""
     catalogo = _catalogo_niveis(db, escola_id)
+    ano = db.execute(select(Escola.ano_letivo_ativo)
+                     .where(Escola.id == escola_id)).scalar_one()
     turmas = db.execute(
-        select(Turma).where(Turma.escola_id == escola_id, Turma.status == "ativa")
+        select(Turma).where(Turma.escola_id == escola_id, Turma.status == "ativa",
+                            Turma.ano_letivo == ano)
         .order_by(Turma.ano_escolar, Turma.nome)
     ).scalars().all()
     overrides = {
@@ -1124,8 +1179,10 @@ def obter_pontuacao_turma(
     }
     return {
         "catalogo": catalogo,
+        "ano_letivo": ano,
         "turmas": [{"turma_id": t.id, "nome": t.nome, "ano_escolar": t.ano_escolar,
-                    "pontos": overrides.get(t.id, {})} for t in turmas],
+                    "ano_letivo": t.ano_letivo, "pontos": overrides.get(t.id, {})}
+                   for t in turmas],
     }
 
 
@@ -1138,14 +1195,24 @@ def salvar_pontuacao_turma(
 ):
     """Salva a tabela de pontos por nível de UMA turma e, opcionalmente, REPLICA a
     mesma config para outras turmas (aplicar_em) — cada uma continua editável
-    depois. Guarda só o que difere do padrão (config esparsa). UM recálculo no fim."""
+    depois. Guarda só o que difere do padrão (config esparsa). UM recálculo no fim.
+
+    Só as turmas do ano letivo ATIVO (as que o GET lista): a de outro ano não pesa nas
+    Notas do ano ativo, e o "salva. Notas recalculadas." seria falso."""
     # Turmas-alvo = a principal + as marcadas para replicar (sem repetir).
     alvos = list(dict.fromkeys([dados.turma_id, *dados.aplicar_em]))
+    ano = db.execute(select(Escola.ano_letivo_ativo)
+                     .where(Escola.id == escola_id)).scalar_one()
     turmas: dict[int, Turma] = {}
     for tid in alvos:
         t = db.get(Turma, tid)
         if t is None or t.escola_id != escola_id:
             raise HTTPException(status.HTTP_400_BAD_REQUEST, "Turma inválida para esta escola.")
+        if t.ano_letivo != ano:
+            raise HTTPException(
+                status.HTTP_400_BAD_REQUEST,
+                f"A turma {t.nome} é do ano letivo {t.ano_letivo}: a pontuação por turma vale "
+                f"só para as turmas do ano letivo ativo ({ano}).")
         turmas[tid] = t
 
     validos = {c["codigo"] for c in _catalogo_niveis(db, escola_id)}

@@ -355,7 +355,8 @@ def novo_aluno(db, eid, turma, nome, status="ativo"):
     a = Aluno(escola_id=eid, nome=nome, status=status)
     db.add(a)
     db.flush()
-    db.add(Matricula(escola_id=eid, aluno_id=a.id, turma_id=turma.id, ano_letivo=2026))
+    db.add(Matricula(escola_id=eid, aluno_id=a.id, turma_id=turma.id,
+                     ano_letivo=turma.ano_letivo))
     db.flush()
     return a
 

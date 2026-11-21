@@ -16,9 +16,9 @@ produção.
 
 | Dado | Onde | Prazo hoje | Mecanismo |
 |---|---|---|---|
-| Cópias de relatórios (contêm nomes) | `exports/` | **7 dias** (`EXPORTS_RETENCAO_DIAS`; 0 desliga) | expurgo a cada nova exportação (`routers/relatorios.py`) |
-| Conversas do assistente de IA | `conversas_ia`, `mensagens_ia` | **90 dias** (`IA_RETENCAO_DIAS`) | no boot e por `python -m scripts.purgar_ia` (o que sai para o provedor externo e quem o liga: `ASSISTENTE-IA.md`) |
-| Prévia de importação não confirmada | `uploads/temporarios/` | **24 h** (`IDADE_MAXIMA_TEMP_S`) | a cada nova análise |
+| Cópias de relatórios (contêm nomes) | `exports/` | **7 dias** (`EXPORTS_RETENCAO_DIAS`; 0 desliga) | expurgo no boot e a cada hora (`core/expurgo_arquivos.py`), além de a cada nova exportação |
+| Conversas do assistente de IA | `conversas_ia`, `mensagens_ia` | **90 dias** (`IA_RETENCAO_DIAS`; mínimo 1 — ao contrário das `RETENCAO_*`, 0 NÃO desliga: a purga recusa e não apaga nada, o boot com `ENV=producao` recusa e o de dev avisa no log) | no boot e por `python -m scripts.purgar_ia` (o que sai para o provedor externo e quem o liga: `ASSISTENTE-IA.md`) |
+| Prévia de importação não confirmada | `uploads/temporarios/` | **24 h** (`IDADE_MAXIMA_TEMP_S`) | no boot e a cada hora (`core/expurgo_arquivos.py`), além de a cada nova análise de PDF/XLSX; some em até 25 h |
 | Original de importação confirmada | `uploads/<plataforma>/` | **sem prazo** | — |
 | Link de redefinição de senha | `tokens_reset_senha` (só o hash) | **60 min** (`RESET_SENHA_EXPIRA_MIN`), uso único | validade no token |
 | Sessão do Edu (JWT) | navegador (`localStorage`) / celular (SecureStore) | **8 h** (`ACCESS_TOKEN_EXPIRE_MINUTES`) | expiração + `token_version` |
@@ -32,6 +32,8 @@ produção.
 | Logs da aplicação | stdout → Railway (região sfo, EUA) | **do provedor** (a confirmar no plano contratado) | — |
 | Erros | Sentry (EUA) | **do provedor** (a confirmar) | — |
 | Push | Expo Push (EUA) → FCM/APNs | trânsito | — |
+
+Decisão de 20/11/2026. O prazo aprovado para os arquivos originais gerados pelas coletas é de 90 dias. O descarte automático ainda precisa ser implementado e validado, incluindo a recuperação de cópias e o tratamento das exceções. A tabela descreve o comportamento do código atual.
 
 ## 2. O que esta rodada criou
 
@@ -56,7 +58,10 @@ efeitos colaterais conhecidos:
   `tests/test_import_casamento_roster.py:173`.
 
 Já minimizado de vez (código do Quest): `quest.nome_escolhido` não grava mais o nome que
-a criança escolheu (o valor vigente está no perfil e some com ele); `quest.login` e
+a criança escolheu (o valor vigente está no perfil e some com ele); `quest.avatar` (uma
+entrada por toque no vestiário) grava só os `slots` trocados, não a aparência (tom de
+pele, cabelo, acessórios) — antes guardava o avatar inteiro a cada toque; as entradas
+antigas perdem o `avatar` na exclusão permanente da criança (seção 2.3); `quest.login` e
 `quest.login_falhou` já mascaravam o IP e não gravam o código.
 
 ### 2.2 Expurgo por categoria — desligado (todos os prazos = 0)
@@ -85,6 +90,15 @@ Regras fixas do mecanismo (padrões técnicos, revisáveis com a decisão juríd
   `aluno.esquecimento_fora_do_cadastro`, `ia.conversas_esquecimento`, `retencao.expurgo`,
   `turma.exclusao_com_alunos` e `backup.restaurado` (o mapa de ids das fichas que impede
   um backup antigo de trazer de volta a criança excluída; ver seção 2.3);
+- `aluno.fundido` vencido **não é apagado**: fica reduzido à ligação entre as duas fichas
+  (`{"mantido": {"id"}, "removido": {"id"}}`). É a prova de que as duas fichas são a mesma criança, que
+  a restauração do backup, a exclusão permanente e a linha do tempo leem; apagada, o backup
+  de antes da fusão trazia de volta a duplicata da criança excluída de vez. O resultado (e o
+  `retencao.expurgo`) conta as reduções à parte;
+- Quando o expurgo remove comprovantes de eventos descartados de uma fusão ou deduplicação,
+  guarda apenas `prova_ordem_leitura_expurgada: true` no registro da ficha. A restauração
+  histórica da ficha ou da sua sucessora recusa o pedido se não puder verificar qual foi a
+  primeira leitura. Datas de leitura, chaves de eventos, nomes e livros saem do log reduzido.
 - `auditoria_acesso` com prazo **menor que 183 dias** é recusado sem `--abaixo-do-piso`
   (referência: Marco Civil da Internet, art. 15 — guarda mínima de 6 meses de registros
   de acesso a aplicações; a aplicabilidade ao caso é pergunta jurídica, seção 5);
@@ -113,13 +127,31 @@ contadores parados há mais de 1 dia e sem bloqueio vigente.
   `exclusao_aluno.conversas_ia_que_citam` decide). O nome dentro do nome **maior** de
   quem fica não conta (excluir "Joao Pedro Silva" não apaga a conversa sobre "Joao Pedro
   Silva Santos"); com homônimo vivo **exato** a conversa é apagada, como antes (não há
-  como saber de qual das duas fala, e ela é do usuário, não da outra criança);
+  como saber de qual das duas fala, e ela é do usuário, não da outra criança). Também
+  pelo nome das fichas que ela absorveu por fusão (ver "Fichas absorvidas", abaixo);
 - revisões de identidade **dela**: resolvidas para ela, da identidade externa dela
   (plataforma + id), ou com o nome dela quando **nenhuma outra criança da escola** tem
   o mesmo nome (com homônimo vivo, o nome também é do outro e a revisão fica);
+- a conta dela no **cursor da coleta incremental** (`configuracoes`, namespace
+  `sync_incremental`, uma linha por plataforma: `{id da conta: total}` — no Elefante,
+  `{studentId: totalBooksRead}`), que o backup da escola leva inteiro
+  (`exclusao_aluno._tirar_do_cursor_da_sincronizacao`). As contas das outras crianças
+  ficam; sem a dela no cursor, a coleta seguinte só a buscaria inteira, como conta nova.
+  A conta marcada como esquecida (ver "Marca de esquecimento", abaixo) volta ao cursor,
+  sem a ficha, por dois caminhos: a coleta seguinte (a plataforma continua mandando a
+  conta, e o cursor é gravado por mescla com o que já estava lá) e a restauração de um
+  backup gerado antes da exclusão (o cursor volta do arquivo). Quem a tira do cursor
+  já gravado é `exclusao_aluno.tirar_contas_esquecidas_do_cursor`: na sincronização,
+  depois de gravar o cursor, com as marcas da própria escola (a regra da porta de
+  identidade); na restauração, depois de recriar as configurações, com as marcas de
+  qualquer escola (o arquivo pode ser de outra). Fora do cursor, a conta esquecida é
+  buscada inteira a cada coleta e descartada pela porta de identidade (o custo de uma
+  conta a mais na coleta). As duas chamadas estão no código (`app/sync/service.py`,
+  bloco do cursor, e `services/backup.restaurar`) e os testes de ponta a ponta de
+  `tests/test_aud3_lgpd_esquecimento_cursor_elefante.py` (e o `_pg`) as exigem;
 - o arquivo original de um relatório **individual** dela (o nome do arquivo traz o nome
   dela, o arquivo foi gravado pelo servidor para esta escola e a importação não trouxe
-  dado de criança que fica) e **todas** as cópias em `exports/` (não há como saber quais
+  dado de criança que fica) e **todas** as cópias de relatórios geradas pelo app em `exports/` (não há como saber quais
   trazem o nome; o download nunca depende delas). Arquivos só somem **no commit** da
   transação: se a exclusão reverter, nada some.
 
@@ -131,9 +163,29 @@ contadores parados há mais de 1 dia e sem bloqueio vigente.
   gestão de uma escola e não reescreve o log global; e por chave nas entradas da própria
   criança — agora também `nome_recebido` e o nome escolhido no Quest, que não tem pedaço
   do nome civil;
-- revisões de **outra** criança: a excluída sai da lista de candidatos; a candidata de
-  quem **continua** (ficha existente) fica intacta, e a de ficha que não existe mais
-  (duplicata já fundida) perde o nome se ele era o da excluída;
+- log de auditoria das fichas que a criança **absorveu por fusão** (direta ou em cadeia,
+  pelo log `aluno.fundido`): são dela, então as entradas com o id delas (como o
+  `aluno.criado_auto` do stub da importação) contam como "da própria criança", e o nome
+  delas (muitas vezes abreviado: "ANA B. SOUZA") cai também por valor, salvo quando é o
+  nome de uma criança que continua na escola. Id de ficha absorvida que hoje é de uma
+  ficha viva (id reaproveitado) fica de fora;
+- dado pessoal que não é nome, nas entradas da própria criança e das fichas absorvidas:
+  nascimento, observações, foto e a `ficha` (o RA) da `foto_pre_fusao`
+  (`aluno.fundido`), as duas datas de `aluno.nascimento_divergente` e os valores dos
+  itens de nascimento e de RA das `divergencias` de `aluno.fundido_com_conflito` viram
+  `[removido]` (os itens ficam "nascimento [removido]" e "RA [removido]": o registro de
+  que houve conflito continua, a data e o número saem); e o `avatar` inteiro das
+  entradas `quest.avatar` gravadas antes da minimização do vestiário (seção 2.1) vira
+  `[removido]` (a entrada, com a data da troca, fica);
+- o RA da linha da Lista Piloto em `aluno.identidade_vinculada` (a importação o grava
+  em todo vínculo que troca o nome, qualquer que seja o motivo) também vira
+  `[removido]`: o log não guarda a via do casamento, então o número não prova ser o
+  motivo da decisão. O `motivo` e a `origem` do vínculo continuam, como o "porquê
+  técnico" do registro — ver `_anonimizar_logs_do_aluno`. Com isso, nenhuma entrada que
+  o código grava hoje deixa o RA da criança em claro nas entradas dela;
+- revisões de **outra** criança: a excluída — e a ficha que ela absorveu por fusão —
+  sai da lista de candidatos; a candidata de quem **continua** (ficha existente) fica
+  intacta, e a de outra ficha que não existe mais perde o nome se ele era o da excluída;
 - mensagens de sincronização (`sincronizacao_logs`, `_alertas`, `_execucoes.erro_resumo`);
 - `importacoes.arquivo_original` que trazia o nome;
 - original que traz dado de criança que **fica** (é a prova da importação dela, §15):
@@ -146,13 +198,67 @@ também o nome — ou parte do nome — de uma criança que **continua** na esco
 tocado. Excluir "Joao Pedro Silva" não mexe em "Joao Pedro Silva Testelli" nem no homônimo
 vivo "Joao Pedro Silva".
 
+**Fichas absorvidas por fusão** (`exclusao_aluno.fichas_absorvidas`, lidas uma vez, antes
+de anonimizar o log de onde vêm os nomes): são a mesma criança. O nome que ela tinha
+nelas — o do stub criado pela importação ou pela coleta, muitas vezes abreviado ("ANA B.
+SOUZA") — é procurado em **tudo** acima como o nome dela: log de auditoria, revisões de
+identidade, mensagens de sincronização, `arquivo_original` (e o arquivo) e conversas da
+IA. Salvo quando esse nome é também o nome — ou parte do nome — de uma criança que
+continua na escola (`exclusao_aluno.nomes_absorvidos_que_contam`, a mesma regra do log):
+o stub "ANA SOUZA" não prova ser dela se "Ana Souza Lima" continua.
+
 **Fica por obrigação de auditoria, sem nome**
 
 - o log de auditoria, com o `entidade_id` como referência anônima — inclusive
   `aluno.excluido_permanente` (quem excluiu e quando),
-  `aluno.esquecimento_fora_do_cadastro` (só contagens) e `backup.restaurado` (o mapa
-  {id novo: id do arquivo} das fichas recriadas, só números);
+  `aluno.esquecimento_fora_do_cadastro` (só contagens) e `backup.restaurado` (os mapas
+  {id novo: id do arquivo} das fichas, turmas e importações recriadas —
+  `alunos_id_anterior`, `turmas_id_anterior`, `importacoes_id_anterior` — e
+  `referencias_reapontadas`, as contagens do que, fora do arquivo, foi ligado às linhas
+  recriadas ou ficou sem equivalente; só números e contagens). Com esses mapas a
+  restauração reaponta a fila de revisões de identidade e as execuções da sincronização
+  para as linhas recriadas, também numa restauração seguinte;
 - o registro de cada importação (quem, quando, quantos) e o histórico das sincronizações.
+
+**Marca de esquecimento das contas da plataforma** (só a exclusão permanente de aluno;
+a exclusão de turma com alunos não grava a marca)
+
+- A conta da criança no Matific ou no Elefante Letrado continua existindo lá, e a coleta
+  seguinte a manda de novo. Sem memória, ela era uma conta desconhecida: com a política
+  padrão ("permitir") a ficha voltava inteira (nome, conta, retrato, ranking) e o log
+  gravava o nome de novo; com "bloquear", o nome voltava para a fila de revisões e para
+  o log.
+- Agora o `aluno.excluido_permanente` de cada criança leva `contas_esquecidas`:
+  `[{"plataforma", "marca"}]`, em que a marca é o HMAC-SHA256 do id externo com a chave
+  do servidor (`exclusao_aluno.marca_da_conta`; a mesma família de chaves da cifra em
+  repouso). Nem o nome nem o id da conta ficam em claro. Entram as contas vinculadas à
+  ficha (inclusive a aposentada e as que ela absorveu por fusão) e, das revisões dela,
+  só as que **provam** ser dela: a resolvida para ela e a pendência em que o motor achou
+  a ficha dela como a única correspondência segura e só não associou por uma trava
+  (`outra_identidade_na_plataforma` — a segunda conta que a coleta mandou para a fila —,
+  `ficha_inativa`, `deixada_para_revisao`), sem nenhuma ficha que continua na escola
+  entre os candidatos (`exclusao_aluno._donas_pela_pendencia`). A pendência que só tem o
+  nome dela, com motivo de dúvida de identidade (`homonimo_em_outra_sala`,
+  `nome_casa_em_outra_sala`, `candidatos_multiplos`, `correspondencia_insegura`,
+  `criacao_bloqueada_por_politica`, `contas_repetidas_no_relatorio`, `sem_turma`…), é
+  apagada (guarda o nome), mas a conta **não** entra: pode ser de outra criança, de
+  mesmo nome e ainda sem ficha, que a marca tiraria das coletas para sempre. Conta
+  vinculada a uma criança que continua na escola nunca entra.
+- A porta única de identidade (`identidade_aluno.decidir`) ignora a linha de conta
+  marcada antes de qualquer outro passo, com o motivo `conta_esquecida`: não associa,
+  não cria ficha, não abre revisão. A marca vale na escola que excluiu.
+- Limites: a linha **sem** a conta (relatório ou planilha só com o nome, como a Lista
+  Piloto) não tem como ser reconhecida e pode cadastrar a criança de novo — o modal da
+  exclusão avisa e pede o encerramento da conta na plataforma; a conta que estava só
+  numa pendência de dúvida (acima) não é marcada — se era mesmo da criança excluída, a
+  coleta seguinte a trata como conta nova (com "permitir", cria a ficha; com
+  "bloquear", volta para a fila); exclusões feitas antes
+  desta versão não têm a marca (as contas não foram guardadas); levantar a marca (a
+  criança voltou à escola) ainda não tem ação própria — decisão do dono.
+- Troca de chave: a marca gravada com uma chave só é reconhecida enquanto essa chave
+  estiver no anel (`DATA_ENCRYPTION_KEY`, `DATA_ENCRYPTION_KEYS_ANTERIORES`, `SECRET_KEY`,
+  `CHAVE_CIFRA_LEGADA_ANTERIOR`). O id em claro não existe mais para regravá-la: ver a
+  seção 3.
 
 **Fora do alcance do código** (precisa de procedimento ou decisão)
 
@@ -160,7 +266,8 @@ vivo "Joao Pedro Silva".
   restauração do backup JSON da escola pelo app (só o Admin Global) não traz de volta a
   criança excluída de vez depois do arquivo, nem os dados dela, e avisa quantas ficaram de
   fora (`backup.restaurar`, pelo `aluno.excluido_permanente` do log, feito em qualquer
-  escola: vale também para o arquivo de uma escola restaurado em outra). Vale também para o
+  escola: vale também para o arquivo de uma escola restaurado em outra), nem a conta dela
+  no cursor da coleta incremental (`tirar_contas_esquecidas_do_cursor`). Vale também para o
   arquivo gerado antes de outra restauração, que troca os ids das fichas: cada
   restauração grava em `backup.restaurado` o mapa {id novo: id do arquivo} (só números,
   preservado do expurgo) e a seguinte segue essa linhagem, gravada em qualquer escola
@@ -173,7 +280,18 @@ vivo "Joao Pedro Silva".
   escola não é apagada pela exclusão — exclua-a lá também. Ressalva:
   restauração feita antes desse mapa existir (ou com o registro apagado) quebra a
   linhagem — a criança excluída depois dela pode voltar, sem aviso; confira a exclusão
-  manualmente. O texto que o
+  manualmente. A restauração também não traz de volta a ficha que foi **fundida** na
+  criança excluída de vez (a duplicata absorvida é a mesma criança): nos dois sentidos da
+  fusão e também em outra escola, pela ligação do `aluno.fundido` no log; o aviso conta
+  **crianças**, não fichas (a duplicata fundida e a oficial do mesmo arquivo são uma só).
+  Backups recentes registram a escola de origem e a data de criação dela. Ao restaurar
+  um arquivo de outro banco, a restauração usa essa origem para separar os ids da
+  linhagem e só aplica exclusões comprovadas pela data de criação da ficha.
+  O arquivo leva `importacoes.usuario_id` (o id de quem importou): volta como veio se o
+  usuário tem o mesmo id e a mesma data de criação registrada no arquivo. Sem essa prova,
+  inclusive em backups legados, a referência fica nula, como em
+  `identidades_externas.aposentada_por_id`.
+  O texto que o
   arquivo guarda fora das tabelas da criança (ex.: `importacoes.arquivo_original` de um
   relatório individual antigo) volta como estava no arquivo;
 - originais de relatório de **turma** (várias crianças no mesmo PDF/XLSX): ficam (com o
@@ -182,16 +300,27 @@ vivo "Joao Pedro Silva".
   renomeado (pode ser dela — `arquivo_original` também guarda o nome que o cliente
   mandou — e o `/confirmar` não marca qual linha o servidor gravou); só a linha desta
   escola fica `[removido]`. O arquivo fica no disco com o nome. Pergunta 9 da seção 5;
-- prévias não confirmadas em `uploads/temporarios/` (expiram em 24 h);
+- prévias não confirmadas em `uploads/temporarios/` (expiram em 24 h; o expurgo de fundo as apaga em até 25 h);
 - logs da aplicação (Railway) e eventos do Sentry;
-- cópias fora do sistema (downloads, e-mail) e a **plataforma de origem**, que continua
-  mandando o nome na próxima sincronização se a conta lá não for encerrada.
+- cópias fora do sistema (downloads, e-mail) e a **plataforma de origem**: a conta
+  continua ativa lá até ser encerrada. O Constela passa a ignorá-la nas coletas (marca
+  de esquecimento, acima), mas não a encerra.
 
 Teste: `tests/test_exclusao_alcance_total.py` varre **todas** as tabelas e colunas de
 texto/JSON depois da exclusão (dados fictícios) e falha se sobrar o nome ou o id;
+`tests/test_aud3_lgpd_esquecimento_cursor_elefante.py` (e o `_pg`) faz o mesmo com o id
+da conta do Elefante (cursor e backup, também depois da coleta seguinte e da restauração
+de um backup anterior à exclusão) e `tests/test_aud3_lgpd_esquecimento_absorvida_fora_do_log.py`
+com o nome da ficha absorvida por fusão;
 `tests/test_exclusao_escopo_e_homonimos.py` prova que o esquecimento não passa do que
 é da criança (log global, homônimo e nome maior de quem fica, conversas da IA,
-original de outra escola, original com dado de quem fica).
+original de outra escola, original com dado de quem fica);
+`tests/test_aud2_lgpd_esquecimento_conta.py` (e o `_pg`, com a exclusão chegando no meio
+de uma coleta) prova que a coleta seguinte não traz a criança de volta, com "permitir" e
+com "bloquear", nem pela segunda conta que estava na fila; e
+`tests/test_aud2_lgpd_esquecimento_homonima.py` prova que a conta de outra criança, de
+mesmo nome e na fila por dúvida, não é marcada junto (a coleta seguinte cria a ficha
+dela).
 
 ### 2.4 Quest — código de login, limite de tentativas e portão
 
@@ -324,6 +453,11 @@ leva só o primeiro nome (`push.corpo_dados_atualizados`; sem nome: "Um aluno ..
   backfill usa a chave do próprio serviço. Conferir depois:
   `SELECT count(*) FROM quest_credenciais_aluno WHERE codigo_login_hash IS NULL OR
   qr_token_hash IS NULL` = 0.
+- **Troca de chave × contas esquecidas**: ao girar `DATA_ENCRYPTION_KEY` (ou a
+  `SECRET_KEY`), mantenha a anterior no anel (`DATA_ENCRYPTION_KEYS_ANTERIORES` /
+  `CHAVE_CIFRA_LEGADA_ANTERIOR`) enquanto houver `aluno.excluido_permanente` com
+  `contas_esquecidas` gravado com ela. Tirar a chave do anel apaga, em silêncio, a
+  memória dessas contas: a coleta seguinte volta a tratá-las como contas novas.
 
 ## 4. O que NÃO foi feito (e por quê)
 

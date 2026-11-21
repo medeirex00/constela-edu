@@ -125,19 +125,33 @@ def _flexionar(substantivo: str, adjetivo: str) -> str:
 
 def gerar_apelido(db: Session, escola_id: int) -> str:
     """Apelido único dentro da escola (evita duas 'Estrela Valente' na rede
-    local da criança); com sufixo numérico se as combinações esgotarem."""
+    local da criança). Sorteia entre as combinações livres; esgotadas as 256,
+    acrescenta um sufixo numérico — também conferido: antes o sufixo de 10 a 99
+    saía sem conferir e uma escola de 1.000 alunos tinha uma dúzia de apelidos
+    repetidos. Os apelidos da escola são lidos de uma vez (uma consulta).
+
+    Sem índice único (escola_id, apelido), dois perfis criados AO MESMO TEMPO na
+    mesma escola ainda podem sortear o mesmo apelido livre (decisão do dono)."""
+    usados = set(db.execute(
+        select(QuestPerfil.apelido).where(QuestPerfil.escola_id == escola_id)
+    ).scalars())
+    livres = [apelido for apelido in (_flexionar(s, a) for s in _SUBSTANTIVOS
+                                      for a in _ADJETIVOS)
+              if apelido not in usados]
+    if livres:
+        return secrets.choice(livres)
     for _ in range(60):
-        apelido = _flexionar(secrets.choice(_SUBSTANTIVOS),
-                             secrets.choice(_ADJETIVOS))
-        existe = db.execute(
-            select(QuestPerfil.id)
-            .where(QuestPerfil.escola_id == escola_id,
-                   QuestPerfil.apelido == apelido)
-        ).first()
-        if existe is None:
+        apelido = (_flexionar(secrets.choice(_SUBSTANTIVOS), secrets.choice(_ADJETIVOS))
+                   + f" {secrets.randbelow(90) + 10}")
+        if apelido not in usados:
             return apelido
-    return _flexionar(secrets.choice(_SUBSTANTIVOS),
-                      secrets.choice(_ADJETIVOS)) + f" {secrets.randbelow(90) + 10}"
+    # Sorteio sem sorte (escola muito grande): o primeiro sufixo livre a partir de
+    # 10 numa combinação sorteada — sempre existe.
+    base = _flexionar(secrets.choice(_SUBSTANTIVOS), secrets.choice(_ADJETIVOS))
+    sufixo = 10
+    while f"{base} {sufixo}" in usados:
+        sufixo += 1
+    return f"{base} {sufixo}"
 
 
 def gerar_codigo_amigo(db: Session) -> str:
@@ -201,6 +215,11 @@ PREFERENCIAS_PERMITIDAS = {"som", "musica", "narracao", "reduzir_animacoes"}
 
 NOME_EXIBICAO_MAX = 20
 
+# "Letras" (isalpha, categoria Lo) que não desenham nada: os preenchimentos do
+# Hangul — o U+3164 é o "nome invisível" que circula em jogos — e os brancos dos
+# hieróglifos. Com elas o nome some das falas e do "É você, {nome}?".
+LETRAS_INVISIVEIS = frozenset("\u115f\u1160\u3164\uffa0\U00013441\U00013442")
+
 
 def validar_nome_exibicao(nome: str) -> str:
     """Nome que a criança escolheu na cerimônia ("como você quer ser
@@ -215,7 +234,7 @@ def validar_nome_exibicao(nome: str) -> str:
     limpo = " ".join((nome or "").split())
     if not (2 <= len(limpo) <= NOME_EXIBICAO_MAX):
         raise ValueError("O nome precisa ter entre 2 e 20 letras.")
-    if not all(c.isalpha() or c == " " for c in limpo):
+    if not all((c.isalpha() and c not in LETRAS_INVISIVEIS) or c == " " for c in limpo):
         raise ValueError("Use só letras, sem números ou símbolos.")
     saida = unicodedata.normalize("NFC", limpo.title())
     if not (2 <= len(saida) <= NOME_EXIBICAO_MAX):
@@ -229,8 +248,26 @@ def primeiro_nome_cadastro(nome_civil: str) -> str:
 
 def nome_para_falas(perfil: QuestPerfil, aluno_nome: str) -> str:
     """Nome usado em toda a interface: o escolhido pela criança, ou o
-    primeiro nome do cadastro enquanto ela não escolher."""
-    return (perfil.nome_exibicao or "").strip() or primeiro_nome_cadastro(aluno_nome)
+    primeiro nome do cadastro enquanto ela não escolher. Letra invisível de um
+    nome gravado antes da validação recusá-la não vai para as falas."""
+    escolhido = "".join(c for c in (perfil.nome_exibicao or "")
+                        if c not in LETRAS_INVISIVEIS)
+    return " ".join(escolhido.split()) or primeiro_nome_cadastro(aluno_nome)
+
+
+def travar_perfil(db: Session, perfil: QuestPerfil) -> QuestPerfil:
+    """Relê o perfil com ``SELECT ... FOR UPDATE`` (e ``populate_existing``, que
+    troca no próprio objeto o que a dependência leu sem trava) antes de mesclar
+    avatar ou preferências. Os dois são um dicionário JSON regravado INTEIRO: sem a
+    trava, dois toques rápidos que leram a mesma versão gravavam um por cima do
+    outro e uma troca sumia (os dois com 200). Com ela, o segundo espera o primeiro
+    gravar e mescla sobre a versão nova. No SQLite o FOR UPDATE não existe (escrita
+    já é serial)."""
+    return db.execute(
+        select(QuestPerfil).where(QuestPerfil.id == perfil.id)
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    ).scalar_one()
 
 
 def atualizar_avatar(perfil: QuestPerfil, mudancas: dict) -> None:

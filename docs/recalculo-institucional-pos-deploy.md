@@ -30,11 +30,16 @@ python -m scripts.recalcular_institucional
 # variações, se precisar fatiar a carga:
 python -m scripts.recalcular_institucional --rede 3     # só a rede 3
 python -m scripts.recalcular_institucional --escola 42  # só a escola 42
+python -m scripts.recalcular_institucional --rede 3 --escola 42  # a 42, só se for da rede 3
 ```
 
+Com `--rede` e `--escola` juntos valem as duas condições: `--rede 3 --escola 42`
+recalcula a escola 42 só se ela for da rede 3 (senão, nenhuma escola).
+
 O script imprime o progresso escola a escola e um resumo final
-(`escolas processadas`, `alunos recalculados`, `falhas`). Sai com código `1` se
-houve qualquer falha — reexecutar é seguro (idempotente).
+(`escolas processadas`, `alunos recalculados`, `falhas`; no `--dry-run`, só
+`escolas que seriam recalculadas`). Sai com código `1` se houve qualquer falha —
+reexecutar é seguro (idempotente).
 
 ## Garantias
 

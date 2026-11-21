@@ -27,6 +27,12 @@ Regras (iguais em dev e produção; em dev a migração da importação já deix
   e o próximo boot, já com o schema certo, sobe completo.
 
 O corpo HTTP leva só o motivo; as revisões (banco × código) vão para o log.
+
+Banco FORA: o monitor externo e o healthcheck sondam a cada poucos segundos. O traceback
+(ERROR; com o Sentry ligado, um evento) sai só na QUEDA; enquanto o banco segue fora, um
+lembrete curto (WARNING, sem traceback) a cada ``AVISO_BANCO_FORA_S``; a VOLTA vira uma
+linha INFO, seguida do estado do schema. A queda é uma só para as duas sondas que tocam
+o banco (``/api/health/ready`` e ``/api/health``), que usam o mesmo objeto.
 """
 from __future__ import annotations
 
@@ -45,6 +51,9 @@ INICIO = time.time()
 
 PRONTOS = ("em_dia", "adiante_aceito", "adiante_apos_boot")
 REINICIO_PENDENTE = "reinicio_pendente"
+BANCO_INACESSIVEL = "banco_inacessivel"
+# Com o banco fora, intervalo mínimo entre os lembretes curtos no log (segundos).
+AVISO_BANCO_FORA_S = 300
 
 
 class Prontidao:
@@ -54,6 +63,10 @@ class Prontidao:
         self._ultimo_motivo: str | None = None
         # Motivo do schema errado no BOOT (None = o boot foi completo).
         self._boot_incompleto: str | None = None
+        # Banco fora: desde quando (relógio monotônico; None = respondendo) e o último
+        # registro no log (a queda ou um lembrete).
+        self._banco_fora_desde: float | None = None
+        self._ultimo_aviso_banco = 0.0
 
     def exigir_reinicio(self, motivo_boot: str) -> None:
         """Marca que o boot deste processo pulou o agendador, os ajustes de dados e a
@@ -68,9 +81,10 @@ class Prontidao:
             with engine.connect() as conexao:
                 conexao.execute(text("SELECT 1"))
                 estado = migracoes.estado_do_schema(conexao)
-        except Exception:  # noqa: BLE001 — qualquer falha aqui = banco fora
-            logger.exception("Healthcheck: banco de dados inacessível")
-            return False, "banco_inacessivel", None
+        except Exception as erro:  # noqa: BLE001 — qualquer falha aqui = banco fora
+            self.banco_inacessivel(erro)
+            return False, BANCO_INACESSIVEL, None
+        self.banco_respondeu()
         if estado.situacao == "em_dia":
             pronto, motivo = True, "em_dia"
         elif estado.situacao == "adiante":
@@ -90,6 +104,42 @@ class Prontidao:
             self.ja_pronto = True
         self._registrar(pronto, motivo, estado)
         return pronto, motivo, estado
+
+    def banco_inacessivel(self, erro: BaseException) -> None:
+        """Uma sonda não alcançou o banco. Loga a QUEDA com o traceback; depois, só um
+        lembrete curto a cada ``AVISO_BANCO_FORA_S`` enquanto o banco seguir fora."""
+        agora = time.monotonic()
+        with self._mutex:
+            desde = self._banco_fora_desde
+            if desde is None:
+                self._banco_fora_desde = desde = agora
+                self._ultimo_aviso_banco = agora
+                # A volta registra de novo o estado do schema (ver _registrar).
+                self._ultimo_motivo = BANCO_INACESSIVEL
+                caiu, lembrar = True, False
+            else:
+                caiu = False
+                lembrar = agora - self._ultimo_aviso_banco >= AVISO_BANCO_FORA_S
+                if lembrar:
+                    self._ultimo_aviso_banco = agora
+        extra = {"componente": "prontidao"}
+        if caiu:
+            logger.error("Healthcheck: banco de dados inacessível", exc_info=erro,
+                         extra=extra)
+        elif lembrar:
+            logger.warning("Healthcheck: banco de dados continua inacessível há %d min (%s)",
+                           int((agora - desde) // 60), type(erro).__name__, extra=extra)
+
+    def banco_respondeu(self) -> None:
+        """Uma sonda alcançou o banco: se ele estava fora, registra a volta."""
+        agora = time.monotonic()
+        with self._mutex:
+            desde = self._banco_fora_desde
+            if desde is None:
+                return
+            self._banco_fora_desde = None
+        logger.info("Healthcheck: banco de dados voltou a responder (fora por %d s)",
+                    int(agora - desde), extra={"componente": "prontidao"})
 
     def _registrar(self, pronto: bool, motivo: str, estado: migracoes.EstadoSchema) -> None:
         """Loga só quando o motivo MUDA (o healthcheck sonda a cada poucos segundos)."""

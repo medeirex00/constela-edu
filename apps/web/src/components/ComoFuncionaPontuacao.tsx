@@ -29,6 +29,7 @@ import { useId, useState, type ReactNode } from "react";
 
 import { useApp } from "../context/AppContext";
 import { useApi } from "../hooks/useApi";
+import { diaDoCatalogo, nomeDaVersaoDaRegra } from "../lib/regraPontuacao";
 import type { PesosDaRegua } from "../lib/tiposCriterios";
 import { ordenarCriterios } from "./CriteriosVisuais";
 import ExemploPontuacao from "./ExemploPontuacao";
@@ -145,7 +146,7 @@ export default function ComoFuncionaPontuacao({
   const maisPct = typeof parametros?.teto === "number" ? Math.round((parametros.teto - 1) * 100) : null;
   const menosPct = typeof parametros?.piso === "number" ? Math.round((1 - parametros.piso) * 100) : null;
   const catalogoN = dados?.catalogo?.n ?? parametros?.calibracao?.n_livros;
-  const catalogoDe = parametros?.calibracao?.catalogo_de ?? dados?.catalogo?.gerado_em;
+  const diaCatalogo = diaDoCatalogo(parametros?.calibracao?.catalogo_de ?? dados?.catalogo?.gerado_em);
 
   const pesosLeitura = modo === "institucional" ? pesos?.leitura ?? null : null;
   const pesosMatematica = modo === "institucional" ? pesos?.matematica ?? null : null;
@@ -259,15 +260,25 @@ export default function ComoFuncionaPontuacao({
                     )}
                   </ol>
 
+                  {/* A regra pelo nome comum (o identificador técnico fica na dica, como
+                      no Suporte) e o dia do catálogo em dd/mm/aaaa. */}
                   <p className="rounded-xl bg-zinc-50 px-3.5 py-2.5 text-xs text-zinc-500 dark:bg-zinc-800/60 dark:text-zinc-400">
-                    Regra em uso nesta escola: {dados.regra_da_escola}
+                    Regra em uso nesta escola:{" "}
+                    <span title={`Identificador da versão: ${dados.regra_da_escola}`}>
+                      {nomeDaVersaoDaRegra(dados.regra_da_escola)}
+                    </span>
                     {dados.regra_da_escola !== dados.versao_vigente ? (
-                      <> (regra da rede: {dados.versao_vigente})</>
+                      <>
+                        {" "}(regra da rede:{" "}
+                        <span title={`Identificador da versão: ${dados.versao_vigente}`}>
+                          {nomeDaVersaoDaRegra(dados.versao_vigente)}
+                        </span>)
+                      </>
                     ) : null}
                     {typeof catalogoN === "number" ? (
                       <>
                         . Catálogo de referência: {catalogoN.toLocaleString("pt-BR")} livros
-                        {catalogoDe ? <> ({catalogoDe})</> : null}
+                        {diaCatalogo ? <> ({diaCatalogo})</> : null}
                       </>
                     ) : null}
                     .

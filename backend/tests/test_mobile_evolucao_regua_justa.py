@@ -18,6 +18,7 @@ from datetime import datetime, timedelta, timezone
 from app.models import Importacao, SnapshotMatific
 from app.services import scoring
 from tests.test_permissoes import _cliente_como, cenario_professor  # noqa: F401 — fixture
+from tests._ano_letivo import escola_no_ano_de_hoje  # noqa: F401 — fixture
 
 
 def _cenario(db, escola_completa):
@@ -54,7 +55,8 @@ def _comparar(cliente_http, base):
     return linhas_web, linhas_app
 
 
-def test_evolucao_do_app_igual_a_da_web_para_a_gestao(cliente, db, escola_completa):
+def test_evolucao_do_app_igual_a_da_web_para_a_gestao(relogio_no_ano_letivo, cliente, db,
+                                                     escola_completa):
     escola, primeira, segunda = _cenario(db, escola_completa)
     linhas_web, linhas_app = _comparar(cliente, f"/api/v1/escolas/{escola.id}")
     nota_app = {aid: nota for aid, _pos, nota in linhas_app}
@@ -68,7 +70,7 @@ def test_evolucao_do_app_igual_a_da_web_para_a_gestao(cliente, db, escola_comple
 
 
 def test_evolucao_do_app_igual_a_da_web_para_o_professor(
-        cenario_professor, db, escola_completa):  # noqa: F811
+        relogio_no_ano_letivo, cenario_professor, db, escola_completa):  # noqa: F811
     escola, _primeira, segunda = _cenario(db, escola_completa)
     linhas_web, linhas_app = _comparar(cenario_professor["professor"],
                                        f"/api/v1/escolas/{escola.id}")

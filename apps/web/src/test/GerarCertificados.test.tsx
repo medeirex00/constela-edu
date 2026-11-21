@@ -10,12 +10,11 @@
  *   - "Gerar PDF" chama apiDownloadPost com o caminho e o corpo do contrato;
  *   - erros do backend aparecem com a mensagem dele.
  */
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import GerarCertificados from "../components/GerarCertificados";
 import { useApp } from "../context/AppContext";
 import type { GerarCertificadosProps } from "../components/GerarCertificados";
-import { bimestreDeHoje } from "../lib/calendarioBimestres";
 import { bimestreDoPeriodo } from "../lib/tiposCertificados";
 import type { AlunoParaCertificado, ItemPreviaCertificado } from "../lib/tiposCertificados";
 import {
@@ -33,6 +32,23 @@ import {
 
 const PREVIA = "/escolas/1/certificados/lote/previa";
 const LOTE = "/escolas/1/certificados/lote";
+
+// Relógio (só a data) fixo em 15/10/2026, 4º bimestre do calendário que a web já conhece.
+// O seletor do bimestre abre pelo calendário do ANO DE HOJE, e estes testes não simulam a
+// rota do calendário: com o relógio de verdade, a partir de 01/01/2027 o seletor abria
+// vazio e a arte da plataforma ficava travada à espera da escolha — "Gerar PDF" desabilitado
+// e o número esperado virava "null" — sem nenhuma mudança de código (REV-PER-2). Quem
+// precisa de outro dia troca o relógio dentro do próprio teste.
+const HOJE_FIXO = new Date(2026, 9, 15, 12, 0, 0);
+
+beforeEach(() => {
+  vi.useFakeTimers({ toFake: ["Date"] });
+  vi.setSystemTime(HOJE_FIXO);
+});
+
+afterEach(() => {
+  vi.useRealTimers();
+});
 
 const LISTA: AlunoParaCertificado[] = [
   { aluno_id: 101, nome: "Ana Beatriz Souza", turma: "3º Ano A", posicao: 1 },
@@ -150,7 +166,7 @@ describe("GerarCertificados — quem entra no lote", () => {
 
     await u.click(screen.getByRole("radio", { name: "Top 10" }));
     expect(nomesDoLote()).toEqual(LISTA.map((a) => a.nome));
-    expect(screen.getByText("A lista desta tela tem 7 alunos: entram todos.")).toBeInTheDocument();
+    expect(screen.getByText("A lista do lote tem 7 alunos: entram todos.")).toBeInTheDocument();
   });
 
   it("linha sem ficha (aluno_id nulo) fica de fora com aviso e ninguém entra no lugar", async () => {
@@ -185,6 +201,12 @@ describe("GerarCertificados — modelo por módulo contratado", () => {
     expect(screen.getByRole("radio", { name: "Elefante Letrado" })).toBeChecked();
     expect(screen.getByRole("radio", { name: "Matific" })).not.toBeChecked();
     expect(screen.getByRole("radio", { name: "Geral" })).not.toBeChecked();
+  });
+
+  it("a descrição da arte da plataforma usa o nome impresso no PDF (certificado de desempenho)", async () => {
+    await renderizar({ modeloInicial: "elefante" });
+    expect(screen.getByText(/certificado de desempenho da plataforma/)).toBeInTheDocument();
+    expect(screen.queryByText(/certificado de participação/)).not.toBeInTheDocument();
   });
 
   it("rede só com Matemática: sem o chip do Elefante", async () => {
@@ -237,7 +259,7 @@ describe("GerarCertificados — prévia e geração", () => {
     responderPreviaComRecusa();
     const { u } = await renderizar();
     const bimestre = screen.getByLabelText("Bimestre impresso");
-    expect(bimestre).toHaveValue(String(bimestreDeHoje(new Date())));
+    expect(bimestre).toHaveValue("4"); // 15/10/2026 (HOJE_FIXO): 4º bimestre
     await u.selectOptions(bimestre, "3");
 
     // Antes de verificar não há o que gerar.
@@ -336,8 +358,9 @@ describe("GerarCertificados — bimestre impresso da lista", () => {
     expect(bimestreDoPeriodo("bimestre_anterior", hoje)).toBe(3);
     // Do 1º bimestre, o anterior é o 4º (do ano passado, como no backend).
     expect(bimestreDoPeriodo("bimestre_anterior", new Date(2026, 2, 10, 12, 0, 0))).toBe(4);
-    // Recesso de janeiro: fora do calendário, não afirma qual é o anterior.
-    expect(bimestreDoPeriodo("bimestre_anterior", new Date(2026, 0, 15, 12, 0, 0))).toBeUndefined();
+    // Recesso de janeiro: hoje sugere o 1º, então o anterior é o 4º do ano passado — o
+    // mesmo do backend (periodos._bimestre). Antes dava undefined e o lote abria no 1º.
+    expect(bimestreDoPeriodo("bimestre_anterior", new Date(2026, 0, 15, 12, 0, 0))).toBe(4);
     for (const preset of ["mes", "semana", "ano_letivo", "personalizado", "dia", "bimestre_5"]) {
       expect(bimestreDoPeriodo(preset, hoje)).toBeUndefined();
     }

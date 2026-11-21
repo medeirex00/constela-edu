@@ -57,7 +57,7 @@ def test_bloqueio_de_conta_inexistente_tambem_nao_grava_o_texto(db, escola_compl
     codigos = [c.post("/api/v1/auth/login",
                       data={"username": SENHA_NO_CAMPO_ERRADO, "password": "x"}).status_code
                for _ in range(12)]
-    assert 429 in codigos
+    assert codigos == [401] * 12
     db.expire_all()
     bloqueios = [f.detalhes.get("email") for f in db.execute(select(LogAuditoria).where(
         LogAuditoria.acao == "login.bloqueado")).scalars().all()]

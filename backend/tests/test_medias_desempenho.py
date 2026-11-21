@@ -22,6 +22,7 @@ from app.models import (
 )
 from app.services import rede as svc
 from app.services import scoring
+from tests._ano_letivo import ANO
 
 
 def _rede(db, nome="Rede Desempenho"):
@@ -38,10 +39,10 @@ def _escola(db, rede_id, nome, alunos, *, notas_ele=None, notas_mat=None):
     aluno NÃO tem dado daquela plataforma, ou seja, não recebe snapshot). A Nota
     é gravada para TODOS (como o motor faz), com 0 onde não há dado.
     """
-    esc = Escola(nome=nome, ano_letivo_ativo=2026, rede_id=rede_id, status="ativa")
+    esc = Escola(nome=nome, ano_letivo_ativo=ANO, rede_id=rede_id, status="ativa")
     db.add(esc)
     db.flush()
-    turma = Turma(escola_id=esc.id, nome="1ºA", ano_escolar="1º Ano", ano_letivo=2026,
+    turma = Turma(escola_id=esc.id, nome="1ºA", ano_escolar="1º Ano", ano_letivo=ANO,
                   status="ativa")
     db.add(turma)
     db.flush()
@@ -54,7 +55,7 @@ def _escola(db, rede_id, nome, alunos, *, notas_ele=None, notas_mat=None):
         a = Aluno(escola_id=esc.id, nome=f"Crianca {nome} {i}", status="ativo")
         db.add(a)
         db.flush()
-        db.add(Matricula(escola_id=esc.id, aluno_id=a.id, turma_id=turma.id, ano_letivo=2026))
+        db.add(Matricula(escola_id=esc.id, aluno_id=a.id, turma_id=turma.id, ano_letivo=ANO))
         ne, nm = notas_ele[i], notas_mat[i]
         if ne is not None:      # tem dado do Elefante
             db.add(SnapshotElefante(escola_id=esc.id, aluno_id=a.id, importacao_id=imp.id,
@@ -65,7 +66,7 @@ def _escola(db, rede_id, nome, alunos, *, notas_ele=None, notas_mat=None):
         # O motor grava Nota para TODO matriculado — inclusive quem não usa (0).
         # A rede lê as colunas `*_institucional`: semeamos com o MESMO valor local
         # (o teste quer testar esse desempenho; sem recalcular_escola elas nascem 0).
-        db.add(Nota(detalhes=scoring.carimbo_institucional(), escola_id=esc.id, aluno_id=a.id, ano_letivo=2026,
+        db.add(Nota(detalhes=scoring.carimbo_institucional(), escola_id=esc.id, aluno_id=a.id, ano_letivo=ANO,
                     nota_elefante=ne or 0.0, nota_matific=nm or 0.0,
                     nota_elefante_institucional=ne or 0.0,
                     nota_matific_institucional=nm or 0.0,
@@ -190,10 +191,10 @@ def test_f_aluno_duplicado_nao_infla_cobertura_nem_media(db):
     dup = Aluno(escola_id=esc.id, nome="Crianca Escola F 0 (duplicata)", status="ativo")
     db.add(dup)
     db.flush()
-    db.add(Matricula(escola_id=esc.id, aluno_id=dup.id, turma_id=turma.id, ano_letivo=2026))
+    db.add(Matricula(escola_id=esc.id, aluno_id=dup.id, turma_id=turma.id, ano_letivo=ANO))
     db.add(SnapshotElefante(escola_id=esc.id, aluno_id=dup.id, importacao_id=imp.id,
                             livros_unicos=5, tempo_leitura_min=60))
-    db.add(Nota(detalhes=scoring.carimbo_institucional(), escola_id=esc.id, aluno_id=dup.id, ano_letivo=2026,
+    db.add(Nota(detalhes=scoring.carimbo_institucional(), escola_id=esc.id, aluno_id=dup.id, ano_letivo=ANO,
                 nota_elefante=20.0, nota_matific=0.0,
                 nota_elefante_institucional=20.0, nota_matific_institucional=0.0,
                 nota_geral=10.0, posicao=11))

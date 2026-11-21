@@ -24,6 +24,7 @@ import logging
 import re
 import secrets
 from collections import defaultdict
+from datetime import datetime, timezone
 
 from sqlalchemy import delete, func, select, update
 from sqlalchemy.exc import IntegrityError
@@ -38,6 +39,7 @@ from app.models import (
     LogAuditoria,
     MensagemIA,
     Professor,
+    TokenResetSenha,
     Turma,
     Usuario,
 )
@@ -390,11 +392,14 @@ def invalidar_senhas_derivadas(db: Session, escola_id: int | None = None, *,
       na classificação (``UPDATE … WHERE id = :id AND senha_hash = :lido``), e o
       ``token_version`` sobe na MESMA instrução. Quem trocou a senha no meio da
       execução não é sobrescrito: volta em ``trocadas_durante``.
+    * A conta invalidada perde também os aparelhos registrados para push
+      (``push.remover_aparelhos_da_conta``), como nas outras substituições de senha.
 
     NÃO commita — quem chama decide (transação única: falha no meio = rollback
     de tudo)."""
     from sqlalchemy.orm.util import identity_key
 
+    from app.services import push as svc_push
     from app.services.audit import registrar
 
     if classificacao is None:
@@ -407,12 +412,18 @@ def invalidar_senhas_derivadas(db: Session, escola_id: int | None = None, *,
     trocadas: list[dict] = []
     if aplicar:
         lidos = classificacao["hashes_lidos"]
+        # Os hashes novos (bcrypt, ~0,2 s cada) saem TODOS antes do 1º UPDATE: cada
+        # UPDATE trava a linha da conta até o commit de quem chama, e o bcrypt dentro
+        # do laço prendia a 1ª conta por (N-1) x custo — o heartbeat e o PATCH dela
+        # esperavam sem prazo, segurando conexão do pool e thread do worker
+        # (S_G_SCRIPTS-3). Gerados antes, a janela de trava é só a dos UPDATEs.
+        novos = {item["usuario_id"]: senha_hash_sem_acesso() for item in alvos}
         for item in alvos:
             uid = item["usuario_id"]
             resultado = db.execute(
                 update(Usuario)
                 .where(Usuario.id == uid, Usuario.senha_hash == lidos[uid])
-                .values(senha_hash=senha_hash_sem_acesso(),
+                .values(senha_hash=novos[uid],
                         token_version=func.coalesce(Usuario.token_version, 0) + 1)
                 .execution_options(synchronize_session=False))
             if resultado.rowcount != 1:
@@ -422,6 +433,11 @@ def invalidar_senhas_derivadas(db: Session, escola_id: int | None = None, *,
             carregada = db.identity_map.get(identity_key(Usuario, uid))
             if carregada is not None:
                 db.expire(carregada, ["senha_hash", "token_version"])
+            # Os aparelhos (push) saem com as sessões, como nas outras substituições
+            # de senha (``admin._revogar_acessos``, ``auth.consumir_link_reset``): a
+            # senha era pública, e um celular registrado com ela seguia recebendo os
+            # avisos da escola. A auditoria da etapa fica com os mesmos campos.
+            svc_push.remover_aparelhos_da_conta(db, uid)
             registrar(db, "usuario.senha_derivada_invalidada", escola_id=item["escola_id"],
                       entidade="usuario", entidade_id=uid,
                       detalhes={"uso": item["uso"], "origem": origem})
@@ -475,6 +491,43 @@ def _identidade_livre(db: Session, base: str, escola_id: int,
                 and not email_reservado_ao_dono(email)):
             return username, email
         i += 1
+
+
+def _email_gerado(email: str | None) -> bool:
+    """E-mail que o próprio sistema gerou a partir do @ (``_identidade_livre``),
+    e não um e-mail real cadastrado à mão (cadastro completo de professor)."""
+    return (email or "").strip().lower().endswith(f"@{_DOMINIO}")
+
+
+def _entregar_credencial_nova(db: Session, escola_id: int, conta: Usuario,
+                              prof: Professor, base: str, senha: str) -> str:
+    """Grava @ e senha NOVOS numa conta de professor nunca usada (a senha sai na
+    folha entregue ao gestor) e devolve o @.
+
+    Derruba junto o que dava acesso com a credencial antiga — as sessões
+    (``token_version``) e os links de redefinição ainda pendentes da conta, a
+    mesma regra da troca de senha pelo admin: sem isso, quem tivesse o link
+    antigo (encaminhado por mensagem, por exemplo) sobrescrevia a senha que o
+    gestor acabou de entregar.
+
+    O e-mail de login só acompanha o @ novo quando foi GERADO pelo sistema. O
+    e-mail real (cadastro completo) fica como está, na conta e no cadastro do
+    professor: trocá-lo apagava o único registro dele e o login pelo e-mail
+    parava de funcionar sem aviso — a ferramenta fala só de @ e senha."""
+    username, email = _identidade_livre(db, base, escola_id, excluir_id=conta.id)
+    conta.username = username
+    if _email_gerado(conta.email):
+        conta.email = email
+        prof.email = email
+    conta.senha_hash = hash_senha(senha)
+    conta.token_version = func.coalesce(Usuario.token_version, 0) + 1
+    db.flush([conta])
+    db.execute(
+        update(TokenResetSenha)
+        .where(TokenResetSenha.usuario_id == conta.id,
+               TokenResetSenha.usado_em.is_(None))
+        .values(usado_em=datetime.now(timezone.utc)))
+    return username
 
 
 def _reconciliar(nome: str, existentes: list[Professor]) -> Professor | None:
@@ -705,8 +758,9 @@ def aplicar_deduplicacao(db: Session, escola_id: int,
                          loser_ids: list[int]) -> list[dict]:
     """APLICA só as fusões CONFIRMADAS (``loser_ids``): move as turmas de cada
     duplicado para o que fica, apaga as contas duplicadas e padroniza o @/senha do
-    que fica (guardando quem já usava a conta). Devolve a folha de credenciais.
-    NÃO commita — quem chama decide (o endpoint faz o commit)."""
+    que fica (guardando quem já usava a conta; ver ``_entregar_credencial_nova``).
+    Devolve a folha de credenciais. NÃO commita — quem chama decide (o endpoint
+    faz o commit)."""
     escolhidos = set(loser_ids or [])
     # Agrupa os losers escolhidos por survivor (um survivor pode absorver vários).
     por_survivor: dict[int, list[Professor]] = defaultdict(list)
@@ -742,11 +796,7 @@ def aplicar_deduplicacao(db: Session, escola_id: int,
             folha.append({"nome": survivor.nome, "usuario": su.username, "senha": None})
         elif cred and su is not None:
             base, senha = cred
-            username, email = _identidade_livre(db, base, escola_id, excluir_id=su.id)
-            su.username, su.email = username, email
-            su.senha_hash = hash_senha(senha)
-            su.token_version = (su.token_version or 0) + 1  # invalida sessões antigas
-            survivor.email = email
+            username = _entregar_credencial_nova(db, escola_id, su, survivor, base, senha)
             folha.append({"nome": survivor.nome, "usuario": username, "senha": senha})
         else:
             folha.append({"nome": survivor.nome, "usuario": None, "senha": None})
@@ -760,8 +810,9 @@ def padronizar_usernames(db: Session, escola_id: int) -> list[dict]:
 
     Conta JÁ USADA (``ultimo_acesso``): só RE-CAIXA o @ (o login é case-insensível,
     então não quebra) e MANTÉM a senha/sessão. Conta nunca usada: regenera @ +
-    senha na convenção. Devolve a folha (nome · @ · senha; senha=None = mantida).
-    NÃO commita."""
+    senha na convenção (``_entregar_credencial_nova``: o e-mail real fica e o link
+    de redefinição pendente morre). Devolve a folha (nome · @ · senha;
+    senha=None = mantida). NÃO commita."""
     folha: list[dict] = []
     professores = list(db.execute(
         select(Professor).where(Professor.escola_id == escola_id)).scalars())
@@ -783,11 +834,7 @@ def padronizar_usernames(db: Session, escola_id: int) -> list[dict]:
                 u.username = base
                 folha.append({"nome": prof.nome, "usuario": base, "senha": None})
             continue
-        # Conta nunca usada: regenera @ + senha na convenção.
-        username, email = _identidade_livre(db, base, escola_id, excluir_id=u.id)
-        u.username, u.email = username, email
-        u.senha_hash = hash_senha(senha)
-        u.token_version = (u.token_version or 0) + 1
-        prof.email = email
+        # Conta nunca usada: regenera @ + senha na convenção (o e-mail real fica).
+        username = _entregar_credencial_nova(db, escola_id, u, prof, base, senha)
         folha.append({"nome": prof.nome, "usuario": username, "senha": senha})
     return folha

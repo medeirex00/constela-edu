@@ -389,6 +389,7 @@ def test_contagens_so_numeros_e_nao_grava(banco, monkeypatch, capsys):
     """Pergunta do pré-deploy: alguma conta GLOBAL usa senha derivada? A saída
     traz só contagens — nada que identifique conta, pessoa ou escola."""
     Sessao, _ = banco
+    import scripts.senhas_derivadas as etapa
     antes = _retrato(Sessao)
     codigo, saida = _rodar(monkeypatch, capsys, Sessao, "--contagens")
     assert codigo == 0
@@ -411,6 +412,7 @@ def test_contagens_so_numeros_e_nao_grava(banco, monkeypatch, capsys):
         "recebe 403 e não há volta garantida (o scripts/link_redefinicao.py recusa "
         "conta global): troque a senha ANTES do deploy e confira de novo até "
         "'globais: 0'.",
+        etapa.AVISO_CAIXAS,          # o limite das 4 caixas (G_SCRIPTS-2)
     ]
     for proibido in IDENTIFICADORES:
         assert proibido not in saida, proibido
@@ -428,7 +430,12 @@ def test_contagens_sem_global_derivada_diz_que_nao_ha(banco, monkeypatch, capsys
     assert codigo == 0
     assert "globais: 1" not in saida and "\nglobais: 0\n" in saida
     assert "total: 11" in saida
-    assert saida.strip().endswith("nenhuma conta global com senha derivada.")
+    import scripts.senhas_derivadas as etapa
+    # "Nenhuma" só nas 4 caixas conferidas, com o limite logo abaixo (G_SCRIPTS-2).
+    assert saida.strip().splitlines()[-2:] == [
+        "nenhuma conta global com senha derivada nas 4 caixas conferidas "
+        "(ver o limite abaixo).",
+        etapa.AVISO_CAIXAS]
     assert "ATENÇÃO" not in saida
 
 

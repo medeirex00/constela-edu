@@ -19,15 +19,16 @@ dimensão — sem virar zero e sem sumir da tela. Ver `ranking_evolucao`.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from types import SimpleNamespace
 
-from sqlalchemy import func, select
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.orm import Session, selectinload
 
 from app.models import (
     Aluno,
     Escola,
+    Importacao,
     Leitura,
     Livro,
     Matricula,
@@ -36,9 +37,13 @@ from app.models import (
     SnapshotMatific,
     Turma,
 )
+from app.models.plataformas import IMPORTACAO_SEM_QUESTOES
 from app.services import (bimestres, dificuldade_livro, elegibilidade, matific_destaque,
                           scoring)
 
+# ``Importacao.tipo`` do retrato gravado à mão pela escola (botão Editar das telas
+# Matific/Elefante — ``routers.plataformas._importacao_manual``).
+IMPORTACAO_AJUSTE_MANUAL = "manual"
 CAMPOS_MATIFIC = ("atividades", "estrelas", "pontuacao_media")
 CAMPOS_ELEFANTE = ("livros_unicos", "tempo_leitura_min", "questoes_tentativas", "questoes_acertos")
 # Snapshot → plataforma (o vocabulário de ``modulos.PLATAFORMA_MODULO``): é por
@@ -51,12 +56,119 @@ def _sem_fuso(momento: datetime) -> datetime:
     return momento.replace(tzinfo=None) if momento.tzinfo else momento
 
 
-def _series_por_aluno(db: Session, escola_id: int, modelo) -> dict[int, list]:
-    """Todos os snapshots da escola agrupados por aluno, em ordem cronológica.
+def ajustes_manuais(db: Session, escola_id: int, plataforma: str) -> frozenset[int]:
+    """Ids das importações da ``plataforma`` que são AJUSTE MANUAL da escola (o botão
+    Editar — e, no Elefante, também o "informar níveis" —,
+    ``routers.plataformas._importacao_manual``). É o que diz, retrato a retrato
+    (``importacao_id``), o que é número digitado e o que é coleta."""
+    return frozenset(db.execute(
+        select(Importacao.id).where(Importacao.escola_id == escola_id,
+                                    Importacao.plataforma == plataforma,
+                                    Importacao.tipo == IMPORTACAO_AJUSTE_MANUAL)
+    ).scalars())
 
-    Ordem por data_referencia (id desempata): o import por período do Matific
-    pode gravar um mês ANTIGO depois (backfill) — por id, a série ficaria fora
-    de ordem e _janela/_baseline elegeriam o passado como "atual"."""
+
+def ajustes_manuais_matific(db: Session, escola_id: int) -> frozenset[int]:
+    """``ajustes_manuais`` do Matific — a entrada de
+    ``matific_destaque.sem_ajustes_superados``."""
+    return ajustes_manuais(db, escola_id, "matific")
+
+
+def ajustes_manuais_elefante(db: Session, escola_id: int) -> frozenset[int]:
+    """``ajustes_manuais`` do Elefante — a entrada de
+    ``sem_ajustes_superados_vitalicio``."""
+    return _importacoes_especiais_elefante(db, escola_id)[0]
+
+
+def _importacoes_especiais_elefante(db: Session, escola_id: int
+                                    ) -> tuple[frozenset[int], frozenset[int]]:
+    """(ajustes manuais, coletas S9) do Elefante da escola: os ids das importações que
+    são AJUSTE MANUAL (``ajustes_manuais``) e os das coletas em que as questões NÃO
+    vieram (``Importacao.status == IMPORTACAO_SEM_QUESTOES``) — numa consulta só e, dentro
+    de ``scoring.leituras_da_requisicao``, uma vez por requisição (a série de livros e a
+    das questões leem as duas listas)."""
+    memoria = scoring.memoria_da_requisicao(db, "importacoes_especiais_elefante")
+    if memoria is not None and escola_id in memoria:
+        return memoria[escola_id]
+    manuais: set[int] = set()
+    s9: set[int] = set()
+    for iid, plataforma, tipo, situacao in db.execute(
+            select(Importacao.id, Importacao.plataforma, Importacao.tipo, Importacao.status)
+            .where(Importacao.escola_id == escola_id,
+                   or_(and_(Importacao.plataforma == "elefante",
+                            Importacao.tipo == IMPORTACAO_AJUSTE_MANUAL),
+                       Importacao.status == IMPORTACAO_SEM_QUESTOES))).all():
+        if plataforma == "elefante" and tipo == IMPORTACAO_AJUSTE_MANUAL:
+            manuais.add(iid)
+        if situacao == IMPORTACAO_SEM_QUESTOES:
+            s9.add(iid)
+    resultado = (frozenset(manuais), frozenset(s9))
+    if memoria is not None:
+        memoria[escola_id] = resultado
+    return resultado
+
+
+def sem_ajustes_superados_matific(db: Session, escola_id: int,
+                                  series: dict[int, list]) -> dict[int, list]:
+    """``series`` do Matific (por aluno) sem os ajustes manuais que uma coleta
+    posterior do mesmo ano já desmentiu (``matific_destaque.sem_ajustes_superados``).
+    Escola sem ajuste manual: devolve as séries como vieram (uma consulta só)."""
+    manuais = ajustes_manuais_matific(db, escola_id)
+    if not manuais:
+        return series
+    return {aluno_id: matific_destaque.sem_ajustes_superados(serie, manuais)
+            for aluno_id, serie in series.items()}
+
+
+def sem_ajustes_superados_vitalicio(serie, manuais) -> list:
+    """A série de um contador VITALÍCIO (Elefante) SEM os ajustes manuais que uma coleta
+    posterior já desmentiu — a regra de ``matific_destaque.sem_ajustes_superados``, sem
+    o recorte por ano.
+
+    O ajuste do Elefante (``editar_elefante``/``informar_niveis_leitura``; numa escola
+    integrada, o que o Admin Global faz quando a escola "fala com o suporte") grava um
+    retrato novo no instante do ajuste. O contador da plataforma é de vida inteira e a
+    coleta seguinte traz de novo o número DELA: se o ajuste ficasse na série, seria um
+    degrau entre duas coletas — corrigir para baixo fazia a coleta seguinte parecer
+    livros, minutos e questões do período; corrigir para cima apagava o ganho real.
+
+    REGRA: um retrato manual vale — como base E como estado atual — só enquanto
+    nenhuma COLETA (retrato que não é ajuste manual) vier depois dele, de qualquer ano
+    (o contador não zera na virada). Sem coleta depois, o ajuste é o estado vigente e
+    continua valendo; ajuste seguido de ajuste (a escola sem integração, que digita os
+    números) fica como está. Devolve a série em ordem cronológica
+    (``data_referencia``; empate preserva a ordem recebida, isto é, o id)."""
+    ordenada = sorted(serie, key=lambda s: _sem_fuso(s.data_referencia))
+    if not manuais:
+        return ordenada
+    coleta_depois = False
+    mantidos = []
+    for snap in reversed(ordenada):
+        if getattr(snap, "importacao_id", None) in manuais:
+            if coleta_depois:
+                continue       # desmentido pela coleta que veio depois
+        else:
+            coleta_depois = True
+        mantidos.append(snap)
+    mantidos.reverse()
+    return mantidos
+
+
+def sem_ajustes_superados_elefante(db: Session, escola_id: int,
+                                   series: dict[int, list]) -> dict[int, list]:
+    """``series`` do Elefante (por aluno) sem os ajustes manuais que uma coleta
+    posterior já desmentiu (``sem_ajustes_superados_vitalicio``). Escola sem ajuste
+    manual do Elefante: devolve as séries como vieram (uma consulta só)."""
+    manuais = ajustes_manuais_elefante(db, escola_id)
+    if not manuais:
+        return series
+    return {aluno_id: sem_ajustes_superados_vitalicio(serie, manuais)
+            for aluno_id, serie in series.items()}
+
+
+def _series_brutas(db: Session, escola_id: int, modelo) -> dict[int, list]:
+    """Todos os snapshots da escola agrupados por aluno, em ordem cronológica
+    (``data_referencia``; o id desempata), sem filtro nenhum."""
     series: dict[int, list] = {}
     for snap in db.execute(
         select(modelo).where(modelo.escola_id == escola_id)
@@ -66,14 +178,63 @@ def _series_por_aluno(db: Session, escola_id: int, modelo) -> dict[int, list]:
     return series
 
 
-def _baseline(serie: list, inicio: datetime):
-    """Último snapshot ANTERIOR ao início do período (None = começou do zero)."""
-    inicio = _sem_fuso(inicio)
-    anterior = None
-    for snap in serie:
-        if _sem_fuso(snap.data_referencia) < inicio:
-            anterior = snap
-    return anterior
+def _series_por_aluno(db: Session, escola_id: int, modelo) -> dict[int, list]:
+    """Todos os snapshots da escola agrupados por aluno, em ordem cronológica.
+
+    Ordem por data_referencia (id desempata): o import por período do Matific
+    pode gravar um mês ANTIGO depois (backfill) — por id, a série ficaria fora
+    de ordem e _janela elegeria o passado como "atual".
+
+    Sai da série o ajuste manual que uma coleta posterior já desmentiu — no
+    MATIFIC, a coleta do mesmo ano (``sem_ajustes_superados_matific``); no
+    ELEFANTE, qualquer coleta depois dele (``sem_ajustes_superados_elefante``) —,
+    senão ele virava base ou estado atual de um período e inventava ganho (ou o
+    apagava). É a série do Ranking de Evolução, do mural, do /insights, do app e
+    do assistente."""
+    series = _series_brutas(db, escola_id, modelo)
+    if modelo is SnapshotMatific:
+        return sem_ajustes_superados_matific(db, escola_id, series)
+    if modelo is SnapshotElefante:
+        return sem_ajustes_superados_elefante(db, escola_id, series)
+    return series
+
+
+def series_das_questoes_elefante(db: Session, escola_id: int,
+                                 serie_e: dict[int, list], *,
+                                 series_brutas: dict[int, list] | None = None) -> dict[int, list]:
+    """A série das QUESTÕES do Elefante por aluno: só os retratos que medem as
+    questões, sem o ajuste manual que uma coleta das questões desmentiu — a regra
+    das Questões do período do Relatório (``relatorios_periodo._retratos_das_questoes``).
+
+    O retrato de uma coleta em que as questões NÃO vieram (S9,
+    ``Importacao.status == IMPORTACAO_SEM_QUESTOES``) leva as questões do retrato atual
+    de antes dele — que pode ser um ajuste manual do suporte. Na série de livros e
+    tempo (``serie_e``) ele MEDE e desmente o ajuste; nas questões, ele repetia o
+    número digitado e, como base de um período, devolvia o degrau entre o digitado e
+    o número da plataforma como "questões do período" (S_G_AJUSTE-1, resíduo S9).
+    Aqui ele sai, e só a coleta que mede as questões desmente o ajuste.
+
+    Escola sem nenhuma coleta S9 (o comum): devolve ``serie_e`` como veio (uma
+    consulta só). Dentro de ``scoring.leituras_da_requisicao`` sai do banco uma vez
+    por requisição. Um chamador que só lê um aluno pode fornecer sua série bruta
+    para dispensar a varredura da escola e o cache compartilhado."""
+    memoria = (scoring.memoria_da_requisicao(db, "series_das_questoes_elefante")
+               if series_brutas is None else None)
+    if memoria is not None and escola_id in memoria:
+        return memoria[escola_id]
+    manuais, s9 = _importacoes_especiais_elefante(db, escola_id)
+    if not s9:
+        series = serie_e
+    else:
+        if series_brutas is None:
+            series_brutas = _series_brutas(db, escola_id, SnapshotElefante)
+        series = {
+            aluno_id: sem_ajustes_superados_vitalicio(
+                [s for s in serie if s.importacao_id not in s9], manuais)
+            for aluno_id, serie in series_brutas.items()}
+    if memoria is not None:
+        memoria[escola_id] = series
+    return series
 
 
 def _delta(atual, anterior, campo: str) -> float:
@@ -104,12 +265,13 @@ def _janela(serie: list, inicio: datetime | None, fim: datetime | None,
     base = último snapshot ANTES do início.
 
     Quando NÃO há estado anterior ao início:
-      * base_no_periodo=False (padrão): base = None → o ganho vira o total
-        acumulado ("aluno novo evolui a partir do zero"). É o comportamento
-        das telas de evolução/mural.
+      * base_no_periodo=False (padrão da função): base = None → o ganho vira
+        o total acumulado ("aluno novo evolui a partir do zero"). É a régua
+        ANTIGA, que premia o acumulado de quem não cresceu na janela.
       * base_no_periodo=True: base = 1º snapshot DENTRO do período → só o
         crescimento observado no intervalo conta (o acumulado anterior nunca
-        é atribuído ao período). É o exigido pelas PREMIAÇÕES (justas).
+        é atribuído ao período). É a régua JUSTA, a das premiações, do Ranking
+        de Evolução, do app, do telão, do mural (Conquistas) e do /insights.
 
     ``ano_letivo`` (opcional): descarta os snapshots fora do ano letivo ANTES de
     escolher ``atual`` e ``base`` — para séries de contadores DO ANO (Matific),
@@ -167,10 +329,27 @@ def _bucket_leitura(dt: datetime, granularidade: str) -> tuple[tuple, str]:
         # Bimestre LETIVO (calendário oficial da rede), não o do calendário civil:
         # ``(mês-1)//2+1`` chegava a rotular "5º bim" e "6º bim", que não existem
         # num ano letivo, e punha jul e ago no mesmo balde quando o 2º bimestre
-        # fecha em 23/07. ``bimestre_sugerido`` sempre devolve 1–4 (e em ano sem
-        # calendário cadastrado cai no mapa por mês), então o eixo nunca quebra.
-        bimestre = bimestres.bimestre_sugerido(dt.date())
-        return (dt.year, bimestre), f"{bimestre}º bim {dt.year}"
+        # fecha em 23/07.
+        dia = dt.date()
+        cal = bimestres.calendario(dia.year)
+        if cal is None:
+            # Ano sem calendário cadastrado: o mapa por mês (aproximado, que avisa
+            # no log) — ``bimestre_sugerido`` sempre devolve 1–4.
+            bimestre = bimestres.bimestre_sugerido(dia)
+            return (dt.year, bimestre), f"{bimestre}º bim {dt.year}"
+        # A leitura JÁ FEITA é classificada pela DATA, na janela oficial do
+        # bimestre — a mesma do Ranking de Leitura, das Premiações, do Relatório
+        # por Período e do certificado. A SUGESTÃO (``bimestre_sugerido``) põe o
+        # recesso no próximo bimestre, e o Perfil contava no "1º bim" a leitura de
+        # janeiro que o 1º bimestre não conta.
+        bimestre = bimestres.bimestre_da_data(dia)
+        if bimestre is not None:
+            return (dt.year, bimestre), f"{bimestre}º bim {dt.year}"
+        # Recesso (antes do 1º, entre dois bimestres ou depois do 4º): um balde
+        # próprio, entre os bimestres vizinhos, com o mês em que ele começa.
+        anterior = max((n for n in bimestres.BIMESTRES if cal[n][1] < dia), default=0)
+        comeca = cal[anterior][1] + timedelta(days=1) if anterior else date(dia.year, 1, 1)
+        return (dt.year, anterior + 0.5), f"Recesso {_MES_ABREV[comeca.month]}/{dt.year}"
     return (dt.year, dt.month), f"{_MES_ABREV[dt.month]}/{dt.year}"  # mês (padrão)
 
 
@@ -264,7 +443,7 @@ def linha_do_tempo(db: Session, escola_id: int, aluno_id: int,
             {
                 "data": snap.data_referencia,
                 "atividades": snap.atividades,
-                "estrelas": snap.estrelas,
+                "estrelas": int(scoring.estrelas_que_contam(snap)),
                 "pontuacao_media": snap.pontuacao_media,
             }
             for snap in matific
@@ -286,7 +465,8 @@ def resumo_evolucao(db: Session, escola_id: int, aluno_id: int, dias: int, *,
                     plataformas_fora: frozenset[str] | set[str] = frozenset()) -> dict:
     """Variação de cada indicador no período, com percentual quando possível.
     Os indicadores das ``plataformas_fora`` (módulo fora do plano) não entram."""
-    inicio = datetime.now(timezone.utc) - timedelta(days=dias)
+    agora = datetime.now(timezone.utc).replace(tzinfo=None)
+    inicio = agora - timedelta(days=dias)
     indicadores = []
     for modelo, campos in ((SnapshotMatific, CAMPOS_MATIFIC), (SnapshotElefante, CAMPOS_ELEFANTE)):
         if _PLATAFORMA_DO_MODELO[modelo] in plataformas_fora:
@@ -298,11 +478,28 @@ def resumo_evolucao(db: Session, escola_id: int, aluno_id: int, dias: int, *,
                 .order_by(modelo.data_referencia, modelo.id)
             ).scalars()
         ]
-        atual = serie[-1] if serie else None
-        anterior = _baseline(serie, inicio)
+        # O ajuste manual já desmentido pela coleta não é ponto de partida.
+        if modelo is SnapshotMatific:
+            serie = sem_ajustes_superados_matific(
+                db, escola_id, {aluno_id: serie})[aluno_id]
+            atual, anterior = _janela(serie, inicio, agora, ano_letivo=agora.year)
+        else:
+            series_brutas = {aluno_id: serie}
+            series_e = sem_ajustes_superados_elefante(db, escola_id, series_brutas)
+            series_q = series_das_questoes_elefante(
+                db, escola_id, series_e, series_brutas=series_brutas)
+            atual, anterior = _janela(series_e[aluno_id], inicio, agora)
+            atual_q, anterior_q = _janela(series_q[aluno_id], inicio, agora)
         for campo in campos:
-            valor_inicial = float(getattr(anterior, campo, 0) or 0) if anterior else 0.0
-            valor_atual = float(getattr(atual, campo, 0) or 0) if atual else 0.0
+            if campo == "estrelas":
+                valor_inicial = scoring.estrelas_que_contam(anterior) if anterior else 0.0
+                valor_atual = scoring.estrelas_que_contam(atual) if atual else 0.0
+            elif campo in {"questoes_tentativas", "questoes_acertos"}:
+                valor_inicial = float(getattr(anterior_q, campo, 0) or 0)
+                valor_atual = float(getattr(atual_q, campo, 0) or 0)
+            else:
+                valor_inicial = float(getattr(anterior, campo, 0) or 0)
+                valor_atual = float(getattr(atual, campo, 0) or 0)
             variacao = round(valor_atual - valor_inicial, 2)
             indicadores.append({
                 "indicador": campo,
@@ -372,10 +569,57 @@ class ItemEvolucao:
 def _alunos_com_leituras(db: Session, escola_id: int) -> set[int]:
     """Quem tem QUALQUER leitura individual registrada. Varredura INDEPENDENTE
     da janela — um chamador que rode várias janelas (o /insights: 30d/90d/semana/
-    base) carrega UMA vez e injeta em `_leituras_no_periodo`/`ranking_evolucao`."""
-    return set(db.execute(
+    base) carrega UMA vez e injeta em `_leituras_no_periodo`/`ranking_evolucao`.
+    Dentro de ``scoring.leituras_da_requisicao``, uma vez por requisição mesmo
+    sem injeção (o mural do dia, da semana e do mês)."""
+    memoria = scoring.memoria_da_requisicao(db, "alunos_com_leituras")
+    if memoria is not None and escola_id in memoria:
+        return set(memoria[escola_id])
+    alunos = set(db.execute(
         select(Leitura.aluno_id).where(Leitura.escola_id == escola_id).distinct()
     ).scalars().all())
+    if memoria is not None:
+        memoria[escola_id] = frozenset(alunos)
+    return alunos
+
+
+def _agora_da_requisicao(db: Session) -> datetime:
+    """O instante (UTC) de onde contam as janelas pedidas em ``dias``. Dentro de
+    ``scoring.leituras_da_requisicao`` é um só para a requisição inteira: o dia, a
+    semana e o mês do mural e a aba de 30 dias do app medem a partir do MESMO
+    agora (e a mesma janela lê as leituras uma vez); fora do bloco, o relógio."""
+    memoria = scoring.memoria_da_requisicao(db, "instante")
+    if memoria is None:
+        return datetime.now(timezone.utc)
+    if "agora" not in memoria:
+        memoria["agora"] = datetime.now(timezone.utc)
+    return memoria["agora"]
+
+
+def matriculas_ativas(db: Session, escola_id: int, ano_letivo: int) -> list:
+    """``(Matricula, Turma)`` de cada aluno ATIVO matriculado no ano letivo, com o
+    aluno já carregado (``selectinload``: quem lê ``matricula.aluno.nome`` não
+    dispara uma consulta por aluno). A coorte do ranking de evolução, dos índices
+    e dos alertas — a mesma consulta nos três. Dentro de
+    ``scoring.leituras_da_requisicao`` sai do banco uma vez por requisição (o
+    pacote do app a pedia cinco vezes)."""
+    memoria = scoring.memoria_da_requisicao(db, "matriculas_ativas")
+    if memoria is not None and (escola_id, ano_letivo) in memoria:
+        return list(memoria[(escola_id, ano_letivo)])
+    linhas = db.execute(
+        select(Matricula, Turma)
+        .join(Turma, Matricula.turma_id == Turma.id)
+        .join(Aluno, Matricula.aluno_id == Aluno.id)
+        .where(
+            Matricula.escola_id == escola_id,
+            Matricula.ano_letivo == ano_letivo,
+            Aluno.status == "ativo",
+        )
+        .options(selectinload(Matricula.aluno))  # evita N+1
+    ).all()
+    if memoria is not None:
+        memoria[(escola_id, ano_letivo)] = tuple(linhas)
+    return linhas
 
 
 def _leituras_no_periodo(db: Session, escola_id: int,
@@ -394,9 +638,14 @@ def _leituras_no_periodo(db: Session, escola_id: int,
         foi realmente lido.
 
     `alunos_com_leituras` (independente da janela) pode ser injetado para não
-    repetir o DISTINCT a cada janela."""
+    repetir o DISTINCT a cada janela. Dentro de ``scoring.leituras_da_requisicao``,
+    a MESMA janela pedida duas vezes (o mural do mês e a aba de 30 dias do app)
+    lê as leituras uma vez."""
     if alunos_com_leituras is None:
         alunos_com_leituras = _alunos_com_leituras(db, escola_id)
+    memoria = scoring.memoria_da_requisicao(db, "leituras_no_periodo")
+    if memoria is not None and (escola_id, inicio, fim) in memoria:
+        return alunos_com_leituras, memoria[(escola_id, inicio, fim)]
 
     # NÍVEL CONGELADO da leitura; nulo (leitura anterior a esta versão) cai no
     # nível ATUAL do livro. Mesma ``coalesce`` do motor, do /ranking/leitura e das
@@ -429,6 +678,8 @@ def _leituras_no_periodo(db: Session, escola_id: int,
             # título, senão o mesmo livro valeria números diferentes conforme a
             # tela (livro renomeado na escola, ou homônimo do catálogo).
             item["itens"].append((titulo or "", chave, 0, elefante_id))
+    if memoria is not None:
+        memoria[(escola_id, inicio, fim)] = dados
     return alunos_com_leituras, dados
 
 
@@ -477,6 +728,7 @@ def _referencias_por_dimensao(
     return refs, k_vol
 
 
+@scoring.com_leituras_da_requisicao
 def ranking_evolucao(db: Session, escola_id: int, inicio: datetime | None = None,
                      fim: datetime | None = None, turma_id: int | None = None,
                      ano_escolar: str | None = None,
@@ -488,6 +740,9 @@ def ranking_evolucao(db: Session, escola_id: int, inicio: datetime | None = None
                      mapa_dif: dict[tuple[str, str], float] | None = None,
                      alunos_com_leituras: set[int] | None = None,
                      base_no_periodo: bool = False,
+                     ano_letivo: int | None = None,
+                     alunos_permitidos: set[int] | None = None,
+                     serie_q: dict[int, list] | None = None,
                      ) -> list[ItemEvolucao]:
     """Ranking de quem mais cresceu DENTRO da janela [inicio, fim] (o ganho é
     medido pela `_janela`, que ignora o acumulado anterior ao período).
@@ -506,7 +761,8 @@ def ranking_evolucao(db: Session, escola_id: int, inicio: datetime | None = None
     Sub-decisão da spec §7.2 resolvida como **(a) TER SNAPSHOT**, nunca (b) ter
     crescido: quem usa a plataforma e não cresceu entra com 0,00 e fica em
     último (zero LEGÍTIMO, a mesma filosofia do Ranking Geral); quem não tem
-    dado sai da lista daquela dimensão. (b) premiaria estagnar — bastava não
+    dado sai da lista daquela dimensão — e quem não tem dado em NENHUMA sai
+    também da ordem única (``posicao``) e da lista devolvida. (b) premiaria estagnar — bastava não
     crescer para sumir do denominador — e apagaria a diferença entre "não usa" e
     "usou e não avançou", que é a informação que o professor precisa.
 
@@ -523,16 +779,28 @@ def ranking_evolucao(db: Session, escola_id: int, inicio: datetime | None = None
     numerados DENTRO do recorte (1..N de quem aparece na lista).
 
     ANO LETIVO: a série do Matific traz contadores DO ANO, então, havendo
-    ``inicio``, a `_janela` dela ignora snapshots fora do ano letivo ativo (um
+    ``inicio``, a `_janela` dela ignora snapshots fora do ano letivo (um
     dezembro anterior não é base de janeiro). A do Elefante (contadores de vida
-    inteira) não é recortada.
+    inteira) não é recortada. ``ano_letivo`` é o ano da COORTE e do contador do
+    Matific — o ativo por padrão; num período inteiro de um ano letivo já
+    encerrado, o daquele ano (``periodos.populacao_do_periodo``, decidido pela
+    rota, como nas premiações): as crianças, as turmas e a série daquele ano.
+    ``alunos_permitidos`` recorta QUEM aparece por aluno (no ano encerrado, o
+    filtro de turma e as turmas do professor, que são as de agora, escolhem as
+    crianças por ``PopulacaoDoPeriodo.alunos_das_turmas``); como os outros
+    recortes, não muda a régua.
 
     `serie_m`/`serie_e`/`mapa_dif` são as varreduras CARAS e INDEPENDENTES da
     janela; um chamador que precise de VÁRIAS janelas (o mural: dia/semana/mês)
     pode carregá-las UMA vez e injetá-las aqui, em vez de o serviço relê-las a
     cada chamada. `alunos_com_leituras` (o DISTINCT de quem tem leitura, também
     independente da janela) idem. Só a AGREGAÇÃO por janela de
-    `_leituras_no_periodo` continua por chamada (depende do intervalo)."""
+    `_leituras_no_periodo` continua por chamada (depende do intervalo).
+
+    Roda dentro de ``scoring.leituras_da_requisicao``: o perfil de scoring e os
+    pesos (os quatro ``pesos_efetivos`` abaixo), o contrato da rede e a coorte
+    saem do banco uma vez — e, quando quem chama já abriu o bloco (o mural, o
+    pacote do app, os índices), uma vez para todas as janelas."""
     escola = db.get(Escola, escola_id)
     if escola is None:
         return []
@@ -541,21 +809,11 @@ def ranking_evolucao(db: Session, escola_id: int, inicio: datetime | None = None
         # definição — não há por que calcular a escola inteira para devolver [].
         return []
     if inicio is None and dias is not None:
-        inicio = (datetime.now(timezone.utc) - timedelta(days=dias)).replace(tzinfo=None)
+        inicio = (_agora_da_requisicao(db) - timedelta(days=dias)).replace(tzinfo=None)
 
     # COORTE COMPLETA da escola — base dos ganhos e da régua. Sem filtro aqui.
-    consulta = (
-        select(Matricula, Turma)
-        .join(Turma, Matricula.turma_id == Turma.id)
-        .join(Aluno, Matricula.aluno_id == Aluno.id)
-        .where(
-            Matricula.escola_id == escola_id,
-            Matricula.ano_letivo == escola.ano_letivo_ativo,
-            Aluno.status == "ativo",
-        )
-    )
-    consulta = consulta.options(selectinload(Matricula.aluno))  # evita N+1
-    matriculas = db.execute(consulta).all()
+    ano_da_coorte = escola.ano_letivo_ativo if ano_letivo is None else ano_letivo
+    matriculas = matriculas_ativas(db, escola_id, ano_da_coorte)
 
     permitidas = set(turma_ids) if turma_ids is not None else None
 
@@ -579,6 +837,10 @@ def ranking_evolucao(db: Session, escola_id: int, inicio: datetime | None = None
         serie_m = _series_por_aluno(db, escola_id, SnapshotMatific)
     if serie_e is None:
         serie_e = _series_por_aluno(db, escola_id, SnapshotElefante)
+    # As QUESTÕES só dos retratos que as medem (sem os da coleta S9, que repetem as
+    # de antes): ``series_das_questoes_elefante`` — ``serie_e`` mesmo, sem S9.
+    if serie_q is None:
+        serie_q = series_das_questoes_elefante(db, escola_id, serie_e)
     if mapa_dif is None:   # a REGRA de dificuldade (fonte única), injetável
         mapa_dif = dificuldade_livro.regra_da_escola(db, escola_id)
     # Leituras com data REAL: para quem tem relatório individual importado, o
@@ -598,22 +860,30 @@ def ranking_evolucao(db: Session, escola_id: int, inicio: datetime | None = None
     # dado DA PLATAFORMA daquela dimensão até `fim`. Nunca "cresceu > 0".
     aferido: dict[int, dict[str, bool]] = {}
     # Contadores do Matific são DO ANO: com início, só snapshots do ano letivo.
-    ano_matific = escola.ano_letivo_ativo if inicio is not None else None
+    ano_matific = ano_da_coorte if inicio is not None else None
     for matricula, turma in matriculas:
         aluno_id = matricula.aluno_id
         atual_m, base_m = _janela(serie_m.get(aluno_id, []), inicio, fim,
                                   base_no_periodo=base_no_periodo,
                                   ano_letivo=ano_matific)
+        atividades_m = _delta(atual_m, base_m, "atividades")
         ganhos_m[aluno_id] = SimpleNamespace(
-            atividades=_delta(atual_m, base_m, "atividades"),
-            estrelas=_delta(atual_m, base_m, "estrelas"),
+            atividades=atividades_m,
+            # No máximo 5 estrelas por atividade do período (o teto das
+            # premiações, ``matific_destaque.limitar_estrelas``).
+            estrelas=matific_destaque.limitar_estrelas(
+                atividades_m, _delta(atual_m, base_m, "estrelas")),
             pontuacao_media=_delta(atual_m, base_m, "pontuacao_media"),
         )
         atual_e, base_e = _janela(serie_e.get(aluno_id, []), inicio, fim,
                                   base_no_periodo=base_no_periodo)
-        # Questões só existem agregadas (snapshot); leitura tem data real.
-        questoes_t = _delta(atual_e, base_e, "questoes_tentativas")
-        questoes_a = _delta(atual_e, base_e, "questoes_acertos")
+        # Questões só existem agregadas (snapshot); leitura tem data real. A janela
+        # delas é a da série das questões (sem os retratos S9 como borda).
+        atual_q, base_q = ((atual_e, base_e) if serie_q is serie_e else
+                           _janela(serie_q.get(aluno_id, []), inicio, fim,
+                                   base_no_periodo=base_no_periodo))
+        questoes_t = _delta(atual_q, base_q, "questoes_tentativas")
+        questoes_a = _delta(atual_q, base_q, "questoes_acertos")
         itens_periodo = None
         if aluno_id in com_leituras:
             # Fonte exata: as leituras individuais datadas dentro do período.
@@ -691,6 +961,8 @@ def ranking_evolucao(db: Session, escola_id: int, inicio: datetime | None = None
     for matricula, turma in matriculas:
         if not _no_recorte(turma):
             continue
+        if alunos_permitidos is not None and matricula.aluno_id not in alunos_permitidos:
+            continue
         aluno_id = matricula.aluno_id
         nota_m, _ = scoring.calcular_matific(
             ganhos_m[aluno_id], refs, p_matific, pct_matific, k_vol)
@@ -708,16 +980,16 @@ def ranking_evolucao(db: Session, escola_id: int, inicio: datetime | None = None
             p_geral, {DIMENSOES[d] for d, tem in marcas.items() if tem})
         nota = round(nota_m * pesos_aluno.get("matific", 0)
                      + nota_e * pesos_aluno.get("elefante", 0), 2)
-        ganhos = {
-            "atividades": ganhos_m[aluno_id].atividades,
-            "estrelas": ganhos_m[aluno_id].estrelas,
-            "livros": ganhos_e[aluno_id].livros_unicos,
-            "tempo_leitura_min": ganhos_e[aluno_id].tempo_leitura_min,
-            "acertos": ganhos_e[aluno_id].questoes_acertos,
-            # Qualidade da leitura no período (nível dos livros lidos): é o
-            # primeiro desempate da dimensão Leitura, então precisa viajar junto.
-            "pontos_dificuldade": round(pontos_dif[aluno_id], 2),
-        }
+        ganhos = {}
+        if "matematica" in contratadas:
+            ganhos.update(atividades=ganhos_m[aluno_id].atividades,
+                          estrelas=ganhos_m[aluno_id].estrelas)
+        if "leitura" in contratadas:
+            ganhos.update(livros=ganhos_e[aluno_id].livros_unicos,
+                          tempo_leitura_min=ganhos_e[aluno_id].tempo_leitura_min,
+                          acertos=ganhos_e[aluno_id].questoes_acertos,
+                          # Primeiro desempate da dimensão Leitura.
+                          pontos_dificuldade=round(pontos_dif[aluno_id], 2))
         itens.append(ItemEvolucao(
             aluno_id=aluno_id, nome=matricula.aluno.nome, turma=turma.nome,
             ano_escolar=turma.ano_escolar, nota_evolucao=nota, ganhos=ganhos,
@@ -729,6 +1001,17 @@ def ranking_evolucao(db: Session, escola_id: int, inicio: datetime | None = None
         ))
 
     _ordenar_evolucao_por_dimensao(itens, contratadas)
+
+    # AUSÊNCIA NÃO É ZERO também no legado: quem não é aferido em NENHUMA
+    # dimensão (sem retrato de plataforma contratada até `fim`) não tem
+    # crescimento a medir e não recebe posição — o mesmo corte que cada lista
+    # por dimensão já faz. Sem ele, um período sem importação devolvia a coorte
+    # inteira empatada em 0,0, numerada em ORDEM ALFABÉTICA, e a web montava o
+    # pódio (e os certificados) com esses nomes. Quem TEM dado e não cresceu
+    # continua, com 0,00 (zero legítimo). Nenhum consumidor perde informação:
+    # as listas por dimensão não contavam essas crianças, e o telão, o mural e o
+    # /insights só usam quem tem nota > 0.
+    itens = [item for item in itens if any(item.aferido.values())]
 
     # LEGADO — a ordem ÚNICA de crescimento (a que o telão, o mural e o
     # /insights ainda consomem). `aluno_id` fecha a chave para que dois
@@ -851,7 +1134,7 @@ def _indicadores_atuais(db: Session, escola_id: int, aluno_ids: list[int],
         snap_m = matific.get(aluno_id)
         if snap_m:
             total["atividades"] += snap_m.atividades
-            total["estrelas"] += snap_m.estrelas
+            total["estrelas"] += scoring.estrelas_que_contam(snap_m)   # 5/atividade
             total["pontuacao_media"] += snap_m.pontuacao_media
             com_media += 1
         snap_e = elefante.get(aluno_id)
@@ -986,32 +1269,41 @@ def resumo_turma(db: Session, escola_id: int, turma_id: int,
     if turma is None or turma.escola_id != escola_id:
         return None
     escola = db.get(Escola, escola_id)
+    ano_turma = turma.ano_letivo
     matriculas = db.execute(
         select(Matricula)
         .join(Aluno, Matricula.aluno_id == Aluno.id)
         .where(Matricula.turma_id == turma_id,
-               Matricula.ano_letivo == escola.ano_letivo_ativo,
+               Matricula.ano_letivo == ano_turma,
+               Aluno.escola_id == escola_id,
                Aluno.status == "ativo")
     ).scalars().all()
     aluno_ids = [m.aluno_id for m in matriculas]
 
     notas = db.execute(
         select(Nota).where(Nota.escola_id == escola_id,
-                           Nota.ano_letivo == escola.ano_letivo_ativo,
+                           Nota.ano_letivo == ano_turma,
                            Nota.aluno_id.in_(aluno_ids or [0]))
     ).scalars().all()
     # Uma carga só dos snapshots, usada pelos indicadores E pelo corte de
     # aferido — o discriminante é a EXISTÊNCIA do snapshot (a definição), não a
     # coluna `Nota.aferido_*` (o cache carimbado pelo recálculo). Enquanto uma
     # escola não é recalculada, o número certo é o do dado.
-    if matific is None:
-        matific = scoring._snapshots_atuais(db, escola_id, SnapshotMatific)
-    if elefante is None:
-        elefante = scoring._snapshots_atuais(db, escola_id, SnapshotElefante)
+    _, fim_ano = matific_destaque.janela_ano_letivo(ano_turma)
+    if ano_turma < escola.ano_letivo_ativo:
+        # Os indicadores do histórico não incorporam coletas posteriores à turma.
+        janela = (datetime.min, fim_ano)
+        matific = scoring._snapshots_atuais(db, escola_id, SnapshotMatific, janela=janela)
+        elefante = scoring._snapshots_atuais(db, escola_id, SnapshotElefante, janela=janela)
+    else:
+        if matific is None:
+            matific = scoring._snapshots_atuais(db, escola_id, SnapshotMatific)
+        if elefante is None:
+            elefante = scoring._snapshots_atuais(db, escola_id, SnapshotElefante)
     # Aferido em Matemática = snapshot do Matific DO ANO (a definição do motor):
     # quem só tem coleta do ano anterior não entra na média como o 0,0 que o
     # motor gravou. A cobertura segue com `matific` (qualquer época).
-    matific_ano = scoring.snapshots_matific_do_ano(db, escola_id, escola.ano_letivo_ativo)
+    matific_ano = scoring.snapshots_matific_do_ano(db, escola_id, ano_turma)
     indicadores = _indicadores_atuais(db, escola_id, aluno_ids, matific_ano, elefante)
     aferidos = {"leitura": set(elefante), "matematica": set(matific_ano)}
     contratadas = scoring.dimensoes_contratadas(db, escola)
@@ -1109,19 +1401,37 @@ def _bloco_dimensoes(contratadas: list[str], aferido: dict[str, bool],
     quando não há dado, `contratada` explícita, e o denominador ao lado. Sem
     isto, comparar um aluno com uma turma poria lado a lado um zero de ausência
     e uma média já cortada por aferido — dois números com a mesma cara e
-    significados diferentes.
+    significados diferentes. Matéria fora do plano da rede nunca é aferida
+    (o motor também não a afere: ``scoring._ordenar_por_dimensao``).
     """
+    aferido = {d: bool(aferido.get(d)) and d in contratadas for d in DIMENSOES}
     return {
         dimensao: {
             "plataforma": DIMENSOES[dimensao],
             "contratada": dimensao in contratadas,
-            "aferido": bool(aferido.get(dimensao)),
-            "nota": notas.get(dimensao) if aferido.get(dimensao) else None,
+            "aferido": aferido[dimensao],
+            "nota": notas.get(dimensao) if aferido[dimensao] else None,
             "posicao": (posicoes or {}).get(dimensao),
             "n_aferidos": (n_aferidos or {}).get(dimensao),
         }
         for dimensao in DIMENSOES
     }
+
+
+def _lado_no_plano(lado: dict, contratadas) -> dict:
+    """CONTRATO: num lado do comparador, a nota legada (``notas.matific`` /
+    ``notas.elefante``) e os indicadores da matéria que a rede NÃO contratou saem
+    NULOS — o módulo fora do plano não existe para ela, nem como zero. Sem isto,
+    um retrato antigo do Matific numa rede só com Leitura aparecia como "Nota
+    Matific 100,0" e "30 atividades" no Comparador. Mesmo formato do lado de
+    grupo pequeno (``grupo_pequeno``), que também anula com ``None``."""
+    for dimensao, plataforma in DIMENSOES.items():
+        if dimensao in contratadas:
+            continue
+        lado["notas"][plataforma] = None
+        for campo in CAMPOS_DOS_INDICADORES[dimensao]:
+            lado["indicadores"][campo] = None
+    return lado
 
 
 def _lado_aluno(db: Session, escola_id: int, aluno_id: int) -> dict | None:
@@ -1133,6 +1443,15 @@ def _lado_aluno(db: Session, escola_id: int, aluno_id: int) -> dict | None:
         select(Nota).where(Nota.aluno_id == aluno_id,
                            Nota.ano_letivo == escola.ano_letivo_ativo)
     ).scalar_one_or_none()
+    # Quem está FORA do ranking vigente (ficha inativa, sem matrícula do ano, turma de
+    # Fase) não tem posição: a gravada na Nota é de um cálculo antigo e hoje pertence a
+    # outra criança — a mesma regra do Perfil (``scoring.no_ranking_vigente``).
+    turma_do_ano = db.execute(
+        select(Turma).join(Matricula, Matricula.turma_id == Turma.id)
+        .where(Matricula.aluno_id == aluno_id,
+               Matricula.ano_letivo == escola.ano_letivo_ativo)
+    ).scalars().first()
+    no_ranking = nota is not None and scoring.no_ranking_vigente(aluno, turma_do_ano)
     elefante = scoring._snapshots_atuais(db, escola_id, SnapshotElefante)
     # Aferido em Matemática = Matific DO ANO, a definição do motor: a criança
     # que só tem coleta do ano anterior aparece "sem dado", e não "0,0".
@@ -1144,11 +1463,13 @@ def _lado_aluno(db: Session, escola_id: int, aluno_id: int) -> dict | None:
     # lado de "3º" na outra parece comparável — é exatamente o que o
     # denominador existe para impedir (spec §2). Zero consulta a mais: o número
     # já viaja dentro da linha de `notas` que acabou de ser lida. Os lados
-    # TURMA e ESCOLA já mandavam o deles.
-    detalhes_dim = ((nota.detalhes or {}).get("dimensoes") or {}) if nota else {}
+    # TURMA e ESCOLA já mandavam o deles. Fora do ranking vigente ele sai com a
+    # posição: era o "de N" do cálculo antigo.
+    detalhes_dim = ((nota.detalhes or {}).get("dimensoes") or {}) if no_ranking else {}
     n_aferidos = {d: (detalhes_dim.get(d) or {}).get("n_aferidos")
                   for d in DIMENSOES}
-    return {
+    contratadas = scoring.dimensoes_contratadas(db, escola)
+    return _lado_no_plano({
         "tipo": "aluno",
         "id": aluno.id,
         "nome": aluno.nome,
@@ -1156,11 +1477,11 @@ def _lado_aluno(db: Session, escola_id: int, aluno_id: int) -> dict | None:
         # Estado por dimensão: sem dado é `null`, não 0,0 — é o que impede a
         # tela de mostrar "0,0 em Matemática" para quem nunca abriu o Matific.
         "dimensoes": _bloco_dimensoes(
-            scoring.dimensoes_contratadas(db, escola), aferido,
+            contratadas, aferido,
             {"leitura": nota.nota_elefante if nota else None,
              "matematica": nota.nota_matific if nota else None},
-            {"leitura": nota.posicao_leitura if nota else None,
-             "matematica": nota.posicao_matematica if nota else None},
+            {"leitura": nota.posicao_leitura if no_ranking else None,
+             "matematica": nota.posicao_matematica if no_ranking else None},
             n_aferidos=n_aferidos),
         # LEGADO: as chaves antigas, preservadas bit a bit para os clientes que
         # ainda as leem. `geral` e `posicao` são a ordem única (§ Aprovação 2).
@@ -1168,9 +1489,9 @@ def _lado_aluno(db: Session, escola_id: int, aluno_id: int) -> dict | None:
             "matific": nota.nota_matific if nota else 0.0,
             "elefante": nota.nota_elefante if nota else 0.0,
             "geral": nota.nota_geral if nota else 0.0,
-            "posicao": nota.posicao if nota else None,
+            "posicao": nota.posicao if no_ranking else None,
         },
-    }
+    }, contratadas)
 
 
 def _lado_turma(db: Session, escola_id: int, turma_id: int, *,
@@ -1184,7 +1505,7 @@ def _lado_turma(db: Session, escola_id: int, turma_id: int, *,
         return None
     internas = {chave: resumo[chave] for chave in ("_aferidos", "_contribuintes")
                 if chave in resumo}
-    return {
+    return _lado_no_plano({
         **internas,
         "tipo": "turma",
         "id": resumo["turma"]["id"],
@@ -1206,7 +1527,7 @@ def _lado_turma(db: Session, escola_id: int, turma_id: int, *,
             "geral": resumo["media_geral"],
             "posicao": None,
         },
-    }
+    }, resumo["contratadas"])
 
 
 def _lado_escola(db: Session, escola_id: int, *,
@@ -1227,7 +1548,11 @@ def _lado_escola(db: Session, escola_id: int, *,
     aluno perde a matrícula, então a nota órfã de quem foi desvinculado entrava
     nas médias e no denominador de cada dimensão, e o lado "escola" do
     comparador divergia do dashboard da mesma escola. Mesma régua de
-    `resumo_turma`/`resumo_escola`, que já filtram por matrícula.
+    `resumo_turma`/`resumo_escola`, que já filtram por matrícula. E, como o
+    `resumo_escola` (a Visão da Escola) e o cartão da rede, só a matrícula numa
+    TURMA DO ANO ATIVO (S_G_GRUPO-1): a matrícula do ano ativo que ficou numa turma
+    de outro ano (dado legado) entrava no lado "escola", e escola − turmas devolvia
+    os números dessa criança.
 
     O DESEMPENHO segue os mesmos dois cortes do dashboard e do painel da rede
     (``rankings._desempenho_da_escola``, ``rede._medias_por_plataforma``): só a
@@ -1249,8 +1574,10 @@ def _lado_escola(db: Session, escola_id: int, *,
     aluno_ids = list(db.execute(
         select(Aluno.id)
         .join(Matricula, Matricula.aluno_id == Aluno.id)
+        .join(Turma, Turma.id == Matricula.turma_id)
         .where(Matricula.escola_id == escola_id,
                Matricula.ano_letivo == escola.ano_letivo_ativo,
+               Turma.ano_letivo == escola.ano_letivo_ativo,
                Aluno.status == "ativo")
     ).scalars())
     notas = db.execute(
@@ -1309,6 +1636,7 @@ def _lado_escola(db: Session, escola_id: int, *,
             "posicao": None,
         },
     }
+    _lado_no_plano(lado, contratadas)
     if com_contagem_aferidos:
         # Crianças DISTINTAS (o aluno com duas matrículas aparece duas vezes em
         # `aluno_ids`), nos mesmos conjuntos que somam os indicadores.

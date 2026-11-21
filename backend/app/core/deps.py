@@ -154,6 +154,12 @@ def escola_autorizada(
     escola = db.get(Escola, escola_id)
     if escola is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Escola não encontrada.")
+    # Referência FORTE à ficha da escola durante a sessão (a requisição): o identity
+    # map do SQLAlchemy só guarda referência fraca, e a Escola lida aqui era descartada
+    # assim que a dependência devolvia o int — o ``db.get(Escola, escola_id)`` da rota
+    # fazia um SELECT de novo (uma ida a mais, ~0,2 s, em toda rota por escola).
+    # Expirada por um commit, a ficha é relida no acesso, como sempre (DESEMPENHO-2).
+    db.info.setdefault("escolas_autorizadas", {})[escola_id] = escola
     if usuario.is_global:
         return escola_id
     if _e_secretaria(usuario):
@@ -180,7 +186,15 @@ def exigir_rede(
 ) -> int:
     """Isolamento por REDE (tier Secretaria): o usuário só acessa a PRÓPRIA rede
     (``usuario.rede_id``); o admin global acessa qualquer uma. Bloqueia IDOR
-    entre redes — uma secretaria nunca lê os dados agregados de outra."""
+    entre redes — uma secretaria nunca lê os dados agregados de outra.
+
+    A conta (não global) que JÁ É desta rede passa sem ir ao banco: ``usuarios.rede_id``
+    é chave estrangeira para ``redes`` (``ON DELETE SET NULL``), então a rede para a qual
+    a conta aponta existe. Em produção cada consulta custa ~195 ms e esta dependência está
+    em toda rota ``/redes/{id}/...`` da Secretaria. O global e a conta de outra rede seguem
+    o caminho de sempre (os mesmos 404 e 403)."""
+    if not usuario.is_global and usuario.rede_id is not None and usuario.rede_id == rede_id:
+        return rede_id
     if db.get(Rede, rede_id) is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Rede não encontrada.")
     if usuario.is_global:

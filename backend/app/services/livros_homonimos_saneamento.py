@@ -63,6 +63,13 @@ O QUE ESTE SERVIÇO NÃO FAZ, e por quê:
   ZERO duplicata provada. ``auditar`` nem as considera candidatas — a regra é a
   evidência, não uma lista de escolas.
 
+A IMPORTAÇÃO USA A MESMA REGRA. Sem isso, a coleta seguinte recriava o par: ela
+traz a leitura que está na linha ``legado`` e a resolve para a ``fonte`` do outro
+nível, e a deduplicação de releitura só compara ``livro_id``. ``recusa_do_par`` é
+a regra PROVADA como função pura (sem banco); ``_importar_elefante_leituras`` a
+aplica antes de gravar e trata o par como "já constava" (aviso e auditoria
+``leitura.duplicata_homonima_evitada``). Nada existente é alterado ali.
+
 GOVERNANÇA. Mesma régua de ``leituras_restauracao``: motivo escrito, auditoria
 item a item com o de/para, transação única, e este módulo NÃO commita — quem
 chama confirma.
@@ -193,6 +200,106 @@ def _classificar(delta_s: float | None, delta_tempo: int | None) -> str:
     return DIFERENTES
 
 
+def _deltas(data_a: datetime | None, tempo_a: int | None,
+            data_b: datetime | None, tempo_b: int | None
+            ) -> tuple[float | None, int | None]:
+    """Diferença de instante (s) e de tempo de leitura (min); None sem dado."""
+    da = _sem_tz(data_a) if data_a is not None else None
+    dbt = _sem_tz(data_b) if data_b is not None else None
+    delta_s = (abs((da - dbt).total_seconds())
+               if (da is not None and dbt is not None) else None)
+    delta_t = (abs(tempo_a - tempo_b)
+               if (tempo_a is not None and tempo_b is not None) else None)
+    return delta_s, delta_t
+
+
+def _recusa_da_regra(*, classificacao: str, delta_segundos: float | None,
+                     delta_tempo: int | None, titulo_normalizado: str,
+                     legado_origem: str | None, fonte_origem: str | None,
+                     legado_elefante_id: int | None, fonte_elefante_id: int | None,
+                     legado_livro_id: int | None, fonte_livro_id: int | None,
+                     ambiguos: dict[str, dict[int, str]]) -> str:
+    """O núcleo da regra PROVADA — o mesmo para o saneamento (``validar``) e para
+    a importação (``recusa_do_par``). Devolve "" quando o par é a duplicata
+    provada, ou o motivo de não ser. As condições são conferidas uma a uma, de
+    propósito: a mensagem diz QUAL falhou."""
+    if classificacao != PROVADA:
+        return (f"classificação {classificacao}: só {PROVADA} autoriza "
+                "remoção — instantes distintos são o caso legítimo de duas obras.")
+    if delta_segundos != 0:
+        return f"o instante difere em {delta_segundos} s; exige-se 0."
+    if delta_tempo != 0:
+        return (f"o tempo de leitura difere em {delta_tempo} min; exige-se "
+                "o mesmo tempo nas duas linhas.")
+    if legado_origem != "legado":
+        return (f"a linha que sairia tem origem {legado_origem!r}, não "
+                "'legado' — fora do padrão auditado.")
+    if fonte_origem != "fonte":
+        return (f"a linha que ficaria tem origem {fonte_origem!r}, não "
+                "'fonte' — fora do padrão auditado.")
+    if titulo_normalizado not in ambiguos:
+        return (f"o título {titulo_normalizado!r} não é um dos homônimos do "
+                "catálogo oficial.")
+    pares = ambiguos[titulo_normalizado]
+    for lado, eid in (("legado", legado_elefante_id),
+                      ("fonte", fonte_elefante_id)):
+        if eid is not None and eid not in pares:
+            return (f"o elefante_id {eid} do lado {lado} não é uma das entradas "
+                    f"homônimas do catálogo ({sorted(pares)}).")
+    if legado_livro_id is not None and legado_livro_id == fonte_livro_id:
+        return "as duas linhas apontam o MESMO livro; não há par."
+    return ""
+
+
+@dataclass(frozen=True)
+class LadoDoPar:
+    """Um lado de um par homônimo, sem banco: a linha de ``Livro`` (id, origem,
+    id oficial) e a leitura pendurada nela (instante e tempo). ``livro_id`` é
+    None para um livro que ainda não foi gravado (criado na coleta em curso)."""
+
+    livro_id: int | None
+    origem: str | None
+    elefante_id: int | None
+    data: datetime | None
+    tempo: int | None
+
+
+def recusa_do_par(titulo_normalizado: str, legado: LadoDoPar, fonte: LadoDoPar,
+                  *, ambiguos: dict[str, dict[int, str]] | None = None,
+                  aceitar_tempo_ausente: bool = False) -> str:
+    """A regra PROVADA como função pura: "" quando ``legado`` e ``fonte`` são a
+    MESMA leitura gravada nas duas linhas do título homônimo (mesmo segundo,
+    mesmo tempo, uma linha ``legado`` e uma ``fonte``); senão, o motivo.
+
+    É a regra que ``validar`` aplica a cada par do saneamento — e a que a
+    importação do Elefante usa para não gravar de novo uma leitura que já está
+    na outra linha do título (o que recriaria o par que este serviço remove).
+
+    ``aceitar_tempo_ausente`` — SÓ para a importação, onde a ação é NÃO GRAVAR e
+    nada se apaga: com o tempo AUSENTE num dos lados (ou nos dois), o mesmo segundo
+    basta. A coleta grava ``tempo_livro_min=None`` quando a plataforma não manda o
+    tempo, e o par sem tempo é INDETERMINADO para o saneamento — que nunca o remove:
+    gravado de novo, ele ficava para sempre. Tempos DIFERENTES continuam sendo duas
+    leituras, e todas as outras condições (legado + fonte, título homônimo do
+    catálogo, ids oficiais, livros distintos) valem igual. O saneamento (remoção)
+    não muda: ``validar`` não passa este parâmetro.
+    """
+    ambiguos = ambiguos if ambiguos is not None else titulos_auditados()
+    delta_s, delta_t = _deltas(legado.data, legado.tempo, fonte.data, fonte.tempo)
+    classificacao = _classificar(delta_s, delta_t)
+    if aceitar_tempo_ausente and delta_s == 0 and delta_t is None:
+        # Mesmo segundo e o tempo de um dos lados (ou dos dois) não veio: para não
+        # gravar de novo, é a mesma leitura (as demais condições seguem abaixo).
+        classificacao, delta_t = PROVADA, 0
+    return _recusa_da_regra(
+        classificacao=classificacao, delta_segundos=delta_s,
+        delta_tempo=delta_t, titulo_normalizado=titulo_normalizado,
+        legado_origem=legado.origem, fonte_origem=fonte.origem,
+        legado_elefante_id=legado.elefante_id, fonte_elefante_id=fonte.elefante_id,
+        legado_livro_id=legado.livro_id, fonte_livro_id=fonte.livro_id,
+        ambiguos=ambiguos)
+
+
 def auditar(db: Session, escola_id: int) -> list[Evidencia]:
     """Levanta TODOS os pares homônimos da escola e classifica cada um.
 
@@ -227,10 +334,8 @@ def auditar(db: Session, escola_id: int) -> list[Evidencia]:
         for aluno_id in sorted(set(leit_legado) & set(leit_fonte)):
             a, b = leit_legado[aluno_id], leit_fonte[aluno_id]
             da, dbt = _sem_tz(a.data), _sem_tz(b.data)
-            delta_s = abs((da - dbt).total_seconds()) if da and dbt else None
-            ta = a.tempo_leitura_min if a.tempo_leitura_min is not None else None
-            tb = b.tempo_leitura_min if b.tempo_leitura_min is not None else None
-            delta_t = (abs(ta - tb) if (ta is not None and tb is not None) else None)
+            ta, tb = a.tempo_leitura_min, b.tempo_leitura_min
+            delta_s, delta_t = _deltas(da, ta, dbt, tb)
             aluno = db.get(Aluno, aluno_id)
             n_ev_legado = len(list(db.execute(select(EventoAluno.id).where(
                 EventoAluno.aluno_id == aluno_id,
@@ -264,34 +369,21 @@ def validar(ev: Evidencia, *, ambiguos: dict[str, dict[int, str]] | None = None
     """Devolve "" quando a remoção é autorizada, ou o motivo da recusa.
 
     As oito condições são conferidas uma a uma, de propósito: a mensagem diz
-    QUAL falhou, e é ela que vai para o relatório do dry-run.
+    QUAL falhou, e é ela que vai para o relatório do dry-run. As sete primeiras
+    são o núcleo da regra (``_recusa_da_regra``), o mesmo que a importação usa
+    por ``recusa_do_par``.
     """
     ambiguos = ambiguos if ambiguos is not None else titulos_auditados()
-    if ev.classificacao != PROVADA:
-        return (f"classificação {ev.classificacao}: só {PROVADA} autoriza "
-                "remoção — instantes distintos são o caso legítimo de duas obras.")
-    if ev.delta_segundos != 0:
-        return f"o instante difere em {ev.delta_segundos} s; exige-se 0."
-    if ev.delta_tempo != 0:
-        return (f"o tempo de leitura difere em {ev.delta_tempo} min; exige-se "
-                "o mesmo tempo nas duas linhas.")
-    if ev.legado_origem != "legado":
-        return (f"a linha que sairia tem origem {ev.legado_origem!r}, não "
-                "'legado' — fora do padrão auditado.")
-    if ev.fonte_origem != "fonte":
-        return (f"a linha que ficaria tem origem {ev.fonte_origem!r}, não "
-                "'fonte' — fora do padrão auditado.")
-    if ev.titulo_normalizado not in ambiguos:
-        return (f"o título {ev.titulo_normalizado!r} não é um dos homônimos do "
-                "catálogo oficial.")
-    pares = ambiguos[ev.titulo_normalizado]
-    for lado, eid in (("legado", ev.legado_elefante_id),
-                      ("fonte", ev.fonte_elefante_id)):
-        if eid is not None and eid not in pares:
-            return (f"o elefante_id {eid} do lado {lado} não é uma das entradas "
-                    f"homônimas do catálogo ({sorted(pares)}).")
-    if ev.legado_livro_id == ev.fonte_livro_id:
-        return "as duas linhas apontam o MESMO livro; não há par."
+    recusa = _recusa_da_regra(
+        classificacao=ev.classificacao, delta_segundos=ev.delta_segundos,
+        delta_tempo=ev.delta_tempo, titulo_normalizado=ev.titulo_normalizado,
+        legado_origem=ev.legado_origem, fonte_origem=ev.fonte_origem,
+        legado_elefante_id=ev.legado_elefante_id,
+        fonte_elefante_id=ev.fonte_elefante_id,
+        legado_livro_id=ev.legado_livro_id, fonte_livro_id=ev.fonte_livro_id,
+        ambiguos=ambiguos)
+    if recusa:
+        return recusa
     if ev.legado_leitura_id == ev.fonte_leitura_id:
         return "as duas leituras são a MESMA linha; não há par."
     return ""

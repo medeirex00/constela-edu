@@ -18,7 +18,7 @@ test.describe("Login", () => {
     await page.getByLabel("Senha", { exact: true }).fill("senha-totalmente-errada");
     await page.getByRole("button", { name: /entrar/i }).click();
 
-    await expect(page.getByText(/incorretos|inv[aá]lid/i)).toBeVisible();
+    await expect(page.getByText(/Não foi possível entrar.*peça um link de redefinição/i)).toBeVisible();
     // Continua na tela de login (não criou sessão).
     await expect(page.getByRole("button", { name: "Menu do usuário" })).toHaveCount(0);
   });

@@ -20,6 +20,7 @@ PONTOS DE EXTENSÃO (só verificáveis com uma conta real — sem conta aqui):
 from __future__ import annotations
 
 import json
+import math
 import re
 from datetime import date, datetime, timedelta, timezone
 
@@ -35,6 +36,7 @@ from app.sync.connectors.base import (
 )
 from app.sync.connectors.navegador import Navegador
 from app.sync.interfaces import (
+    AJUSTE_DA_COLETA,
     ArquivoObtido,
     Contexto,
     Credenciais,
@@ -56,6 +58,12 @@ _API_BASE = "https://www.matific.com"
 # própria página logada já a envia (credentials:'include'); sem token/Bearer.
 _EP_CURRENT = f"{_API_BASE}/api/v2/accounts/current/"   # traz school_id do logado
 _EP_COMPETITIONS = f"{_API_BASE}/api/v2/competition-v2/"  # lista (p/ competition_id)
+# O school_student respondeu 200 fora do formato conhecido (sem a lista ``data``: a API
+# mudou). A mensagem vai crua para o alerta "Formato do relatório mudou", o log e o
+# erro_resumo da tela de Integrações — na língua do gestor, sem "conector" nem campo.
+FORMATO_DO_PLACAR_MUDOU = (
+    "O Placar do Matific respondeu num formato que o Constela não reconhece (a "
+    f"plataforma pode ter mudado a resposta). Avise o suporte: {AJUSTE_DA_COLETA}.")
 _DURATION_PADRAO = "this-year"   # "Ano acadêmico atual" (cumulativo)
 _RE_SCHOOL_ID = re.compile(r"school_id=([0-9a-f-]{36})", re.I)
 _RE_COMPETICAO = re.compile(r"/competition-v2/([0-9a-f-]{36})/", re.I)
@@ -141,12 +149,29 @@ def _slug(texto: str) -> str:
     return re.sub(r"[^a-z0-9]+", "-", (texto or "turma").lower()).strip("-")[:40] or "turma"
 
 
-def _para_int(valor) -> int:
-    """A API do Matific manda os números como STRING ('3914'). Robusto a lixo."""
+def _numero_do_placar(valor) -> int | None:
+    """Número do Placar (``score``/``activities_completed``). O exemplo do
+    docs/MATIFIC_API.md traz TEXTO numérico ('362'); número também vale. A doc não
+    diz se esses campos podem vir ``null``: não há registro de null em
+    score/activities_completed, e outros campos numéricos do Placar vêm null
+    (``rank_score``, ``bonus_score``). Qualquer outra coisa — objeto, lista,
+    booleano, texto que não é número, vazio e, por ora, ``null`` — é ILEGÍVEL e
+    devolve ``None``, nunca 0: zero no lugar do número real tirava a criança do
+    pódio e gravava retrato 0/0 (a resposta mudou de formato).
+
+    Tratar ``null`` como ilegível é decisão EM ABERTO do dono, com o efeito inteiro:
+    a coleta não grava o retrato daquela criança (alerta "Formato do relatório
+    mudou") e um null de UMA única criança recusa o pódio ao vivo inteiro da
+    "Premiar por período" (``aovivo._recusar_linhas_sem_numeros``)."""
+    if valor is None or isinstance(valor, bool) or not isinstance(valor, (str, int, float)):
+        return None
     try:
-        return int(float(str(valor).strip()))
-    except (TypeError, ValueError):
-        return 0
+        numero = float(str(valor).strip())
+    except ValueError:
+        return None
+    if not math.isfinite(numero):
+        return None
+    return int(numero)
 
 
 def _parse_data(s: str):
@@ -368,9 +393,12 @@ class ConectorMatific(ConectorNavegador):
         relatório). Linha com só parte disso é DEFEITO: não entra e é contada em
         ``descartes['sem_nome_ou_turma']`` (quando o chamador passa o dict).
 
-        Campo numérico AUSENTE (não "zero": a chave não veio — ex.: renomeado no
-        Placar) fica listado em ``ausentes`` do aluno; a sync o manda como nulo e
-        a importação NÃO grava retrato herdado com data nova (ver importacoes)."""
+        Campo numérico AUSENTE ou ILEGÍVEL (não "zero": a chave não veio — ex.:
+        renomeado no Placar — ou veio com valor que não é número, inclusive ``null``;
+        ver ``_numero_do_placar``) fica listado em ``ausentes`` do aluno e vale 0 só
+        como marcador: a sync o manda como nulo (a importação NÃO grava retrato
+        herdado com data nova, ver importacoes) e o placar ao vivo recusa a linha
+        (``aovivo._recusar_linhas_sem_numeros``)."""
         res = res if isinstance(res, dict) else {}
         body = res.get("body")
         # O corpo é uma lista com UM objeto {..., data:[...]}.
@@ -388,15 +416,14 @@ class ConectorMatific(ConectorNavegador):
                     descartes["sem_nome_ou_turma"] = descartes.get("sem_nome_ou_turma", 0) + 1
                 continue                 # fantasma (tudo vazio) ou linha com defeito
             nome = nomes.get(uuid) or abrev
+            numeros = {"estrelas": _numero_do_placar(it.get("score")),
+                       "atividades": _numero_do_placar(it.get("activities_completed"))}
             aluno = {
                 "nome": nome, "nome_abrev": abrev, "uuid": uuid, "turma": turma,
                 "serie": str(it.get("grade_code") or "").strip(),
-                "estrelas": _para_int(it.get("score")),
-                "atividades": _para_int(it.get("activities_completed")),
+                **{campo: valor or 0 for campo, valor in numeros.items()},
             }
-            ausentes = [campo for campo, chave in (("estrelas", "score"),
-                                                   ("atividades", "activities_completed"))
-                        if chave not in it]
+            ausentes = [campo for campo, valor in numeros.items() if valor is None]
             if ausentes:
                 aluno["ausentes"] = ausentes
             alunos.append(aluno)
@@ -565,10 +592,8 @@ class ConectorMatific(ConectorNavegador):
                 + (" (acesso ao dado recusado)." if codigo == "sem_acesso_ao_dado"
                    else "."), codigo=codigo, recuperavel=codigo == "falha_download")
         if not self._corpo_school_student_valido(res):
-            raise ErroConector(
-                "Resposta do Placar do Matific fora do formato conhecido (sem a lista "
-                "'data') — a API pode ter mudado. Verifique o conector.",
-                codigo="parser_incompativel", recuperavel=False)
+            raise ErroConector(FORMATO_DO_PLACAR_MUDOU,
+                               codigo="parser_incompativel", recuperavel=False)
         self._conferir_escola_do_corpo(res, school_id)
         descartes: dict = {}
         alunos = self._parse_school_student(res, nomes, descartes)
@@ -648,6 +673,15 @@ class ConectorMatific(ConectorNavegador):
             except ValueError as exc:
                 raise ErroConector("Resposta não-JSON do Matific no HTTP.",
                                    codigo="sessao_invalida", recuperavel=True) from exc
+            # JSON com status de erro (400, 404, 429, 5xx…): a plataforma disse que
+            # falhou. Antes o corpo de erro seguia adiante e virava "0 alunos" na
+            # tela da premiação — e entrava no cache. É o mesmo critério do caminho
+            # pelo navegador (``_coletar_do_placar``).
+            if not http_ok(r.status_code):
+                raise ErroConector(
+                    f"O Matific respondeu HTTP {r.status_code} à consulta do Placar. "
+                    "Tente de novo em alguns minutos.",
+                    codigo=codigo_do_http(r.status_code), recuperavel=True)
             return {"ok": True, "status": r.status_code, "body": corpo}
 
         try:
@@ -697,6 +731,11 @@ class ConectorMatific(ConectorNavegador):
                 url_ss = (f"{_API_BASE}/api/v2/reports/leaderboard/school_student/"
                           f"?{filtro}&school_id={school_id}")
                 res_ss = _get(client, url_ss)
+                # 200 fora do formato conhecido é a API que mudou: "lista vazia" aqui
+                # diria que a escola não tem alunos (mesma regra do navegador).
+                if not self._corpo_school_student_valido(res_ss):
+                    raise ErroConector(FORMATO_DO_PLACAR_MUDOU,
+                                       codigo="parser_incompativel", recuperavel=False)
                 self._conferir_escola_do_corpo(res_ss, school_id)
                 return self._parse_school_student(res_ss, nomes)
         except ErroConector:

@@ -111,8 +111,9 @@ confirma.
 - **Config** (env): `SYNC_WORKERS`, `SYNC_POLL_S`, `SYNC_MAX_TENTATIVAS`,
   `SYNC_BACKOFF_BASE_S`, `SYNC_TIMEOUT_S` (por passo do navegador),
   `SYNC_TETO_EXECUCAO_S` (teto TOTAL da coleta, 2700 s), `SYNC_LENTO_S`,
-  `SYNC_TRAVADA_S` (janela do reaper de execuções órfãs, 3600 s — tem de passar
-  do teto da coleta, senão o reaper mata uma coleta viva) e `MATIFIC_END_DATE`
+  `SYNC_TRAVADA_S` (janela da fila e do pré-requisito do agendador, 3600 s — tem
+  de passar do teto da coleta), `SYNC_SEM_SINAL_S` (execução em `executando` sem
+  nenhum registro no log há mais que isto é órfã, 900 s) e `MATIFIC_END_DATE`
   (semântica do fim do período do Matific; `desconhecida` recusa 1 dia).
 - **Recuperação:** retries com backoff exponencial até `SYNC_MAX_TENTATIVAS`;
   idempotência de fila em DUAS camadas (fast-path + **índice único parcial**
@@ -126,11 +127,18 @@ confirma.
   valor anterior (o PDF de estrelas e o Excel por turma se completam).
 - **Retomada após crash (reaper):** um worker morto/redeploy no meio deixa a
   execução presa em `executando`; como o índice de exclusão mútua a trata como
-  ativa, a escola ficaria travada. `recuperar_execucoes_travadas` (chamada no
-  início de cada rodada do scheduler) e a **auto-cura no `enfileirar`** detectam
-  execuções `executando` com `iniciada_em` além de `SYNC_TRAVADA_S` (60 min),
-  finalizam-nas como `erro` (claim atômico) e **re-enfileiram** uma nova
-  tentativa. Se o `enfileirar` perde a corrida do claim para o reaper
+  ativa, a escola ficaria travada. Quem está rodando dá **sinal de vida**: uma
+  thread escreve no log da execução a cada `SYNC_SEM_SINAL_S`/6 (só se ninguém
+  escreveu lá nesse intervalo), por no máximo 2 × `SYNC_TRAVADA_S`.
+  `recuperar_execucoes_travadas` (chamada no início de cada rodada do
+  scheduler), o boot, a **auto-cura no `enfileirar`** e, com o agendador
+  desligado, a leitura do `/status` detectam execuções `executando` sem nenhum
+  registro no log (nem início) há mais de `SYNC_SEM_SINAL_S` (15 min),
+  finalizam-nas como `erro` (claim atômico) e o reaper **re-enfileira** uma nova
+  tentativa. Uma coleta viva além de 60 min não é reivindicada; a morta num
+  redeploy sai em ~15 min. O fim de uma execução só grava sobre `executando`
+  (UPDATE condicional): reivindicada no meio, o `erro` de quem a encerrou fica,
+  e o dado já gravado vira recálculo pendente. Se o `enfileirar` perde a corrida do claim para o reaper
   concorrente, ele **re-checa** o estado (em vez de devolver a órfã morta) e
   cria a execução pedida — o clique nunca some. Assim o botão "Sincronizar" e a
   agenda voltam a funcionar sozinhos, sem intervenção no banco — testado
@@ -216,6 +224,31 @@ Frontend: `apps/web/src/pages/Comecar.tsx` + `components/CredenciaisForm.tsx`
     `studentId` recebidos passam pela mesma normalização que grava a identidade
     (`importacao.student_id_elefante`: sem espaços, sem o sufixo `.0`, nunca só
     zeros), para `" 123 "` ou `123.0` não virarem aviso falso.
+- **Troca de sala do Matific só na MESMA série** (S_G_VIRADA-1,
+  `importacoes._mesma_serie`): a coleta move a matrícula entre turmas ativas e
+  já cadastradas da mesma etapa **e da mesma série** (o 3º A para o 3º B). Turma
+  de outra série vira aviso na importação e a matrícula fica onde está: mudar de
+  série é a virada do ano letivo (a matrícula do ano novo vem da Lista Piloto),
+  não troca de sala. Antes, na virada, o Placar já com as turmas do ano seguinte
+  levava o 3º A inteiro para o 4º A do ano que terminou. Se a criança mudou mesmo
+  de série no meio do ano, a turma é trocada à mão em Alunos.
+- **Coleta fora do ano letivo ativo** (S_G_VIRADA-1; o dia da coleta conta pelo
+  horário de Brasília): a coleta feita num dia de outro ano que o ano letivo ativo
+  da escola (em janeiro/fevereiro, com a escola ainda no ano que terminou; ou com o
+  ano ativo adiantado) **grava os números de quem já tem ficha**, mas **não move
+  matrícula nem cria ficha**. A criança sem ficha fica de fora (descarte
+  `coleta_fora_do_ano_letivo`), com o cursor dela desfeito: a coleta depois da
+  virada (o administrador global troca o "Ano letivo ativo" e a escola envia a
+  Lista Piloto do ano novo) a traz. Quando isso deixa alguém de fora (ficha não
+  criada ou matrícula não movida), abre o aviso **`coleta_fora_do_ano_letivo`**
+  (sem nome de criança, com o que fazer), que fecha sozinho na primeira coleta
+  feita dentro do ano letivo que termina sem falha, e **não** é correspondência
+  pendente (a linha dessa criança não vai para a Revisão de identidade). Se
+  nenhuma conta já ligada a uma ficha da escola veio na coleta, nada foi
+  atualizado: a execução termina
+  `sem_atualizacao` com o motivo `fora_do_ano_sem_conferencia` e não conta como
+  coleta em dia. O destino da criança sem ficha na janela da virada é decisão
+  pendente do dono.
 
 ## Estados da execução: "em dia", "verificado" e período (revisão e93)
 - **Em dia** (fecha o alerta crítico `desatualizada`): coleta completa e sem

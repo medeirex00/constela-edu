@@ -506,12 +506,22 @@ def test_sem_atividade_e_fora_do_ano_letivo(cliente, escola_completa):
     eid = escola_completa["escola"].id
     d = cliente.get(_url(eid, "matific", f"atividades=5&estrelas=10&{Q_AGOSTO}")).json()
     assert d["motivo"] == "sem_atividade" and d["calculo"] is None
+    # Fora do ano letivo: um período DEPOIS dele (antes da virada) não tem janela.
+    d = cliente.get(_url(eid, "matific", "atividades=5&estrelas=10&periodo=personalizado"
+                                          "&inicio=2027-03-01&fim=2027-03-31")).json()
+    assert d["motivo"] == "fora_do_ano_letivo" and d["regua"]["k_mediana_atividades"] is None
+    # Um período de ano letivo JÁ ENCERRADO usa a régua daquele ano, a mesma das
+    # premiações (S_G_VIRADA-2): aqui ninguém fez atividade em 2025.
     d = cliente.get(_url(eid, "matific", "atividades=5&estrelas=10&periodo=personalizado"
                                           "&inicio=2025-03-01&fim=2025-03-31")).json()
-    assert d["motivo"] == "fora_do_ano_letivo" and d["regua"]["k_mediana_atividades"] is None
-    d = cliente.get(_url(eid, "matific", "atividades=5&estrelas=10&periodo=personalizado"
-                                          "&inicio=2026-08-31&fim=2026-08-01")).json()
-    assert d["motivo"] == "periodo_invalido"
+    assert d["motivo"] == "sem_atividade" and d["regua"]["ano_letivo"] == 2025
+    # Datas trocadas: o 422 do serviço de períodos, com a frase do Relatório por Período
+    # (PERIODOS-6; antes era 200 com motivo "periodo_invalido").
+    r = cliente.get(_url(eid, "matific", "atividades=5&estrelas=10&periodo=personalizado"
+                                          "&inicio=2026-08-31&fim=2026-08-01"))
+    assert r.status_code == 422
+    assert r.json()["detail"] == ("A data inicial (31/08/2026) é posterior à final "
+                                  "(01/08/2026) — inverta as duas.")
     # Sem período: o padrão é o mesmo da rota de Premiações ("mes").
     d = cliente.get(_url(eid, "matific", "atividades=5&estrelas=10")).json()
     assert d["periodo"]["chave"] == "mes"

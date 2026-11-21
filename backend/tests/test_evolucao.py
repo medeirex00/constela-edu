@@ -6,6 +6,17 @@ import pytest
 from app.models import Importacao, SnapshotElefante, SnapshotMatific
 from app.services import evolucao as svc
 from app.services import scoring
+from tests._ano_letivo import escola_no_ano_de_hoje  # noqa: F401 — fixture
+
+
+@pytest.fixture(autouse=True)
+def _relogio(relogio_no_ano_letivo):
+    """Os retratos daqui são de "N dias atrás" (de 1 a 60) e as janelas, de 30 dias; o
+    Matific é contador DO ANO. Nas primeiras semanas de janeiro N dias atrás é o ano
+    passado e o cenário deixa de existir (o veterano "parado há 60 dias" nem é aferido):
+    o relógio fica no ano letivo da escola com folga para trás — autouse, antes de
+    qualquer login."""
+    return relogio_no_ano_letivo
 
 
 def _importacao(db, escola_id) -> Importacao:
@@ -194,6 +205,8 @@ def test_estatisticas_cartaz_usa_snapshot_atual(db, escola_completa):
     _snap_matific(db, escola.id, importacao, ana.id, 1, atividades=90, estrelas=45)
     _snap_elefante(db, escola.id, importacao, ana.id, 1, livros_unicos=7)
     db.commit()
+    # Os cartões somam só quem está na tabela do cartaz (tem Nota do ano).
+    scoring.recalcular_escola(db, escola.id)
 
     stats = rel.estatisticas_cartaz(db, escola.id)
     assert stats["atividades"] == 90  # snapshot atual, não max(100, 90)

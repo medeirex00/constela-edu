@@ -366,9 +366,13 @@ def test_secretaria_mantem_a_visao_agregada_da_rede(cenario):
     for rota in (f"/api/v1/redes/{cenario['rede']}/dashboard",
                  f"/api/v1/redes/{cenario['rede']}/ranking",
                  f"/api/v1/escolas/{cenario['escola']}/resumo-escola",
-                 f"/api/v1/escolas/{cenario['escola_b']}/dashboard",
                  "/api/v1/escolas"):
         assert sec.get(rota).status_code == 200, rota
+    # O painel da ESCOLA (`/escolas/{id}/dashboard`) não é a visão agregada dela:
+    # recortado pelas turmas que ela não tem, saía 200 com tudo zerado (PEND-31).
+    # Ela recebe 403 explicado e vê a escola pelo Panorama da Rede.
+    r = sec.get(f"/api/v1/escolas/{cenario['escola_b']}/dashboard")
+    assert r.status_code == 403 and "Panorama da Rede" in r.json()["detail"], r.text
 
 
 # =============================================================================

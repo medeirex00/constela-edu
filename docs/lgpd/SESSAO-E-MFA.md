@@ -44,18 +44,60 @@ foi implementado, porque as duas mudanças alteram o login de todos os usuários
 | por conta | 20 falhas em 15 min | memória, por processo | não |
 | falhas por IP, em qualquer conta (IPv6 pela rede /64) | 50 em 5 min | memória **e** banco: `quest_limites_acesso`, dimensão `edu_login_ip_falha` | `EDU_LOGIN_TETO_IP_FALHAS`, `EDU_LOGIN_TETO_IP_JANELA_S` |
 | global (todos os IPs somados) | 400 em 5 min | memória **e** banco: dimensão `edu_login_global_falha` | `EDU_LOGIN_TETO_GLOBAL_FALHAS`, `EDU_LOGIN_TETO_GLOBAL_JANELA_S` |
+| logins correndo ao mesmo tempo (desde 11/11/2026) | 8 por processo | memória, por processo (`portao_login`) | não |
 
 - Os dois tetos persistentes valem entre os workers/réplicas e sobrevivem ao deploy; usam
   a tabela de limites do Quest (migração 0037) com dimensões próprias do Edu (prefixo
   `edu_login_`), e o IP só vai para o banco como HMAC. São conferidos **antes** de
   procurar a conta (a mesma resposta exista a conta ou não) e só **falhas** contam (o
   login certo não soma nem zera; o 429 não realimenta o contador).
+- **O teto vale também para logins simultâneos (desde 11/11/2026, auditoria
+  G_CARGA-3).** Antes o teto era conferido no começo do login e a falha contada no fim:
+  numa rajada de logins simultâneos de um IP só, todos os que chegavam antes de a 50ª
+  falha ser gravada seguiam até a conferência da senha (108 palpites avaliados, com 2
+  workers). Agora a tentativa é **reservada** no banco antes de procurar a conta, numa
+  instrução atômica que confere o teto e soma 1 (no IP e no global, as duas ou
+  nenhuma); se ela não virar falha (login certo, conta desativada com senha válida ou
+  erro inesperado), a vaga volta. Enquanto uma tentativa está em andamento ela ocupa a vaga
+  dela: com o IP a uma falha do teto, outra tentativa que chegue no mesmo instante pode
+  receber o 429 (a espera anunciada é a do bloqueio, a que vale se a tentativa em
+  andamento virar falha). A recusa vista no banco vale também na memória do processo
+  que a recebeu, mas só por **5 segundos** (as tentativas seguintes param ali, sem ir
+  ao banco); depois o banco é consultado de novo e decide. Curta de propósito
+  (REV2-AUTH2-1): a vaga que enche o teto pode ser de uma tentativa ainda em andamento
+  noutro processo, que volta se não virar falha; guardada pela espera inteira, um
+  login certo em andamento deixava o IP — ou, no teto global, o login de todos —
+  recusado por 5 min naquele processo, com o banco já abaixo do teto.
 - As variáveis são lidas no boot (mudar exige reiniciar o serviço); teto ≥ 1 e janela
   de 60 s a 1 h. Os limites por conta e por (conta, IP) seguem fixos e só em memória
   (zeram no restart e não valem entre réplicas).
+- **Resposta uniforme no login (REV3-SEG-1).** Os limites por conta e por (conta, IP)
+  devolvem o mesmo 401 de credencial inválida, com orientação para pedir um link de
+  redefinição à administração. A recusa conta como falha nos tetos públicos e mantém
+  a janela original do bloqueio da conta. E-mail e nome de usuário da mesma conta
+  compartilham o limite. A redefinição da senha troca a versão da sessão e libera o
+  limite da conta. Os tetos públicos por IP e global e o portão de concorrência exibem
+  429 com orientação de espera.
 - O teto por IP tem de ficar **abaixo** do global: com `EDU_LOGIN_TETO_IP_FALHAS` ≥
   `EDU_LOGIN_TETO_GLOBAL_FALHAS`, um IP só travaria o login de todos — o boot avisa em dev
   e recusa com `ENV=producao` (desde 01/11/2026).
+- **Rajada de logins não para a API (desde 11/11/2026, auditoria G_CARGA-1).** Até então
+  cada falha era contada no banco dentro da transação do login, e a linha do teto global
+  (uma só para a API inteira) ficava presa por várias idas ao banco (~195 ms cada em
+  produção): todas as falhas passavam em fila por ela, cada pedido esperando com uma
+  thread e uma conexão do worker, e 240 logins errados — abaixo dos tetos — deixavam as
+  sessões já abertas esperando até 75 s por requisição. Agora: (1) a falha é contada numa
+  única instrução atômica, em AUTOCOMMIT e fora da transação do login, e a linha fica
+  presa só durante essa instrução; (2) a instrução desiste da linha presa por outra
+  transação depois de 0,5 s (`lock_timeout`) e a falha fica só na memória do processo,
+  com um aviso no log (`limites.contagem_sem_trava`); (3) cada processo deixa correr no
+  máximo **8 logins ao mesmo tempo** (`EDU_LOGIN_SIMULTANEOS`, ajustável em produção sem
+  mudar o código; mínimo 1): quem chega com os 8 ocupados recebe na hora o 429
+  "Muitas pessoas estão entrando ao mesmo tempo. Aguarde alguns segundos e tente
+  novamente.", sem nenhuma ida ao banco (aviso no log `login.simultaneos_no_teto`, no
+  máximo um por minuto). Com isso a rajada usa no máximo 8 das 40 threads e 8 das 30
+  conexões de cada worker. O login por código do Quest conta as falhas do mesmo jeito
+  (1) e (2); o portão (3) não vale para ele (ver o trade-off abaixo).
 
 **Trade-off do teto global (aceito, o mesmo do login por código do Quest).** Ao chegar no
 teto, o `/auth/login` responde 429 para **todas** as contas até o fim do bloqueio (uma
@@ -68,6 +110,17 @@ precisa entrar naquele intervalo. Se o uso real chegar perto do teto, ou diante 
 ataque desse tipo, o valor pode **subir em produção** pela variável
 `EDU_LOGIN_TETO_GLOBAL_FALHAS` (reinício do serviço, sem mudar código) — ao custo de
 deixar passar mais palpites distribuídos antes do corte.
+
+**Trade-off do portão de logins simultâneos (11/11/2026).** Durante uma rajada, quem tenta
+entrar também pode receber o 429 "Muitas pessoas estão entrando ao mesmo tempo" e precisa
+tentar de novo em alguns segundos; as **sessões já abertas seguem sendo atendidas** (antes
+da correção, elas também paravam). No uso real o portão não aparece: um login leva ~1–2 s
+em produção e a equipe raramente tem mais de 8 entrando no mesmo instante em cada
+processo. O login por código do Quest ficou **sem** portão: as crianças de uma turma
+entram juntas no começo da aula, e um teto mal escolhido as mandaria esperar — decisão
+pendente do dono. Sem ele, uma rajada contra o Quest ainda disputa as threads do worker
+(as sessões abertas ficam mais lentas por alguns segundos), mas não volta à fila da linha
+global.
 
 ## 2. Riscos
 

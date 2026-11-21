@@ -96,13 +96,14 @@ describe("SeloFrescor", () => {
     expect(screen.queryByText(/Funcionando/i)).not.toBeInTheDocument();
   });
 
-  it("coleta parcial: diz quantos alunos estão com retrato antigo", () => {
+  it("parcial: diz quantos alunos estão com retrato antigo", () => {
     render(<SeloFrescor
       frescor={frescor({ estado: "parcial", alunos_com_dado: 40, alunos_com_dado_antigo: 6,
         dado_mais_antigo_em: "2026-09-02" })}
       dimensoes={["leitura"]} />);
     const aviso = screen.getByRole("status");
-    expect(aviso).toHaveTextContent("Coleta parcial: 6 de 40 aluno(s)");
+    // Não diz "Coleta parcial": sem integração, o estado vem do número digitado, sem coleta.
+    expect(aviso).toHaveTextContent("Parte dos dados é antiga: 6 de 40 aluno(s)");
     expect(aviso).toHaveTextContent("02/09/2026");
   });
 

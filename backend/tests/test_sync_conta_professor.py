@@ -65,8 +65,8 @@ def test_a_sync_cria_a_conta_do_professor_sem_senha_conhecida(db, escola_complet
                     "quintela123", "marisaquintela", "12345678", conta.email}
     for senha in previsiveis:
         # A lista de candidatos cresceu (todas as caixas do nome/@) além do teto
-        # do limitador de login: zera-o a cada tentativa para que CADA senha
-        # receba a recusa por senha errada (401), não o 429 do limitador.
+        # do limitador de login. Zere o contador a cada tentativa para testar
+        # cada senha; o bloqueio da conta também responde com o mesmo 401.
         _zerar_limitadores()
         assert _login("MarisaQuintela", senha).status_code == 401, senha
 

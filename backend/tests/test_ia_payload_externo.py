@@ -1,7 +1,8 @@
 """Assistente com provedor EXTERNO: nenhum dado identificável de aluno sai (A1).
 
 O provedor externo é substituído por um FALSO que captura o que iria pela rede:
-o ``anthropic.Anthropic`` (``messages.create``) e o ``httpx.post`` da OpenAI. O
+o ``anthropic.Anthropic`` (``messages.create``) e o cliente HTTP da OpenAI
+(``provedores._cliente_http``, com um transporte falso do httpx). O
 fluxo é o real, ponta a ponta: o Admin Global liga o provedor pela API (P9), o
 admin da escola pergunta pela API e a configuração da escola escolhe o provedor.
 
@@ -10,6 +11,7 @@ nome sozinho, o nome sem acento ("joao"), o RA e o e-mail digitados na pergunta
 saíam como foram escritos, e voltavam a sair a cada pergunta seguinte, no
 histórico. Dados fictícios.
 """
+import json
 import re
 import unicodedata
 from types import SimpleNamespace
@@ -99,26 +101,36 @@ def _falso_anthropic(monkeypatch, captura: _Captura):
                 SimpleNamespace(type="text", text=f"O destaque é {token}.")])
 
     class Cliente:
-        def __init__(self, api_key):
+        def __init__(self, api_key, **_opcoes):  # timeout, max_retries (o prazo)
             captura.api_key = api_key
             self.messages = Mensagens()
 
     monkeypatch.setattr(anthropic, "Anthropic", Cliente)
 
 
+# Cabeçalhos que o próprio httpx põe em todo pedido; o resto veio do provedor.
+_CABECALHOS_DO_HTTPX = {"host", "accept", "accept-encoding", "connection", "user-agent",
+                        "content-length", "content-type"}
+
+
 def _falso_openai(monkeypatch, captura: _Captura):
     import httpx
 
-    def post(url, headers=None, json=None, timeout=None):
-        assert url == "https://api.openai.com/v1/chat/completions"
-        captura.corpos.append(json)
-        captura.cabecalhos.append(headers)
-        token = re.search(r"Aluno \d+", json["messages"][0]["content"]).group(0)
-        return SimpleNamespace(
-            raise_for_status=lambda: None,
-            json=lambda: {"choices": [{"message": {"content": f"O destaque é {token}."}}]})
+    from app.services.ia import provedores
 
-    monkeypatch.setattr(httpx, "post", post)
+    def responder(pedido: httpx.Request) -> httpx.Response:
+        assert str(pedido.url) == "https://api.openai.com/v1/chat/completions"
+        corpo = json.loads(pedido.content)
+        captura.corpos.append(corpo)
+        captura.cabecalhos.append({
+            nome.decode(): valor.decode() for nome, valor in pedido.headers.raw
+            if nome.decode().lower() not in _CABECALHOS_DO_HTTPX})
+        token = re.search(r"Aluno \d+", corpo["messages"][0]["content"]).group(0)
+        return httpx.Response(
+            200, json={"choices": [{"message": {"content": f"O destaque é {token}."}}]})
+
+    monkeypatch.setattr(provedores, "_cliente_http", lambda _limite: httpx.Client(
+        transport=httpx.MockTransport(responder)))
 
 
 def _pergunta_com_tudo(ana, joao, sofia) -> str:

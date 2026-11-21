@@ -42,5 +42,6 @@ class Usuario(Base):
     token_version: Mapped[int] = mapped_column(default=0)
     # Notificações (Fase 2): maior id de notificação que este usuário já viu.
     # Não-lidas = avisos do feed dele com id maior que este. Barato e por conta.
-    notificacoes_lidas_ate_id: Mapped[int] = mapped_column(default=0)
+    notificacoes_lidas_ate_id: Mapped[int] = mapped_column(default=0,
+                                                           server_default="0")  # o da 0025
     created_at: Mapped[datetime] = mapped_column(default=agora)

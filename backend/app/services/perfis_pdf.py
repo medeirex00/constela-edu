@@ -50,9 +50,10 @@ from app.services.importacao import (
     _casar_coluna,
     _eh_coluna_nome,
     _fechar_linha,
-    _numero,
+    _numero_plausivel,
     _similaridade,
     normalizar_nome,
+    valor_plausivel,
 )
 
 # Vocabulário OFICIAL de níveis do Elefante (escada A3 AA…Z + tiers Z+ e A+) —
@@ -1978,17 +1979,27 @@ def _tabela_posicional(
 
 
 def _atribuir(item: LinhaImportacao, campo: str, bruto: str, conversor) -> None:
-    """Conversão tolerante: falha vira aviso, nunca derruba a linha (§51)."""
+    """Conversão tolerante: falha vira aviso, nunca derruba a linha (§51).
+
+    Número impossível (infinito, ou acima de ``VALOR_MAXIMO`` — o RA ou o telefone
+    caído na coluna) também é ilegível: a mesma régua da planilha e do /confirmar
+    (``importacao.valor_plausivel``). Antes o "inf" estourava ``int()`` com
+    OverflowError e derrubava a prévia inteira, e o gigante só era recusado (400)
+    na confirmação."""
     if not bruto:
         return
     try:
-        item.dados[campo] = conversor(bruto)
-    except (ValueError, TypeError):
+        valor = conversor(bruto)
+        if (isinstance(valor, (int, float)) and not isinstance(valor, bool)
+                and not valor_plausivel(valor)):
+            raise ValueError("fora da faixa")
+        item.dados[campo] = valor
+    except (ValueError, TypeError, OverflowError):
         item.avisos.append(f"“{campo}” ilegível ({bruto!r}) — campo ficará ausente.")
 
 
 def _inteiro(bruto: str) -> int:
-    return int(_numero(bruto))
+    return int(_numero_plausivel(bruto))
 
 
 # --------------------------------------------------------------------------
@@ -2543,7 +2554,7 @@ class PerfilMatific:
                                    dados={})
             _atribuir(item, "atividades", registro.texto("atividades"), _inteiro)
             _atribuir(item, "pontuacao_media",
-                      registro.texto("pontuacao_media"), _numero)
+                      registro.texto("pontuacao_media"), _numero_plausivel)
             _atribuir(item, "estrelas", registro.texto("estrelas"), _inteiro)
             serie = registro.texto("serie")
             if serie:

@@ -35,6 +35,9 @@ _SEM_TRAVA_DE_PROPOSITO = {
         "risco residual declarado: salvar/testar credencial com o módulo desligado",
     "app.sync.router.remover_credenciais":
         "remover a credencial tem de seguir possível com o módulo desligado",
+    "app.routers.admin.restaurar_backup":
+        "só descarta o cache do ao vivo do Matific da escola restaurada (G_LGPD-8), "
+        "rota do Admin Global: nenhum dado do Matific sai na resposta",
 }
 
 

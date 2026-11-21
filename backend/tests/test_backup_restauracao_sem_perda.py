@@ -27,6 +27,7 @@ from sqlalchemy import select
 from app.core.database import Base
 from app.models import (
     Aluno,
+    Escola,
     EventoAluno,
     IdentidadeExterna,
     Importacao,
@@ -206,10 +207,28 @@ def test_roundtrip_preserva_identidade_externa_evento_e_marcador(cliente, client
     """O caso que reabria o P0: o mapa UUID↔aluno tem de sobreviver ao restore.
 
     Antes da correção este teste falhava em ``IdentidadeExterna 1 → 0``.
+
+    A restauração APAGA as fichas e as recria com ids novos: o nome e os ids antigos
+    são lidos ANTES (depois, a ficha antiga não existe — no PostgreSQL, lê-la dá
+    ``ObjectDeletedError``). E uma escola vizinha com ficha, livro e importação de id
+    MAIOR impede o banco de devolver os ids antigos (o SQLite reaproveita o maior id
+    livre): sem ela, "aponta o id novo" passava no SQLite sem remapeamento nenhum
+    (S_G_LGPD-3). A suíte também roda no PostgreSQL (``_pg``).
     """
     escola = escola_completa["escola"]
     ana = escola_completa["alunos"][0]
     _dados_do_aluno(db, escola, ana)
+    vizinha = Escola(nome="ESCOLA TESTE VIZINHA", ano_letivo_ativo=escola.ano_letivo_ativo)
+    db.add(vizinha)
+    db.flush()
+    db.add_all([Aluno(escola_id=vizinha.id, nome="Crianca Vizinha Ficticia"),
+                Livro(escola_id=vizinha.id, titulo="Livro Vizinho Ficticio", nivel_codigo="D"),
+                Importacao(escola_id=vizinha.id, plataforma="matific", tipo="pdf")])
+    db.commit()
+    nome_ana, id_antigo = ana.nome, ana.id
+    livro_antigo = db.execute(select(Livro.id).where(Livro.escola_id == escola.id)).scalar_one()
+    importacao_antiga = db.execute(select(Importacao.id).where(
+        Importacao.escola_id == escola.id)).scalar_one()
 
     baixado = cliente.get(f"{_base(escola.id)}/backup")
     assert baixado.status_code == 200
@@ -221,7 +240,8 @@ def test_roundtrip_preserva_identidade_externa_evento_e_marcador(cliente, client
 
     db.expire_all()
     nova_ana = db.execute(select(Aluno).where(Aluno.escola_id == escola.id,
-                                              Aluno.nome == ana.nome)).scalars().one()
+                                              Aluno.nome == nome_ana)).scalars().one()
+    assert nova_ana.id != id_antigo, "a ficha recriada tem id novo: é ele que as FKs seguem"
 
     identidades = db.execute(select(IdentidadeExterna)
                              .where(IdentidadeExterna.escola_id == escola.id)).scalars().all()
@@ -239,9 +259,11 @@ def test_roundtrip_preserva_identidade_externa_evento_e_marcador(cliente, client
     assert evento.chave_natural == "hash-determinístico-1"
     assert evento.dados == {"genero": "ficção"}
     # FKs para livro e importação também remapeadas (não apontam para o ID velho)
+    assert evento.livro_id != livro_antigo and evento.importacao_id != importacao_antiga
     livro = db.get(Livro, evento.livro_id)
     assert livro is not None and livro.titulo == "O Pequeno Príncipe"
-    assert db.get(Importacao, evento.importacao_id) is not None
+    assert livro.escola_id == escola.id
+    assert db.get(Importacao, evento.importacao_id).escola_id == escola.id
 
     marcadores = db.execute(select(SyncMarcador)
                             .where(SyncMarcador.escola_id == escola.id)).scalars().all()

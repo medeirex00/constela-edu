@@ -43,6 +43,7 @@ import { TabelaRolavel } from "../components/TabelaRolavel";
 import { BotaoIcone, Card, Carregando, Chip, Erro, PageHeader, Vazio } from "../components/ui";
 import { useApp } from "../context/AppContext";
 import { useApi } from "../hooks/useApi";
+import { useCalendarioBimestres } from "../lib/calendarioBimestres";
 import { nomeArquivoCsv, type TabelaCsv } from "../lib/csvRanking";
 import { dataHora, numero } from "../lib/formato";
 import { bimestreDoPeriodo } from "../lib/tiposCertificados";
@@ -86,6 +87,9 @@ export default function RankingMatematica({ embutido = false, alvoAcoes }: {
   const { dados: turmasBase } = useApi<Turma[]>(
     escolaId ? `/escolas/${escolaId}/turmas` : null, { cacheMs: 60_000 });
   const turnoAtivo = turnoEfetivo(turno, turmasBase);
+  // Calendário oficial do backend: "Este bimestre" ganha o número (e o lote de
+  // certificados abre nele) também nos anos fora da cópia de 2026 da web.
+  const calendario = useCalendarioBimestres(escolaId);
 
   const isAno = periodo.preset === "ano_letivo";
   // Personalizado só busca com as duas datas — evita disparar login pela metade.
@@ -204,7 +208,7 @@ export default function RankingMatematica({ embutido = false, alvoAcoes }: {
 
   const atualizadoEm = !isAno && live.dados?.atualizado_em ? dataHora(live.dados.atualizado_em) : null;
 
-  const rotuloPeriodo = rotuloDoPeriodo(periodo);
+  const rotuloPeriodo = rotuloDoPeriodo(periodo, new Date(), calendario);
   const recorte = [
     alvo.startsWith("turma:") ? alvo.slice(6) : alvo.startsWith("serie:") ? `${alvo.slice(6)} (todas as turmas)` : null,
     turnoAtivo !== TURNO_TODOS ? (turnoAtivo === TURNO_SEM ? "turmas sem turno" : rotuloTurno(turnoAtivo)) : null,
@@ -235,7 +239,7 @@ export default function RankingMatematica({ embutido = false, alvoAcoes }: {
         modeloInicial: "matific",
         contexto: `Ranking · Matemática, placar do Matific (estrelas) · ${rotuloPeriodo}${recorte ? ` · ${recorte}` : ""}`,
         // Placar de um bimestre: o bimestre impresso abre nele, não no de hoje.
-        bimestreInicial: bimestreDoPeriodo(periodo.preset),
+        bimestreInicial: bimestreDoPeriodo(periodo.preset, new Date(), calendario),
       }}
     />
   );

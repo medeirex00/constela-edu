@@ -177,11 +177,17 @@ def _linhas(db: Session, avaliacao: AvaliacaoExterna | None, codigo: str,
     if avaliacao is None:
         return []
     alvos = _alvos(codigo)
-    linhas = db.execute(select(IndicadorReferencia).where(
-        IndicadorReferencia.avaliacao_id == avaliacao.id,
-        IndicadorReferencia.abrangencia.in_(tuple(alvos)),
-        IndicadorReferencia.codigo_territorio.in_(tuple(alvos.values())),
-        IndicadorReferencia.indicador.in_(indicadores))).scalars()
+    if leituras.ativa(db):
+        # O mesmo filtro, sobre as linhas do território lidas uma vez na requisição.
+        linhas = [ln for ln in leituras.referencias(db, codigo)
+                  if ln.avaliacao_id == avaliacao.id and ln.abrangencia in alvos
+                  and ln.codigo_territorio in alvos.values() and ln.indicador in indicadores]
+    else:
+        linhas = db.execute(select(IndicadorReferencia).where(
+            IndicadorReferencia.avaliacao_id == avaliacao.id,
+            IndicadorReferencia.abrangencia.in_(tuple(alvos)),
+            IndicadorReferencia.codigo_territorio.in_(tuple(alvos.values())),
+            IndicadorReferencia.indicador.in_(indicadores))).scalars()
     # O par (abrangência, código) — nunca um código de outra abrangência.
     return [ln for ln in linhas if alvos.get(ln.abrangencia) == ln.codigo_territorio]
 

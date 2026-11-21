@@ -170,7 +170,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         return;
       } catch (erro) {
         if (erro instanceof ApiError && erro.status === 401) {
-          limparToken(); // sessão realmente inválida (o core já redireciona)
+          // O cliente já invalidou a sessão se o token ainda era o desta chamada.
           setCarregando(false);
           return;
         }
@@ -238,7 +238,34 @@ export function AppProvider({ children }: { children: ReactNode }) {
     setEscolas(await api<Escola[]>("/escolas"));
   }, []);
 
-  const escolaAtual = escolas.find((escola) => escola.id === escolaId) ?? null;
+  // A escola ABERTA que não está na lista da sessão. O GET /escolas só traz as
+  // ativas: o Admin Global que abre uma escola inativa (Escolas › Usuários ›
+  // “Gestão completa”) ou inativa a escola que está aberta ficava com
+  // `escolaAtual` nulo, e as telas supunham o que faltava (Turmas usava o ano do
+  // relógio: “Turmas ativas em 2027” numa escola ainda em 2026). Só o global pede
+  // as inativas, e só ele chega a uma escola fora da própria lista. Depende de
+  // `escolas` para reler depois de `recarregarEscolas` (ex.: o ano trocado).
+  const [escolaForaDaLista, setEscolaForaDaLista] = useState<Escola | null>(null);
+  const daLista = escolas.find((escola) => escola.id === escolaId) ?? null;
+  const buscarForaDaLista = usuario?.is_global === true && escolaId !== null && daLista === null;
+  useEffect(() => {
+    if (!buscarForaDaLista) return;
+    let vigente = true;
+    api<Escola[]>("/escolas?incluir_inativas=true")
+      .then((todas) => {
+        if (vigente) setEscolaForaDaLista(todas.find((escola) => escola.id === escolaId) ?? null);
+      })
+      .catch(() => {
+        // Sem a escola, as telas mostram só o que não depende dela (nada é suposto).
+        if (vigente) setEscolaForaDaLista(null);
+      });
+    return () => {
+      vigente = false;
+    };
+  }, [buscarForaDaLista, escolaId, escolas]);
+
+  const escolaAtual =
+    daLista ?? (escolaForaDaLista !== null && escolaForaDaLista.id === escolaId ? escolaForaDaLista : null);
 
   return (
     <Contexto.Provider

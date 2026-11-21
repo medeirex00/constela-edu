@@ -36,6 +36,11 @@ Duas travas antes do nome (``decidir``):
     linha dessa conta aplica número em ficha nenhuma — revisão
     ``id_externo_duplicado``, uma pendência por nome.
 
+E uma depois do nome (``marcar_fichas_disputadas``): DUAS CONTAS AINDA SEM
+VÍNCULO, no mesmo relatório, que levariam à MESMA ficha (ou criariam a mesma
+ficha nova) não decidem pela ordem do arquivo — nenhuma leva a ficha, as duas vão
+para a revisão.
+
 TURMA E ANO LETIVO (onde a ficha nova pode nascer — ``_turma_para_criar``):
   * só turmas do ANO LETIVO ATIVO da escola entram no contexto (as matrículas
     também: ``carregar_contexto``); turma escolhida de outro ano não serve de
@@ -45,7 +50,9 @@ TURMA E ANO LETIVO (onde a ficha nova pode nascer — ``_turma_para_criar``):
     dados da plataforma na própria ficha (associar não mexe em matrícula);
   * o reconhecimento da sala pela série (``Contexto.sala_efetiva``) compara
     também a ETAPA: rótulo de ANO nunca vira turma de FASE (Educação Infantil),
-    nem o contrário.
+    nem o contrário — e a turma de destino, da sala ou escolhida, também é
+    conferida contra a etapa da turma do relatório (revisão
+    ``turma_de_outra_etapa``), já na prévia.
 
 Nunca escolhe "o primeiro" candidato, nunca funde fichas (fusão é ação
 administrativa explícita) e nunca cria ficha nova quando a identidade externa
@@ -53,6 +60,11 @@ pertence a uma ficha existente — nem se ela estiver inativa. Ficha EXCLUÍDA n
 é reutilizada: não é candidata e não segura identidade externa. Ficha
 TRANSFERIDA (ou arquivada, fora da Lista Piloto) não é reativada por aqui:
 qualquer caminho que chegue a ela vira revisão (``STATUS_INATIVOS``).
+
+CONTA ESQUECIDA (antes de tudo, até da escolha explícita): a conta da plataforma de
+uma criança EXCLUÍDA DE VEZ desta escola (direito ao esquecimento) é ignorada — não
+associa, não cria ficha, não vai para a revisão (``exclusao_aluno``: a exclusão
+permanente guarda só a marca da conta, um HMAC, sem nome nem id em claro).
 
 Este módulo só LÊ o banco (``Contexto`` é carregado uma vez por importação e
 atualizado em memória pelo chamador a cada aluno criado/identidade vinculada).
@@ -70,14 +82,14 @@ from sqlalchemy.orm import Session
 
 from app.models import Aluno, Escola, IdentidadeExterna, Matricula, Turma
 from app.models.academico import RevisaoIdentidade
-from app.services import matching
-from app.services.importacao import chave_nome, tokens_nome
+from app.services import exclusao_aluno, matching
+from app.services.importacao import chave_nome, nome_abreviado, tokens_nome
 from app.services.lista_piloto import ra_util
 
 ASSOCIAR = "associar"   # dados vão para uma ficha existente
 REVISAR = "revisar"     # há candidato(s), nenhum seguro: não associa, não cria
 CRIAR = "criar"         # nenhum candidato plausível: ficha nova
-IGNORAR = "ignorar"     # entrada inválida (aluno de outra escola/excluído)
+IGNORAR = "ignorar"     # entrada inválida (aluno de outra escola/excluído/esquecido)
 
 STATUS_INATIVOS = ("arquivado", "fora_lista_piloto", "transferido")
 
@@ -88,7 +100,13 @@ CAMPO_ID_EXTERNO = {"matific": "matific_uuid", "elefante": "elefante_student_id"
 MOTIVOS = {
     "identidade_de_ficha_inativa": "a identidade da plataforma pertence a uma ficha inativa",
     "identidade_de_outro_aluno": "a identidade da plataforma já pertence a outro aluno",
-    "outra_identidade_na_plataforma": "o aluno encontrado já tem outra conta nesta plataforma",
+    # Três caminhos (``_para_aluno`` e o passo 1 de ``decidir``): a ficha já tem
+    # outra conta; outra conta DESTE relatório leva a ela; ou a leva uma conta numa
+    # pendência aberta. Nos dois últimos a ficha pode não ter conta nenhuma.
+    "outra_identidade_na_plataforma":
+        "outra conta nesta plataforma também leva a este aluno (já vinculada à ficha, "
+        "neste relatório ou numa pendência em Revisões de identidade): não dá para "
+        "saber qual delas é a criança",
     "ficha_inativa": "o único candidato está com a ficha inativa",
     "correspondencia_insegura": "nome parecido, mas a correspondência não é segura",
     "candidatos_multiplos": "mais de um aluno plausível na sala",
@@ -104,8 +122,12 @@ MOTIVOS = {
         "matrícula vem da Lista Piloto)",
     "nome_incompleto":
         "a plataforma mandou só o nome abreviado (ou de uma palavra só), sem o nome "
-        "completo, e a conta ainda não está vinculada a nenhuma ficha — esse nome "
-        "não basta para associar nem para criar ficha",
+        "completo, e nada já vinculado (conta da plataforma, RA) diz quem é a "
+        "criança — esse nome não basta para associar nem para criar ficha",
+    "contas_repetidas_no_relatorio":
+        "duas contas diferentes da plataforma vieram no mesmo relatório com o mesmo "
+        "nome, e nenhuma ficha corresponde — podem ser a mesma criança (conta "
+        "duplicada) ou duas crianças; nada foi criado",
     "id_externo_duplicado":
         "o mesmo identificador da plataforma veio em mais de uma linha do "
         "relatório, com nomes ou números diferentes (ou já há uma pendência assim "
@@ -117,9 +139,18 @@ MOTIVOS = {
     "turma_fora_do_ano_letivo":
         "a turma escolhida não é do ano letivo ativo da escola",
     "turma_de_outra_etapa":
-        "a turma cadastrada que corresponde à sala do relatório é de outra etapa "
-        "(ex.: Educação Infantil x Fundamental): ficha e matrícula nova não nascem "
-        "nela",
+        "a turma onde a ficha nova nasceria (a da sala do relatório, ou a escolhida) "
+        "é de outra etapa que a turma do relatório (ex.: Educação Infantil x "
+        "Fundamental): ficha e matrícula nova não nascem nela. Escolha uma turma da "
+        "mesma etapa (se ela ainda não existe, cadastre-a com um nome que diga a "
+        "etapa, como “1º Ano A”: o nome curto “1ºA” pode já ser o da turma da outra "
+        "etapa)",
+    # Pedido de quem confirmou a importação (``LinhaConfirmacao.deixar_para_revisao``),
+    # quando o backend, sozinho, associaria ou criaria: a decisão fica com a fila.
+    "deixada_para_revisao":
+        "quem confirmou a importação deixou esta linha para a Revisão de identidade: "
+        "nada foi associado nem criado (confira se a criança já tem ficha antes de "
+        "criar uma)",
     # D11 (item E): orientação, sem fluxo novo — a confirmação manual não encerra
     # a pendência; quem decide é a Revisão de identidade (Admin Global, D10).
     "identidade_de_outra_escola":
@@ -162,8 +193,10 @@ MOTIVOS_DE_TURMA = frozenset({"sem_turma", "turma_nao_cadastrada", "turma_ambigu
 # desfaz o cursor de ninguém por ela), nem em 'sem_vinculo' (não vira
 # "correspondência pendente" a cada coleta), nem conta como linha com defeito.
 # Hoje: a conta da plataforma que a escola APOSENTOU (conta duplicada — achado 5
-# da revisão e95, decisão D4).
-MOTIVOS_DESCARTE_DECIDIDO = frozenset({"identidade_aposentada"})
+# da revisão e95, decisão D4) e a conta de uma criança EXCLUÍDA DE VEZ (direito ao
+# esquecimento: a gestão já decidiu, e o nome dela não pode voltar nem num aviso).
+MOTIVO_CONTA_ESQUECIDA = "conta_esquecida"
+MOTIVOS_DESCARTE_DECIDIDO = frozenset({"identidade_aposentada", MOTIVO_CONTA_ESQUECIDA})
 
 # Vias de ASSOCIAR/REVISAR que NÃO dependem do nome recebido: a conta da
 # plataforma já vinculada, o RA da escola e a decisão humana anterior. São as
@@ -239,11 +272,17 @@ class LinhaIdentidade:
     # A plataforma não entregou o nome COMPLETO, só o abreviado (Matific: o uuid
     # não veio no student-leaderboard). Marcado pelo analisador da API.
     nome_incompleto: bool = False
+    # A turma que o RELATÓRIO informa, separada do DESTINO: com a turma escolhida
+    # (``turma_id``), ``turma_nome`` é o nome dela, e a etapa do relatório se perdia
+    # — a checagem de etapa comparava a turma escolhida com ela mesma. Vazio quando
+    # o relatório não informa turma (aí não há etapa para comparar).
+    turma_relatorio: str = ""
 
 
 def _chamada(dados: dict) -> int | None:
     bruto = str(dados.get("numero_chamada") or dados.get("chamada") or "").strip()
-    return int(bruto) if bruto.isdigit() else None
+    # isdecimal, não isdigit: "2¹" é dígito para o isdigit e o int() levantava.
+    return int(bruto) if bruto.isdecimal() else None
 
 
 def _nascimento(dados: dict) -> date | None:
@@ -259,17 +298,37 @@ def _nascimento(dados: dict) -> date | None:
 
 def linha_de_dados(nome: str, dados: dict | None, *, plataforma: str | None = None,
                    turma_nome: str = "", turma_id: int | None = None,
-                   aluno_id: int | None = None) -> LinhaIdentidade:
+                   aluno_id: int | None = None,
+                   turma_relatorio: str | None = None) -> LinhaIdentidade:
     """Monta a ``LinhaIdentidade`` a partir da linha importada — UM só lugar, usado
-    pela prévia e pela confirmação (mesmos campos, mesma normalização)."""
+    pela prévia e pela confirmação (mesmos campos, mesma normalização).
+
+    ``turma_relatorio``: a turma que o relatório informa. Sem ela (None), vale a
+    própria ``turma_nome`` quando a linha não tem turma escolhida — na prévia são a
+    mesma coisa; com a turma escolhida, quem chama informa a do relatório."""
     dados = dados or {}
     plat = plataforma_da_linha(dados, plataforma)
+    if turma_relatorio is None:
+        turma_relatorio = turma_nome if turma_id is None else ""
     return LinhaIdentidade(
         nome=nome or "", plataforma=plat, id_externo=id_externo_da_linha(plat, dados),
         turma_nome=(turma_nome or "").strip(), turma_id=turma_id,
         ra=str(dados.get("ra") or "").strip(), chamada=_chamada(dados),
         nascimento=_nascimento(dados), aluno_id=aluno_id,
-        nome_incompleto=dados.get("nome_incompleto") is True)
+        nome_incompleto=dados.get("nome_incompleto") is True,
+        turma_relatorio=(turma_relatorio or "").strip())
+
+
+def turma_de_outra_etapa(turma_relatorio: str, turma) -> bool:
+    """A turma de DESTINO é de outra etapa que a turma do RELATÓRIO (Educação
+    Infantil × Fundamental — ``matriculas.etapa_da_sala``)? A do relatório lida pelo
+    nome; a de destino pelo nome e pelo ``ano_escolar``. Sem turma no relatório não
+    há base: não é de outra etapa."""
+    from app.services.matriculas import etapa_da_sala
+    if not (turma_relatorio or "").strip() or turma is None:
+        return False
+    return (etapa_da_sala(turma_relatorio)
+            != etapa_da_sala(turma.nome, getattr(turma, "ano_escolar", "") or ""))
 
 
 @dataclass(frozen=True)
@@ -314,11 +373,33 @@ class Contexto:
     # (plataforma, id_externo) que vieram repetidos DESTE relatório sem que a conta
     # prove de quem é cada linha — preenchido por ``marcar_ids_em_conflito``.
     ids_em_conflito: set[tuple[str, str]] = field(default_factory=set)
+    # (plataforma, aluno_id) que mais de uma conta AINDA SEM VÍNCULO deste relatório
+    # levaria — e (plataforma, nome, sala) da ficha NOVA que duas contas criariam.
+    # Preenchidos por ``marcar_fichas_disputadas``: a primeira linha não leva nada.
+    fichas_disputadas: set[tuple[str, int]] = field(default_factory=set)
+    criacoes_disputadas: set[tuple[str, str, str]] = field(default_factory=set)
     # (plataforma, id_externo) com pendência "id_externo_duplicado" ainda aberta na
     # escola: a disputa já foi vista (noutro arquivo da mesma coleta — o histórico
     # de leituras vem depois do resumo — ou numa coleta anterior) e só um humano a
     # encerra. Até lá nenhuma linha dessa conta aplica número.
     ids_em_disputa: set[tuple[str, str]] = field(default_factory=set)
+    # (plataforma, aluno_id) → contas com pendência "outra_identidade_na_plataforma"
+    # ainda ABERTA que apontam esta ficha. É a disputa de ``marcar_fichas_disputadas``
+    # (ou a de uma conta já vinculada) vista DEPOIS do relatório que a abriu: o
+    # arquivo seguinte da mesma coleta (o histórico de leituras vem depois do resumo)
+    # trazia só uma das contas, e ela levava a ficha — quem decidia era qual conta
+    # aparecia no arquivo de leituras. Lido de ``carregar_contexto``; consultado por
+    # ``contas_rivais`` (motor e triagem).
+    contas_em_disputa: dict[tuple[str, int], set[str]] = field(default_factory=dict)
+    # (plataforma, nome, sala) → contas com pendência "contas_repetidas_no_relatorio"
+    # ainda ABERTA: as duas contas sem ficha que criariam a MESMA ficha nova. A mesma
+    # trava de ``criacoes_disputadas``, para os arquivos seguintes.
+    criacoes_em_disputa: dict[tuple[str, str, str], set[str]] = field(default_factory=dict)
+    # Chaves de identidade (``chave_identidade``: a conta, ou nome + sala) com pendência
+    # "deixada_para_revisao" ainda ABERTA: quem confirmou uma importação pediu que um
+    # humano decida. Até a pendência ser resolvida ou descartada, a mesma identidade
+    # não associa nem cria sozinha nas importações e coletas seguintes (``decidir``).
+    deixadas_para_revisao: set[str] = field(default_factory=set)
     # (plataforma, id_externo) deste relatório que já são EFETIVOS em OUTRA escola
     # do Constela → id dessa escola. Preenchido por ``marcar_ids_de_outra_escola``
     # (com as linhas em mãos: o estado da rede inteira não é carregado).
@@ -348,7 +429,22 @@ class Contexto:
     # provando de quem era o id externo, mas estão FORA de ``identidade`` e de
     # ``ids_do_aluno`` — não casam, não contam e não voltam sozinhas.
     aposentadas: dict[tuple[str, str], int] = field(default_factory=dict)
+    # Contas de crianças EXCLUÍDAS DE VEZ desta escola: {(plataforma, marca)}, a
+    # marca é o HMAC do id externo (``exclusao_aluno.marcas_esquecidas``). Lidas uma
+    # vez; ``conta_esquecida`` responde por conta, com memória (o relatório de
+    # leituras repete a conta numa linha por livro).
+    contas_esquecidas: set[tuple[str, str]] = field(default_factory=set)
+    _memo_esquecidas: dict = field(default_factory=dict, repr=False)
     _memo_escola: dict = field(default_factory=dict, repr=False)
+
+    def conta_esquecida(self, plataforma: str, id_externo: str) -> bool:
+        if not (self.contas_esquecidas and plataforma and id_externo):
+            return False
+        chave = (plataforma, id_externo)
+        if chave not in self._memo_esquecidas:
+            self._memo_esquecidas[chave] = exclusao_aluno.conta_esquecida(
+                self.contas_esquecidas, plataforma, id_externo)
+        return self._memo_esquecidas[chave]
 
     # --- manutenção em memória -------------------------------------------
     def registrar_aluno(self, aluno: Aluno) -> None:
@@ -501,6 +597,36 @@ class Contexto:
         return bool(letra_relatorio and letra_cadastro
                     and letra_relatorio != letra_cadastro)
 
+    def _ainda_sem_dono(self, plataforma: str, contas, aluno_id: int | None,
+                        id_externo: str) -> set[str]:
+        """As ``contas`` (de pendências abertas) que ainda disputam: não são a da
+        própria linha, não foram aposentadas e não estão vinculadas a OUTRA ficha
+        (a vinculada a esta mesma ficha já é a trava de ``ids_do_aluno``)."""
+        saida: set[str] = set()
+        for conta in contas or ():
+            if conta == id_externo or (plataforma, conta) in self.aposentadas:
+                continue
+            dono = self.identidade.get((plataforma, conta))
+            if dono is None or dono == aluno_id:
+                saida.add(conta)
+        return saida
+
+    def contas_rivais(self, plataforma: str, aluno_id: int, id_externo: str) -> set[str]:
+        """OUTRAS contas desta plataforma, ainda sem vínculo, com pendência aberta de
+        "duas contas para a mesma ficha" (``outra_identidade_na_plataforma``) que
+        aponta ``aluno_id``. Enquanto um humano não decide, nenhuma delas leva a
+        ficha sozinha — em nenhum arquivo."""
+        return self._ainda_sem_dono(plataforma,
+                                    self.contas_em_disputa.get((plataforma, aluno_id)),
+                                    aluno_id, id_externo)
+
+    def criacao_rival(self, plataforma: str, nome: str, sala: str, id_externo: str) -> bool:
+        """Outra conta sem ficha, com pendência aberta ``contas_repetidas_no_relatorio``,
+        criaria a MESMA ficha nova (mesmo nome, mesma sala)?"""
+        return bool(self._ainda_sem_dono(
+            plataforma, self.criacoes_em_disputa.get((plataforma, nome, sala)), None,
+            id_externo))
+
     def decisao_humana(self, linha: LinhaIdentidade, *chaves: str) -> int | None:
         """Aluno que um gestor já escolheu para ESTA identidade, procurando em cada
         chave de sala informada. São duas quando ``sala_efetiva`` reconheceu a sala
@@ -563,16 +689,34 @@ def carregar_contexto(db: Session, escola_id: int, ano: int | None = None) -> Co
         if isinstance(resolucao, dict) and resolucao.get("automatica") is True:
             continue
         ctx.resolvidas[chave_ident] = aluno_id
-    for chave_ident, revisao_id, motivo, plataforma, id_externo in db.execute(
+    for (chave_ident, revisao_id, motivo, plataforma, id_externo, candidatos, nome,
+         turma_informada) in db.execute(
             select(RevisaoIdentidade.chave_identidade, RevisaoIdentidade.id,
                    RevisaoIdentidade.motivo, RevisaoIdentidade.plataforma,
-                   RevisaoIdentidade.id_externo)
+                   RevisaoIdentidade.id_externo, RevisaoIdentidade.candidatos,
+                   RevisaoIdentidade.nome_recebido, RevisaoIdentidade.turma_informada)
             .where(RevisaoIdentidade.escola_id == escola_id,
                    RevisaoIdentidade.status == "pendente")
             .order_by(RevisaoIdentidade.id)).all():
         ctx.pendentes.setdefault(chave_ident, []).append(revisao_id)
         if motivo == "id_externo_duplicado" and id_externo:
             ctx.ids_em_disputa.add((plataforma, str(id_externo)))
+        elif motivo == "outra_identidade_na_plataforma" and id_externo:
+            for c in candidatos or ():
+                if isinstance(c, dict) and c.get("aluno_id"):
+                    ctx.contas_em_disputa.setdefault(
+                        (plataforma, int(c["aluno_id"])), set()).add(str(id_externo))
+        elif motivo == "contas_repetidas_no_relatorio" and id_externo:
+            # A mesma chave (nome sem o sufixo de turma, sala reconhecida) que
+            # ``decidir`` usa no passo 5 para a linha que traria esta conta.
+            sala_rel = chave_sala(turma_informada or "")
+            sala = ctx.sala_efetiva(sala_rel, turma_informada or "")
+            ctx.criacoes_em_disputa.setdefault(
+                (plataforma, chave_nome(_nome_para_casar(nome or "", sala, sala_rel)), sala),
+                set()).add(str(id_externo))
+        elif motivo == "deixada_para_revisao" and chave_ident:
+            ctx.deixadas_para_revisao.add(chave_ident)
+    ctx.contas_esquecidas = exclusao_aluno.marcas_esquecidas(db, escola_id)
     return ctx
 
 
@@ -657,6 +801,54 @@ def marcar_ids_em_conflito(ctx: Contexto, linhas, plataforma: str | None = None
         {chave for chave, vistos in nomes.items() if len(vistos) > 1}
         | {chave for chave, vistas in retratos.items() if len(vistas) > 1})
     return ctx.ids_em_conflito
+
+
+def marcar_fichas_disputadas(ctx: Contexto, idents) -> set[tuple[str, int]]:
+    """DUAS CONTAS SEM VÍNCULO NO MESMO RELATÓRIO PARA A MESMA FICHA.
+
+    Duas contas da mesma plataforma, nenhuma ainda vinculada, chegam no mesmo
+    relatório e as duas casariam com a mesma ficha (o caso típico: a conta que a
+    criança usa e outra pouco usada, com o mesmo nome). Linha a linha, a PRIMEIRA
+    do arquivo levava a ficha e gravava o retrato; só a segunda ia para a revisão
+    — e quem vencia era a ordem do arquivo, não a criança. É a trava
+    ``outra_identidade_na_plataforma`` que já vale para conta JÁ vinculada
+    (``_para_aluno`` e o passo 1), antecipada para o primeiro vínculo.
+
+    Roda ANTES das linhas, junto de ``marcar_ids_em_conflito``, com as MESMAS
+    linhas na prévia e na confirmação: decide cada conta sem vínculo contra o
+    estado de agora (``decidir`` só lê) e marca a ficha que duas ou mais contas
+    levariam — ``decidir`` manda TODAS para a revisão. Vale também para a ficha
+    NOVA: duas contas sem ficha, mesmo nome e mesma sala, não criam a ficha da
+    primeira (revisão ``contas_repetidas_no_relatorio``).
+
+    Conta já vinculada (ou aposentada) não entra: o vínculo dela decide, como
+    sempre. A mesma conta em várias linhas (histórico de leituras) conta uma vez."""
+    ctx.fichas_disputadas = set()
+    ctx.criacoes_disputadas = set()
+    por_ficha: dict[tuple[str, int], set[str]] = {}
+    por_criacao: dict[tuple[str, str, str], set[str]] = {}
+    vistas: set[LinhaIdentidade] = set()
+    for linha in idents:
+        if linha is None or not (linha.plataforma and linha.id_externo):
+            continue
+        conta = (linha.plataforma, linha.id_externo)
+        if conta in ctx.identidade or conta in ctx.aposentadas or linha in vistas:
+            continue
+        vistas.add(linha)
+        # A decisão do MOTOR (sem a trava de ``deixadas_para_revisao``): a conta que
+        # alguém deixou para a Revisão continua disputando a ficha — senão a OUTRA
+        # conta do relatório a levaria sozinha enquanto a decisão humana está aberta.
+        dec = _decidir(ctx, linha)
+        if dec.acao == ASSOCIAR and dec.aluno_id is not None:
+            por_ficha.setdefault((linha.plataforma, dec.aluno_id), set()).add(linha.id_externo)
+        elif dec.acao == CRIAR:
+            nome = chave_nome(_nome_para_casar(linha.nome, dec.chave_sala,
+                                               chave_sala(linha.turma_nome)))
+            por_criacao.setdefault((linha.plataforma, nome, dec.chave_sala),
+                                   set()).add(linha.id_externo)
+    ctx.fichas_disputadas = {k for k, contas in por_ficha.items() if len(contas) > 1}
+    ctx.criacoes_disputadas = {k for k, contas in por_criacao.items() if len(contas) > 1}
+    return ctx.fichas_disputadas
 
 
 def marcar_ids_de_outra_escola(db: Session, ctx: Contexto, linhas,
@@ -796,7 +988,12 @@ def _para_aluno(ctx: Contexto, linha: LinhaIdentidade, aluno: Aluno, via: str,
         return Decisao(REVISAR, aluno.id, via, "ficha_inativa", cands, chave_sala=chave)
     if linha.id_externo:
         outras = ctx.ids_do_aluno.get((aluno.id, linha.plataforma), set()) - {linha.id_externo}
-        if outras:
+        # Também a OUTRA conta sem vínculo que, neste mesmo relatório, levaria esta
+        # mesma ficha (``marcar_fichas_disputadas``): a ordem do arquivo não decide.
+        # E a que disputa esta ficha numa pendência ainda aberta (``contas_rivais``):
+        # o arquivo seguinte da coleta, com só uma das contas, também não decide.
+        if (outras or (linha.plataforma, aluno.id) in ctx.fichas_disputadas
+                or ctx.contas_rivais(linha.plataforma, aluno.id, linha.id_externo)):
             return Decisao(REVISAR, aluno.id, via, "outra_identidade_na_plataforma",
                            cands, chave_sala=chave)
     return Decisao(ASSOCIAR, aluno.id, via, candidatos=(aluno.id,), chave_sala=chave)
@@ -813,19 +1010,33 @@ def _turma_para_criar(ctx: Contexto, linha: LinhaIdentidade, chave: str
     Só turma ATIVA do ANO LETIVO ATIVO é destino: a escolhida de outro ano (fora
     de ``ctx.turmas``) dá "turma_fora_do_ano_letivo"; a arquivada — escolhida, a
     única da sala ou a única da etapa/série (``Contexto.sala_arquivada``) — dá
-    "turma_arquivada". Numa sala com uma arquivada e uma ativa, vale a ativa."""
+    "turma_arquivada". Numa sala com uma arquivada e uma ativa, vale a ativa.
+
+    Nem turma de OUTRA ETAPA que a turma do relatório (``turma_de_outra_etapa``):
+    "1 ANO A" e a "1ºA" da Fase (o nome que ``nome_turma_exibicao`` dá a "Fase
+    1A") têm a mesma sala 1|A, mas a ficha do 1º Ano não nasce na Educação
+    Infantil, nem o contrário. Na sala, a de outra etapa não é candidata — com uma
+    da etapa certa ao lado, vale ela; só com as de outra etapa, "turma_de_outra_etapa".
+    A escolhida de outra etapa também. É a decisão da prévia e da confirmação (a
+    rede de segurança de ``_resolver_aluno`` continua para a turma achada pelo nome
+    na gravação)."""
     if linha.turma_id is not None:
         escolhida = ctx.turmas.get(linha.turma_id)
         if escolhida is None:
             return None, "turma_fora_do_ano_letivo"
         if not turma_ativa(escolhida):
             return None, "turma_arquivada"
+        if turma_de_outra_etapa(linha.turma_relatorio, escolhida):
+            return None, "turma_de_outra_etapa"
         return linha.turma_id, ""
-    ids = [i for i in ctx.turmas_da_sala.get(chave, []) if turma_ativa(ctx.turmas[i])]
-    if not ids:
+    ativas = [i for i in ctx.turmas_da_sala.get(chave, []) if turma_ativa(ctx.turmas[i])]
+    if not ativas:
         if ctx.sala_arquivada(chave, linha.turma_nome) is not None:
             return None, "turma_arquivada"
         return None, ""
+    ids = [i for i in ativas if not turma_de_outra_etapa(linha.turma_relatorio, ctx.turmas[i])]
+    if not ids:
+        return None, "turma_de_outra_etapa"
     if len(ids) == 1:
         return ids[0], ""
     from app.services.matriculas import codigo_externo_do_nome, nome_turma_exibicao
@@ -891,6 +1102,45 @@ def _nome_para_casar(nome: str, chave: str = "", chave_alt: str = "") -> str:
     if not limpos or limpos == tokens:
         return nome
     return " ".join(limpos)
+
+
+# O mesmo sufixo no fim da palavra CRUA (com o ordinal que ``tokens_nome`` lê
+# como letra: "3ºA", "3°A").
+_SUFIXO_CRU = re.compile(r"\d{1,2}[ºª°]?[A-Za-z]$")
+
+
+def nome_sem_sufixo_de_turma(nome: str, chave: str = "", chave_alt: str = "") -> str:
+    """O nome que a ficha NOVA grava: o recebido, sem o sufixo de turma que
+    ``_nome_para_casar`` tira do casamento — a MESMA regra (só sai o sufixo da
+    sala da própria linha, como palavra solta ou grudado no último nome) —, mas
+    com a grafia de quem digitou (caixa, acento). Antes o sufixo só saía do
+    casamento e a ficha nascia "… LIMA 3A". Sem sufixo, ou se só sobraria o
+    sufixo, devolve o nome como veio (só sem os espaços das pontas, como antes)."""
+    partes = (nome or "").split()
+    saida: list[str] = []
+    mudou = False
+    for parte in partes:
+        toks = tokens_nome(parte)
+        if len(toks) != 1:
+            saida.append(parte)
+            continue
+        token = toks[0]
+        if _SUFIXO_TURMA.fullmatch(token) and (_sufixo_da_sala(token, chave)
+                                               or _sufixo_da_sala(token, chave_alt)):
+            mudou = True
+            continue
+        colado = _SUFIXO_TURMA_COLADO.fullmatch(token)
+        cru = _SUFIXO_CRU.search(parte)
+        if (colado is not None and cru is not None
+                and (_sufixo_da_sala(colado.group(2), chave)
+                     or _sufixo_da_sala(colado.group(2), chave_alt))):
+            saida.append(parte[:cru.start()])
+            mudou = True
+            continue
+        saida.append(parte)
+    if not mudou or not saida:
+        return (nome or "").strip()          # o de sempre: nada muda sem sufixo
+    return " ".join(saida)
 
 
 # Grafias equivalentes de nome próprio no português do Brasil (LUÍS/LUIZ,
@@ -1080,8 +1330,38 @@ def _oficial_entre_duplicatas(ctx: Contexto, linha: LinhaIdentidade,
     return oficial, sozinha.motivo
 
 
+def _deixada_para_revisao(ctx: Contexto, linha: LinhaIdentidade, chave: str) -> bool:
+    """Esta identidade tem pendência "deixada_para_revisao" aberta? A chave é a que a
+    pendência gravou (``ColetorRevisoes.adicionar``): a conta, sem sala; sem conta, o
+    nome sob a sala decidida ou sob a sala crua do relatório."""
+    if not ctx.deixadas_para_revisao:
+        return False
+    for sala in dict.fromkeys((chave, chave_sala(linha.turma_nome))):
+        if chave_identidade(linha, sala)[:400] in ctx.deixadas_para_revisao:
+            return True
+    return False
+
+
 def decidir(ctx: Contexto, linha: LinhaIdentidade) -> Decisao:
-    """A decisão ÚNICA (prévia = confirmação). Só lê ``ctx``."""
+    """A decisão ÚNICA (prévia = confirmação). Só lê ``ctx``.
+
+    "DEIXAR PARA A REVISÃO" SEGURA A IDENTIDADE: com pendência
+    ``deixada_para_revisao`` aberta, a decisão que associaria ou criaria vira a mesma
+    revisão (com a ficha que o motor acharia como candidata) — nas importações e
+    coletas seguintes, até a pendência ser resolvida ou descartada. É a trava que
+    ``contas_repetidas_no_relatorio`` já tem: o pedido foi de gente, e a coleta
+    seguinte não pode atropelá-lo. A escolha explícita de uma ficha (``aluno_id``)
+    é essa decisão humana e continua valendo; IGNORAR e as outras revisões (com o
+    motivo e a regra delas, como a do D10) não mudam."""
+    dec = _decidir(ctx, linha)
+    if (dec.acao in (ASSOCIAR, CRIAR) and linha.aluno_id is None
+            and _deixada_para_revisao(ctx, linha, dec.chave_sala)):
+        return replace(dec, acao=REVISAR, motivo="deixada_para_revisao")
+    return dec
+
+
+def _decidir(ctx: Contexto, linha: LinhaIdentidade) -> Decisao:
+    """O motor, sem a trava de ``deixadas_para_revisao`` (ver ``decidir``)."""
     # NOME INCOMPLETO (Matific sem o nome cheio — só "ANNA E"): roda a decisão de
     # sempre e só aceita o que NÃO depende do nome — a conta já vinculada, o RA, a
     # decisão humana anterior para esta identidade, a conta aposentada. Qualquer
@@ -1090,7 +1370,7 @@ def decidir(ctx: Contexto, linha: LinhaIdentidade) -> Decisao:
     # para quem for decidir. Escolha explícita de um humano (``aluno_id``) segue o
     # caminho de sempre.
     if linha.nome_incompleto and linha.aluno_id is None:
-        base = decidir(ctx, replace(linha, nome_incompleto=False))
+        base = _decidir(ctx, replace(linha, nome_incompleto=False))
         if base.acao == IGNORAR or base.via in _VIAS_SEM_NOME:
             return base
         return Decisao(REVISAR, base.aluno_id, base.via, "nome_incompleto",
@@ -1106,10 +1386,34 @@ def decidir(ctx: Contexto, linha: LinhaIdentidade) -> Decisao:
     ) else ctx.sala_efetiva(chave_relatorio, linha.turma_nome)
     chave_alt = chave_relatorio if chave_relatorio != chave else ""
 
+    # 00) CONTA ESQUECIDA: a conta é de uma criança que a escola excluiu de vez
+    # (direito ao esquecimento). Antes de tudo — inclusive da escolha explícita de
+    # um humano: se ela associasse, a conta ganharia vínculo numa ficha e a coleta
+    # seguinte reabriria o que o esquecimento fechou. Nada associa, cria ou vai para
+    # a revisão (que guardaria o nome); levantar a marca é decisão à parte.
+    if linha.id_externo and ctx.conta_esquecida(linha.plataforma, linha.id_externo):
+        return Decisao(IGNORAR, motivo=MOTIVO_CONTA_ESQUECIDA, chave_sala=chave)
+
+    # 0a) Identidade APOSENTADA: a escola já decidiu que esta conta duplicada
+    # não representa mais a criança no Constela. A linha não vira dado nem volta
+    # para a fila — senão cada sincronização reabriria a mesma duplicidade que já
+    # foi decidida. Ela é IGNORADA, com aviso, e o histórico continua no banco.
+    # Também antes da escolha explícita (REV2-COSTURA-2): com a ficha escolhida à
+    # mão na prévia, os números da conta aposentada iam para essa ficha (a própria
+    # dona ou outra criança), embora a prévia diga "será ignorada" e o /resolver
+    # recuse a pendência dela. Só uma nova decisão humana (reativar a identidade,
+    # /identidades/{plataforma}/reativar) desfaz isso.
+    if linha.id_externo:
+        aposentada = ctx.aposentadas.get((linha.plataforma, linha.id_externo))
+        if aposentada is not None:
+            return Decisao(IGNORAR, aposentada, "identidade", "identidade_aposentada",
+                           (aposentada,), chave_sala=chave)
+
     # 0) Escolha EXPLÍCITA de um humano (prévia aceita, alternativa escolhida,
-    # revisão resolvida). Vale — salvo se a identidade externa da linha já for de
-    # OUTRO aluno: aí os dados não podem ir para o escolhido sem uma reatribuição
-    # explícita (feita na resolução da revisão), então vira revisão.
+    # revisão resolvida). Vale — salvo se a conta for esquecida ou aposentada (00 e
+    # 0a, acima) ou se a identidade externa da linha já for de OUTRO aluno: aí os
+    # dados não podem ir para o escolhido sem uma reatribuição explícita (feita na
+    # resolução da revisão), então vira revisão.
     if linha.aluno_id is not None:
         aluno = ctx.alunos.get(linha.aluno_id)
         if aluno is None:
@@ -1137,17 +1441,6 @@ def decidir(ctx: Contexto, linha: LinhaIdentidade) -> Decisao:
         return Decisao(ASSOCIAR, aluno.id, "explicito", candidatos=(aluno.id,),
                        chave_sala=chave)
 
-    # 0b) Identidade APOSENTADA: a escola já decidiu que esta conta duplicada
-    # não representa mais a criança no Constela. A linha não vira dado nem volta
-    # para a fila — senão cada sincronização reabriria a mesma duplicidade que já
-    # foi decidida. Ela é IGNORADA, com aviso, e o histórico continua no banco.
-    # Só uma nova decisão humana (reativar a identidade) desfaz isso.
-    if linha.id_externo:
-        aposentada = ctx.aposentadas.get((linha.plataforma, linha.id_externo))
-        if aposentada is not None:
-            return Decisao(IGNORAR, aposentada, "identidade", "identidade_aposentada",
-                           (aposentada,), chave_sala=chave)
-
     # 0c) ID EXTERNO DUPLICADO (neste relatório — ``marcar_ids_em_conflito`` — ou
     # numa disputa ainda aberta na fila): a conta não prova de quem é ESTA linha
     # (nem a ficha que já tem o vínculo é certamente a dona dos números dela).
@@ -1173,7 +1466,7 @@ def decidir(ctx: Contexto, linha: LinhaIdentidade) -> Decisao:
             if dono is not None:
                 cands = (dono.id,)
             else:
-                pelo_nome = decidir(ctx, replace(linha, id_externo="", nome_incompleto=False))
+                pelo_nome = _decidir(ctx, replace(linha, id_externo="", nome_incompleto=False))
                 cands = pelo_nome.candidatos or (
                     (pelo_nome.aluno_id,) if pelo_nome.aluno_id is not None else ())
             return Decisao(REVISAR, cands[0] if cands else None, "identidade",
@@ -1334,6 +1627,25 @@ def decidir(ctx: Contexto, linha: LinhaIdentidade) -> Decisao:
     # 5) Nenhum candidato: CRIAR — na turma cadastrada da sala, decidida sem chute.
     # Sem turma alguma, quem cria precisa escolher a turma (a tela pede; a
     # sincronização não tem como — ``_resolver_aluno`` manda para revisão).
+    #
+    # Antes, NOME ABREVIADO (``nome_abreviado``: "ZEFA Q", uma palavra só, inicial
+    # solta) não vira ficha — venha de onde vier: Placar do Matific sem o
+    # ``nome_abrev``, Elefante, planilha, PDF. Era assim que nasciam as fichas
+    # "LORENA D" ao lado da oficial. Vai para a revisão ``nome_incompleto``, sem
+    # candidato, e quem decide pode criar a ficha pela fila. Só a CRIAÇÃO é barrada:
+    # associar por abreviação (passos 3 e 4) continua como sempre.
+    if nome_abreviado(nome_casar):
+        return Decisao(REVISAR, None, "novo", "nome_incompleto", (), chave_sala=chave,
+                       vetados=vetados)
+    # Duas contas sem vínculo, mesmo nome e mesma sala, no mesmo relatório: a ficha
+    # não nasce com os números da primeira (``marcar_fichas_disputadas``). Nem no
+    # arquivo seguinte, que traz só uma delas, enquanto a pendência da outra estiver
+    # aberta (``criacao_rival``).
+    if linha.id_externo and (
+            (linha.plataforma, alvo_nome, chave) in ctx.criacoes_disputadas
+            or ctx.criacao_rival(linha.plataforma, alvo_nome, chave, linha.id_externo)):
+        return Decisao(REVISAR, None, "novo", "contas_repetidas_no_relatorio", (),
+                       chave_sala=chave, vetados=vetados)
     if not chave:
         return Decisao(CRIAR, None, "novo", "sem_turma", chave_sala=chave, vetados=vetados)
     turma_id, motivo = _turma_para_criar(ctx, linha, chave)
@@ -1401,10 +1713,12 @@ class ColetorRevisoes:
         if pend is None:
             turma_id = decisao.turma_id
             if turma_id is None:
-                # A turma SUGERIDA para a ficha nova: só a única ATIVA da sala —
-                # turma arquivada não recebe ficha nem matrícula nova.
+                # A turma SUGERIDA para a ficha nova: só a única ATIVA da sala, da
+                # etapa da turma do relatório — turma arquivada não recebe ficha nem
+                # matrícula nova, e a de outra etapa é justamente a que foi recusada.
                 ids = [i for i in ctx.turmas_da_sala.get(decisao.chave_sala, [])
-                       if turma_ativa(ctx.turmas[i])]
+                       if turma_ativa(ctx.turmas[i])
+                       and not turma_de_outra_etapa(linha.turma_relatorio, ctx.turmas[i])]
                 turma_id = ids[0] if len(ids) == 1 else None
             pend = Pendencia(
                 chave=chave, chave_identidade=ident[:400], plataforma=linha.plataforma,

@@ -103,6 +103,8 @@ describe("Matific", () => {
     const atividades = screen.getByLabelText("Atividades finalizadas");
     await u.clear(atividades);
     await u.type(atividades, "45");
+    // O motivo é obrigatório (o servidor recusa sem ele, como no Elefante).
+    await u.type(screen.getByLabelText(/Motivo da edição/), "correção do relatório");
     await u.click(screen.getByRole("button", { name: "Salvar e recalcular" }));
 
     await waitFor(() => expect(chamadasPut()).toHaveLength(1));

@@ -17,15 +17,20 @@ from app.models import (
     Turma,
 )
 from app.services import rede as svc
+from tests._ano_letivo import ANO
 
 
 def _escola(db, rede_id, nome, *, alunos, livros_cada=0, tempo_cada=0,
-            estrelas_cada=0, atividades_cada=0, com_matific=True, com_elefante=True):
-    """Escola com N alunos ativos matriculados; cada aluno com os snapshots pedidos."""
-    esc = Escola(nome=nome, ano_letivo_ativo=2026, rede_id=rede_id, status="ativa")
+            estrelas_cada=0, atividades_cada=None, com_matific=True, com_elefante=True):
+    """Escola com N alunos ativos matriculados; cada aluno com os snapshots pedidos.
+    ``atividades_cada`` ausente = as bastantes para as estrelas caberem no teto do motor
+    (5 por atividade): acima dele, a rede soma só as estrelas que contam."""
+    if atividades_cada is None:
+        atividades_cada = -(-estrelas_cada // 5)
+    esc = Escola(nome=nome, ano_letivo_ativo=ANO, rede_id=rede_id, status="ativa")
     db.add(esc)
     db.flush()
-    turma = Turma(escola_id=esc.id, nome="1ºA", ano_escolar="1º Ano", ano_letivo=2026,
+    turma = Turma(escola_id=esc.id, nome="1ºA", ano_escolar="1º Ano", ano_letivo=ANO,
                   status="ativa")
     db.add(turma)
     db.flush()
@@ -36,8 +41,8 @@ def _escola(db, rede_id, nome, *, alunos, livros_cada=0, tempo_cada=0,
         a = Aluno(escola_id=esc.id, nome=f"Crianca {nome} {i}", status="ativo")
         db.add(a)
         db.flush()
-        db.add(Matricula(escola_id=esc.id, aluno_id=a.id, turma_id=turma.id, ano_letivo=2026))
-        db.add(Nota(escola_id=esc.id, aluno_id=a.id, ano_letivo=2026, nota_geral=70.0,
+        db.add(Matricula(escola_id=esc.id, aluno_id=a.id, turma_id=turma.id, ano_letivo=ANO))
+        db.add(Nota(escola_id=esc.id, aluno_id=a.id, ano_letivo=ANO, nota_geral=70.0,
                     nota_elefante=70.0, nota_matific=70.0, posicao=i + 1))
         if com_elefante:
             db.add(SnapshotElefante(escola_id=esc.id, aluno_id=a.id, importacao_id=imp.id,
@@ -114,7 +119,7 @@ def test_3_aluno_duplicado_nao_conta_duas_vezes(db):
     # (1) a mesma ficha não pode ser matriculada 2x no ano — o banco barra.
     aluno = db.query(Aluno).filter(Aluno.escola_id == esc.id).first()
     ja_matriculado = db.query(Matricula).filter(
-        Matricula.aluno_id == aluno.id, Matricula.ano_letivo == 2026).count()
+        Matricula.aluno_id == aluno.id, Matricula.ano_letivo == ANO).count()
     assert ja_matriculado == 1
 
     # (2) ficha duplicada do MESMO aluno (com snapshot próprio), ainda ativa:
@@ -123,7 +128,7 @@ def test_3_aluno_duplicado_nao_conta_duas_vezes(db):
     dup = Aluno(escola_id=esc.id, nome="Crianca Escola Dup 0 (duplicata)", status="ativo")
     db.add(dup)
     db.flush()
-    db.add(Matricula(escola_id=esc.id, aluno_id=dup.id, turma_id=turma.id, ano_letivo=2026))
+    db.add(Matricula(escola_id=esc.id, aluno_id=dup.id, turma_id=turma.id, ano_letivo=ANO))
     db.add(SnapshotElefante(escola_id=esc.id, aluno_id=dup.id, importacao_id=imp.id,
                             livros_unicos=10, tempo_leitura_min=0))
     db.commit()

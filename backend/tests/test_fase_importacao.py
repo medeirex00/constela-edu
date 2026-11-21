@@ -18,8 +18,8 @@ from datetime import date
 import openpyxl
 from sqlalchemy import select
 
-from app.models import Aluno, Matricula, Nota, Turma
-from app.services import elegibilidade
+from app.models import Aluno, Importacao, Matricula, Nota, SnapshotElefante, Turma
+from app.services import elegibilidade, scoring
 
 CT_XLSX = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 COLUNAS = ["N.º", "RM", "RA", "Nome", "Data de Nasc.", "Responsável",
@@ -118,6 +118,17 @@ def test_fase_nao_entra_no_ranking_mas_continua_cadastrada(cliente, db,
     _confirmar(cliente, escola_id, LISTA)
     bia = _por_nome(db, escola_id, "BIA DA EDUCACAO INFANTIL")
     dora = _por_nome(db, escola_id, "DORA DO FUNDAMENTAL")
+    # As duas leem: o Ranking Geral só lista quem tem dado de alguma plataforma
+    # (DEC-19), e a Fase tem de ficar fora MESMO com dado.
+    imp = Importacao(escola_id=escola_id, plataforma="seed", tipo="seed")
+    db.add(imp)
+    db.flush()
+    for crianca in (bia, dora):
+        db.add(SnapshotElefante(escola_id=escola_id, aluno_id=crianca.id,
+                                importacao_id=imp.id, livros_unicos=3,
+                                livros_por_nivel={"D": 3}))
+    db.commit()
+    scoring.recalcular_escola(db, escola_id)
 
     r = cliente.get(f"{API}/escolas/{escola_id}/ranking")
     assert r.status_code == 200, r.text

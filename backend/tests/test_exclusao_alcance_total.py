@@ -259,9 +259,12 @@ def test_o_que_e_apagado_anonimizado_e_mantido(cliente_global, db, cenario):
 
 
 def test_arquivos_individual_e_copias_somem_os_de_turma_ficam(cliente_global, db, cenario):
+    entrega = cenario["copia"].with_name("instrucoes-da-escola.pdf")
+    entrega.write_bytes(b"%PDF entrega")
     _excluir(cliente_global, cenario)
     assert not cenario["individual"].exists()      # relatório individual dela
     assert not cenario["copia"].exists()           # cópia em /exports
+    assert entrega.read_bytes() == b"%PDF entrega"
     assert cenario["de_turma"].exists()            # várias crianças: fica (documentado)
     assert cenario["gitkeep"].exists()             # infraestrutura
 

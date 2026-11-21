@@ -123,7 +123,9 @@ _TELAS = [
     ("/relatorios", "/ranking/cartaz", 403),
     ("/relatorios/periodo", "/relatorios/periodo", 403),
     ("/usuarios", "/usuarios", 403),
-    ("Dashboard da escola", "/dashboard", 200),
+    # O painel da escola saía 200 com tudo zerado (recortado pelas turmas que ela
+    # não tem): 403 explicado, como no pacote do app (PEND-31).
+    ("Dashboard da escola", "/dashboard", 403),
 ]
 
 

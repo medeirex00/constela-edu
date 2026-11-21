@@ -29,6 +29,7 @@ from app.sync import service
 from tests._sync_nucleo_fakes import (
     API, NavElefante, PlacarFake, aluno_el, alertas_abertos, credencial, execucoes, ident,
     instalar, livro, novo_aluno, rodar, vincular)
+from tests._ano_letivo import no_ano_de_hoje
 
 K = "3 ANO A (300396804)"
 CID_A, CID_B, CID_OUTRA = 511434, 600001, 777001
@@ -113,7 +114,7 @@ def _status_plataforma(cliente, eid, plataforma="elefante"):
 # ---------------------------------------------------------------------------
 @pytest.mark.parametrize("cenario", ["fichas_sem_vinculo", "sem_fichas"])
 def test_primeira_coleta_tudo_em_revisao_nao_e_em_dia_e_desatualizada_abre_depois(
-        db, escola_completa, monkeypatch, cenario):
+        relogio_no_ano_letivo, db, escola_completa, monkeypatch, cenario):
     """Sem nenhuma conta vinculada e nenhum nome que case: 'tudo_em_revisao', o
     alerta 'correspondencia_pendente' (com o texto da 1ª coleta) e NENHUM "em dia".
     Dentro da cadência o 'desatualizada' não abre; passada a cadência, com a coleta
@@ -155,8 +156,8 @@ def test_primeira_coleta_tudo_em_revisao_nao_e_em_dia_e_desatualizada_abre_depoi
 # ---------------------------------------------------------------------------
 # 2. Escola com vinculados, mas TODOS os alunos da coleta em revisão
 # ---------------------------------------------------------------------------
-def test_vinculados_e_coleta_toda_em_revisao_nao_e_em_dia(db, cliente, escola_completa,
-                                                          monkeypatch):
+def test_vinculados_e_coleta_toda_em_revisao_nao_e_em_dia(
+        relogio_no_ano_letivo, db, cliente, escola_completa, monkeypatch):
     """A escola já tem as três contas vinculadas; a credencial passa a ver outra
     escola (outras crianças, mesmo rótulo de turma). Nenhuma conta da escola foi
     conferida: 'tudo_em_revisao', não em dia — o 'desatualizada' abre contra a
@@ -195,7 +196,8 @@ def test_vinculados_e_coleta_toda_em_revisao_nao_e_em_dia(db, cliente, escola_co
     assert p["ultima_tentativa"]["motivo"] == "tudo_em_revisao"
 
 
-def test_matific_credencial_de_outra_escola_tudo_em_revisao(db, escola_completa, monkeypatch):
+def test_matific_credencial_de_outra_escola_tudo_em_revisao(
+        relogio_no_ano_letivo, db, escola_completa, monkeypatch):
     """O mesmo no Matific: as três contas vinculadas por uuid somem e vêm outras
     (uuids e nomes desconhecidos). 'tudo_em_revisao', não em dia; o aviso
     'contas_ausentes' também abre (as vinculadas não vieram no Placar)."""
@@ -232,7 +234,7 @@ def test_matific_credencial_de_outra_escola_tudo_em_revisao(db, escola_completa,
 # 3. Mistura: vinculados conferidos sem mudança + pendências → em dia
 # ---------------------------------------------------------------------------
 def test_mistura_vinculados_conferidos_e_pendencias_e_em_dia_com_alerta(
-        db, escola_completa, monkeypatch):
+        relogio_no_ano_letivo, db, escola_completa, monkeypatch):
     eid = escola_completa["escola"].id
     politica_sync.definir(db, eid, "bloquear")
     db.commit()
@@ -260,8 +262,9 @@ def test_mistura_vinculados_conferidos_e_pendencias_e_em_dia_com_alerta(
     assert "nenhuma conta da escola conferida" not in mensagem
 
 
-def test_matific_queda_retida_com_pendencia_conta_como_conferida(db, escola_completa,
-                                                                 monkeypatch):
+@no_ano_de_hoje
+def test_matific_queda_retida_com_pendencia_conta_como_conferida(relogio_no_ano_letivo, db,
+                                                                 escola_completa, monkeypatch):
     """Decisão registrada: o total menor RETIDO só acontece para uuid já vinculado
     NESTA escola, comparado com o retrato gravado — a coleta conferiu a escola.
     Queda retida + pendência é 'correspondencia_pendente' (em dia), com os alertas
@@ -401,7 +404,7 @@ def _fontes(db, cliente, cliente_global, eid, cfg):
 
 
 def test_regra_unica_status_painel_e_agendador_seguem_a_forma_c(
-        db, cliente, cliente_global, escola_completa, monkeypatch):
+        relogio_no_ano_letivo, db, cliente, cliente_global, escola_completa, monkeypatch):
     eid = escola_completa["escola"].id
     a = escola_completa["alunos"][0]
     politica_sync.definir(db, eid, "bloquear")

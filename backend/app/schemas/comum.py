@@ -4,9 +4,21 @@ Mantidos em um módulo único nesta fase; ao crescer, dividir por domínio
 sem alterar os imports (o pacote reexporta tudo).
 """
 import math
+import re
 from datetime import date, datetime
+from typing import Annotated
 
-from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
+from pydantic import (
+    AfterValidator,
+    BaseModel,
+    BeforeValidator,
+    ConfigDict,
+    EmailStr,
+    Field,
+    field_validator,
+)
+
+from app.core import tempo
 
 
 class ORMModel(BaseModel):
@@ -41,6 +53,22 @@ class LoginOut(BaseModel):
     usuario: UsuarioOut
 
 
+# Caracteres de CONTROLE (C0 e DEL), com o espaço em volta. Invisíveis na tela,
+# chegam colados de PDF ou relatório (ex.: \x02) — e um só deles num nome derruba
+# a exportação Excel da escola inteira (o openpyxl recusa o caractere). Vale para
+# todo nome que vai para a planilha: aluno, turma (e a série) e escola.
+_RE_CONTROLE = re.compile(r"\s*[\x00-\x1f\x7f]+\s*")
+
+
+def _nome_sem_controle(valor):
+    """Troca cada trecho com caractere de controle por UM espaço (e tira o das
+    pontas), ANTES de conferir o tamanho: o nome que se vê é o nome que fica.
+    Nome sem caractere de controle passa intacto."""
+    if isinstance(valor, str) and _RE_CONTROLE.search(valor):
+        return _RE_CONTROLE.sub(" ", valor).strip()
+    return valor
+
+
 # --- Escolas ----------------------------------------------------------------
 
 class EscolaOut(ORMModel):
@@ -53,23 +81,47 @@ class EscolaOut(ORMModel):
     status: str
 
 
+class EscolaItemOut(EscolaOut):
+    """Um item de GET /escolas: a escola e os MÓDULOS do plano dela (os da rede dela,
+    ``modulos.modulos_da_escola``; escola sem rede, todos). O admin global recebe em
+    /auth/me o catálogo inteiro — é por aqui que a tela sabe o que a escola SELECIONADA
+    contratou, para não oferecer o que o backend recusaria com 403."""
+    modulos: list[str] = []
+
+
+def _ano_corrente_br() -> int:
+    """O ano civil de hoje em Brasília — o ano letivo da escola nova coincide com
+    ele. Era o literal 2026: a partir de 2027, a escola cadastrada sem ano (a tela
+    Escolas manda só nome, cidade e estado) nasceria no ano letivo errado.
+    ``tempo.hoje_br`` pelo módulo, para os testes poderem adiantar o relógio."""
+    return tempo.hoje_br().year
+
+
 # Limites dos campos de texto = tamanho da coluna String(n) do modelo. Sem eles,
 # o SQLite aceita e o PostgreSQL recusa no commit (DataError → 500); com eles, a
 # API responde 422 antes de tocar o banco.
+# O ano letivo da escola na MESMA faixa das turmas (``TurmaCreate``: 2000–2100). Sem ela,
+# um ano como 10000 era aceito e as Premiações e o Dashboard respondiam 500 (``date()`` não
+# vai além de 9999).
+ANO_LETIVO_MIN, ANO_LETIVO_MAX = 2000, 2100
+
+
 class EscolaCreate(BaseModel):
-    nome: str = Field(min_length=2, max_length=200)
+    nome: Annotated[str, BeforeValidator(_nome_sem_controle)] = Field(
+        min_length=2, max_length=200)
     cidade: str | None = Field(default=None, max_length=120)
     estado: str | None = Field(default=None, max_length=2)
-    ano_letivo_ativo: int = 2026
+    ano_letivo_ativo: int = Field(default_factory=_ano_corrente_br, ge=ANO_LETIVO_MIN,
+                                  le=ANO_LETIVO_MAX)
 
 
 class EscolaUpdate(BaseModel):
     # O nome é validado na rota (2 a 200 depois de tirar os espaços das pontas).
-    nome: str | None = None
+    nome: Annotated[str | None, BeforeValidator(_nome_sem_controle)] = None
     cidade: str | None = Field(default=None, max_length=120)
     estado: str | None = Field(default=None, max_length=2)
     logotipo_url: str | None = Field(default=None, max_length=500)
-    ano_letivo_ativo: int | None = None
+    ano_letivo_ativo: int | None = Field(default=None, ge=ANO_LETIVO_MIN, le=ANO_LETIVO_MAX)
     # Um status fora do vocabulário faria a escola sumir de TODAS as listas
     # (o GET filtra por igualdade exata) sem caminho de volta pela interface.
     status: str | None = Field(default=None, pattern="^(ativa|inativa)$")
@@ -133,8 +185,10 @@ class TurmaOut(ORMModel):
 
 
 class TurmaCreate(BaseModel):
-    nome: str = Field(min_length=1, max_length=100)
-    ano_escolar: str = Field(min_length=1, max_length=30)
+    nome: Annotated[str, BeforeValidator(_nome_sem_controle)] = Field(
+        min_length=1, max_length=100)
+    ano_escolar: Annotated[str, BeforeValidator(_nome_sem_controle)] = Field(
+        min_length=1, max_length=30)
     ano_letivo: int = Field(ge=2000, le=2100)
     professor_id: int | None = None
     turno: str | None = Field(default=None, pattern=PADRAO_TURNO)
@@ -144,8 +198,10 @@ class TurmaCreate(BaseModel):
 
 class TurmaUpdate(BaseModel):
     """Atualização parcial — só o que foi enviado é alterado."""
-    nome: str | None = Field(default=None, min_length=1, max_length=100)
-    ano_escolar: str | None = Field(default=None, min_length=1, max_length=30)
+    nome: Annotated[str | None, BeforeValidator(_nome_sem_controle)] = Field(
+        default=None, min_length=1, max_length=100)
+    ano_escolar: Annotated[str | None, BeforeValidator(_nome_sem_controle)] = Field(
+        default=None, min_length=1, max_length=30)
     ano_letivo: int | None = Field(default=None, ge=2000, le=2100)
     professor_id: int | None = None
     turno: str | None = Field(default=None, pattern=PADRAO_TURNO)
@@ -167,10 +223,32 @@ class AlunoOut(ORMModel):
     observacoes: str | None = None
 
 
+# ``Aluno.numero_chamada`` é INTEGER: 32 bits com sinal no PostgreSQL (o mesmo
+# teto de ``lista_piloto.MAX_NUMERO_CHAMADA``). Sem o limite, o SQLite aceitava e
+# o PostgreSQL estourava no commit (NumericValueOutOfRange → 500 "Erro interno");
+# negativo não é número de chamada.
+_MAX_NUMERO_CHAMADA = 2**31 - 1
+
+
+def _numero_chamada_valido(valor: int | None) -> int | None:
+    if valor is None:
+        return None
+    if valor < 0:
+        raise ValueError("O nº de chamada não pode ser negativo.")
+    if valor > _MAX_NUMERO_CHAMADA:
+        raise ValueError("O nº de chamada é grande demais: use o número da criança "
+                         "na lista da turma.")
+    return valor
+
+
+NumeroChamada = Annotated[int | None, AfterValidator(_numero_chamada_valido)]
+
+
 class AlunoCreate(BaseModel):
-    nome: str = Field(min_length=2, max_length=200)
+    nome: Annotated[str, BeforeValidator(_nome_sem_controle)] = Field(
+        min_length=2, max_length=200)
     turma_id: int
-    numero_chamada: int | None = None
+    numero_chamada: NumeroChamada = None
     data_nascimento: date | None = None
     observacoes: str | None = Field(default=None, max_length=1000)  # = AlunoUpdate
     # Ficha cadastral (RA, responsável, telefone, endereço...): mesmas chaves
@@ -180,8 +258,9 @@ class AlunoCreate(BaseModel):
 
 class AlunoUpdate(BaseModel):
     """Edição parcial do cadastro do aluno (só os campos enviados mudam)."""
-    nome: str | None = Field(default=None, min_length=2, max_length=200)
-    numero_chamada: int | None = None
+    nome: Annotated[str | None, BeforeValidator(_nome_sem_controle)] = Field(
+        default=None, min_length=2, max_length=200)
+    numero_chamada: NumeroChamada = None
     data_nascimento: date | None = None
     observacoes: str | None = Field(default=None, max_length=1000)
 
@@ -592,10 +671,26 @@ class RedeOut(ORMModel):
     status: str = "ativa"
 
 
+def _codigo_ibge_valido(valor: str | None) -> str | None:
+    """O código IBGE do município: exatamente 7 dígitos (o que a importação dos
+    indicadores oficiais confere), sem completar nem cortar. "" = sem código."""
+    if valor is None:
+        return None
+    valor = valor.strip()
+    if valor and not re.fullmatch(r"\d{7}", valor):
+        raise ValueError("O código IBGE do município tem 7 dígitos, só números "
+                         "(ex.: 3510500). Nada foi alterado.")
+    return valor
+
+
+# Sem ``max_length``: o validador já recusa o que não tem 7 dígitos, com a mensagem acima.
+CodigoIbge = Annotated[str | None, AfterValidator(_codigo_ibge_valido)]
+
+
 class RedeCreate(BaseModel):
     nome: str = Field(min_length=2, max_length=200)
     uf: str | None = Field(default=None, max_length=2)
-    codigo_ibge: str | None = Field(default=None, max_length=7)
+    codigo_ibge: CodigoIbge = None
     # Só dígitos (o CODMUN da SEDUC; Caraguatatuba = 254). "" = sem código.
     codigo_municipio_estadual: str | None = Field(default=None, pattern=r"^\d{0,8}$")
 
@@ -604,7 +699,8 @@ class RedeUpdate(BaseModel):
     """Atualização parcial — só o que foi enviado muda."""
     nome: str | None = Field(default=None, min_length=2, max_length=200)
     uf: str | None = Field(default=None, max_length=2)
-    codigo_ibge: str | None = Field(default=None, max_length=7)
+    # 7 dígitos; "" limpa (a importação dos indicadores volta a pedir o código).
+    codigo_ibge: CodigoIbge = None
     # CODMUN da SEDUC-SP, só dígitos; "" limpa. Nunca deduzido do nome do município.
     codigo_municipio_estadual: str | None = Field(default=None, pattern=r"^\d{0,8}$")
     status: str | None = Field(default=None, pattern="^(ativa|inativa)$")
@@ -648,5 +744,6 @@ class EscolaLocalIn(BaseModel):
     endereco: str | None = Field(default=None, max_length=200)
     latitude: float | None = Field(default=None, ge=-90, le=90)
     longitude: float | None = Field(default=None, ge=-180, le=180)
-    # "" limpa o código; qualquer valor é normalizado p/ 8 dígitos no endpoint.
+    # "" limpa o código; o resto tem de ter 8 dígitos (o endpoint recusa com 400 o que
+    # não tem: ``avaliacoes.inep_digitado`` nunca corta nem completa).
     codigo_inep: str | None = Field(default=None, max_length=20)

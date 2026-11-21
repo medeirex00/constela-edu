@@ -121,7 +121,8 @@ def test_ano_arquivado_com_politica_bloquear_tambem_nao_cria(db, escola_completa
     assert [r.motivo for r in pendentes(db, escola.id)] == ["turma_arquivada"]
 
 
-def test_as_duas_ativas_crianca_do_1o_ano_vai_para_o_1o_ano(db, escola_completa, monkeypatch):
+def test_as_duas_ativas_crianca_do_1o_ano_vai_para_o_1o_ano(
+        relogio_no_ano_letivo, db, escola_completa, monkeypatch):
     sem_disco(monkeypatch)
     escola = escola_completa["escola"]
     fase, ano1 = _fase_e_ano(db, escola.id, ano_arquivado=False)
@@ -140,7 +141,7 @@ def test_as_duas_ativas_crianca_do_1o_ano_vai_para_o_1o_ano(db, escola_completa,
 
 
 def test_as_duas_ativas_com_politica_bloquear_pendencia_sugere_o_1o_ano(
-        db, escola_completa, monkeypatch):
+        relogio_no_ano_letivo, db, escola_completa, monkeypatch):
     sem_disco(monkeypatch)
     escola = escola_completa["escola"]
     politica_sync.definir(db, escola.id, "bloquear")
@@ -150,7 +151,8 @@ def test_as_duas_ativas_com_politica_bloquear_pendencia_sugere_o_1o_ano(
     assert rev.motivo == "criacao_bloqueada_por_politica" and rev.turma_id == ano1.id
 
 
-def test_sala_com_arquivada_e_ativa_cria_na_ativa(db, escola_completa, monkeypatch):
+def test_sala_com_arquivada_e_ativa_cria_na_ativa(
+        relogio_no_ano_letivo, db, escola_completa, monkeypatch):
     """Duas turmas da MESMA sala, uma arquivada: a ficha nova nasce na ativa (antes
     a arquivada podia ganhar o desempate)."""
     sem_disco(monkeypatch)
@@ -216,8 +218,11 @@ def test_troca_de_turma_nao_move_para_a_fase_nem_para_a_arquivada(db, escola_com
 
 
 def test_troca_de_turma_ainda_move_para_turma_ativa_da_mesma_etapa(db, escola_completa):
+    # A criança sai de uma sala da MESMA série ("1º Ano B"): mudar de série é a virada
+    # do ano letivo, que a coleta não faz (S_G_VIRADA-1) — antes o teste partia do
+    # "2º Ano A" e afirmava a mudança de série.
     escola = escola_completa["escola"]
-    segundo = turma(db, escola.id, "2º Ano A", "2º Ano")
+    segundo = turma(db, escola.id, "1º Ano B", "1º Ano")
     turma(db, escola.id, "1ª Fase A", "1ª Fase")
     primeiro = turma(db, escola.id, "1º Ano A", "1º Ano")
     iris = aluno(db, escola.id, segundo, "IRIS FICTICIA SEGUNDO")
@@ -264,7 +269,8 @@ def test_turma_de_outro_ano_letivo_nao_serve_de_destino(db, escola_completa):
     assert [r.motivo for r in pendentes(db, escola.id)] == ["turma_fora_do_ano_letivo"]
 
 
-def test_outro_ano_letivo_fica_fora_da_sala_e_do_roster(db, escola_completa, monkeypatch):
+def test_outro_ano_letivo_fica_fora_da_sala_e_do_roster(
+        relogio_no_ano_letivo, db, escola_completa, monkeypatch):
     """A turma (e a matrícula) de 2025 não entra no contexto de 2026: não é a sala
     reconhecida pela série, não recebe ficha nova, e a criança que só tem matrícula
     em 2025 não está no roster de 2026 (vai para revisão por homônimo fora da sala,

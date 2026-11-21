@@ -4,6 +4,7 @@ Executar em desenvolvimento:
     uvicorn app.main:app --reload --port 8000
 """
 import logging
+import math
 import secrets
 
 from fastapi import Depends, FastAPI, Request, Response, status
@@ -17,10 +18,12 @@ from app.core.config import registrar_avisos_de_configuracao, settings
 from app.core import observabilidade as obs
 from app.core.cabecalhos import CabecalhosSegurancaMiddleware
 from app.core.limite_corpo import LimiteDeCorpoMiddleware
+from app.core import expurgo_arquivos, mantenedor_do_pool
 from app.core.database import engine, garantir_dados_base, get_db
 from app.core.deps import negar_secretaria
 from app.core.prontidao import prontidao
 from app.core.security import registrar_avisos_da_cifra
+from app.services.periodos import PeriodoInvalido
 from app.quest.routers import auth as quest_auth
 from app.quest.routers import conquistas as quest_conquistas
 from app.quest.routers import perfil as quest_perfil
@@ -113,6 +116,26 @@ if not _schema_errado_no_boot:
     except Exception:  # noqa: BLE001
         logger.warning("Falha ao liberar órfãs de sync no boot", exc_info=True)
 
+    # Aparelhos de push registrados com sessões de outra SECRET_KEY (trocada desde o
+    # último boot) ou de antes desta conferência existir saem no boot: a troca da chave
+    # derruba as sessões, e os aparelhos saem com elas (``push.
+    # conferir_chave_de_sessao_no_boot``). O app volta a se registrar no próximo login.
+    # Nunca impede o boot.
+    try:
+        from app.services import push as _push  # noqa: E402
+
+        _db_boot = next(get_db())
+        try:
+            _removidos = _push.conferir_chave_de_sessao_no_boot(_db_boot)
+            if _removidos:
+                logger.info("Push: %d aparelho(s) de sessões de outra chave removido(s) "
+                            "no boot.", _removidos)
+        finally:
+            _db_boot.close()
+    except Exception:  # noqa: BLE001
+        logger.warning("Falha ao conferir a chave de sessão dos aparelhos no boot",
+                       exc_info=True)
+
 # /docs, /redoc e /openapi.json só quando explicitamente habilitados (dev).
 _docs = "/docs" if settings.DOCS_HABILITADOS else None
 _redoc = "/redoc" if settings.DOCS_HABILITADOS else None
@@ -158,28 +181,96 @@ app.add_middleware(
     # `apiDownload`/`apiDownloadPost` não enxerga o Content-Disposition e cai no
     # nome padrão (no lote de certificados, o nome traz quantos foram emitidos).
     expose_headers=["X-Request-ID", "X-Correlation-ID", "Content-Disposition"],
+    # A web (Vercel) e a API (Railway) estão em origens diferentes: cada URL nova paga um
+    # preflight (OPTIONS), uma ida e volta do navegador à API antes da chamada de
+    # verdade. O navegador guarda a resposta por ``max_age`` segundos (o padrão do
+    # Starlette é 600); 7200 é o teto que o Chrome respeita. Só vale para a MESMA URL de
+    # novo (visitas repetidas), não para a primeira.
+    max_age=7200,
 )
 
 
 # O 422 padrão devolve o "input" de cada erro: num corpo que não é JSON, é o corpo
-# INTEIRO (até o teto do limite_corpo) — eco do que o cliente mandou, que dobra o
-# tráfego e pode repetir dado pessoal em log de proxy. Entrada crua (bytes) ou longa
-# sai do erro; o resto da resposta é a do FastAPI.
+# INTEIRO (até o teto do limite_corpo); num campo de texto que recebe uma lista, a lista
+# inteira; num campo obrigatório ausente, o corpo JSON inteiro (um dict). Eco do que o
+# cliente mandou, que dobra o tráfego e pode repetir dado pessoal em log de proxy — e,
+# num contêiner, custa CPU no event loop (o ``jsonable_encoder`` e a serialização
+# percorrem item a item): 30 MB de lista numa rota anônima paravam o worker por ~4 s.
+# Só fica o ``input`` ESCALAR curto (número finito, booleano, nulo, texto de até 256
+# caracteres); o resto sai do erro. NaN/Infinity também saem: o JSON de entrada os
+# aceita, o de saída (``allow_nan=False``) não, e o 422 virava 500. A resposta leva no
+# máximo os primeiros ``_ERROS_MAXIMOS_NO_422`` erros: uma lista de N itens inválidos
+# gera N erros, e as telas só mostram as mensagens (sem repetir). O resto é a resposta
+# do FastAPI. O ``loc`` (onde está o erro) e o ``msg`` também ecoavam: num campo
+# dict[str, ...], a CHAVE que o cliente mandou entra inteira no ``loc`` (uma de 30 MB dava
+# 422 de 31,5 MB), e os validadores que citam as chaves inválidas (pesos, referências)
+# a repetem no ``msg``. Texto do ``loc`` com mais de ``_LOC_MAXIMO_NO_422`` caracteres e
+# ``msg`` com mais de ``_MSG_MAXIMO_NO_422`` voltam só com o começo e "…"; os números
+# (posição na lista), os nomes dos campos e as mensagens comuns ficam como estão.
+#
+# Campo SECRETO não devolve nem o texto curto: a senha nova recusada pela política (curta
+# ou fraca) voltava inteira, em claro, no 422 — também na rota sem login
+# /auth/redefinir-senha (REG_SEGURANCA-4). Qualquer parte do ``loc`` (o campo, o campo
+# de dentro, o cookie) que contenha um destes pedaços, em qualquer caixa, tira o
+# ``input``: senhas, códigos e QR do Quest, tokens (link, push, arquivo), chaves de API e
+# credenciais das plataformas. O resto do erro (onde e por quê) fica.
 _INPUT_MAXIMO_NO_422 = 256
+_ERROS_MAXIMOS_NO_422 = 20
+_LOC_MAXIMO_NO_422 = 64
+_MSG_MAXIMO_NO_422 = 512
+_PEDACOS_DE_CAMPO_SECRETO = ("senha", "password", "token", "codigo", "api_key", "apikey",
+                             "segredo", "secret", "credencia", "cookie", "authorization")
+
+
+def _campo_secreto(loc) -> bool:
+    return any(isinstance(parte, str)
+               and any(pedaco in parte.lower() for pedaco in _PEDACOS_DE_CAMPO_SECRETO)
+               for parte in loc or ())
+
+
+def _input_que_pode_voltar(bruto: object) -> bool:
+    if bruto is None or isinstance(bruto, (bool, int)):
+        return True
+    if isinstance(bruto, float):
+        return math.isfinite(bruto)
+    return isinstance(bruto, str) and len(bruto) <= _INPUT_MAXIMO_NO_422
+
+
+def _curto(texto: str, teto: int) -> str:
+    return texto if len(texto) <= teto else texto[:teto] + "…"
+
+
+def _loc_curto(loc) -> tuple:
+    return tuple(_curto(parte, _LOC_MAXIMO_NO_422) if isinstance(parte, str) else parte
+                 for parte in loc)
 
 
 @app.exception_handler(RequestValidationError)
 async def _erro_de_validacao(request: Request, exc: RequestValidationError) -> JSONResponse:
     erros = []
-    for erro in exc.errors():
+    for erro in exc.errors()[:_ERROS_MAXIMOS_NO_422]:
         erro = dict(erro)
-        bruto = erro.get("input")
-        if isinstance(bruto, (bytes, bytearray)) or (
-                isinstance(bruto, str) and len(bruto) > _INPUT_MAXIMO_NO_422):
+        if "loc" in erro:
+            erro["loc"] = _loc_curto(erro["loc"])
+        # Conferido no ``loc`` já encurtado: uma chave de dict de 30 MB não é varrida.
+        if "input" in erro and (_campo_secreto(erro.get("loc"))
+                                or not _input_que_pode_voltar(erro["input"])):
             erro.pop("input")
+        if isinstance(erro.get("msg"), str):
+            erro["msg"] = _curto(erro["msg"], _MSG_MAXIMO_NO_422)
         erros.append(erro)
     return JSONResponse(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
                         content={"detail": jsonable_encoder(erros)})
+
+
+# Período personalizado com as datas trocadas (``periodos.resolver``): 422 com a frase do
+# Relatório por Período ("inverta as duas") em QUALQUER rota que resolve período — Ranking de
+# Leitura e de Matemática, Premiações, Histórico, Evolução, exemplo da pontuação. Antes só o
+# relatório recusava; as outras respondiam "nenhuma leitura no período" (200 vazio).
+@app.exception_handler(PeriodoInvalido)
+async def _periodo_invalido(request: Request, exc: PeriodoInvalido) -> JSONResponse:
+    return JSONResponse(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                        content={"detail": str(exc)})
 
 
 for router in (
@@ -263,18 +354,51 @@ def _parar_scheduler_sync() -> None:
     sync_scheduler.parar()
 
 
+# Mantenedor do pool (só PostgreSQL; ``0`` em DB_POOL_AQUECIDO_S ou DB_POOL_AQUECIDO_CONEXOES
+# desliga): uma thread por worker que pré-aquece o pool no boot e, a cada ciclo, deixa N
+# conexões prontas, para que a requisição não pague conexão nova, ping de conexão parada nem
+# reciclagem. Nunca derruba o boot nem a API. Ver app/core/mantenedor_do_pool.py.
+@app.on_event("startup")
+def _ligar_mantenedor_do_pool() -> None:
+    mantenedor_do_pool.iniciar(engine)
+
+
+@app.on_event("shutdown")
+def _parar_mantenedor_do_pool() -> None:
+    mantenedor_do_pool.parar()
+
+
+# Expurgo dos arquivos com prazo (prévia não confirmada: 24 h; cópia de relatório
+# exportado: EXPORTS_RETENCAO_DIAS): uma thread por worker, com uma passada logo no boot e
+# depois a cada hora. Antes o prazo só valia quando alguém analisava ou exportava de novo.
+# Só mexe em arquivo (nada no banco), então sobe mesmo com o schema errado. Nunca derruba o
+# boot nem a API. Ver app/core/expurgo_arquivos.py.
+@app.on_event("startup")
+def _ligar_expurgo_de_arquivos() -> None:
+    expurgo_arquivos.iniciar()
+
+
+@app.on_event("shutdown")
+def _parar_expurgo_de_arquivos() -> None:
+    expurgo_arquivos.parar()
+
+
 # --- Health checks e métricas (SaaS) -----------------------------------------
 
 def _banco_ok() -> bool:
+    """``SELECT 1``. A queda e a volta do banco vão para o log uma vez cada, junto com as
+    do readiness (o mesmo objeto de prontidão): o healthcheck sonda a cada poucos
+    segundos."""
     db = next(get_db())
     try:
         db.execute(text("SELECT 1"))
-        return True
-    except Exception:  # noqa: BLE001
-        logger.exception("Healthcheck: banco de dados inacessível")
+    except Exception as erro:  # noqa: BLE001
+        prontidao.banco_inacessivel(erro)
         return False
     finally:
         db.close()
+    prontidao.banco_respondeu()
+    return True
 
 
 # HEAD nas duas sondas: o @app.get do FastAPI não registra HEAD, e o monitor de

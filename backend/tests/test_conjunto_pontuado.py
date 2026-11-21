@@ -37,7 +37,7 @@ from app.services import evolucao as svc_evolucao
 from app.services import rede as svc_rede
 from app.services import scoring
 
-ANO = 2026
+from tests._ano_letivo import ANO
 
 
 def _rede(db, nome="Rede Conjunto"):

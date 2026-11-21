@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import RankingLeitura from "../pages/RankingLeitura";
-import { renderComApp, responder, responderErro, screen, userEvent } from "./utils";
+import { renderComApp, responder, responderErro, screen, userEvent, within } from "./utils";
 
 import type { RankingLeituraItem, Turma } from "../lib/types";
 
@@ -52,6 +52,21 @@ describe("RankingLeitura", () => {
     renderComApp(<RankingLeitura />, { rota: "/ranking-leitura" });
 
     expect(await screen.findByText("Nenhuma leitura no período")).toBeInTheDocument();
+  });
+
+  it("estado vazio só cita período que o seletor oferece", async () => {
+    responder("GET", URL_TURMAS, turmasFake);
+    responder("GET", URL_RANKING, []);
+    renderComApp(<RankingLeitura />, { rota: "/ranking-leitura" });
+
+    const vazio = (await screen.findByText("Nenhuma leitura no período")).parentElement as HTMLElement;
+    const citados = [...(vazio.textContent ?? "").matchAll(/“([^”]+)”/g)].map((m) => m[1]);
+    expect(citados).toEqual(["Ano letivo"]);
+    // Os nomes citados são opções do seletor de período da própria tela (antes:
+    // "Todo o histórico", que ele não tem).
+    const opcoes = within(screen.getByRole("combobox", { name: "Período de análise" }))
+      .getAllByRole("option").map((o) => o.textContent);
+    for (const nome of citados) expect(opcoes).toContain(nome);
   });
 
   it("mostra falha quando a API do ranking erra", async () => {

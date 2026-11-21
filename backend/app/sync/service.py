@@ -22,12 +22,14 @@ import logging
 import statistics
 import threading
 import time
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import String, case, cast, event, func, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, object_session
+from sqlalchemy.orm.attributes import set_committed_value
 
 from app.core.config import settings
 from app.models.escola import Escola
@@ -144,6 +146,7 @@ def _marcar_resolvidos(db: Session, alertas) -> int:
 # este mapa, e o sucesso fecha TODA falha da integração (ver
 # ``resolver_falhas_da_integracao``).
 # --------------------------------------------------------------------------
+CODIGO_SEM_RESPONSAVEL = "escola_sem_responsavel"
 ALERTA_POR_CODIGO: dict[str, tuple[str, str]] = {
     # A plataforma RECUSOU usuário/senha (o único caso que prova senha errada).
     "senha_invalida": ("senha_invalida", "critico"),
@@ -186,6 +189,9 @@ ALERTA_POR_CODIGO: dict[str, tuple[str, str]] = {
     # D8 (LGPD): sem vínculo, TODAS as contas da coleta já são de alunos de OUTRA
     # escola do Constela — credencial da outra escola; nada foi gravado.
     "contas_de_outra_escola": ("contas_de_outra_escola", "critico"),
+    # A escola não tem admin/coordenador ATIVO para assinar a importação
+    # automática: nada é coletado e nada volta sozinho (alguém cadastra ou reativa).
+    CODIGO_SEM_RESPONSAVEL: (CODIGO_SEM_RESPONSAVEL, "critico"),
 }
 _ALERTA_PADRAO = ("falha_download", "warn")   # código desconhecido: como antes
 
@@ -258,6 +264,9 @@ CATEGORIA_POR_TIPO: dict[str, str] = {
     "conta_multiescola": "autenticacao", "escola_externa_trocada": "autenticacao",
     "escola_externa_em_outra_escola": "autenticacao", "contas_de_outra_escola": "autenticacao",
     "escola_nao_identificada": "processamento",
+    # Falta um usuário ativo da escola que assine a importação: é cadastro, não
+    # falha da plataforma nem do processamento.
+    CODIGO_SEM_RESPONSAVEL: "configuracao",
 }
 
 # --------------------------------------------------------------------------
@@ -274,9 +283,12 @@ CATEGORIA_POR_TIPO: dict[str, str] = {
 #                   vinculada da escola foi conferida — alerta próprio),
 #                   'tudo_em_revisao' (as linhas ficaram em revisão/sem vínculo e
 #                   NENHUMA conta da escola foi conferida — mesmo alerta, texto
-#                   próprio, e NÃO conta como "em dia"), 'queda_retida' (total
-#                   menor do Matific retido — 'queda_matific') ou
-#                   'linhas_descartadas' (defeito — 'coleta_parcial')
+#                   próprio, e NÃO conta como "em dia"), 'fora_do_ano_sem_conferencia'
+#                   (coleta de fora do ano letivo ativo cujas linhas ficaram de fora
+#                   esperando a virada e NENHUMA conta da escola foi conferida —
+#                   alerta 'coleta_fora_do_ano_letivo', NÃO conta como "em dia"),
+#                   'queda_retida' (total menor do Matific retido — 'queda_matific')
+#                   ou 'linhas_descartadas' (defeito — 'coleta_parcial')
 #   sem_dados       a plataforma respondeu 2xx e trouxe 0 turma/0 linha
 #   erro            login, HTTP de erro, tempo esgotado, resposta incompatível,
 #                   exceção ou nenhuma unidade coletada; motivo = o código
@@ -300,8 +312,20 @@ MOTIVO_NADA_MUDOU = "nada_mudou"
 MOTIVO_TUDO_EM_REVISAO = "tudo_em_revisao"
 # 'sem_atualizacao' que conta como VERIFICAÇÃO (``ultima_verificacao_em``).
 MOTIVOS_VERIFICADOS = (MOTIVO_NADA_MUDOU, "queda_retida")
+# A resposta perdeu campos que o Constela usa fora dos essenciais (tempo e questões
+# do Elefante, S9): os livros entram, esses números ficam os de antes. 'parcial'
+# com dado aplicado; 'sem_atualizacao' sem. Não é "em dia" nem verificação.
+MOTIVO_CAMPOS_NAO_ATUALIZADOS = "campos_nao_atualizados"
+# 'sem_atualizacao' de uma coleta feita FORA do ano letivo ativo da escola (a virada
+# ainda não foi feita) em que a criança sem ficha ficou de fora esperando a virada
+# (S_G_VIRADA-1) e NENHUMA conta já vinculada a um aluno da escola foi conferida. É a
+# forma C na janela da virada (REV3-VIRADA-2): sem conta da escola conferida, a coleta
+# não prova que o dado desta escola está em dia (credencial de outra escola ou 1ª
+# coleta sem vínculo), mesmo sem nada na fila de revisão. Não fecha 'desatualizada'.
+MOTIVO_FORA_DO_ANO_SEM_CONFERENCIA = "fora_do_ano_sem_conferencia"
 # 'sem_atualizacao' que NÃO conta como "em dia" (``_filtro_em_dia``).
-MOTIVOS_SEM_EM_DIA = (MOTIVO_TUDO_EM_REVISAO,)
+MOTIVOS_SEM_EM_DIA = (MOTIVO_TUDO_EM_REVISAO, MOTIVO_CAMPOS_NAO_ATUALIZADOS,
+                      MOTIVO_FORA_DO_ANO_SEM_CONFERENCIA)
 # Só estes provam que a plataforma respondeu 2xx e a coleta chegou ao fim: são
 # os que podem carimbar a credencial como 'valida'.
 STATUS_CREDENCIAL_VALIDA = ("concluida", "parcial", "sem_atualizacao", "sem_dados")
@@ -366,8 +390,10 @@ def _filtro_em_dia():
     conta. Com tudo em revisão e nenhuma conta já vinculada conferida, a coleta
     não provou que o dado DESTA escola está em dia — é a assinatura de credencial
     de outra escola ou de casamento quebrado; o 'desatualizada' abre depois da
-    cadência, ao lado do 'correspondencia_pendente'. ``coalesce``: motivo NULL
-    (execução anterior à 0039) não é 'tudo_em_revisao'."""
+    cadência, ao lado do 'correspondencia_pendente'. O mesmo vale na janela da virada
+    para 'sem_atualizacao/fora_do_ano_sem_conferencia' (REV3-VIRADA-2): as linhas
+    ficaram de fora esperando a virada e nenhuma conta da escola foi conferida.
+    ``coalesce``: motivo NULL (execução anterior à 0039) não é 'tudo_em_revisao'."""
     return (((SincronizacaoExecucao.status == "concluida")
              | ((SincronizacaoExecucao.status == "sem_atualizacao")
                 & func.coalesce(SincronizacaoExecucao.motivo, "").notin_(MOTIVOS_SEM_EM_DIA))
@@ -761,12 +787,41 @@ def _execucao_ativa(db: Session, escola_id: int, plataforma: str):
 
 
 def _esta_travada(execucao: SincronizacaoExecucao) -> bool:
-    """True se a execução está presa em 'executando' além de ``SYNC_TRAVADA_S``
-    (worker morto/redeploy no meio) — órfã, precisa ser recuperada."""
+    """True se a execução em 'executando' está sem SINAL DE VIDA há mais de
+    ``SYNC_SEM_SINAL_S`` (worker morto, redeploy no meio) — órfã, precisa ser
+    recuperada. O critério é o último registro no log dela, não a idade: quem está
+    vivo escreve nele (``_sinal_de_vida_enquanto_roda``), então uma coleta longa não
+    é reivindicada, e a que morreu é liberada em minutos, não em 60."""
     if execucao.status != "executando" or execucao.iniciada_em is None:
         return False
-    limite = _agora() - timedelta(seconds=settings.SYNC_TRAVADA_S)
-    return execucao.iniciada_em < limite
+    limite = _agora() - timedelta(seconds=settings.SYNC_SEM_SINAL_S)
+    if _naive_utc(execucao.iniciada_em) >= limite:
+        return False          # recente: o 1º sinal de vida ainda nem era devido
+    db = object_session(execucao)
+    if db is None:
+        return False          # sem como conferir o sinal: na dúvida, está viva
+    sinal = ultimo_sinal_de_vida(db, execucao)
+    return sinal is None or sinal < limite
+
+
+def _orfas_em_execucao(db: Session, *, agora: datetime | None = None,
+                       sem_sinal_s: int | None = None) -> list[SincronizacaoExecucao]:
+    """As execuções que ``_esta_travada`` reivindicaria, numa consulta só (em ordem de
+    id). ``agora`` (UTC naive) e ``sem_sinal_s`` valem, por padrão, o relógio e
+    ``SYNC_SEM_SINAL_S``; o pré-requisito ``execucoes_presas`` do agendador passa os
+    que recebeu, para decidir pela MESMA regra do boot."""
+    if sem_sinal_s is None:
+        sem_sinal_s = settings.SYNC_SEM_SINAL_S
+    limite = (agora or _agora()) - timedelta(seconds=sem_sinal_s)
+    linhas = db.execute(
+        select(SincronizacaoExecucao, consulta_ultimo_log()).where(
+            SincronizacaoExecucao.status == "executando",
+            SincronizacaoExecucao.iniciada_em.isnot(None),
+            SincronizacaoExecucao.iniciada_em < limite)
+        .order_by(SincronizacaoExecucao.id)
+    ).all()
+    return [ex for ex, ultimo_log in linhas
+            if (sinal := sinal_de_vida(ex, ultimo_log)) is None or sinal < limite]
 
 
 def _gravou_arquivo(db: Session, execucao_id: int) -> bool:
@@ -811,6 +866,40 @@ def _finalizar_travada(db: Session, execucao: SincronizacaoExecucao, *,
     return reivindicou == 1
 
 
+def _fechar_se_ainda_executando(db: Session, execucao: SincronizacaoExecucao,
+                                status: str) -> bool:
+    """Grava o status final SÓ se a execução ainda está 'executando' (UPDATE
+    condicional, o par do ``_finalizar_travada``). False: outro caminho já a
+    encerrou enquanto esta thread trabalhava — antes o status era sobrescrito e uma
+    'erro' ("Interrompida") voltava a ser 'concluida', com a nova tentativa já na
+    fila. ``synchronize_session=False`` e o valor em memória só depois de vencer: o
+    objeto desta thread pode estar velho, e a sincronização avaliada em Python o
+    daria por fechado mesmo sem a linha ter mudado."""
+    fechou = db.execute(
+        update(SincronizacaoExecucao)
+        .where(SincronizacaoExecucao.id == execucao.id,
+               SincronizacaoExecucao.status == "executando")
+        .values(status=status)
+        .execution_options(synchronize_session=False)).rowcount == 1
+    if fechou:
+        set_committed_value(execucao, "status", status)
+    return fechou
+
+
+def _perdeu_o_fechamento(db: Session, execucao: SincronizacaoExecucao, ap: _Apuracao) -> None:
+    """Outro caminho encerrou esta execução e o estado dele vale. O que esta thread
+    gravou fica (cada arquivo commita o seu) e as notas ficam para a marca de
+    recálculo pendente. Cursor, credencial e alertas não são tocados: uma execução
+    nova pode estar rodando, e ela é quem responde pela integração agora."""
+    ap.perdeu_o_fechamento = True
+    if ap.aplicados:
+        execucao.recalculo_pendente = True
+    registrar_log(db, execucao, "scheduler", "warn",
+                  "A execução já tinha sido encerrada como interrompida enquanto esta "
+                  "coleta ainda rodava: o resultado dela não muda esse estado. O que já "
+                  "foi gravado fica, e as notas serão recalculadas na próxima coleta.")
+
+
 # --------------------------------------------------------------------------
 # Sinal de vida das execuções MANUAIS na fila
 #
@@ -838,8 +927,10 @@ def batimento_fila_s() -> float:
 
 
 def ultimo_sinal_de_vida(db: Session, execucao: SincronizacaoExecucao) -> datetime | None:
-    """O mais novo entre a criação da execução e o último registro no log dela
-    (na fila, só quem espera a vez escreve ali)."""
+    """O mais novo entre o marco da execução e o último registro no log dela. Na
+    fila, o marco é a criação, e só quem espera a vez escreve no log; em
+    'executando', é o início, e escrevem a própria coleta e o
+    ``_sinal_de_vida_enquanto_roda``."""
     ultimo_log = db.scalar(select(func.max(SincronizacaoLog.created_at)).where(
         SincronizacaoLog.execucao_id == execucao.id))
     return sinal_de_vida(execucao, ultimo_log)
@@ -857,7 +948,8 @@ def consulta_ultimo_log():
 def sinal_de_vida(execucao: SincronizacaoExecucao, ultimo_log: datetime | None,
                   ) -> datetime | None:
     """A regra de ``ultimo_sinal_de_vida`` com o último log já lido."""
-    marcos = [m for m in (_naive_utc(execucao.created_at), _naive_utc(ultimo_log)) if m]
+    marco = execucao.iniciada_em if execucao.status == "executando" else execucao.created_at
+    marcos = [m for m in (_naive_utc(marco), _naive_utc(ultimo_log)) if m]
     return max(marcos) if marcos else None
 
 
@@ -1063,11 +1155,16 @@ def _carregar_contadores(db: Session, escola_id: int, plataforma: str) -> dict:
 
 
 def _salvar_contadores(db: Session, escola_id: int, plataforma: str,
-                       contadores: dict) -> None:
+                       contadores: dict, *, substituir: bool = False) -> None:
     """Persiste (fazendo MERGE) as contagens por aluno vistas nesta sync. O merge
     preserva as contagens de turmas que falharam nesta rodada (não vieram em
-    ``contadores``) — assim uma falha parcial nunca zera o cursor de um aluno."""
-    if not contadores:
+    ``contadores``) — assim uma falha parcial nunca zera o cursor de um aluno.
+
+    ``substituir`` (recoleta COMPLETA com unidade que falhou): o cursor passa a ser
+    só o desta rodada. Quem falhou perde o cursor e a próxima coleta incremental o
+    busca inteiro — o merge mantinha o antigo e, com o agregado da turma parado, o
+    aluno era pulado até a recoleta seguinte, 7 dias depois."""
+    if not contadores and not substituir:
         return
     from app.models.configuracao import Configuracao
 
@@ -1078,10 +1175,12 @@ def _salvar_contadores(db: Session, escola_id: int, plataforma: str,
             Configuracao.chave == plataforma)
     ).scalar_one_or_none()
     if row is None:
+        if not contadores:
+            return
         row = Configuracao(escola_id=escola_id, namespace=_NS_INCREMENTAL,
                            chave=plataforma, valor={})
         db.add(row)
-    atual = dict(row.valor) if isinstance(row.valor, dict) else {}
+    atual = {} if substituir else (dict(row.valor) if isinstance(row.valor, dict) else {})
     for sid, total in contadores.items():
         try:
             atual[str(sid)] = int(total)
@@ -1274,11 +1373,87 @@ def resolver_recalculo_pendente(db: Session, escola_id: int) -> int:
 # Contabilidade da execução e decisão do status (contrato da Etapa 2)
 # --------------------------------------------------------------------------
 _MOTIVOS_DE_VINCULO = ("sem_vinculo",)   # pendência de correspondência, não defeito
-# Descarte que a ESCOLA já decidiu (conta aposentada): nem pendência nem defeito.
-# A linha não confere a escola, não desfaz cursor e não abre alerta — só fica
-# contada no motivo próprio e citada no log da execução.
+# Descarte já decidido (conta que a escola aposentou; conta de criança excluída
+# para sempre, ``conta_esquecida``): nem pendência nem defeito. A linha não confere
+# a escola, não desfaz cursor e não abre alerta — só fica contada no motivo próprio
+# e citada no log da execução, com o texto do motivo (``_TEXTO_DECIDIDO``).
 _MOTIVOS_DECIDIDOS = tuple(sorted(MOTIVOS_DESCARTE_DECIDIDO))
-_MOTIVOS_FORA_DE_DEFEITO = _MOTIVOS_DE_VINCULO + _MOTIVOS_DECIDIDOS
+_TEXTO_DECIDIDO = {
+    "identidade_aposentada": ("{n} linha(s) de conta(s) da plataforma que a escola "
+                              "aposentou (conta duplicada já decidida) não foram "
+                              "aplicadas — nada a revisar."),
+    "conta_esquecida": ("{n} linha(s) de conta(s) de aluno excluído permanentemente "
+                        "foram ignoradas — a conta continua ativa na plataforma."),
+}
+# Criança sem ficha que a coleta de FORA do ano letivo ativo não criou (S_G_VIRADA-1):
+# a linha não tem defeito nem pendência de vínculo — espera a virada do ano. Fica em
+# ``ignorados`` (o cursor dela não avança e a coleta depois da virada a traz) e abre o
+# alerta próprio (``TIPO_ALERTA_FORA_DO_ANO``), não o de correspondência pendente.
+_MOTIVO_FORA_DO_ANO = orchestrator.MOTIVO_FORA_DO_ANO_LETIVO
+TIPO_ALERTA_FORA_DO_ANO = orchestrator.MOTIVO_FORA_DO_ANO_LETIVO
+_MOTIVOS_FORA_DE_DEFEITO = _MOTIVOS_DE_VINCULO + _MOTIVOS_DECIDIDOS + (_MOTIVO_FORA_DO_ANO,)
+# O motivo de cada linha com defeito (o código que conectores, parser e importação
+# anotam) como a tela o diz nos alertas "Nenhuma linha aproveitável" e "Coleta parcial".
+_ROTULO_DESCARTE = {
+    "sem_nome": "sem o nome do aluno",
+    "sem_nome_ou_turma": "sem o nome ou a turma do aluno",
+    "sem_nome_ou_titulo": "sem o nome do aluno ou o título do livro",
+    "sem_data": "leitura sem data",
+    "livro_sem_titulo": "livro sem título",
+    "id_em_varias_turmas": "a mesma conta em mais de uma turma, com números diferentes",
+    "campos_ausentes": "sem campos que o Constela usa",
+    "conta_esquecida": "conta de aluno excluído permanentemente",
+}
+
+
+def _rotulo_descarte(motivo: str) -> str:
+    """Rótulo do motivo; um código novo sem rótulo sai sem o "_" de código."""
+    return _ROTULO_DESCARTE.get(motivo) or str(motivo).replace("_", " ")
+
+
+def _textos_dos_decididos(ap: "_Apuracao") -> list[str]:
+    """As linhas do log da execução para os descartes já decididos, uma por motivo
+    (cada um com o seu texto: a conta esquecida não é "conta que a escola
+    aposentou")."""
+    textos = []
+    for motivo in _MOTIVOS_DECIDIDOS:
+        n = int(ap.descartes.get(motivo, 0) or 0)
+        if n:
+            modelo = _TEXTO_DECIDIDO.get(motivo, "{n} linha(s) com descarte já decidido ("
+                                         + _rotulo_descarte(motivo) + ") não foram aplicadas.")
+            textos.append(modelo.format(n=n))
+    return textos
+
+
+# A UNIDADE da coleta que falhou (o código que conectores e serviço anotam em
+# ``registrar_falha_coleta``) como a tela a diz nos alertas "Coleta parcial" e
+# "Nenhum dado aplicado" — nunca o código interno ("endpoint", "lote").
+_ROTULO_UNIDADE = {
+    "turma": "turma",
+    "lote": "livros lidos de uma turma",
+    "aluno": "livros lidos de um aluno",
+    "endpoint": "lista de nomes completos do Matific",
+    "arquivo": "relatório de turma",
+}
+
+
+def _rotulo_unidade(unidade: str) -> str:
+    """Rótulo da unidade; um código novo sem rótulo sai sem o "_" de código."""
+    return _ROTULO_UNIDADE.get(unidade) or str(unidade).replace("_", " ")
+
+
+# Linhas de LIVRO (leituras do Elefante) descartadas. O cursor do aluno avança mesmo
+# assim (decisão: um livro com defeito permanente não faz toda coleta pedir os livros
+# de novo — ``test_sync_revisao_regressao``), então outra coleta logo em seguida NÃO
+# as pede: só a recoleta completa semanal (``_coleta_completa_devida``) o faz.
+_MOTIVOS_DE_LIVRO = ("sem_data", "sem_nome_ou_titulo", "livro_sem_titulo")
+
+# Linhas que vieram sem um campo ESSENCIAL (estrelas/atividades do Matific, livros
+# lidos do Elefante; ``CAMPOS_ESSENCIAIS_SYNC``): é o FORMATO da resposta que mudou
+# (campo renomeado ou valor ilegível) — o mesmo caso do alerta crítico "Formato do
+# relatório mudou", que diz "Sincronizar de novo não resolve". Outra coleta traz a
+# linha do mesmo jeito: só o ajuste da coleta a recupera.
+_MOTIVOS_DE_FORMATO = ("campos_ausentes",)
 
 
 @dataclass
@@ -1315,6 +1490,11 @@ class _Apuracao:
     # Fora do banco, como o resto: é o que ``executar`` consulta ao sair por exceção.
     fim_gravado: tuple | None = None
     fim_logado: bool = False
+    # Outro caminho encerrou a execução primeiro (``_perdeu_o_fechamento``).
+    perdeu_o_fechamento: bool = False
+    # A coleta foi feita fora do ano letivo ativo e não criou ficha nem mudou
+    # matrícula de alguém (S_G_VIRADA-1): abre o alerta 'coleta_fora_do_ano_letivo'.
+    fora_do_ano_letivo: bool = False
 
     def incorporar_coleta(self, coleta: dict | None) -> None:
         """O que o CONECTOR anotou (unidades que não chegaram, linhas com defeito)."""
@@ -1358,6 +1538,7 @@ class _Apuracao:
         for motivo, n in (res.get("descartadas") or {}).items():
             self.descartes[motivo] = self.descartes.get(motivo, 0) + int(n or 0)
         self.avisos_criticos.extend(res.get("avisos_criticos") or [])
+        self.fora_do_ano_letivo = self.fora_do_ano_letivo or bool(res.get("fora_do_ano_letivo"))
         if res.get("parser_incompativel"):
             # O arquivo inteiro perdeu um campo essencial: nada dele foi aplicado.
             self.falhas.append({"unidade": "arquivo", "id": str(self.arquivos),
@@ -1366,11 +1547,21 @@ class _Apuracao:
             self.importacoes.append(int(res["importacao_id"]))
 
     @property
+    def campos_nao_atualizados(self) -> list[str]:
+        """Campos não essenciais que sumiram de todas as linhas de algum relatório
+        (``orchestrator.campos_nao_atualizados``)."""
+        prefixo = orchestrator.AVISO_NAO_ATUALIZADOS
+        return sorted({c for a in self.avisos_criticos if str(a).startswith(prefixo)
+                       for c in str(a)[len(prefixo):].split(",") if c})
+
+    @property
     def interpretacao_incompativel(self) -> bool:
         """A resposta perdeu campo essencial (num arquivo inteiro ou em parte das
-        linhas) — merece o alerta crítico 'parser_incompativel'."""
+        linhas) ou um não essencial em todas as linhas — merece o alerta crítico
+        'parser_incompativel'."""
         return (any(f.get("codigo") == "parser_incompativel" for f in self.falhas)
-                or any(str(a).startswith("campos_ausentes") for a in self.avisos_criticos))
+                or any(str(a).startswith("campos_ausentes") for a in self.avisos_criticos)
+                or bool(self.campos_nao_atualizados))
 
     @property
     def conferiu_a_escola(self) -> bool:
@@ -1383,12 +1574,27 @@ class _Apuracao:
         return bool(self.aplicados) or self.conferidos_sem_mudanca > 0 or self.retidos_queda > 0
 
     @property
+    def pendencia_de_vinculo(self) -> bool:
+        """Há conta desta coleta esperando vínculo — na fila de revisão ou sem vínculo
+        seguro com uma ficha? Toda linha em ``ignorados`` é uma das duas, menos a da
+        criança sem ficha que a coleta de fora do ano letivo não criou (motivo
+        próprio, ``_MOTIVO_FORA_DO_ANO``): ela está em ``ignorados`` só para o cursor
+        voltar. Sem revisão e sem 'sem_vinculo', os ``ignorados`` são todos dela."""
+        if self.em_revisao:
+            return True
+        if not self.ignorados:
+            return False
+        return (not self.descartes.get(_MOTIVO_FORA_DO_ANO)
+                or bool(self.descartes.get("sem_vinculo")))
+
+    @property
     def defeitos(self) -> int:
         return sum(n for m, n in self.descartes.items() if m not in _MOTIVOS_FORA_DE_DEFEITO)
 
     @property
     def decididos(self) -> int:
-        """Linhas descartadas por decisão da escola (conta aposentada)."""
+        """Linhas descartadas por decisão já tomada (conta aposentada; conta de
+        criança excluída para sempre)."""
         return sum(int(self.descartes.get(m, 0) or 0) for m in _MOTIVOS_DECIDIDOS)
 
     @property
@@ -1404,13 +1610,18 @@ class _Apuracao:
         return len(self.falhas) + len(self.ignorados) + self.defeitos
 
     def resumo_falhas(self) -> str:
+        """As unidades que falharam, contadas, na língua de quem lê os alertas da tela
+        de Integrações ("livros lidos de uma turma: 1"), nunca o código ("lote: 1")."""
         por_unidade: dict[str, int] = {}
         for f in self.falhas:
-            por_unidade[f.get("unidade") or "?"] = por_unidade.get(f.get("unidade") or "?", 0) + 1
+            rotulo = _rotulo_unidade(f.get("unidade") or "parte da coleta")
+            por_unidade[rotulo] = por_unidade.get(rotulo, 0) + 1
         return ", ".join(f"{u}: {n}" for u, n in sorted(por_unidade.items()))
 
     def resumo_descartes(self) -> str:
-        return ", ".join(f"{m}: {n}" for m, n in sorted(self.descartes.items())
+        """As linhas com defeito por motivo, na língua de quem lê os alertas da tela de
+        Integrações ("sem o nome do aluno: 2"), nunca o código interno ("sem_nome")."""
+        return ", ".join(f"{_rotulo_descarte(m)}: {n}" for m, n in sorted(self.descartes.items())
                          if m not in _MOTIVOS_FORA_DE_DEFEITO and n)
 
 
@@ -1422,6 +1633,11 @@ def decidir_status(ap: _Apuracao, *, falha_no_meio: bool = False) -> tuple[str, 
     if aplicados:
         if ap.falhas:
             return "parcial", "coleta_parcial"
+        # Campo sumido (S9) vem ANTES da linha com defeito: 'parcial/linhas_descartadas'
+        # conta como "em dia" (``_filtro_em_dia``) e esconderia que tempo e questões
+        # pararam de chegar. Os descartes continuam na mensagem do 'coleta_parcial'.
+        if ap.campos_nao_atualizados:
+            return "parcial", MOTIVO_CAMPOS_NAO_ATUALIZADOS
         if ap.defeitos:
             return "parcial", "linhas_descartadas"
         return "concluida", None
@@ -1449,13 +1665,27 @@ def decidir_status(ap: _Apuracao, *, falha_no_meio: bool = False) -> tuple[str, 
     uteis = ap.linhas - ap.decididos
     if uteis > 0 and ap.defeitos >= uteis:
         return "erro", "linhas_descartadas"       # tudo o que veio tinha defeito
-    if ap.em_revisao or ap.ignorados:
-        # Forma C: pendência com ≥1 conta da escola conferida é "correspondência
-        # pendente" (em dia, com o alerta próprio); sem nenhuma conferida, é
+    if ap.pendencia_de_vinculo and not ap.conferiu_a_escola:
+        # Forma C: pendência sem nenhuma conta da escola conferida é
         # 'tudo_em_revisao' — não é em dia (credencial de outra escola, casamento
-        # quebrado ou 1ª coleta sem vínculo).
-        if not ap.conferiu_a_escola:
-            return "sem_atualizacao", MOTIVO_TUDO_EM_REVISAO
+        # quebrado ou 1ª coleta sem vínculo) e tem o texto próprio do alerta.
+        return "sem_atualizacao", MOTIVO_TUDO_EM_REVISAO
+    if ap.descartes.get(_MOTIVO_FORA_DO_ANO) and not ap.conferiu_a_escola:
+        # Forma C na janela da virada (REV3-VIRADA-2): a criança sem ficha que a coleta
+        # de fora do ano letivo deixou de fora espera a virada — não é pendência de
+        # vínculo, mas também não prova nada desta escola. Sem nenhuma conta da escola
+        # conferida (credencial de outra escola, 1ª coleta sem vínculo), antes saía
+        # 'nada_mudou' e contava como em dia, com qualquer política de criação.
+        return "sem_atualizacao", MOTIVO_FORA_DO_ANO_SEM_CONFERENCIA
+    if ap.campos_nao_atualizados:
+        # S9 antes da pendência comum e da linha com defeito: as duas contam como
+        # "em dia" (``_filtro_em_dia``) e esconderiam que tempo e questões pararam
+        # de chegar. Os alertas delas abrem do mesmo jeito (``_concluir`` os decide
+        # pela contabilidade, não pelo motivo).
+        return "sem_atualizacao", MOTIVO_CAMPOS_NAO_ATUALIZADOS
+    if ap.pendencia_de_vinculo:
+        # Forma C: pendência com ≥1 conta da escola conferida é "correspondência
+        # pendente" (em dia, com o alerta próprio).
         return "sem_atualizacao", "correspondencia_pendente"
     if ap.retidos_queda:
         # Total do Matific MENOR que o gravado: o valor ficou retido (alerta
@@ -1491,6 +1721,12 @@ def _coletar(conector, cred, contexto_fetch: Contexto) -> list:
         else:
             mensagem = "Tempo esgotado esperando a plataforma responder."
         raise ErroConector(mensagem, codigo="timeout", recuperavel=True) from exc
+    except asyncio.CancelledError as exc:
+        # É BaseException: passava por todos os ``except Exception`` e a execução
+        # ficava 'executando', sem log nem fim. Uma tarefa interna cancelada (ex.:
+        # o navegador fechando no meio) é falha da coleta, e tem nova tentativa.
+        raise ErroConector("A coleta foi cancelada no meio do caminho. Tente de novo.",
+                           codigo="erro_navegador", recuperavel=True) from exc
 
 
 _ONDE_AS_CONTAS_VEM = {
@@ -1612,6 +1848,78 @@ def _contas_vinculadas(db: Session, escola_id: int, plataforma: str, *,
                situacao)) or 0)
 
 
+def _mensagem_fora_do_ano_letivo(db: Session, escola_id: int, ap: _Apuracao, *,
+                                 plataforma: str, por_periodo: bool = False) -> str:
+    """Texto do alerta 'coleta_fora_do_ano_letivo' (S_G_VIRADA-1): a coleta de hoje
+    (dia de Brasília) é de outro ano que o ano letivo ativo da escola, e não criou
+    ficha nem mudou matrícula. Diz o que ficou de fora — sem nome de criança e sem
+    contagem (no Elefante a mesma criança vem no resumo e nos livros) — e o que
+    fazer: virar o ano, quando o ano letivo ativo já terminou; conferir o ano, quando
+    ele ainda nem começou.
+
+    "Quem já tem ficha recebe os números" só quando a coleta CONFERIU alguma conta da
+    escola (REV3-VIRADA-2). Sem nenhuma conferida, ninguém recebeu nada: o texto diz
+    isso, que a coleta não conta como em dia ('fora_do_ano_sem_conferencia') e, como o
+    'tudo_em_revisao', a causa provável (acesso de outra escola ou 1ª coleta). Na
+    coleta POR PERÍODO (nunca conta como em dia; o Placar do período pode trazer só
+    quem jogou), sem a suspeita sobre o acesso."""
+    escola = db.get(Escola, escola_id)
+    ano = getattr(escola, "ano_letivo_ativo", None)
+    hoje = fuso.hoje_local()
+    quando = f"{hoje.day:02d}/{hoje.month:02d}/{hoje.year:04d}"
+    sem_ficha = ap.descartes.get(_MOTIVO_FORA_DO_ANO)
+    terminou = ano is not None and hoje.year > ano
+    if terminou:
+        situacao = f"o ano letivo {ano} da escola já terminou no calendário"
+    else:
+        situacao = f"o ano letivo ativo da escola ({ano}) ainda não começou no calendário"
+    inicio = f"A coleta de {quando} é de fora do ano letivo ativo: {situacao}."
+    if not ap.conferiu_a_escola:
+        # Ninguém recebeu nada. O alerta guarda só 500 caracteres (``abrir_alerta``):
+        # o texto é mais curto que o da coleta que conferiu a escola, para a ação
+        # caber inteira.
+        nada = ("Nenhuma conta já ligada a um aluno desta escola veio nela: nada foi "
+                "atualizado" + (" e nenhuma ficha foi criada." if sem_ficha else "."))
+        if not por_periodo:
+            nada += (" Isto não conta como coleta em dia. "
+                     + _causa_sem_conta_conferida(db, escola_id, plataforma))
+        acao = (f"Depois, o administrador global vira o “Ano letivo ativo” para "
+                f"{hoje.year} em Configurações." if terminou else
+                "Confira também o “Ano letivo ativo” em Configurações (só o "
+                "administrador global o altera).")
+        return f"{inicio} {nada} {acao}"
+    ficou_de_fora = "nenhuma matrícula foi mudada"
+    if sem_ficha:
+        ficou_de_fora += (" e as crianças que ainda não têm ficha ficaram de fora "
+                          "(nenhuma ficha foi criada)")
+    if terminou:
+        acao = (f"Vire o ano letivo antes de coletar: o administrador global troca o "
+                f"“Ano letivo ativo” para {hoje.year} em Configurações e a escola envia a "
+                f"Lista Piloto de {hoje.year}. A coleta seguinte traz quem ficou de fora.")
+    else:
+        acao = ("Confira o “Ano letivo ativo” em Configurações (só o administrador global "
+                "o altera) antes de coletar de novo.")
+    return (f"{inicio} Quem já tem ficha recebe os números normalmente, mas "
+            f"{ficou_de_fora}. {acao}")
+
+
+def _causa_sem_conta_conferida(db: Session, escola_id: int, plataforma: str) -> str:
+    """A causa provável de uma coleta de fora do ano letivo sem nenhuma conta da escola
+    conferida — a mesma distinção do ``_mensagem_tudo_em_revisao`` (escola com contas
+    vinculadas, só com contas de alunos inativos, ou sem nenhuma), sem mandar resolver
+    revisões: nada foi para a fila."""
+    vinculadas = _contas_vinculadas(db, escola_id, plataforma)
+    if vinculadas:
+        return (f"A escola tem {vinculadas} conta(s) vinculada(s) nesta plataforma e "
+                "nenhuma veio: confira se o acesso cadastrado é o desta escola.")
+    inativas = _contas_vinculadas(db, escola_id, plataforma, ativos=False)
+    if inativas:
+        return (f"As {inativas} conta(s) vinculada(s) da escola são de alunos não ativos: "
+                "confira as matrículas e o acesso cadastrado.")
+    return ("A escola ainda não tem conta vinculada nesta plataforma: confira se as turmas "
+            "que o acesso cadastrado mostra são desta escola.")
+
+
 def _mensagem_tudo_em_revisao(db: Session, escola_id: int, plataforma: str,
                               pendentes: str) -> str:
     """Texto do 'correspondencia_pendente' quando NENHUMA conta da escola foi
@@ -1650,7 +1958,67 @@ def _mensagem_parcial(ap: _Apuracao, motivo: str | None) -> str:
         partes.append(f"{len(ap.falhas)} unidade(s) com falha ({ap.resumo_falhas()})")
     if ap.defeitos:
         partes.append(f"{ap.defeitos} linha(s) descartada(s) ({ap.resumo_descartes()})")
-    return "; ".join(partes) + ". Sincronize de novo para completar."
+    if ap.campos_nao_atualizados:
+        partes.append(f"{_rotulos_campos(ap.campos_nao_atualizados)} não vieram da "
+                      "plataforma e ficaram com o valor da coleta anterior")
+    texto = "; ".join(partes) + "."
+    # Sincronizar de novo completa o que FALHOU (unidade, falha depois de gravar) ou
+    # a linha com defeito de passagem do relatório de turma (pedido de novo a cada
+    # coleta). NÃO completa: um campo renomeado na API (mandar repetir ensinava a
+    # ignorar o par de alertas), o que veio em outro formato — a unidade inteira ou
+    # só parte das linhas sem um campo essencial (o crítico ao lado diz que a coleta
+    # precisa de ajuste) — e a leitura descartada: o cursor do aluno já avançou e a
+    # próxima coleta não pede os livros dele.
+    falha_que_repetir_completa = any(f.get("codigo") != "parser_incompativel"
+                                     for f in ap.falhas)
+    veio_em_outro_formato = (
+        any(f.get("codigo") == "parser_incompativel" for f in ap.falhas)
+        or any(ap.descartes.get(m) for m in _MOTIVOS_DE_FORMATO))
+    defeito_de_livro = any(ap.descartes.get(m) for m in _MOTIVOS_DE_LIVRO)
+    defeito_que_repetir_completa = any(
+        n for m, n in ap.descartes.items()
+        if n and m not in _MOTIVOS_FORA_DE_DEFEITO and m not in _MOTIVOS_DE_LIVRO
+        and m not in _MOTIVOS_DE_FORMATO)
+    if (falha_que_repetir_completa or defeito_que_repetir_completa
+            or motivo == "falha_apos_gravacao"):
+        texto += " Sincronize de novo para completar."
+    if defeito_de_livro:
+        texto += (" As leituras descartadas não voltam com outra coleta: só são pedidas "
+                  "de novo na recoleta completa semanal.")
+    if veio_em_outro_formato:
+        texto += (" O que veio em outro formato não volta com outra coleta: "
+                  f"{orchestrator.AJUSTE_DA_COLETA} (alerta “Formato do relatório mudou”).")
+    if ap.campos_nao_atualizados:
+        texto += (" Os números que não vieram não voltam com outra coleta: "
+                  f"{orchestrator.AJUSTE_DA_COLETA} (alerta “Formato do relatório mudou”).")
+    return texto
+
+
+# Os campos do retrato como a tela de Integrações os diz (o vocabulário da
+# importação): os não essenciais que podem sumir de todas as linhas e os ESSENCIAIS
+# da sync (``CAMPOS_ESSENCIAIS_SYNC``) que o alerta "Formato do relatório mudou" cita.
+_ROTULO_CAMPO = {"tempo_leitura_min": "tempo de leitura",
+                 "questoes_tentativas": "questões respondidas",
+                 "questoes_acertos": "questões aprovadas",
+                 "estrelas": "estrelas",
+                 "atividades": "atividades",
+                 "livros_unicos": "livros lidos"}
+
+
+def _rotulos_campos(campos) -> str:
+    """Rótulos dos campos; um código novo sai sem o "_" de código."""
+    return ", ".join(_ROTULO_CAMPO.get(c) or str(c).replace("_", " ") for c in campos)
+
+
+def _campos_dos_avisos(avisos) -> str:
+    """Os campos dos avisos críticos ``campos_ausentes:<campo>,<campo>`` (código
+    estável da importação e do orquestrador) em palavras e sem repetição —
+    "atividades, estrelas" —, nunca o código interno."""
+    campos: set[str] = set()
+    for aviso in avisos:
+        _codigo, _sep, lista = str(aviso).partition(":")
+        campos.update(c.strip() for c in lista.split(",") if c.strip())
+    return _rotulos_campos(sorted(campos))
 
 
 def _recalcular_se_preciso(db: Session, execucao: SincronizacaoExecucao, ap: _Apuracao,
@@ -1701,15 +2069,20 @@ def _concluir(db: Session, execucao: SincronizacaoExecucao, ap: _Apuracao,
     credencial, alertas e recálculo. ``falha`` = (código, mensagem, recuperável)
     de uma exceção no MEIO da aplicação (depois de a coleta ter dado certo)."""
     status, motivo = decidir_status(ap, falha_no_meio=falha is not None)
-    if motivo == MOTIVO_TUDO_EM_REVISAO and execucao_por_periodo(execucao):
+    if motivo in (MOTIVO_TUDO_EM_REVISAO, MOTIVO_FORA_DO_ANO_SEM_CONFERENCIA) \
+            and execucao_por_periodo(execucao):
         # Coleta POR PERÍODO nunca conta como "em dia" (``_filtro_do_acumulado``) e
         # pode trazer só quem teve atividade no período (suposição a confirmar com o
         # Matific: o Placar por período omite quem não jogou?). Sem conta da escola
         # nela não há sinal de acesso de outra escola: é a pendência comum. Antes
         # (revisão e95) o alerta e o card mandavam conferir a credencial. Sem
-        # pendência (só contas aposentadas no período), nada mudou.
-        motivo = ("correspondencia_pendente" if (ap.em_revisao or ap.ignorados)
+        # pendência (só contas aposentadas no período, ou só crianças sem ficha que a
+        # coleta de fora do ano letivo deixou para depois da virada), nada mudou.
+        motivo = ("correspondencia_pendente" if ap.pendencia_de_vinculo
                   else MOTIVO_NADA_MUDOU)
+    if not _fechar_se_ainda_executando(db, execucao, status):
+        _perdeu_o_fechamento(db, execucao, ap)
+        return
     _gravar_contabilidade(execucao, ap)
     _registrar_trilha(db, execucao, ap)
     execucao.motivo = motivo
@@ -1731,26 +2104,36 @@ def _concluir(db: Session, execucao: SincronizacaoExecucao, ap: _Apuracao,
         else:
             codigo = "parser_incompativel"
             mensagem = (f"Nenhuma linha aproveitável: {ap.defeitos} linha(s) com defeito "
-                        f"({ap.resumo_descartes()}). Verifique o conector.")
+                        f"({ap.resumo_descartes()}). Avise o suporte: "
+                        f"{orchestrator.AJUSTE_DA_COLETA}.")
             recuperavel = False
         execucao.motivo = motivo
         _tratar_falha(db, execucao, contexto, codigo, mensagem, recuperavel=recuperavel)
         return
 
-    execucao.status = status
     # CURSOR (incremental): avança só numa coleta que chegou ao fim. Falha no meio
     # não salva nada — a próxima sync busca de novo (as UNIQUE impedem duplicar).
     if falha is None and ap.com_linhas:
         # Linha sem aluno vinculado volta ao cursor anterior → a próxima sync busca
         # os livros de novo em vez de perdê-los para sempre.
         _desfazer_cursor_ignorados(contexto_fetch, ap.ignorados)
-        _salvar_contadores(db, escola_id, plataforma, contexto_fetch.contadores_novos)
+        # Recoleta COMPLETA com unidade que falhou (turma, lote, aluno): o cursor
+        # fica só com quem chegou nesta rodada (``substituir``).
+        _salvar_contadores(db, escola_id, plataforma, contexto_fetch.contadores_novos,
+                           substituir=completa and bool(ap.falhas))
+        # LGPD (REV3-LGPD-1): a conta da criança excluída de vez, que a plataforma
+        # continua mandando (a porta de identidade a ignora), não volta ao cursor —
+        # nem a que uma restauração devolveu ao cursor gravado, que o MERGE acima
+        # manteria. Depois do merge, no cursor já gravado.
+        from app.services import exclusao_aluno
+        exclusao_aluno.tirar_contas_esquecidas_do_cursor(db, escola_id)
         # A recoleta completa que CHEGOU AO FIM reinicia o relógio semanal também
         # quando terminou 'parcial' (um livro sem data, um aluno cujo pedido
         # falha sempre): antes só 'concluida'/'sem_atualizacao' marcavam, e uma
         # linha com defeito permanente fazia TODA coleta seguinte ser completa
-        # (~17 min cada) — o cursor nunca mais valia. Quem falhou nesta rodada não
-        # tem cursor novo: a próxima incremental o busca de novo.
+        # (~17 min cada) — o cursor nunca mais valia. Quem falhou nesta rodada
+        # ficou SEM cursor (acima): a próxima incremental o busca inteiro, em vez
+        # de pulá-lo por mais 7 dias quando o agregado da turma não muda.
         if completa and status in ("concluida", "parcial", "sem_atualizacao"):
             _marcar_coleta_completa(db, escola_id, plataforma)
     # CREDENCIAL: o login e o endpoint de dados responderam (só estes estados).
@@ -1767,7 +2150,7 @@ def _concluir(db: Session, execucao: SincronizacaoExecucao, ap: _Apuracao,
     # ('sem_atualizacao/correspondencia_pendente') deixava aberto um
     # 'sem_acesso_ao_dado' crítico de dias atrás, e uma 'concluida' com linhas que
     # ficaram em revisão nela mesma fechava o 'correspondencia_pendente'.
-    pendencia_nesta = bool(ap.em_revisao or ap.ignorados)
+    pendencia_nesta = ap.pendencia_de_vinculo
     outra_escola_nesta = len(ap.ids_outra_escola)
     if status in ("concluida", "sem_atualizacao") or (status == "parcial" and not ap.falhas
                                                       and falha is None):
@@ -1780,6 +2163,8 @@ def _concluir(db: Session, execucao: SincronizacaoExecucao, ap: _Apuracao,
             manter += ("coleta_parcial",)
         if ap.interpretacao_incompativel:
             manter += ("parser_incompativel",)
+        if ap.fora_do_ano_letivo:
+            manter += (TIPO_ALERTA_FORA_DO_ANO,)
         fechados = resolver_falhas_da_integracao(db, escola_id, plataforma, manter=manter)
     else:
         tipos = TIPOS_ACESSO + ("interrompida",)
@@ -1806,9 +2191,33 @@ def _concluir(db: Session, execucao: SincronizacaoExecucao, ap: _Apuracao,
         abrir_alerta(db, escola_id, plataforma, "coleta_parcial", mensagem,
                      severidade="warn", execucao_id=execucao.id)
     if ap.interpretacao_incompativel:
-        mensagem = ("A resposta da plataforma veio sem campos que o Constela usa "
-                    f"({', '.join(sorted(set(ap.avisos_criticos))) or 'formato'}): essas "
-                    "linhas não foram gravadas. O conector precisa ser revisto.")
+        perdidas = sorted({a for a in ap.avisos_criticos
+                           if not str(a).startswith(orchestrator.AVISO_NAO_ATUALIZADOS)})
+        partes = []
+        if perdidas or not ap.campos_nao_atualizados:
+            # Os campos em palavras ("estrelas"), não o aviso cru da importação
+            # ("campos_ausentes:estrelas") — o gestor lê este alerta.
+            partes.append("A resposta da plataforma veio sem campos que o Constela usa "
+                          f"({_campos_dos_avisos(perdidas) or 'formato'}): essas linhas "
+                          "não foram gravadas.")
+        if ap.campos_nao_atualizados:
+            # O que a coleta gravou depende do status: na 'parcial' há aluno com livro
+            # novo, e os livros entraram; na 'sem_atualizacao' nenhum aluno foi
+            # atualizado — dizer "os livros foram atualizados" ali era falso.
+            gravou = ("os livros foram atualizados, mas esses números ficaram"
+                      if ap.aplicados else
+                      "nenhum aluno foi atualizado, e esses números ficaram")
+            # As Questões do período só deixam de medir esta coleta quando o que sumiu
+            # foram as QUESTÕES (a importação fica ``IMPORTACAO_SEM_QUESTOES``); com só o
+            # tempo de leitura sumido, o retrato mede as questões e serve de borda.
+            sem_questoes = set(orchestrator.CAMPOS_QUESTOES) & set(ap.campos_nao_atualizados)
+            partes.append(
+                f"A resposta da plataforma veio sem {_rotulos_campos(ap.campos_nao_atualizados)}"
+                f" em todas as linhas: {gravou} com o valor da coleta anterior"
+                + (", e as Questões do período não medem os dias desta coleta."
+                   if sem_questoes else "."))
+        mensagem = (" ".join(partes) + " Sincronizar de novo não resolve: "
+                    f"{orchestrator.AJUSTE_DA_COLETA}.")
         registrar_log(db, execucao, "parser", "error", mensagem)
         abrir_alerta(db, escola_id, plataforma, "parser_incompativel", mensagem,
                      severidade="critico", execucao_id=execucao.id)
@@ -1847,6 +2256,14 @@ def _concluir(db: Session, execucao: SincronizacaoExecucao, ap: _Apuracao,
         registrar_log(db, execucao, "validacao", "warn", mensagem)
         abrir_alerta(db, escola_id, plataforma, "identidade_de_outra_escola", mensagem,
                      severidade="critico", execucao_id=execucao.id)
+    if ap.fora_do_ano_letivo:
+        # Coleta de fora do ano letivo ativo que deixou alguém de fora: a escola
+        # precisa virar o ano (S_G_VIRADA-1). Sem nome de criança.
+        mensagem = _mensagem_fora_do_ano_letivo(db, escola_id, ap, plataforma=plataforma,
+                                                por_periodo=execucao_por_periodo(execucao))
+        registrar_log(db, execucao, "validacao", "warn", mensagem)
+        abrir_alerta(db, escola_id, plataforma, TIPO_ALERTA_FORA_DO_ANO, mensagem,
+                     severidade="warn", execucao_id=execucao.id)
     if status == "sem_atualizacao" and ap.defeitos:
         # Linha com defeito sem nenhuma mudança: antes nenhum alerta — o defeito
         # só aparecia no histórico.
@@ -1868,13 +2285,11 @@ def _concluir(db: Session, execucao: SincronizacaoExecucao, ap: _Apuracao,
             registrar_log(db, execucao, "download", "warn", mensagem)
             abrir_alerta(db, escola_id, plataforma, "plataforma_sem_dados", mensagem,
                          severidade="warn", execucao_id=execucao.id)
-    if ap.decididos:
-        # Conta APOSENTADA (a escola já escolheu qual conta vale): só o registro —
-        # nem pendência, nem defeito, nem cursor desfeito (achado 5 da revisão e95).
-        registrar_log(db, execucao, "validacao", "info",
-                      f"{ap.decididos} linha(s) de conta(s) da plataforma que a escola "
-                      "aposentou (conta duplicada já decidida) não foram aplicadas — nada "
-                      "a revisar.")
+    # Conta APOSENTADA (a escola já escolheu qual conta vale) e conta de criança
+    # EXCLUÍDA PARA SEMPRE: só o registro, com o texto de cada motivo — nem
+    # pendência, nem defeito, nem cursor desfeito (achado 5 da revisão e95; G_LGPD-1).
+    for texto in _textos_dos_decididos(ap):
+        registrar_log(db, execucao, "validacao", "info", texto)
     _avaliar_queda_matific(db, execucao, {"retidos_queda": ap.retidos_queda,
                                           "verificou_queda": ap.verificou_queda})
     # Coleta COMPLETA: cursor ignorado (``completa``) ou inexistente (1ª coleta).
@@ -1907,6 +2322,9 @@ def _encerrar_com_falha(db: Session, execucao: SincronizacaoExecucao, ap: _Apura
             logger.exception("Falha ao fechar a execução parcial (escola %s, plataforma %s)",
                              escola_id, plataforma)
     codigo, mensagem, recuperavel = falha
+    if not _fechar_se_ainda_executando(db, execucao, "erro"):
+        _perdeu_o_fechamento(db, execucao, ap)
+        return
     _gravar_contabilidade(execucao, ap)
     navegador_abriu = (getattr(contexto_fetch, "coleta", None) or {}).get("navegador_abriu")
     if codigo != "navegador_indisponivel" and (coletou or navegador_abriu):
@@ -2163,7 +2581,8 @@ def executar(db: Session, execucao: SincronizacaoExecucao) -> SincronizacaoExecu
     ap = _Apuracao()
     ids = (execucao.id, execucao.escola_id, execucao.plataforma)
     try:
-        return _executar_reivindicada(db, execucao, ap)
+        with _sinal_de_vida_enquanto_roda(execucao.id):
+            return _executar_reivindicada(db, execucao, ap)
     except BaseException:
         # Saída por exceção DEPOIS de o estado final ir para o banco (o commit antes
         # do recálculo, ou o do fim) e antes da linha: falha de banco no fim, ou um
@@ -2219,6 +2638,16 @@ def _executar_reivindicada(db: Session, execucao: SincronizacaoExecucao,
             raise ErroConector(
                 "Credenciais não configuradas.",
                 codigo="senha_invalida", recuperavel=False)
+        # Quem assina a importação automática (``orchestrator._resolver_ator``) é
+        # conferido ANTES de coletar: sem admin/coordenador ativo, a aplicação
+        # levantava RuntimeError depois da coleta inteira — "Falha inesperada"
+        # recuperável, e a nova tentativa coletava tudo de novo para falhar igual.
+        if orchestrator._resolver_ator(db, execucao.escola_id, execucao.usuario_id) is None:
+            raise ErroConector(
+                "A escola não tem administrador nem coordenador ativo para assinar a "
+                "importação automática, e nada foi coletado. Cadastre ou reative um em "
+                "Usuários e sincronize de novo.",
+                codigo=CODIGO_SEM_RESPONSAVEL, recuperavel=False)
 
         registrar_log(db, execucao, "autenticacao", "info",
                       f"Conectando à {execucao.plataforma}…")
@@ -2304,10 +2733,18 @@ def _executar_reivindicada(db: Session, execucao: SincronizacaoExecucao,
                             falha=caiu or ("erro_inesperado",
                                            f"Falha inesperada: {type(exc).__name__}", True))
 
+    if ap.perdeu_o_fechamento:
+        # O estado final e a linha do fim são de quem encerrou: nada de instante,
+        # duração, frescor ou métrica desta thread por cima deles.
+        db.commit()
+        return execucao
     execucao.finalizada_em = _agora()
     execucao.duracao_ms = int((time.monotonic() - inicio) * 1000)
-    if execucao.status == "concluida":
-        _avaliar_lentidao(db, execucao)
+    if execucao.status in ("concluida", "sem_atualizacao"):
+        # 'sem_atualizacao' (coleta inteira, nada novo) dentro do normal também
+        # FECHA o 'lento' — antes ele ficava aberto até a próxima 'concluida'. Só a
+        # 'concluida' abre: a régua do normal é a das concluídas.
+        _avaliar_lentidao(db, execucao, pode_abrir=execucao.status == "concluida")
     # Frescor: o alerta 'desatualizada' abre/fecha também aqui, não só dentro do
     # agendador (que em produção está desligado).
     atualizar_alerta_desatualizada(db, db.execute(select(SincronizacaoConfig).where(
@@ -2352,6 +2789,8 @@ ORIGENS_DO_FIM = {
                          "(``enfileirar_ou_reaproveitar``)",
     "travada_no_agendador": "o reaper do agendador achou a execução presa "
                             "(``recuperar_execucoes_travadas``)",
+    "travada_no_status": "agendador desligado: a leitura do /status achou a execução "
+                         "sem sinal de vida (``liberar_fila_sem_agendador``)",
     "orfa_no_boot": "o boot achou a execução presa (``finalizar_orfas_no_boot``)",
 }
 
@@ -2487,13 +2926,17 @@ def limite_lento_ms(db: Session, escola_id: int, plataforma: str, *,
     return max(piso, LENTO_FATOR * mediana), mediana
 
 
-def _avaliar_lentidao(db: Session, execucao: SincronizacaoExecucao) -> None:
+def _avaliar_lentidao(db: Session, execucao: SincronizacaoExecucao, *,
+                      pode_abrir: bool = True) -> None:
     """Abre o aviso 'lento' quando ESTA execução concluída fugiu do normal da
-    integração; FECHA-o quando terminou dentro do normal (antes nunca fechava)."""
+    integração; FECHA-o quando terminou dentro do normal (antes nunca fechava).
+    ``pode_abrir=False``: só fecha (execução que não é 'concluida')."""
     limite, mediana = limite_lento_ms(db, execucao.escola_id, execucao.plataforma,
                                       excluir_id=execucao.id)
     if execucao.duracao_ms <= limite:
         resolver_alertas(db, execucao.escola_id, execucao.plataforma, ("lento",))
+        return
+    if not pode_abrir:
         return
     base = (f"o normal desta integração é {mediana // 1000}s" if mediana is not None
             else f"limite de {settings.SYNC_LENTO_S}s")
@@ -2526,7 +2969,8 @@ def _avaliar_queda_matific(db: Session, execucao: SincronizacaoExecucao,
 
 def _tratar_falha(db: Session, execucao: SincronizacaoExecucao, contexto: Contexto,
                   codigo: str, mensagem: str, *, recuperavel: bool) -> None:
-    execucao.status = "erro"
+    """Registra a falha de uma execução que o chamador JÁ fechou como 'erro'
+    (``_fechar_se_ainda_executando``)."""
     execucao.erro_resumo = mensagem[:300]
     # Sem motivo mais específico da contabilidade ('coleta_incompleta',
     # 'linhas_descartadas'), o motivo do 'erro' é o CÓDIGO da falha
@@ -2647,6 +3091,81 @@ def _sinal_de_vida_da_espera(execucao_id: int) -> bool:
         db.close()
 
 
+# --------------------------------------------------------------------------
+# Sinal de vida de quem está em 'executando'
+#
+# Antes o único critério era a idade (``iniciada_em`` além de SYNC_TRAVADA_S): a
+# execução morta num redeploy segurava a escola por até 60 min (o clique se juntava
+# a ela e a tela dizia "Sincronizando"), e a viva além disso era reivindicada. Agora
+# uma thread escreve no log da execução enquanto ela roda, cobrindo também a fase de
+# aplicação, cujos registros só ficam visíveis no commit de cada arquivo.
+# --------------------------------------------------------------------------
+def batimento_execucao_s() -> float:
+    """Intervalo do sinal de vida: 6 por janela de ``SYNC_SEM_SINAL_S``, para um
+    atraso ou uma falha de banco não bastarem para a execução parecer morta."""
+    return max(1.0, settings.SYNC_SEM_SINAL_S / 6)
+
+
+def registrar_batimento_execucao(db: Session, execucao_id: int) -> bool:
+    """Uma linha no log de quem está rodando — só se ninguém escreveu lá há um
+    intervalo: a coleta já registra o próprio progresso e o histórico da tela não
+    enche à toa. Devolve False se a execução já saiu de 'executando'."""
+    execucao = db.get(SincronizacaoExecucao, execucao_id)
+    if execucao is None or execucao.status != "executando":
+        return False
+    agora = _agora()
+    ultimo = _naive_utc(db.scalar(select(func.max(SincronizacaoLog.created_at)).where(
+        SincronizacaoLog.execucao_id == execucao_id)))
+    if ultimo is not None and agora - ultimo < timedelta(seconds=batimento_execucao_s()):
+        return True
+    inicio = _naive_utc(execucao.iniciada_em) or agora
+    minutos = int(max(timedelta(0), agora - inicio).total_seconds() // 60)
+    registrar_log(db, execucao, "scheduler", "info",
+                  f"Em andamento: a sincronização segue rodando neste servidor ({minutos} min).")
+    db.commit()
+    return True
+
+
+def _sinal_de_vida_da_execucao(execucao_id: int) -> bool:
+    """``registrar_batimento_execucao`` com sessão própria. Falha de banco não para
+    o sinal (devolve True): perder um é tolerado, são seis por janela."""
+    from app.core.database import SessionLocal
+    db = SessionLocal()
+    try:
+        return registrar_batimento_execucao(db, execucao_id)
+    except Exception:  # noqa: BLE001 — o sinal nunca derruba a coleta
+        logger.warning("Falha ao registrar o sinal de vida da execução %s", execucao_id,
+                       exc_info=True)
+        return True
+    finally:
+        db.close()
+
+
+@contextmanager
+def _sinal_de_vida_enquanto_roda(execucao_id: int):
+    """Mantém o sinal de vida da execução enquanto o bloco roda. Com teto: uma
+    thread pendurada para sempre deixa de dar sinal depois de 2 × SYNC_TRAVADA_S e
+    a escola é liberada — o sinal prova que o processo está de pé, não que há
+    progresso. Sem thread (limite do sistema), a coleta segue sem o sinal."""
+    parar = threading.Event()
+
+    def _rodar() -> None:
+        teto = time.monotonic() + 2 * settings.SYNC_TRAVADA_S
+        while not parar.wait(batimento_execucao_s()):
+            if time.monotonic() > teto or not _sinal_de_vida_da_execucao(execucao_id):
+                return
+
+    try:
+        threading.Thread(target=_rodar, daemon=True,
+                         name=f"sync-sinal-{execucao_id}").start()
+    except RuntimeError:
+        logger.warning("Sem thread para o sinal de vida da execução %s", execucao_id)
+    try:
+        yield
+    finally:
+        parar.set()
+
+
 def precisa_de_thread(execucao: SincronizacaoExecucao) -> bool:
     """O "Sincronizar agora" deve disparar uma thread para esta execução? Só se
     ela ainda está na FILA — o claim de ``executar`` é ``WHERE status='fila'`` — e
@@ -2730,13 +3249,30 @@ def calcular_proxima(config: SincronizacaoConfig, base: datetime | None = None) 
     return None
 
 
+# Atraso a partir do qual a agenda vencida só é recalculada (ver
+# ``enfileirar_agendados``): a própria cadência.
+ATRASO_MAXIMO_POR_CADENCIA = {"diaria": timedelta(days=1), "semanal": timedelta(days=7)}
+
+
+def _vencida_ha_mais_que_a_cadencia(config: SincronizacaoConfig, agora: datetime) -> bool:
+    limite = ATRASO_MAXIMO_POR_CADENCIA.get(config.cadencia)
+    prevista = _naive_utc(config.proxima_execucao)
+    return limite is not None and prevista is not None and agora - prevista > limite
+
+
 def enfileirar_agendados(db: Session) -> int:
     """Varre configs vencidas e enfileira as execuções (chamado pelo worker).
 
     CLAIM ATÔMICO da config: ``UPDATE ... WHERE proxima_execucao<=agora`` avança
     a próxima e só enfileira se ganharmos a corrida (rowcount==1). Assim, N
     schedulers (um por réplica) nunca enfileiram a mesma agenda duas vezes — o
-    lock de linha do UPDATE serializa e o WHERE re-checa a janela."""
+    lock de linha do UPDATE serializa e o WHERE re-checa a janela.
+
+    AGENDA VENCIDA HÁ MAIS QUE A CADÊNCIA (o agendador ficou desligado, ou a agenda
+    foi salva dias antes de ligá-lo) só é RECALCULADA para o próximo horário dela,
+    sem enfileirar: antes ela rodava na 1ª rodada, a qualquer hora — religar o
+    agendador entre 07:30 e 10:30 de Brasília colidia com o backup. O atraso curto
+    (uma rodada perdida, um reinício) continua enfileirando."""
     agora = _agora()
     n = 0
     vencidas = db.execute(
@@ -2749,13 +3285,20 @@ def enfileirar_agendados(db: Session) -> int:
     ).scalars().all()
     for config in vencidas:
         nova = calcular_proxima(config, agora)
+        atrasada = _vencida_ha_mais_que_a_cadencia(config, agora)
         reivindicou = db.execute(
             update(SincronizacaoConfig)
             .where(SincronizacaoConfig.id == config.id,
                    SincronizacaoConfig.proxima_execucao <= agora)
             .values(proxima_execucao=nova)).rowcount
-        if reivindicou == 1 and not plataforma_no_plano(db, config.escola_id,
-                                                        config.plataforma):
+        if reivindicou == 1 and atrasada:
+            # Sem PII: ids e a nova data. A coleta acontece no próximo horário.
+            logger.warning("sync_agenda_vencida_recalculada escola=%s plataforma=%s "
+                           "proxima=%s", config.escola_id, config.plataforma,
+                           nova.isoformat() if nova else "-")
+            db.commit()
+        elif reivindicou == 1 and not plataforma_no_plano(db, config.escola_id,
+                                                          config.plataforma):
             # Módulo fora do plano da rede: a agenda AVANÇA (não volta a vencer a
             # cada rodada), mas nada é enfileirado — a agenda fica como a escola a
             # deixou e volta a valer se o módulo for recontratado.
@@ -2807,26 +3350,21 @@ def garantir_agendas_diarias(db: Session,
 
 
 def finalizar_orfas_no_boot(db: Session) -> int:
-    """No BOOT do processo: libera execuções presas em 'executando' há mais de
-    ``SYNC_TRAVADA_S`` — o worker que as rodava morreu no restart/redeploy. Marca
-    'erro' e LIBERA a trava (uq_sync_exec_ativa) SEM re-enfileirar (o usuário
-    retoma quando quiser). Idempotente.
+    """No BOOT do processo: libera execuções presas em 'executando' sem sinal de vida
+    há mais de ``SYNC_SEM_SINAL_S`` — o worker que as rodava morreu no
+    restart/redeploy. Marca 'erro' e LIBERA a trava (uq_sync_exec_ativa) SEM
+    re-enfileirar (o usuário retoma quando quiser). Idempotente.
 
-    O GATE DE IDADE é essencial com MÚLTIPLOS workers (uvicorn --workers > 1): o
+    O GATE DO SINAL é essencial com MÚLTIPLOS workers (uvicorn --workers > 1): o
     boot de UM worker NÃO significa que o vizinho parou. Sem o gate, este reaper
     mataria a sincronização EM ANDAMENTO de outro worker (furando a exclusão
-    mútua e podendo duplicar recálculos). Com o gate, só toca execuções antigas o
-    bastante para que ninguém mais as esteja executando — o mesmo limiar do
-    reaper periódico (recuperar_execucoes_travadas)."""
-    limite = _agora() - timedelta(seconds=settings.SYNC_TRAVADA_S)
-    orfas = db.execute(
-        select(SincronizacaoExecucao).where(
-            SincronizacaoExecucao.status == "executando",
-            SincronizacaoExecucao.iniciada_em.isnot(None),
-            SincronizacaoExecucao.iniciada_em < limite)
-    ).scalars().all()
+    mútua e podendo duplicar recálculos). Com o gate, só toca execuções caladas
+    há tempo bastante para que ninguém mais as esteja executando — o mesmo limiar
+    do reaper periódico (recuperar_execucoes_travadas). A que acabou de morrer no
+    próprio redeploy ainda tem sinal recente: sai pela leitura do /status ou pelo
+    próximo clique, passada a janela (``liberar_fila_sem_agendador``)."""
     n = 0
-    for ex in orfas:
+    for ex in _orfas_em_execucao(db):
         if _finalizar_travada(db, ex, origem="orfa_no_boot"):
             n += 1
     if n:
@@ -2849,17 +3387,28 @@ def liberar_fila_sem_agendador(db: Session, escola_id: int | None = None) -> int
     agendadas, manuais ÓRFÃS. Elas nunca vão rodar — deixá-las na fila fazia o
     card dizer "Sincronizando" para sempre e prendia a exclusão mútua até alguém
     clicar. Manual cuja thread ainda espera a vez — neste processo ou em outro
-    worker, pelo sinal de vida — não é tocada, por mais antiga que seja. Com o
-    agendador ligado, não faz nada: ele as pega. Idempotente. Roda no boot e na
-    leitura do /status (``escola_id``)."""
+    worker, pelo sinal de vida — não é tocada, por mais antiga que seja. Encerra
+    também a 'executando' sem sinal de vida (``_esta_travada``): sem o agendador,
+    quem a libertava era só o próximo clique, e a tela ficava em "Sincronizando".
+    Com o agendador ligado, não faz nada: ele as pega. Idempotente. Roda no boot e
+    na leitura do /status (``escola_id``), na mesma consulta."""
     if agendador_ligado():
         return 0
-    consulta = select(SincronizacaoExecucao).where(SincronizacaoExecucao.status == "fila")
+    consulta = select(SincronizacaoExecucao).where(
+        SincronizacaoExecucao.status.in_(("fila", "executando")))
     if escola_id is not None:
         consulta = consulta.where(SincronizacaoExecucao.escola_id == escola_id)
     agora = _agora()
     n = 0
     for ex in db.execute(consulta).scalars().all():
+        if ex.status == "executando":
+            if _esta_travada(ex) and _finalizar_travada(db, ex, origem="travada_no_status"):
+                abrir_alerta(db, ex.escola_id, ex.plataforma, "interrompida",
+                             "Sincronização interrompida (reinício do serviço). Use "
+                             "“Sincronizar agora” para tentar de novo.",
+                             severidade="warn", execucao_id=ex.id)
+                n += 1
+            continue
         if not so_o_agendador_roda(ex, agora=agora):
             continue
         manual = ex.origem != "scheduler" and ex.disponivel_em is None
@@ -2873,23 +3422,15 @@ def liberar_fila_sem_agendador(db: Session, escola_id: int | None = None) -> int
 
 
 def recuperar_execucoes_travadas(db: Session) -> int:
-    """Reaper (retomada após crash): execuções presas em 'executando' além de
-    ``SYNC_TRAVADA_S`` — worker morto ou redeploy no meio — são finalizadas como
-    'erro' e re-enfileiradas (respeitando o limite de tentativas). Sem isto, o
+    """Reaper (retomada após crash): execuções em 'executando' sem sinal de vida há
+    mais de ``SYNC_SEM_SINAL_S`` — worker morto ou redeploy no meio — são finalizadas
+    como 'erro' e re-enfileiradas (respeitando o limite de tentativas). Sem isto, o
     índice de exclusão mútua prenderia a escola até uma intervenção manual.
 
     Roda no início de cada rodada do scheduler. É seguro com várias réplicas: o
     UPDATE atômico garante que só um worker reivindica cada órfã."""
-    orfas = db.execute(
-        select(SincronizacaoExecucao).where(
-            SincronizacaoExecucao.status == "executando",
-            SincronizacaoExecucao.iniciada_em.isnot(None),
-            SincronizacaoExecucao.iniciada_em
-            < (_agora() - timedelta(seconds=settings.SYNC_TRAVADA_S)),
-        )
-    ).scalars().all()
     n = 0
-    for ex in orfas:
+    for ex in _orfas_em_execucao(db):
         if not _finalizar_travada(db, ex, origem="travada_no_agendador"):
             db.rollback()             # outro worker já a reivindicou
             continue

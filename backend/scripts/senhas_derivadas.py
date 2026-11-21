@@ -13,11 +13,18 @@ Garantias
 * DIAGNÓSTICO POR PADRÃO: sem ``--aplicar`` nada é gravado (no Postgres a
   transação é aberta como ``READ ONLY``). Só confere o hash bcrypt de cada conta
   contra as senhas das convenções antigas — o @ e o primeiro nome + "123" em
-  todas as caixas (``AnaSilva123``, ``anasilva123``, ``ANASILVA123``…), inclusive
+  QUATRO caixas (como está, minúsculas, MAIÚSCULAS e só a primeira maiúscula:
+  ``AnaSilva123``, ``anasilva123``, ``ANASILVA123``, ``Anasilva123``), inclusive
   com os nomes/@ que a conta JÁ teve (cadastro de professor ligado pelo e-mail e
   auditoria das edições). Limite: o nome anterior à 1ª edição do usuário não
   fica na auditoria (o ``PATCH /admin/usuarios`` grava só o nome novo); uma
   senha derivada dele só é achada se o cadastro de professor guardar esse nome.
+* LIMITE DAS CAIXAS: a trava do login (``routers/auth.py``) recusa com 403 o
+  nome/@ + "123" em QUALQUER combinação de maiúsculas e minúsculas (compara o
+  texto digitado, sem bcrypt). O bcrypt não deixa conferir todas as combinações
+  aqui: uma senha como ``anaSilva123`` (escolhida pela própria pessoa) não entra
+  nas contagens nem no ``--aplicar`` e recebe o 403 do mesmo jeito. A saída diz
+  isso (``AVISO_CAIXAS``); para conta GLOBAL, a confirmação é com a pessoa.
 * ``--contagens``: o mesmo diagnóstico só-leitura (mesma transação ``READ ONLY``),
   mas a saída tem APENAS números — nem id, nem nome, nem @, nem e-mail, nem nome
   de escola. Recusa ``--aplicar`` e ``--escola`` antes de abrir o banco.
@@ -42,7 +49,8 @@ Garantias
 * Conta SEM ESCOLA nunca é tocada: sai listada à parte — a recuperação é manual,
   pelo admin global (``python -m scripts.link_redefinicao``).
 * Administração global nunca é tocada: sai listada à parte (troca manual).
-* As sessões abertas das contas invalidadas caem (``token_version``).
+* As sessões abertas das contas invalidadas caem (``token_version``), e os
+  aparelhos registrados para push saem junto (o app registra de novo no login).
 * Cada conta invalidada fica no log de auditoria
   (``usuario.senha_derivada_invalidada``, detalhes ``{"uso", "origem"}``).
 
@@ -103,6 +111,16 @@ from scripts._saida import forcar_saida_utf8  # noqa: E402
 
 # Código de saída quando o --esperado não confere (nada gravado).
 SAIDA_ESPERADO_DIVERGENTE = 3
+
+# O que a contagem NÃO vê e a trava do login recusa (G_SCRIPTS-2): sai no
+# --contagens e no diagnóstico. Sem id, nome, @ nem e-mail (vale para chamado e chat).
+AVISO_CAIXAS = (
+    "LIMITE: estas contas foram conferidas com o nome e o usuário + 123 em 4 caixas "
+    "(como está, minúsculas, MAIÚSCULAS e só a primeira maiúscula); o login recusa "
+    "com 403 o nome ou o usuário + 123 em QUALQUER combinação de maiúsculas e "
+    "minúsculas. Uma senha assim em outra combinação não entra nestes números. "
+    "Antes do deploy, confirme com cada administrador global que a senha dele não "
+    "é o próprio nome ou usuário + 123, em caixa nenhuma.")
 
 
 def _escola(conta: dict) -> str:
@@ -222,7 +240,9 @@ def _contagens(classificacao: dict) -> list[str]:
             "recusa conta global): troque a senha ANTES do deploy e confira de novo "
             "até 'globais: 0'.")
     else:
-        linhas.append("nenhuma conta global com senha derivada.")
+        linhas.append("nenhuma conta global com senha derivada nas 4 caixas conferidas "
+                      "(ver o limite abaixo).")
+    linhas.append(AVISO_CAIXAS)
     return linhas
 
 
@@ -282,6 +302,7 @@ def main(argv=None) -> int:
             nunca = len(professores.alvos_da_invalidacao(classificacao,
                                                          so_nunca_usadas=True))
             print(f"\nalvos: --aplicar → {todos}; --aplicar --so-nunca-usadas → {nunca}")
+            print(AVISO_CAIXAS)
             print("diagnóstico apenas — nada foi gravado. Para invalidar (só com "
                   "autorização e backup validado): --aplicar --esperado N.")
             db.rollback()

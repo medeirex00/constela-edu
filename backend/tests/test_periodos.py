@@ -54,9 +54,11 @@ def test_resolver_presets():
     assert rot == "Esta semana"
     i, f, _ = periodos.resolver("tudo", h, 2026)
     assert i is None and f is None
-    # bimestre anterior em janeiro rola para nov/dez do ano anterior
+    # bimestre anterior em janeiro rola para o 4º do ano anterior — 2025 não tem
+    # calendário oficial, então o 4º aproximado (out/dez, o mesmo do "4º bimestre"
+    # pedido em 2025), não mais o bloco civil nov/dez.
     i, f, _ = periodos.resolver("bimestre_anterior", date(2026, 1, 10), 2026)
-    assert i.date() == date(2025, 11, 1) and f.date() == date(2025, 12, 31)
+    assert i.date() == date(2025, 10, 1) and f.date() == date(2025, 12, 31)
 
 
 # --- Gravação de data + HORÁRIO + tempo -------------------------------------

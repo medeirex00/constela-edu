@@ -1,6 +1,7 @@
 """Testes da Fase 5 — Painel Público sem login, restrito a dados pedagógicos."""
 from app.models import Importacao, SnapshotMatific
 from app.services import scoring
+from tests._ano_letivo import escola_no_ano_de_hoje  # noqa: F401 — fixture
 
 
 def _ativar_painel(cliente, escola_id: int) -> str:
@@ -104,7 +105,8 @@ def test_b2_perfil_publico_bloqueia_enumeracao_fora_do_painel(cliente, db, escol
     db.add(fora_aluno)
     db.flush()
     db.add(Matricula(escola_id=escola_id, aluno_id=fora_aluno.id,
-                     turma_id=escola_completa["turma"].id, ano_letivo=2026))
+                     turma_id=escola_completa["turma"].id,
+                     ano_letivo=escola_completa["escola"].ano_letivo_ativo))
     db.commit()
     fora_id = fora_aluno.id
 
@@ -233,14 +235,13 @@ def test_painel_publico_expor_nome_exige_confirmacao_no_servidor(cliente, db, es
         f"/api/v1/escolas/{escola_id}/painel-publico").json()
 
 
-def test_painel_publico_evolucao_justa_nao_infla_acumulado(cliente, db, escola_completa):
+def test_painel_publico_evolucao_justa_nao_infla_acumulado(relogio_no_ano_letivo, cliente, db,
+                                                          escola_completa):
     """Telão público: a evolução mede só o crescimento DENTRO da janela
     (base_no_periodo=True). Um aluno com apenas o acumulado de vida (um único
     snapshot, sem histórico anterior) NÃO aparece 'evoluindo tudo' — evita o
     'caso Antonella' no telão, que é público. Falharia com o comportamento antigo
     (acumulado exibido como evolução)."""
-    from datetime import datetime, timezone
-
     from app.models import Importacao, SnapshotMatific
     from app.services import scoring
 
@@ -248,7 +249,11 @@ def test_painel_publico_evolucao_justa_nao_infla_acumulado(cliente, db, escola_c
     imp = Importacao(escola_id=escola.id, plataforma="matific", tipo="seed")
     db.add(imp)
     db.flush()
-    hoje = datetime.now(timezone.utc).replace(tzinfo=None)
+    # O "agora" do teste fica no ano letivo com folga para trás: a janela de 30 dias do
+    # telão que começa antes de 1º/01 zera o contador DO ANO do Matific (regra do
+    # início do ano em ``evolucao._janela``), e em janeiro o único retrato seria, com
+    # razão, todo ele crescimento — o cenário "acumulado de vida" deixaria de existir.
+    hoje = relogio_no_ano_letivo.replace(tzinfo=None)
     for indice, aluno in enumerate(escola_completa["alunos"]):
         db.add(SnapshotMatific(escola_id=escola.id, aluno_id=aluno.id,
                                importacao_id=imp.id, atividades=100 * (indice + 1),

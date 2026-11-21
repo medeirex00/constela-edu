@@ -141,9 +141,9 @@ _FAMILIAS_DO_BANCO = (
      "Segundos desde a criação (fila) ou o início (executando) da execução ativa da "
      "integração.", ("escola_id", "plataforma", "status")),
     ("sync_execucoes_presas",
-     "Execuções ativas sem sinal de vida há mais de SYNC_TRAVADA_S: executando com "
-     "início anterior ao limite (o critério do reaper) ou na fila sem criação, "
-     "disponibilidade nem log dentro do limite.", ("plataforma", "status")),
+     "Execuções ativas sem sinal de vida: executando sem início nem log dentro de "
+     "SYNC_SEM_SINAL_S (o critério do reaper) ou na fila sem criação, "
+     "disponibilidade nem log dentro de SYNC_TRAVADA_S.", ("plataforma", "status")),
     ("sync_alertas_abertos",
      "Alertas de sincronização abertos (resolvido = false).",
      ("escola_id", "plataforma", "tipo", "severidade")),
@@ -301,14 +301,14 @@ def coletar_familias(db: Session, *, agora: datetime | None = None,
                E.disponivel_em)
         .where(E.status.in_(STATUS_ATIVOS))).all()
 
-    # (4) Sinal de vida de quem espera na fila: o último log de cada uma (só se houver).
-    ids_fila = [a.id for a in ativas if a.status == "fila"]
+    # (4) Sinal de vida das ativas: o último log de cada uma (só se houver).
+    ids_ativas = [a.id for a in ativas]
     ultimo_log: dict[int, datetime] = {}
-    if ids_fila:
+    if ids_ativas:
         ultimo_log = {
             eid: _utc_naive(quando) for eid, quando in ler(
                 select(L.execucao_id, func.max(L.created_at))
-                .where(L.execucao_id.in_(ids_fila))
+                .where(L.execucao_id.in_(ids_ativas))
                 .group_by(L.execucao_id)).all()}
 
     # (5) Alertas abertos, agregados no banco.
@@ -356,6 +356,7 @@ def _montar(agora, credenciais, integracoes, ativas, ultimo_log, alertas,
         recalculo[_escola(eid)] = True
 
     limite = agora - timedelta(seconds=settings.SYNC_TRAVADA_S)
+    limite_em_execucao = agora - timedelta(seconds=settings.SYNC_SEM_SINAL_S)
     ativas_por: dict[tuple, int] = defaultdict(int)
     presas_por: dict[tuple, int] = defaultdict(int)
     idade_ativa: dict[tuple, float] = {}
@@ -365,7 +366,9 @@ def _montar(agora, credenciais, integracoes, ativas, ultimo_log, alertas,
         if ex.status == "executando":
             desde = _utc_naive(ex.iniciada_em) or _utc_naive(ex.created_at)
             # O mesmo critério de ``service._esta_travada`` (o que o reaper finaliza).
-            presa = ex.iniciada_em is not None and _utc_naive(ex.iniciada_em) < limite
+            sinais = [m for m in (_utc_naive(ex.iniciada_em), ultimo_log.get(ex.id))
+                      if m is not None]
+            presa = ex.iniciada_em is not None and max(sinais) < limite_em_execucao
         else:
             desde = _utc_naive(ex.created_at)
             sinais = [m for m in (_utc_naive(ex.created_at), _utc_naive(ex.disponivel_em),

@@ -142,6 +142,8 @@ class ExecucaoOut(_ORM):
     recalculo_pendente: bool = False     # dado gravado, recálculo das notas pendente/falhou
     # Por que o status: 'nada_mudou' | 'correspondencia_pendente' | 'tudo_em_revisao'
     # (tudo em revisão e nenhuma conta da escola conferida: não é "em dia") |
+    # 'fora_do_ano_sem_conferencia' (coleta de fora do ano letivo ativo, linhas deixadas
+    # para depois da virada e nenhuma conta da escola conferida: não é "em dia") |
     # 'queda_retida' | 'falha_apos_gravacao' | 'coleta_parcial' | 'linhas_descartadas'
     # | código do erro ('sem_acesso_ao_dado', 'falha_download', 'parser_incompativel'…)
     motivo: str | None = None
@@ -258,12 +260,12 @@ class PlataformaStatus(BaseModel):
 class EscolaStatus(BaseModel):
     escola_id: int
     escola_nome: str
-    qtd_alunos: int
-    qtd_turmas: int
+    qtd_alunos: int      # ativos e matriculados no ano letivo ativo (como /alunos)
+    qtd_turmas: int      # turmas do ano letivo ativo, não arquivadas (como /turmas)
     plataformas: list[PlataformaStatus]
     alertas_abertos: int
     # Estado do onboarding (fluxo "escola pronta em <5 min").
-    lista_piloto_importada: bool = False   # já tem turmas cadastradas?
+    lista_piloto_importada: bool = False   # já tem turmas cadastradas (qualquer ano)?
     integracao_configurada: bool = False   # já salvou ≥1 credencial de plataforma?
     # O agendador automático está ligado NESTE servidor? Desligado, a agenda da
     # escola continua "ativa" mas nada roda sozinho — a tela precisa dizer isso.

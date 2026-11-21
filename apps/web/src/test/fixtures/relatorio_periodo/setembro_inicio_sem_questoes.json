@@ -1,0 +1,282 @@
+{
+  "escola": {
+    "id": 1,
+    "nome": "ESCOLA TESTE",
+    "ano_letivo": 2026
+  },
+  "populacao": {
+    "ano_letivo": 2026,
+    "origem": "ano_ativo",
+    "ano_letivo_ativo": 2026
+  },
+  "periodo": {
+    "preset": "personalizado",
+    "rotulo": "01/09/2026 a 30/09/2026",
+    "inicio": "2026-09-01T00:00:00",
+    "fim": "2026-09-30T23:59:59.999999",
+    "inclusivo": true
+  },
+  "escopo": {
+    "tipo": "escola",
+    "turma_id": null,
+    "aluno_id": null,
+    "turma_nome": null,
+    "restrito_a_turmas": null
+  },
+  "plataformas": [
+    "elefante",
+    "matific"
+  ],
+  "plataformas_rotulo": "Elefante Letrado + Matific",
+  "alunos": {
+    "considerados": 3,
+    "com_atividade": 2,
+    "sem_atividade": 1
+  },
+  "nao_suportado": [
+    {
+      "plataforma": "elefante",
+      "metrica": "tempo_min_por_evento",
+      "por_que": "O tempo do evento vem do `totalTimeSpent` da API, e a API devolve uma linha por (aluno, LIVRO) — não por sessão. Medido em produção: 95,8% das séries por livro nunca decrescem e somar todos os eventos excede o total do retrato em até 15,6% (comportamento de contador ACUMULADO, em que a soma repete o mesmo tempo), mas 4,2% das séries DECRESCEM, o que um acumulado não pode fazer (então a diferença atual−base também não vale). As duas leituras possíveis estão refutadas pela própria base: o tempo do período por evento não é calculável. O tempo do período vem de `Leitura.tempo_leitura_min`, o mesmo campo da premiação oficial."
+    },
+    {
+      "plataforma": "matific",
+      "metrica": "questoes",
+      "por_que": "O retrato do Matific guarda atividades, estrelas e pontuação média — não existe contador de questões, então não há como calcular este número para um período sem inventá-lo."
+    },
+    {
+      "plataforma": "elefante",
+      "metrica": "pontos_de_dificuldade",
+      "por_que": "A régua de mérito é oficial e vive em `premiacoes`; recalculá-la aqui criaria uma segunda régua que poderia divergir do pódio. Use /premiacoes para mérito."
+    }
+  ],
+  "elefante": {
+    "livros_novos": 0,
+    "tempo_min": 0,
+    "alunos_com_livro_novo": 0,
+    "livros_com_atividade": 0,
+    "livros_relidos": 0,
+    "eventos_leitura": 0,
+    "tempo_min_por_evento": null,
+    "alunos_com_atividade": 2,
+    "questoes_tentativas": 25,
+    "questoes_acertos": 15,
+    "alunos_sem_retrato": 1,
+    "janela_efetiva_questoes": {
+      "data_base_mais_antiga": "2026-08-15T03:10:00",
+      "data_base_mais_recente": "2026-09-01T03:10:00",
+      "data_atual_mais_antiga": "2026-10-01T03:10:00",
+      "data_atual_mais_recente": "2026-10-01T03:10:00",
+      "observacao": "o número vem da diferença entre COLETAS; este é o intervalo real que ele cobre, que pode ser mais largo que o período pedido (coleta-base anterior ao início) ou mais estreito (sem coleta antes do início, ou última coleta antes do fim) — veja a cobertura"
+    },
+    "cobertura_questoes": {
+      "regra": "diferenca_de_coletas",
+      "periodo_inicio": "2026-09-01",
+      "periodo_fim": "2026-09-30",
+      "periodo_fim_efetivo": "2026-09-30",
+      "em_andamento": false,
+      "coleta_inicio": "2026-08-15T03:10:00",
+      "coleta_inicio_mais_tardio": null,
+      "coleta_fim": "2026-10-01T03:10:00",
+      "coleta_fim_mais_cedo": "2026-10-01T03:10:00",
+      "inicio_coberto": true,
+      "fim_coberto": true,
+      "inclui_antes_do_inicio": true,
+      "inicio_do_contador_anual": false,
+      "antecedencia_max_horas": null,
+      "coleta_base_ampliados": null,
+      "status": "ampliada",
+      "completa": false,
+      "alunos_cobertura_completa": 1,
+      "alunos_cobertura_parcial": 0,
+      "alunos_sem_inicio": 0,
+      "alunos_sem_fim": 0,
+      "alunos_ampliados": 0,
+      "alunos_inicio_sem_questoes": 1,
+      "coleta_base_inicio_sem_questoes": "2026-08-15T03:10:00",
+      "antecedencia_inicio_sem_questoes_horas": 408,
+      "alunos_inicio_sem_questoes_sem_base": 0,
+      "primeira_coleta_inicio_sem_questoes": null,
+      "alunos_sem_intervalo": 0,
+      "alunos_sem_intervalo_so_inicio": 0,
+      "alunos_contador_regrediu": 0,
+      "alunos_sem_coleta_no_periodo": 0,
+      "alunos_coleta_interrompida": 0,
+      "turmas_sem_coleta": [],
+      "alunos_medidos": 2,
+      "acumulado_na_primeira_coleta": null,
+      "alunos_questoes_nao_vieram": 0
+    },
+    "sem_atividade": 1,
+    "suporte": {
+      "livros_novos": {
+        "campo": "Leitura.data (COUNT)",
+        "classificacao": "SUPORTADO",
+        "por_que": "é o MESMO campo e filtro da premiação oficial 'Mais Livros' (premiacoes._leitura_no_periodo), então o relatório não discorda do pódio",
+        "ressalva": "Leitura.data é o lastReadWhen da PRIMEIRA importação daquele livro e nunca é atualizada (§35): releitura não entra aqui — entra em livros_relidos"
+      },
+      "tempo_min": {
+        "campo": "Leitura.tempo_leitura_min (SUM, filtrado por Leitura.data)",
+        "classificacao": "SUPORTADO COM RESSALVA",
+        "por_que": "é o MESMO campo da premiação oficial 'Mais Tempo'",
+        "ressalva": "o campo é NULLABLE ('quando o relatório informa') e nulo entra como 0, então o total do período é um PISO em relação ao acumulado do retrato"
+      },
+      "livros_com_atividade": {
+        "campo": "EventoAluno.ocorrido_em (COUNT DISTINCT livro_id)",
+        "classificacao": "SUPORTADO",
+        "por_que": "o espelho registra TODA linha do relatório, inclusive a releitura que a §35 descarta, com o instante da plataforma",
+        "ressalva": "duas leituras do mesmo livro no MESMO MINUTO colapsam num evento (uq_evento_natural inclui o minuto): eventos_leitura é um PISO, não contagem de sessões"
+      },
+      "tempo_min_por_evento": {
+        "classificacao": "NÃO SUPORTADO",
+        "por_que": "O tempo do evento vem do `totalTimeSpent` da API, e a API devolve uma linha por (aluno, LIVRO) — não por sessão. Medido em produção: 95,8% das séries por livro nunca decrescem e somar todos os eventos excede o total do retrato em até 15,6% (comportamento de contador ACUMULADO, em que a soma repete o mesmo tempo), mas 4,2% das séries DECRESCEM, o que um acumulado não pode fazer (então a diferença atual−base também não vale). As duas leituras possíveis estão refutadas pela própria base: o tempo do período por evento não é calculável. O tempo do período vem de `Leitura.tempo_leitura_min`, o mesmo campo da premiação oficial."
+      },
+      "questoes": {
+        "campo": "SnapshotElefante.questoes_* (diferença entre retratos)",
+        "classificacao": "SUPORTADO COM RESSALVA",
+        "por_que": "questões só existem como contador acumulado (vitalício) no retrato, sem data por questão; a do período é a diferença entre a coleta que mede o fim e a que mede o início",
+        "ressalva": "exige retrato no período (sem ele o aluno entra em alunos_sem_retrato, não conta zero); sem coleta no início do período, a conta começa na primeira coleta dele, e sem coleta no fim, termina na última — nos dois casos o número NÃO é do período inteiro (veja cobertura_questoes)"
+      }
+    },
+    "primeiro_evento_da_escola": null
+  },
+  "matific": {
+    "atividades": 15,
+    "estrelas": 20,
+    "alunos_com_atividade": 1,
+    "alunos_sem_retrato": 2,
+    "questoes": null,
+    "janela_efetiva": {
+      "data_base_mais_antiga": "2026-08-30T12:00:00",
+      "data_base_mais_recente": "2026-08-30T12:00:00",
+      "data_atual_mais_antiga": "2026-09-29T12:00:00",
+      "data_atual_mais_recente": "2026-09-29T12:00:00",
+      "observacao": "o número vem da diferença entre COLETAS; este é o intervalo real que ele cobre, que pode ser mais largo que o período pedido (coleta-base anterior ao início) ou mais estreito (sem coleta antes do início, ou última coleta antes do fim) — veja a cobertura"
+    },
+    "cobertura": {
+      "regra": "oficial_matific",
+      "periodo_inicio": "2026-09-01",
+      "periodo_fim": "2026-09-30",
+      "periodo_fim_efetivo": "2026-09-30",
+      "em_andamento": false,
+      "coleta_inicio": "2026-08-30T12:00:00",
+      "coleta_inicio_mais_tardio": null,
+      "coleta_fim": "2026-09-29T12:00:00",
+      "coleta_fim_mais_cedo": "2026-09-29T12:00:00",
+      "inicio_coberto": true,
+      "fim_coberto": true,
+      "inclui_antes_do_inicio": false,
+      "inicio_do_contador_anual": false,
+      "antecedencia_max_horas": null,
+      "coleta_base_ampliados": null,
+      "status": "regra_oficial",
+      "completa": false,
+      "alunos_cobertura_completa": 0,
+      "alunos_cobertura_parcial": 0,
+      "alunos_sem_inicio": 0,
+      "alunos_sem_fim": 0,
+      "alunos_ampliados": 0,
+      "alunos_inicio_sem_questoes": 0,
+      "coleta_base_inicio_sem_questoes": null,
+      "antecedencia_inicio_sem_questoes_horas": null,
+      "alunos_inicio_sem_questoes_sem_base": 0,
+      "primeira_coleta_inicio_sem_questoes": null,
+      "alunos_sem_intervalo": 0,
+      "alunos_sem_intervalo_so_inicio": 0,
+      "alunos_contador_regrediu": 0,
+      "alunos_sem_coleta_no_periodo": 0,
+      "alunos_coleta_interrompida": 0,
+      "turmas_sem_coleta": [],
+      "alunos_medidos": 1,
+      "acumulado_na_primeira_coleta": null,
+      "alunos_questoes_nao_vieram": 0
+    },
+    "sem_atividade": 2,
+    "suporte": {
+      "campo": "SnapshotMatific.data_referencia (diferença de acumulados)",
+      "classificacao": "SUPORTADO COM RESSALVA",
+      "por_que": "o Matific entrega contador ACUMULADO do ano, não evento datado: a atividade do período é o acumulado do fim menos o de antes do início (mesma regra de matific_destaque, usada pelas premiações)",
+      "ressalva": "sem retrato DENTRO da janela o aluno não é elegível — ausência não é zero, e esses alunos são contados em alunos_sem_retrato",
+      "questoes": {
+        "classificacao": "NÃO SUPORTADO",
+        "por_que": "O retrato do Matific guarda atividades, estrelas e pontuação média — não existe contador de questões, então não há como calcular este número para um período sem inventá-lo."
+      }
+    }
+  },
+  "por_turma": [
+    {
+      "turma_id": 1,
+      "turma": "3º Ano A",
+      "ano_escolar": "3º Ano",
+      "turno": null,
+      "alunos": 3,
+      "com_atividade": 2,
+      "elefante": {
+        "livros_novos": 0,
+        "tempo_min": 0,
+        "livros_com_atividade": 0,
+        "livros_relidos": 0,
+        "eventos_leitura": 0
+      },
+      "matific": {
+        "atividades": 15,
+        "estrelas": 20
+      }
+    }
+  ],
+  "por_aluno": [
+    {
+      "aluno_id": 1,
+      "nome": "Ana Beatriz Souza",
+      "turma": "3º Ano A",
+      "turma_id": 1,
+      "ano_escolar": "3º Ano",
+      "elefante": {
+        "livros_novos": 0,
+        "tempo_min": 0,
+        "livros_com_atividade": 0,
+        "livros_relidos": 0,
+        "eventos_leitura": 0,
+        "tempo_min_por_evento": null,
+        "questoes_tentativas": 15,
+        "questoes_acertos": 10
+      },
+      "matific": null,
+      "sem_atividade": false
+    },
+    {
+      "aluno_id": 2,
+      "nome": "João Pedro Barbosa",
+      "turma": "3º Ano A",
+      "turma_id": 1,
+      "ano_escolar": "3º Ano",
+      "elefante": {
+        "livros_novos": 0,
+        "tempo_min": 0,
+        "livros_com_atividade": 0,
+        "livros_relidos": 0,
+        "eventos_leitura": 0,
+        "tempo_min_por_evento": null,
+        "questoes_tentativas": 10,
+        "questoes_acertos": 5
+      },
+      "matific": {
+        "atividades": 15,
+        "estrelas": 20,
+        "data_base": "2026-08-30T12:00:00",
+        "data_atual": "2026-09-29T12:00:00"
+      },
+      "sem_atividade": false
+    },
+    {
+      "aluno_id": 3,
+      "nome": "Sofia Almeida Duarte",
+      "turma": "3º Ano A",
+      "turma_id": 1,
+      "ano_escolar": "3º Ano",
+      "elefante": null,
+      "matific": null,
+      "sem_atividade": true
+    }
+  ]
+}

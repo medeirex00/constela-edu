@@ -27,7 +27,7 @@ import { TabelaRolavel } from "../../components/TabelaRolavel";
 import { Badge, Card, Carregando, IconePastel, Mensagem } from "../../components/ui";
 import { Recolhivel } from "./DetalhesFonte";
 import { FiltrosAplicados, OPCOES_LEITURA_PESADA, TD, TH, TITULO_CARTAO, useApiExata } from "./comum";
-import { coberturaDe, decimal, diaBR, rotuloCobertura, rotuloSerie, textoContagem } from "./formato";
+import { coberturaDe, decimal, diaBR, numeroProtegido, rotuloCobertura, rotuloSerie, textoContagem } from "./formato";
 import type { RespostaIndicadoresRede } from "./tipos";
 import type { BimestreEvolucao, MotivoNoBimestre, RespostaEvolucao } from "./tiposDiagnostico";
 import { textosDoFluxoPrincipal } from "../rede/secretaria/oQueMede";
@@ -63,8 +63,7 @@ function Falta({ campo, bloco, suprimido, motivo, visivel = false }: {
   motivo?: string | null;
   visivel?: boolean;
 }) {
-  const protegido = Boolean(suprimido || bloco?.motivo_sem_dado === "suprimido"
-    || (bloco?.metricas_protegidas ?? []).includes(campo));
+  const protegido = Boolean(suprimido) || numeroProtegido(bloco, campo);
   const porque = protegido
     ? bloco?.texto_sem_dado ?? TEXTO_PROTEGIDO
     : motivo ?? bloco?.texto_sem_dado ?? null;
@@ -192,15 +191,12 @@ const colunasDaEscola = (comElefante: boolean, comMatific: boolean) =>
  * da ficha, lá em cima, chama de "Protegido (poucos alunos)" (`situacaoDeUso.ts`): a célula diz
  * "protegido", como a situação, e não "sem dado".
  */
-const MOTIVOS_PROTEGIDOS_NA_FICHA = new Set(["suprimido", "poucos_alunos_medidos", "series_suprimidas"]);
-
 /** A falta de UM número da escola na ficha: "protegido" ou "sem dado", e o porquê (quando há). */
 interface FaltaDaEscola { protegido: boolean; porque: string | null }
 
 function faltaDaEscola(e: EscolaNoBimestreDaTabela["e"], p: Plataforma, campo: string): FaltaDaEscola {
   const bloco = e?.[p];
-  if (e?.suprimido || MOTIVOS_PROTEGIDOS_NA_FICHA.has(bloco?.motivo_sem_dado ?? "")
-      || (bloco?.metricas_protegidas ?? []).includes(campo)) {
+  if (e?.suprimido || numeroProtegido(bloco, campo)) {
     return { protegido: true, porque: bloco?.texto_sem_dado ?? TEXTO_PROTEGIDO };
   }
   // Sem número: a situação da coleta (curta) quando não está em dia; senão o texto do serviço.

@@ -7,8 +7,27 @@ para apagar a duplicada lá; e apagá-la AQUI seria pior, porque se perderia a
 prova de que aquele id externo era daquela criança.
 
 Então o Constela guarda as duas e diz qual é a EFETIVA. A aposentada continua
-existindo, com todo o histórico: só deixa de casar na importação, de alimentar
-retrato/pontuação e de voltar a se associar sozinha.
+existindo, com todo o histórico: só deixa de casar na importação (não chega
+retrato NOVO dela) e de voltar a se associar sozinha.
+
+O QUE APOSENTAR NÃO FAZ (ainda): tirar da ficha o que JÁ veio da conta
+aposentada. Nem o retrato (``SnapshotMatific``/``SnapshotElefante``) nem a leitura
+(``Leitura``) guardam de qual conta vieram, então:
+
+* as leituras do Elefante trazidas por ela continuam contando (livros novos e
+  tempo do período, bônus de leitura na escola);
+* o retrato atual da ficha só muda quando entrar uma coleta da conta efetiva, e
+  o ganho de um período que começa antes disso ainda pode comparar uma conta com
+  a outra;
+* no Matific, se a aposentada tinha números maiores, a trava contra queda da
+  coleta automática (``orchestrator.reter_quedas_matific``) retém a coleta da
+  efetiva enquanto ela ficar abaixo deles; a importação manual do relatório
+  oficial não passa por essa trava.
+
+Separar exige a coluna da conta no retrato e na leitura (migração: decisão do
+dono, ALUNOS-4). Por isso a fusão de duas fichas com contas
+diferentes da mesma plataforma é recusada (``alunos_fusao.contas_em_conflito``):
+é ela que juntava as duas séries.
 
 DISTINÇÃO QUE NÃO PODE SE PERDER: aposentar aqui NÃO desativa nada na
 plataforma. A conta continua lá, e a próxima sincronização vai continuar trazendo
@@ -349,7 +368,10 @@ def definir_efetiva(db: Session, escola_id: int, *, aluno_id: int, plataforma: s
     """Fixa a identidade EFETIVA do aluno nesta plataforma e aposenta as outras.
 
     Não apaga nada, não toca em snapshot, leitura, evento ou nota, e não altera
-    nenhuma outra plataforma. Faz parte da transação de quem chama — o commit é
+    nenhuma outra plataforma. Consequência: o que já veio da conta aposentada
+    continua na ficha (nem o retrato nem a leitura guardam a conta de origem) e o
+    retrato atual só muda quando entrar uma coleta da efetiva — ver o cabeçalho do
+    módulo. Faz parte da transação de quem chama — o commit é
     do chamador, para a decisão e a auditoria caírem juntas.
 
     Escolher uma conta APOSENTADA a faz voltar a valer: se ela já é efetiva em

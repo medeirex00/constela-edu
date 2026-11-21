@@ -40,11 +40,12 @@ def _escola(db, rede_id, nome, inep):
     return e
 
 
-def _fonte(db, *, cadencia="manual", proxima=None, ativo=True, mapeamento=None):
+def _fonte(db, *, cadencia="manual", proxima=None, ativo=True, mapeamento=None,
+           url="https://download.inep.gov.br/ideb/x.csv"):
     av = svc.obter_avaliacao(db, "ideb")
     f = FonteAvaliacao(
         avaliacao_id=av.id, nome="IDEB AI 2023",
-        url="https://download.inep.gov.br/ideb/x.csv", edicao=2023,
+        url=url, edicao=2023,
         indicador="ideb", unidade="indice", cadencia=cadencia, ativo=ativo,
         mapeamento=mapeamento or dict(_MAPEAMENTO), proxima_coleta=proxima)
     db.add(f); db.commit(); db.refresh(f)
@@ -82,7 +83,9 @@ def test_coletar_fonte_erro_de_download_vira_status_sem_quebrar(db):
 
     assert resumo["status"] == "erro"
     assert f.ultimo_status == "erro"
-    assert "ConnectionError" in f.ultimo_erro
+    # Falha de conexão: a mensagem única (o detalhe do erro de rede fica no log —
+    # G_INDICADORES-2: o texto cru diferenciava porta aberta de fechada).
+    assert f.ultimo_erro == svc.ERRO_CONEXAO_FONTE
     assert f.ultima_coleta is not None             # registrou a tentativa
     assert db.scalar(select(func.count(ResultadoAvaliacao.id))) == 0
 
@@ -95,11 +98,11 @@ def test_coletar_fonte_aceita_zip(db):
     with zipfile.ZipFile(buf, "w") as zf:
         zf.writestr("divulgacao/planilha.csv", _PLANILHA.decode("utf-8"))
     conteudo = buf.getvalue()
-    f = _fonte(db)
+    f = _fonte(db, url="https://download.inep.gov.br/ideb/x.zip")
 
-    svc.coletar_fonte(db, f, baixador=lambda url: conteudo)
+    resumo = svc.coletar_fonte(db, f, baixador=lambda url: conteudo)
     db.commit()
-    assert f.ultimo_status == "ok"
+    assert f.ultimo_status == "ok", resumo
     assert db.scalar(select(func.count(ResultadoAvaliacao.id))) == 1
 
 
@@ -225,7 +228,7 @@ def test_coletar_agora_erro_reporta_status_200(db, monkeypatch):
     r = c.post(f"/api/v1/avaliacoes/fontes/{fid}/coletar")
     assert r.status_code == 200                       # a rota não quebra…
     assert r.json()["ultimo_status"] == "erro"        # …o status conta a falha
-    assert "ConnectionError" in r.json()["ultimo_erro"]
+    assert r.json()["ultimo_erro"] == svc.ERRO_CONEXAO_FONTE   # sem o detalhe da rede
 
 
 def test_atualizar_pausa_e_desliga_agenda(db):

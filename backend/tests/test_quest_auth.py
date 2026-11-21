@@ -9,11 +9,12 @@ import re
 
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import select
+from sqlalchemy import event, select
+from sqlalchemy.orm import Session
 
 from app.core.security import hash_senha
 from app.main import app
-from app.models import Escola, Usuario
+from app.models import Escola, LogAuditoria, Usuario
 from app.quest.models import QuestCredencialAluno, QuestPerfil
 from app.quest.routers import auth as quest_auth_router
 from app.quest.services import credenciais as svc_credenciais
@@ -46,6 +47,63 @@ def _credencial_de(db, aluno_id) -> QuestCredencialAluno:
 def _entrar(codigo):
     return TestClient(app).post("/api/v1/quest/auth/entrar",
                                 json={"codigo": codigo})
+
+
+def test_login_do_quest_assina_com_a_versao_do_cartao(cliente, db, escola_completa, monkeypatch):
+    escola = escola_completa["escola"]
+    turma = escola_completa["turma"]
+    assert _gerar_cartoes(cliente, escola.id, turma.id).status_code == 200
+    codigo = _credencial_de(db, escola_completa["alunos"][0].id).codigo_login
+    ordem = []
+    assinar = svc_credenciais.criar_token_aluno
+
+    def criar_token(credencial):
+        ordem.append("assinar")
+        return assinar(credencial)
+
+    def confirmou(sessao):
+        if any(isinstance(obj, LogAuditoria) and obj.acao == "quest.login" for obj in sessao.new):
+            ordem.append("confirmar")
+
+    monkeypatch.setattr(svc_credenciais, "criar_token_aluno", criar_token)
+    event.listen(Session, "before_commit", confirmou)
+    try:
+        resposta = _entrar(codigo)
+    finally:
+        event.remove(Session, "before_commit", confirmou)
+    assert resposta.status_code == 200
+    assert ordem[:2] == ["assinar", "confirmar"]
+
+
+def test_login_do_quest_reserva_antes_da_consulta_e_devolve_ao_entrar(
+    cliente, db, escola_completa, monkeypatch,
+):
+    escola = escola_completa["escola"]
+    turma = escola_completa["turma"]
+    assert _gerar_cartoes(cliente, escola.id, turma.id).status_code == 200
+    codigo = _credencial_de(db, escola_completa["alunos"][0].id).codigo_login
+    ordem = []
+    reservar = quest_auth_router.limites.reservar
+    buscar = svc_credenciais.buscar_por_codigo
+    devolver = quest_auth_router.limites.devolver
+
+    def reserva(*args):
+        ordem.append("reservar")
+        return reservar(*args)
+
+    def busca(*args):
+        ordem.append("buscar")
+        return buscar(*args)
+
+    def devolucao(*args):
+        ordem.append("devolver")
+        return devolver(*args)
+
+    monkeypatch.setattr(quest_auth_router.limites, "reservar", reserva)
+    monkeypatch.setattr(svc_credenciais, "buscar_por_codigo", busca)
+    monkeypatch.setattr(quest_auth_router.limites, "devolver", devolucao)
+    assert _entrar(codigo).status_code == 200
+    assert ordem == ["reservar", "buscar", "devolver"]
 
 
 # ---------------------------------------------------------------------------

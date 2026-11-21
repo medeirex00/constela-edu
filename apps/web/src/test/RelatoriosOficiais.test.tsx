@@ -8,12 +8,27 @@
  *  - o erro do certificado (409/422 com o motivo do backend) aparece DENTRO do cartão
  *    de certificados, perto do botão — e não no topo da página.
  */
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import Relatorios from "../pages/Relatorios";
 import {
   ApiError, api, apiDownload, escolaFake, renderComApp, responder, screen, userEvent, usuarioFake, within,
 } from "./utils";
+
+// Relógio (só a data) fixo em 15/10/2026, 4º bimestre do calendário que a web já conhece.
+// O seletor de Bimestre abre pelo calendário do ANO DE HOJE, e estes testes não simulam a
+// rota do calendário: com o relógio de verdade, a partir de 01/01/2027 o seletor abria vazio
+// e os modelos das plataformas ficavam travados à espera da escolha, sem nenhuma mudança de
+// código (REV-PER-2). O ano sem calendário tem os próprios testes em
+// AudCalendarioBimestres.test.tsx.
+beforeEach(() => {
+  vi.useFakeTimers({ toFake: ["Date"] });
+  vi.setSystemTime(new Date(2026, 9, 15, 12, 0, 0));
+});
+
+afterEach(() => {
+  vi.useRealTimers();
+});
 
 function alunoFake(id: number, nome: string, ano_escolar = "3º Ano") {
   return { id, nome, foto_url: null, numero_chamada: null, status: "ativo", turma: "3º Ano A", ano_escolar };

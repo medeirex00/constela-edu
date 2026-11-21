@@ -13,13 +13,11 @@ Chromium com o CSS e o rodapé numerado oficiais) e a reserva é o mesmo
 ``gerar_pdf`` em fpdf que a exportação já usa quando não há Chromium — o padrão
 copiado de ``gerar_lista_alunos_pdf``.
 
-  Nota de acoplamento: importamos de ``app.services.relatorios``, que está entre
-  as alterações paralelas não commitadas. Importar não é modificar, e as funções
-  usadas aqui foram conferidas uma a uma: são IDÊNTICAS na versão commitada e na
-  versão da árvore de trabalho. A única que difere entre as duas é ``_latin1``
-  (a versão nova mapeia o travessão "—" para hífen), e por isso este módulo
-  NUNCA imprime travessão: onde não há dado, escreve por extenso. Assim a saída
-  é a mesma com ou sem o trabalho paralelo presente.
+  Nota de acoplamento: importamos de ``app.services.relatorios`` (a moldura e o
+  ``gerar_pdf`` da reserva). Importar não é modificar. O texto da reserva vai para
+  as fontes nativas do fpdf2 em cp1252 (``relatorios._latin1`` →
+  ``services.texto_pdf``): o travessão, as aspas curvas e o apóstrofo tipográfico
+  sobrevivem; ``_sem_tipografia`` (abaixo) só troca o que o cp1252 não tem.
 
 A RESERVA CARREGA OS MESMOS NÚMEROS. Sem Chromium o PDF sai simples, mas não sai
 pobre: ``linhas_resumo`` é a fonte única das duplas (rótulo, valor) e alimenta os
@@ -37,15 +35,20 @@ from app.core.tempo import agora_br, para_br
 from app.services.relatorios import (_esc_html, _relatorio_html_pdf,
                                      _relatorio_shell, gerar_pdf)
 
-# Onde não há dado, escrevemos por extenso. Nunca "—" (o travessão não existe em
-# latin-1, e as duas versões de `_latin1` o tratam de formas diferentes) e nunca
-# "0" (zero é uma afirmação: a criança foi medida e não produziu).
-SEM_SUPORTE = "não suportado"
+# Onde não há dado, escrevemos por extenso. Nunca um traço ("—"), que não diz se
+# faltou o dado ou se o relatório não calcula aquilo, e nunca "0" (zero é uma
+# afirmação: a criança foi medida e não produziu). "Não calculado" é a etiqueta da
+# tela para o que o motor classifica como NÃO SUPORTADO; "sem dado", a da ausência.
+SEM_SUPORTE = "não calculado"
 SEM_DADO = "sem dado"
+
+# Título da seção que explica o que o relatório não calcula — na vitrine e na reserva.
+# O resumo aponta para ele ("ver “O que este relatório não responde”"): referência a
+# uma seção que não existe no papel manda o leitor procurar o que não há.
+TITULO_NAO_RESPONDE = "O QUE ESTE RELATÓRIO NÃO RESPONDE"
 
 log = logging.getLogger(__name__)
 
-_ROTULO_PLATAFORMA = {"elefante": "Elefante Letrado", "matific": "Matific"}
 _ROTULO_ESCOPO = {"escola": "Escola inteira", "turma": "Turma", "aluno": "Estudante"}
 
 # Estilos EXTRAS, escopados com prefixo próprio para não colidir com o
@@ -187,6 +190,10 @@ def _quem(dados: dict) -> str:
             return str(turmas[0].get("turma") or "")
         if linhas:
             return str(linhas[0].get("turma") or "")
+        # Turma sem aluno ativo: o nome vem do banco (``gerar`` o põe no escopo); o id
+        # fica só para o resultado de antes do campo.
+        if escopo_d.get("turma_nome"):
+            return str(escopo_d["turma_nome"])
         return str(escopo_d["turma_id"]) if escopo_d.get("turma_id") else ""
     return ""
 
@@ -221,12 +228,12 @@ def linhas_resumo(dados: dict) -> list[tuple[str, str, str]]:
     ele = dados.get("elefante")
     if ele is not None:
         linhas.append(("Livros novos", _num(ele.get("livros_novos")),
-                       "Leitura.data - o mesmo número da premiação"))
+                       "o mesmo número da premiação"))
         linhas.append(("Tempo de leitura", _tempo(ele.get("tempo_min")),
                        "tempo informado por livro novo"))
         linhas.append(("Estudantes com livro novo", _num(ele.get("alunos_com_livro_novo")), ""))
         linhas.append(("Livros com atividade", _num(ele.get("livros_com_atividade")),
-                       "EventoAluno.ocorrido_em - inclui releitura"))
+                       "inclui releitura"))
         linhas.append(("Livros relidos", _num(ele.get("livros_relidos")),
                        "livro lido na janela cuja 1ª importação é anterior a ela"))
         linhas.append(("Registros de leitura", _num(ele.get("eventos_leitura")),
@@ -242,6 +249,8 @@ def linhas_resumo(dados: dict) -> list[tuple[str, str, str]]:
         cob = ele.get("cobertura_questoes") or {}
         fonte = ("nenhum estudante no recorte" if vazio
                  else "nenhuma coleta na janela" if ninguem
+                 else "as questões não vieram da plataforma" if (
+                     tent is None and cob.get("alunos_questoes_nao_vieram"))
                  else "uma coleta só por estudante: sem diferença a medir" if tent is None
                  else "COBERTURA PARCIAL - ver nota" if cob.get("status") == "parcial"
                  else "INCLUI antes do início - ver nota" if cob.get("status") == "ampliada"
@@ -250,8 +259,10 @@ def linhas_resumo(dados: dict) -> list[tuple[str, str, str]]:
         linhas.append(("Questões corretas", SEM_DADO if sem_numero else _num(cert), ""))
         linhas.append(("Sem coleta na janela", _num(ele.get("alunos_sem_retrato")),
                        "ausência de coleta, não zero"))
+        # Aponta para o TÍTULO da seção que explica (o mesmo na vitrine e na reserva);
+        # curto para caber inteiro na 3ª coluna da reserva.
         linhas.append(("Tempo por registro de leitura", SEM_SUPORTE,
-                       "o campo é acumulado por livro - ver as notas finais"))
+                       f"ver “{TITULO_NAO_RESPONDE.capitalize()}”"))
 
     mat = dados.get("matific")
     if mat is not None:
@@ -306,16 +317,51 @@ def _tiles(dados: dict) -> list[tuple[str, str]]:
     return tiles[:5]
 
 
+def _ano_letivo(dados: dict) -> str:
+    """O ano letivo do relatório: o das crianças medidas (``populacao``), que num
+    período de ano encerrado não é o ano ativo da escola. Resultado de antes do campo:
+    o da escola."""
+    ano = ((dados.get("populacao") or {}).get("ano_letivo")
+           or (dados.get("escola") or {}).get("ano_letivo"))
+    return str(ano or "")
+
+
+def _populacao(dados: dict) -> tuple[str, str, str] | None:
+    """De que ano são as crianças e as turmas, quando isso precisa ser dito: (frase
+    inteira da vitrine, valor e detalhe CURTOS da reserva). A mesma regra e as mesmas
+    frases da tela (``avisoPopulacao`` em components/SeletorPeriodo.tsx). ``None`` no
+    caso de sempre (o período está no ano letivo ativo)."""
+    pop = dados.get("populacao") or {}
+    ano, ativo = pop.get("ano_letivo"), pop.get("ano_letivo_ativo")
+    if pop.get("origem") == "ano_do_periodo":
+        escopo = dados.get("escopo") or {}
+        turmas = (f" A turma escolhida é a de agora: aparecem as crianças dela, com a "
+                  f"turma que tinham em {ano}." if escopo.get("turma_id")
+                  # O papel circula: "suas turmas" (como na tela) seria de quem lê.
+                  else f" As turmas de quem gerou são as de agora: aparecem as crianças "
+                       f"delas, com a turma que tinham em {ano}."
+                  if escopo.get("restrito_a_turmas")
+                  else "")
+        return (f"Período do ano letivo de {ano}, que já terminou: entram as crianças "
+                f"matriculadas em {ano}, com a turma e a série daquele ano.{turmas}",
+                f"as de {ano}", f"ano do período; escola já em {ativo}")
+    if pop.get("origem") == "atravessa_anos":
+        return (f"O período passa por mais de um ano letivo: entram as crianças "
+                f"matriculadas em {ano}, o ano letivo atual da escola, com a turma de "
+                f"agora. Quem não tem matrícula em {ano} não aparece.",
+                f"as de {ano}", "período em mais de um ano letivo")
+    return None
+
+
 def _periodo_html(dados: dict) -> str:
     periodo = dados.get("periodo") or {}
-    escola = dados.get("escola") or {}
     escopo = dados.get("escopo") or {}
     itens = [
         ("Período", _intervalo(periodo)),
         ("Tipo de período", str(periodo.get("rotulo") or "")),
         ("Plataformas", dados.get("plataformas_rotulo") or ""),
         ("Escopo", _ROTULO_ESCOPO.get(escopo.get("tipo"), str(escopo.get("tipo") or ""))),
-        ("Ano letivo", str(escola.get("ano_letivo") or "")),
+        ("Ano letivo", _ano_letivo(dados)),
     ]
     quem = _quem(dados)
     if quem:
@@ -330,6 +376,11 @@ def _periodo_html(dados: dict) -> str:
                      ("Recorte do usuário",
                       f"{len(restrito)} turma(s) vinculada(s) ao cadastro de quem "
                       f"gerou — NÃO é a escola inteira"))
+    # Pelo mesmo motivo: um relatório de out–dez/2026 tirado depois da virada diz que
+    # as crianças e as turmas são as de 2026, não as de agora.
+    populacao = _populacao(dados)
+    if populacao:
+        itens.append(("Crianças e turmas", populacao[0]))
     corpo = "".join(
         f'<tr><td class="esq">{_esc_html(r)}</td>'
         f'<td class="esq rp-val">{_esc_html(v)}</td></tr>' for r, v in itens)
@@ -383,6 +434,18 @@ def _duracao(horas) -> str:
     return f"{horas} h" if horas < 48 else f"{horas // 24} dias"
 
 
+# Por que o trecho entre o início do período e a primeira coleta não sai das coletas —
+# POR PLATAFORMA (pela ``regra`` da cobertura). O contador das questões do Elefante é
+# vitalício; o do Matific é do ANO e conta atividades e estrelas (o "Como ler" diz o
+# mesmo). A tela usa as mesmas frases (``POR_QUE_SEM_INICIO`` em RelatorioPeriodo.tsx).
+_POR_QUE_SEM_INICIO = {
+    "diferenca_de_coletas": "o contador que o Constela coleta é acumulado desde o início "
+                            "da conta e não diz quando cada questão foi respondida",
+    "oficial_matific": "o contador do Matific é o total do ano (atividades e estrelas) e "
+                       "não diz quando cada atividade foi feita",
+}
+
+
 def _avisos_cobertura(dados: dict) -> list[dict]:
     """PERÍODO PEDIDO × COBERTURA DAS COLETAS de cada número de retrato — a
     mesma regra da tela (``AvisoCobertura`` em RelatorioPeriodo.tsx). O período
@@ -407,7 +470,11 @@ def _avisos_cobertura(dados: dict) -> list[dict]:
         andamento = (f"em andamento, até {_data(efetivo)}"
                      if ini and efetivo and fim and efetivo < fim else "")
         pedido = pedido_curto + (f" ({andamento})" if andamento else "")
-        de = _data_hora(c["coleta_inicio"]) if c.get("coleta_inicio") else "o início do contador"
+        # Sem coleta-base, a conta parte do início do contador da plataforma. A frase
+        # muda de forma, não só de palavra: "de" + "o início do contador" dava "de o
+        # início" (a tela monta igual, em ``AvisoCobertura``).
+        tem_base = bool(c.get("coleta_inicio"))
+        de = _data_hora(c["coleta_inicio"]) if tem_base else "o início do contador"
         ate = _data_hora(c.get("coleta_fim")) if c.get("coleta_fim") else SEM_DADO
         medidos = c.get("alunos_medidos")
         if medidos is None:      # API anterior ao campo
@@ -432,9 +499,9 @@ def _avisos_cobertura(dados: dict) -> list[dict]:
                     f"sem coleta no início do período{para(c.get('alunos_sem_inicio'))}: "
                     f"o que foi feito de {_data(ini)} até a primeira coleta"
                     + (f" (até {_data_hora(tardio)})" if tardio else "")
-                    + " não está na conta: o contador que o Constela coleta é acumulado "
-                      "desde o início da conta e não diz quando cada questão foi "
-                      "respondida, então esse trecho não sai das coletas"
+                    + " não está na conta: "
+                    + _POR_QUE_SEM_INICIO["oficial_matific" if oficial else "diferenca_de_coletas"]
+                    + ", então esse trecho não sai das coletas"
                     + (f" (a primeira coleta já trazia {_num(c['acumulado_na_primeira_coleta'])} "
                        "questões acumuladas, de datas que o contador não informa)"
                        if c.get("acumulado_na_primeira_coleta") else "")
@@ -443,18 +510,49 @@ def _avisos_cobertura(dados: dict) -> list[dict]:
                        "Respondidas), que o Constela ainda não coleta"))
                 curtos.append(("NÃO está na conta" + qtd(c.get("alunos_sem_inicio")),
                                f"{_data(ini)} até {_data_hora(tardio) if tardio else 'a 1a coleta'}"))
+        # Houve coleta no início, mas sem as questões (S9): não é "sem coleta no início".
+        sq_sem_base = c.get("alunos_inicio_sem_questoes_sem_base") or 0
+        if sq_sem_base:
+            primeira = c.get("primeira_coleta_inicio_sem_questoes")
+            ate_primeira = _data_hora(primeira) if primeira else "a 1a coleta"
+            motivos.append(
+                f"a coleta do início veio sem as questões{para(sq_sem_base)}: a conta começa "
+                "na primeira coleta com as questões"
+                + (f" (até {_data_hora(primeira)})" if primeira else "")
+                + f", e o que foi feito de {_data(ini)} até ela não está na conta")
+            curtos.append(("início sem questões" + qtd(sq_sem_base),
+                           f"NÃO conta {_data(ini)} até {ate_primeira}"))
         if not c.get("fim_coberto") and c.get("alunos_sem_fim"):
             cedo = _data_hora(c.get("coleta_fim_mais_cedo") or c.get("coleta_fim"))
             motivos.append(
                 f"a última coleta{para(c.get('alunos_sem_fim'))} é de {cedo}: o que veio "
                 f"depois, até {_data(efetivo or fim)}, não está na conta")
             curtos.append(("NÃO está na conta" + qtd(c.get("alunos_sem_fim")), f"depois de {cedo}"))
-        if c.get("inclui_antes_do_inicio"):
+        ampliados = c.get("alunos_ampliados")
+        if c.get("inclui_antes_do_inicio") and (ampliados is None or ampliados > 0):
+            antecedencia = _duracao(c.get("antecedencia_max_horas"))
+            # A base destes alunos, sem a dos que tiveram a coleta do início sem questões.
+            base_amp = c.get("coleta_base_ampliados") or c.get("coleta_inicio")
+            de_amp = _data_hora(base_amp) if base_amp else "o início do contador"
+            base = (f"a coleta-base é de {de_amp}" if base_amp
+                    else "a conta parte do início do contador")
             motivos.append(
-                f"não há coleta perto do início{para(c.get('alunos_ampliados'))}: a "
-                f"coleta-base é de {de}, {_duracao(c.get('antecedencia_max_horas'))} antes "
-                f"de {_data(ini)} - o número INCLUI a atividade desse intervalo")
-            curtos.append(("INCLUI antes do início" + qtd(c.get("alunos_ampliados")), f"desde {de}"))
+                f"não há coleta perto do início{para(ampliados)}: {base}"
+                + (f", {antecedencia} antes de {_data(ini)}" if antecedencia else "")
+                + " - o número INCLUI a atividade desse intervalo")
+            curtos.append(("INCLUI antes do início" + qtd(ampliados), f"desde {de_amp}"))
+        sq_com_base = c.get("alunos_inicio_sem_questoes") or 0
+        if sq_com_base:
+            base_sq = c.get("coleta_base_inicio_sem_questoes")
+            antecedencia = _duracao(c.get("antecedencia_inicio_sem_questoes_horas"))
+            motivos.append(
+                f"a coleta do início veio sem as questões{para(sq_com_base)}: a conta parte "
+                + (f"da coleta de {_data_hora(base_sq)}" if base_sq else "da coleta anterior")
+                + (f", {antecedencia} antes de {_data(ini)}," if antecedencia else "")
+                + " e INCLUI a atividade desse intervalo")
+            curtos.append(("INCLUI antes do início" + qtd(sq_com_base),
+                           (f"desde {_data_hora(base_sq)}: " if base_sq else "")
+                           + "início sem questões"))
         n_sem = c.get("alunos_sem_intervalo") or 0
         if n_sem:
             if oficial:
@@ -498,10 +596,20 @@ def _avisos_cobertura(dados: dict) -> list[dict]:
             nomes = ", ".join(str(t.get("turma") or t.get("turma_id")) for t in turmas_sem)
             motivos.append(f"turma(s) sem nenhuma coleta no período, fora da conta: {nomes}")
             curtos.append((f"{_num(len(turmas_sem))} turma(s) sem coleta", nomes))
+        nao_vieram = c.get("alunos_questoes_nao_vieram") or 0
+        if nao_vieram:
+            motivos.append(
+                f"{_num(nao_vieram)} estudante(s) com coleta no período em que a "
+                "plataforma não mandou as questões (a equipe do Constela precisa ajustar a "
+                "coleta dessa plataforma): essa coleta não mede as questões, e a conta "
+                "deles vai só até a coleta anterior, ou fica fora dela")
+            curtos.append((f"{_num(nao_vieram)} sem questões na coleta",
+                           "a plataforma não mandou: NÃO medido"))
         saida.append({"rotulo": rotulo, "status": c.get("status"), "oficial": oficial,
                       "pedido": pedido, "pedido_curto": pedido_curto, "andamento": andamento,
+                      "nao_vieram": nao_vieram,
                       "so_inicio": (c.get("alunos_sem_intervalo_so_inicio") or 0) >= n_sem > 0,
-                      "de": de, "ate": ate,
+                      "de": de, "ate": ate, "tem_base": tem_base,
                       "em_andamento": bool(c.get("em_andamento")),
                       "motivos": motivos, "curtos": curtos})
     return saida
@@ -509,7 +617,11 @@ def _avisos_cobertura(dados: dict) -> list[dict]:
 
 def _cobertura_html(aviso: dict) -> str:
     rotulo, pedido = _esc_html(aviso["rotulo"]), _esc_html(aviso["pedido"])
-    disponivel = f'{_esc_html(aviso["de"])} a {_esc_html(aviso["ate"])}'
+    de, ate = _esc_html(aviso["de"]), _esc_html(aviso["ate"])
+    # Sem coleta-base: "desde o início do contador até …" (nunca "de o início").
+    disponivel = f"{de} a {ate}" if aviso["tem_base"] else f"desde o início do contador até {ate}"
+    medido_pelas_coletas = f"de {disponivel}" if aviso["tem_base"] else disponivel
+    coleta_base = f"a coleta-base, {de}," if aviso["tem_base"] else "o início do contador"
     motivos = "".join(f" {_esc_html(m[0].upper() + m[1:])}." for m in aviso["motivos"])
     status = aviso["status"]
     if status == "sem_intervalo":
@@ -518,6 +630,11 @@ def _cobertura_html(aviso: dict) -> str:
                     f'{pedido}.</b> O 0 da regra oficial (a mesma das premiações) vem de '
                     'uma única coleta por estudante no período e nenhuma antes — ele '
                     'NÃO quer dizer que não houve atividade.</div>')
+        if aviso.get("nao_vieram"):
+            return (f'<div class="rp-nota"><b>{rotulo}: sem número para {pedido}.</b> A '
+                    'plataforma não mandou as questões nas coletas do período (a equipe do '
+                    'Constela precisa ajustar a coleta dessa plataforma): sem elas, não há '
+                    'diferença a medir (não é zero).</div>')
         if aviso["so_inicio"]:
             return (f'<div class="rp-nota"><b>{rotulo}: sem número para {pedido} ainda.</b> '
                     'A única coleta do período é a que mede o início; a próxima medirá o '
@@ -526,16 +643,15 @@ def _cobertura_html(aviso: dict) -> str:
                 'única coleta por estudante no período e nenhuma antes — não existe '
                 'diferença a medir (não é zero).</div>')
     if status == "completa":
-        fim = (f" Em andamento: os dados vão até a coleta de {_esc_html(aviso['ate'])}."
+        fim = (f" Em andamento: os dados vão até a coleta de {ate}."
                if aviso["em_andamento"] else "")
         return (f'<div class="rp-nota"><b>{rotulo}:</b> período solicitado {pedido}, '
-                f'medido pelas coletas de {disponivel}.{fim}</div>')
+                f'medido pelas coletas {medido_pelas_coletas}.{fim}</div>')
     if status == "regra_oficial":
         return (f'<div class="rp-nota"><b>{rotulo}:</b> período solicitado {pedido}. O '
                 'número segue a regra oficial do Matific (a mesma das premiações): '
-                f'diferença entre a coleta-base, {_esc_html(aviso["de"])}, e a última '
-                f'coleta considerada, {_esc_html(aviso["ate"])} — as bordas do período '
-                f'não são verificadas aqui.{motivos}</div>')
+                f'diferença entre {coleta_base} e a última coleta considerada, {ate} — '
+                f'as bordas do período não são verificadas aqui.{motivos}</div>')
     if status == "ampliada":
         return (f'<div class="rp-nota"><b>{rotulo}: o valor INCLUI atividade de antes do '
                 f'período.</b> Período solicitado: {pedido}. Intervalo medido pelas '
@@ -545,16 +661,144 @@ def _cobertura_html(aviso: dict) -> str:
             f'Intervalo medido pelas coletas do Constela: {disponivel}.{motivos}</div>')
 
 
-def _ressalvas(dados: dict) -> list[tuple[str, str]]:
-    """(indicador, ressalva) de tudo que o motor qualificou."""
-    saida = []
+# ---------------------------------------------- "Como ler estes números"
+# Na língua de quem lê o relatório — o MESMO texto da tela (``EXPLICACAO_ELEFANTE``,
+# ``EXPLICACAO_MATIFIC`` e ``EXPLICACAO_NAO_RESPONDE`` em
+# apps/web/src/pages/RelatorioPeriodo.tsx; ``test_relatorios_periodo_pdf`` confere que
+# cada frase daqui está lá). O motor manda em ``suporte`` e ``nao_suportado`` o porquê
+# técnico (nome de campo e de tabela, a classificação SUPORTADO/NÃO SUPORTADO): ele
+# não vai para o papel, que circula entre professores e em reuniões. Chave que estas
+# listas não conhecem cai no texto do motor, como na tela. ``curto`` só serve à
+# reserva (fpdf), cuja célula corta o texto longo: a frase inteira, cortada no meio,
+# diria outra coisa. Por isso ele cabe INTEIRO na 3ª coluna da reserva: até
+# ``LARGURA_DO_CURTO_MM`` na fonte dela (``test_relatorios_periodo_pdf`` mede cada um).
+LARGURA_DO_CURTO_MM = 66.0
+_ROTULO_CLASSIFICACAO = {"SUPORTADO": "Confiável",
+                         "SUPORTADO COM RESSALVA": "Confiável, com um cuidado",
+                         "NÃO SUPORTADO": "Não calculado"}
+
+_TEMPO_DE_CADA_LEITURA = (
+    "Não dá para saber quanto durou cada leitura: a plataforma informa o tempo somado "
+    "de cada livro, não o de cada vez que o aluno o abriu, e esses totais às vezes até "
+    "diminuem — o que um total somado não faria. O tempo do período vem do tempo dos "
+    "livros novos, o mesmo da premiação “Mais tempo”.")
+
+_EXPLICACAO_ELEFANTE: dict[str, dict] = {
+    "livros_novos": {
+        "nome": "“Livros novos”",
+        "explicacao": "Conta cada livro que apareceu pela primeira vez no relatório da "
+                      "plataforma dentro do período. É a mesma conta da premiação “Mais "
+                      "livros”: o relatório e o pódio mostram o mesmo número.",
+        "cuidado": "Vale a data em que o livro apareceu pela primeira vez no relatório da "
+                   "plataforma, e ela não muda depois. Por isso um livro lido de novo não "
+                   "entra aqui — ele aparece em “Livros com atividade”, como relido.",
+        "curto": "livro relido conta só em Livros com atividade",
+    },
+    "tempo_min": {
+        "nome": "“Tempo de leitura”",
+        "explicacao": "Soma o tempo dos livros novos do período. É a mesma conta da "
+                      "premiação “Mais tempo”.",
+        "cuidado": "A plataforma nem sempre informa o tempo de um livro; quando não "
+                   "informa, ele entra como zero. Por isso o total é o mínimo lido no "
+                   "período — o tempo real pode ser maior.",
+        "curto": "total mínimo: tempo não informado conta zero",
+    },
+    "livros_com_atividade": {
+        "nome": "“Livros com atividade”",
+        "explicacao": "Conta os livros diferentes que o aluno abriu no período, inclusive "
+                      "os que ele releu, pela data e hora que a plataforma registra em "
+                      "cada leitura.",
+    },
+    "tempo_min_por_evento": {
+        "nome": "Tempo de cada leitura",
+        "explicacao": _TEMPO_DE_CADA_LEITURA,
+    },
+    "questoes": {
+        "nome": "“Questões”",
+        "explicacao": "A plataforma só informa o total de questões que o aluno já "
+                      "respondeu desde que começou, sem a data de cada uma. O número do "
+                      "período é a diferença entre a coleta do fim e a do início.",
+        "cuidado": "Só entra quem tem coleta no período; quem não tem fica fora da conta "
+                   "(não conta como zero). Sem coleta no começo do período, a conta começa "
+                   "na primeira coleta; sem coleta no fim, termina na última — nos dois "
+                   "casos o número não cobre o período inteiro, e o aviso de “Questões”, "
+                   "acima, diz quanto falta.",
+        "curto": "sem coleta no início ou no fim, não cobre tudo",
+    },
+}
+
+_EXPLICACAO_MATIFIC = {
+    "nome": "“Atividades” e “Estrelas”",
+    "explicacao": "O Matific informa o total do ano (atividades e estrelas somadas), não a "
+                  "data de cada atividade. O número do período é o total no fim menos o de "
+                  "antes do início — a mesma regra das premiações.",
+    "cuidado": "Sem coleta dentro do período, o aluno fica fora da conta (falta de dado não "
+               "é zero) e é contado em “Sem coleta na janela”.",
+    "curto": "sem coleta no período, fica fora (não é zero)",
+}
+
+_EXPLICACAO_NAO_RESPONDE: dict[str, dict] = {
+    "elefante.tempo_min_por_evento": {
+        "nome": "Tempo de cada leitura (Elefante Letrado)",
+        "explicacao": _TEMPO_DE_CADA_LEITURA,
+        "curto": "o tempo vem somado por livro, não por leitura",
+    },
+    "matific.questoes": {
+        "nome": "Questões (Matific)",
+        "explicacao": "O Matific guarda atividades, estrelas e pontuação média, mas não "
+                      "conta questões. Mostrar esse número para um período seria inventá-lo.",
+        "curto": "o Matific não conta questões",
+    },
+    "elefante.pontos_de_dificuldade": {
+        "nome": "Pontos de dificuldade (Elefante Letrado)",
+        "explicacao": "Quem se destaca pela dificuldade dos livros é decidido em "
+                      "Premiações, com a régua oficial. Calcular de novo aqui criaria uma "
+                      "segunda régua, que poderia discordar do pódio: para mérito, use "
+                      "Premiações.",
+        "curto": "para mérito, use Premiações (a régua oficial)",
+    },
+}
+
+
+def _explicacao(lista: dict, chave: str, s: dict) -> dict:
+    """A explicação de um número; sem entrada na lista, o texto que o motor mandou (a
+    mesma regra de ``explicacaoDe`` na tela)."""
+    return lista.get(chave) or {"nome": re.sub(r"[._]", " ", chave),
+                                "explicacao": s.get("por_que") or "",
+                                "cuidado": s.get("ressalva")}
+
+
+def _como_ler(dados: dict) -> list[tuple[str, dict, str]]:
+    """(plataforma, explicação, classificação) de cada número de "Como ler estes
+    números" — a fonte única da vitrine e da reserva, com a regra da tela: o que o
+    motor lista em ``nao_suportado`` fica SÓ em "O que este relatório não responde",
+    sem repetir aqui com o selo "Não calculado"; do Matific, só "Atividades" e
+    "Estrelas" (as questões dele estão naquela lista)."""
+    fora = {(i.get("plataforma"), i.get("metrica")) for i in dados.get("nao_suportado") or []}
+    itens = []
     for chave, s in ((dados.get("elefante") or {}).get("suporte") or {}).items():
-        if isinstance(s, dict) and s.get("ressalva"):
-            saida.append((f"Elefante · {chave.replace('_', ' ')}", s["ressalva"]))
+        if (isinstance(s, dict) and s.get("classificacao")
+                and ("elefante", chave) not in fora):
+            itens.append(("Elefante Letrado", _explicacao(_EXPLICACAO_ELEFANTE, chave, s),
+                          s["classificacao"]))
     sup_mat = (dados.get("matific") or {}).get("suporte") or {}
-    if sup_mat.get("ressalva"):
-        saida.append(("Matific · atividades e estrelas", sup_mat["ressalva"]))
-    return saida
+    if sup_mat.get("classificacao"):
+        itens.append(("Matific", _EXPLICACAO_MATIFIC, sup_mat["classificacao"]))
+    return itens
+
+
+def _o_que_nao_responde(dados: dict) -> list[dict]:
+    """A explicação de cada item de ``nao_suportado``, na língua da tela."""
+    return [_explicacao(_EXPLICACAO_NAO_RESPONDE,
+                        f"{i.get('plataforma')}.{i.get('metrica')}", i)
+            for i in dados.get("nao_suportado") or []]
+
+
+def _ressalvas(dados: dict) -> list[tuple[str, str]]:
+    """(indicador, cuidado ao ler) dos números de "Como ler estes números" que têm um
+    cuidado — o "Cuidado ao ler" da tela, curto para caber na célula da reserva."""
+    return [(e["nome"], e.get("curto") or _primeira_frase(e["cuidado"]))
+            for _plataforma, e, _classificacao in _como_ler(dados) if e.get("cuidado")]
 
 
 def _janela_efetiva_html(dados: dict) -> str:
@@ -582,51 +826,38 @@ _SELO = {"SUPORTADO": "ok", "SUPORTADO COM RESSALVA": "res", "NÃO SUPORTADO": "
 
 
 def _suporte_html(dados: dict) -> str:
-    """"Como ler estes números": a classificação de cada métrica, com a ressalva.
+    """"Como ler estes números": o que cada número conta e o cuidado ao lê-lo, com a
+    etiqueta da tela ("Confiável", "Confiável, com um cuidado").
 
     Sai no papel porque o PDF circula sozinho — longe da tela que explicava.
     """
     linhas = []
-
-    def item(nome: str, s: dict) -> None:
-        classe = _SELO.get(s.get("classificacao"), "nao")
-        campo = f'<br><span class="rp-fonte">{_esc_html(s["campo"])}</span>' if s.get("campo") else ""
-        ressalva = (f'<br><span class="rp-porque"><b>Ressalva:</b> '
-                    f'{_esc_html(s["ressalva"])}</span>' if s.get("ressalva") else "")
+    for plataforma, e, classificacao in _como_ler(dados):
+        classe = _SELO.get(classificacao, "nao")
+        cuidado = (f'<br><span class="rp-porque"><b>Cuidado ao ler:</b> '
+                   f'{_esc_html(e["cuidado"])}</span>' if e.get("cuidado") else "")
         linhas.append(
-            f'<tr><td class="esq nome">{_esc_html(nome)}{campo}</td>'
+            f'<tr><td class="esq nome">{_esc_html(e["nome"])}'
+            f'<br><span class="rp-fonte">{_esc_html(plataforma)}</span></td>'
             f'<td><span class="rp-selo {classe}">'
-            f'{_esc_html(s.get("classificacao") or "")}</span></td>'
-            f'<td class="esq rp-porque">{_esc_html(s.get("por_que") or "")}{ressalva}</td></tr>')
-
-    ele = dados.get("elefante") or {}
-    for chave, s in (ele.get("suporte") or {}).items():
-        if isinstance(s, dict) and s.get("classificacao"):
-            item(f"Elefante · {chave.replace('_', ' ')}", s)
-    mat = dados.get("matific") or {}
-    sup_mat = mat.get("suporte") or {}
-    if sup_mat.get("classificacao"):
-        item("Matific · atividades e estrelas", sup_mat)
-    if isinstance(sup_mat.get("questoes"), dict):
-        item("Matific · questões", sup_mat["questoes"])
+            f'{_esc_html(_ROTULO_CLASSIFICACAO.get(classificacao, classificacao))}</span></td>'
+            f'<td class="esq rp-porque">{_esc_html(e["explicacao"])}{cuidado}</td></tr>')
     if not linhas:
         return ""
     return ('<h2 class="secao">COMO LER ESTES NÚMEROS</h2>'
             '<table class="tab"><thead><tr><th class="esq">Indicador</th>'
-            '<th>Classificação</th><th class="esq">Por quê</th></tr></thead>'
+            '<th>Classificação</th><th class="esq">O que o número conta</th></tr></thead>'
             f'<tbody>{"".join(linhas)}</tbody></table>')
 
 
 def _nao_suportado_html(dados: dict) -> str:
-    itens = dados.get("nao_suportado") or []
+    itens = _o_que_nao_responde(dados)
     if not itens:
         return ""
     blocos = "".join(
-        f'<div class="rp-nota"><b>'
-        f'{_esc_html(_ROTULO_PLATAFORMA.get(i.get("plataforma"), i.get("plataforma") or ""))}'
-        f' · {_esc_html(str(i.get("metrica") or "").replace("_", " "))}:</b> '
-        f'{_esc_html(i.get("por_que") or "")}</div>' for i in itens)
-    return ('<h2 class="secao">O QUE ESTE RELATÓRIO NÃO RESPONDE</h2>'
+        f'<div class="rp-nota"><b>{_esc_html(e["nome"])}:</b> '
+        f'{_esc_html(e["explicacao"])}</div>' for e in itens)
+    return (f'<h2 class="secao">{TITULO_NAO_RESPONDE}</h2>'
             '<p class="rp-porque">Métrica sem dado histórico suficiente sai declarada, '
             'não estimada: um número aproximado num relatório de gestão vira decisão.</p>'
             + blocos)
@@ -742,29 +973,25 @@ def _detalhe_matific(bloco: dict) -> str:
             f"{_num(bloco.get('estrelas', 0))} estrelas")
 
 
-# Tipografia que NÃO existe em latin-1 e, portanto, não sobrevive ao PDF de
-# reserva (fpdf usa fontes latin-1). Mapeamos para o equivalente ASCII antes de
-# entregar a célula — senão vira "?" e o leitor lê defeito do relatório.
-_FORA_DO_LATIN1 = {
-    "—": "-", "–": "-", "―": "-",            # travessões
-    "“": '"', "”": '"', "„": '"',            # aspas curvas
-    "‘": "'", "’": "'",                       # apóstrofos curvos
-    "…": "...", "•": "-", "→": "->", "≈": "~",
+# Tipografia que NÃO existe no cp1252 das fontes nativas da reserva (fpdf2,
+# ``services.texto_pdf``) e que o motor ou este módulo escrevem. Sem equivalente na
+# fonte, ``texto_pdf`` a transformaria em "?" e o leitor leria defeito do
+# relatório; aqui vira o equivalente ASCII. O travessão, o meia-risca, as aspas
+# curvas, o apóstrofo tipográfico, as reticências e o marcador existem no cp1252 e
+# passam intactos: o nome da criança (Sant’Anna) sai como é (REV2-COSTURA-4).
+_FORA_DO_CP1252 = {
+    "―": "-",                                 # barra horizontal
+    "→": "->", "≈": "~",
 }
 
 
 def _sem_tipografia(texto) -> str:
-    """Texto pronto para a fonte latin-1 do PDF de reserva.
-
-    Isto não é zelo estético: o motor escreve travessão nos motivos de
-    "não suportado" (`MOTIVO_MATIFIC_QUESTOES`), e as DUAS versões de `_latin1`
-    em `services/relatorios.py` tratam o travessão de formas diferentes — a
-    commitada o transforma em "?". Normalizando aqui, a saída é a mesma com ou
-    sem o trabalho paralelo presente, que é o que a nota de acoplamento no topo
-    deste módulo promete.
-    """
+    """Texto pronto para a fonte cp1252 do PDF de reserva: só troca o que ela não
+    tem (``_FORA_DO_CP1252``). Antes, com as fontes em latin-1, trocava também o
+    travessão, as aspas curvas e o apóstrofo, inclusive no nome da criança, da
+    turma e da escola ("Sant’Anna" saía "Sant'Anna")."""
     texto = str(texto if texto is not None else "")
-    for de, para in _FORA_DO_LATIN1.items():
+    for de, para in _FORA_DO_CP1252.items():
         texto = texto.replace(de, para)
     return texto
 
@@ -818,8 +1045,14 @@ def _reserva(dados: dict, cor: str) -> bytes:
                        "confira matrícula e situação"])
     restrito = (dados.get("escopo") or {}).get("restrito_a_turmas")
     if restrito:
+        # Curto para caber inteiro na 3ª coluna (como os ``curto`` de "Como ler").
         linhas.append(["Recorte do usuário", f"{len(restrito)} turma(s)",
-                       "vinculadas ao cadastro de quem gerou - nao e a escola inteira"])
+                       "turmas de quem gerou - não é a escola inteira"])
+    populacao = _populacao(dados)
+    if populacao:
+        # De que ano são as crianças e as turmas (período de um ano já encerrado, ou
+        # que passa por mais de um): curto, para caber inteiro.
+        linhas.append(["Crianças e turmas", populacao[1], populacao[2]])
     linhas.append(["RESUMO DO PERÍODO", "", ""])
     linhas += [list(linha) for linha in linhas_resumo(dados)]
 
@@ -869,14 +1102,25 @@ def _reserva(dados: dict, cor: str) -> bytes:
             linhas.append(["", "valor NÃO é só o período", ""])
         for valor, detalhe in aviso["curtos"]:
             linhas.append(["", valor, _curto(detalhe, 44)])
-    for nome, s_ in _ressalvas(dados):
-        linhas.append(["Ressalva · " + nome, "", _primeira_frase(s_, 72)])
+    # Um título, como "POR TURMA", e o nome do número sozinho na 1ª coluna: com o "Cuidado
+    # ao ler · " em cada linha, ela ficava larga e tirava da 3ª a largura do cuidado curto.
+    ressalvas = _ressalvas(dados)
+    if ressalvas:
+        linhas.append(["CUIDADO AO LER", "", ""])
+    for nome, cuidado in ressalvas:
+        linhas.append([nome, "", _primeira_frase(cuidado, 72)])
 
-    for item in dados.get("nao_suportado") or []:
-        rotulo = (f"{_ROTULO_PLATAFORMA.get(item.get('plataforma'), '')} · "
-                  f"{str(item.get('metrica') or '').replace('_', ' ')}")
-        linhas.append([rotulo.strip(" ·"), SEM_SUPORTE,
-                       _primeira_frase(item.get("por_que"))])
+    # O mesmo título da vitrine: é para ele que o resumo manda o leitor. Em duas
+    # células: inteiro na 1ª coluna, ele a alargaria (a largura é proporcional à
+    # célula mais larga) e sairia cortado ("... NÃO RESPON...") — junto com o cuidado
+    # curto da 3ª coluna.
+    nao_responde = _o_que_nao_responde(dados)
+    if nao_responde:
+        inicio, fim = TITULO_NAO_RESPONDE.rsplit(" NÃO ", 1)
+        linhas.append([inicio, "NÃO " + fim, ""])
+    for e in nao_responde:
+        linhas.append([e["nome"], SEM_SUPORTE,
+                       e.get("curto") or _primeira_frase(e["explicacao"])])
 
     # TODA célula passa pela normalização: as que eu escrevi e, principalmente,
     # as que vieram do motor.

@@ -15,7 +15,7 @@ mesmo link. Falhavam no 99c197d (consumo 200 ou gravação sem condição): a se
 do admin no meio, o 2º consumo no meio e a ordem dos comandos. Desativar,
 promover e mudar o cargo no meio já davam 400 nesse ponto (a conta era lida
 depois): ficam como controle de que a releitura continua valendo depois da
-trava. A TRAVA em si (``FOR UPDATE``, que o SQLite não emite) é provada no PG
+trava. A TRAVA em si (``FOR NO KEY UPDATE``, que o SQLite não emite) é provada no PG
 com duas threads, em ``..._corrida_pg``; aqui se prova a ORDEM dos comandos.
 """
 from fastapi.testclient import TestClient
@@ -197,7 +197,7 @@ def test_senha_fraca_do_dono_nao_queima_o_link(cliente, db, escola_completa):
 def test_consumo_trava_a_conta_antes_de_marcar_o_token_condicionalmente(
         cliente, db, escola_completa):
     """A ORDEM que serializa com as revogações (usuário → token) e a marcação
-    condicional. No PostgreSQL a leitura da conta sai com FOR UPDATE; no SQLite o
+    condicional. No PostgreSQL a leitura da conta sai com FOR NO KEY UPDATE; no SQLite o
     dialeto não emite a cláusula (um escritor por vez), então lá se prova a ordem."""
     e = escola_completa["escola"]
     p = _conta(db, e.id, "paula.corrida6@teste.local")
@@ -228,4 +228,4 @@ def test_consumo_trava_a_conta_antes_de_marcar_o_token_condicionalmente(
     assert all("usado_em IS NULL" in s for s in comandos
                if s.startswith("UPDATE tokens_reset_senha")), comandos
     if engine.dialect.name == "postgresql":
-        assert "FOR UPDATE" in comandos[i_conta], comandos[i_conta]
+        assert "FOR NO KEY UPDATE" in comandos[i_conta], comandos[i_conta]

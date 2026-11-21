@@ -10,11 +10,14 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import threading
+from contextlib import contextmanager
 from datetime import datetime
 
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.orm import Session
 
+from app.core.database import engine
 from app.models.configuracao import Configuracao
 from app.sync import connectors, vault
 from app.sync.connectors.navegador import (
@@ -33,6 +36,16 @@ _CHAVE = "ultimo"
 _TIMEOUT_S = 180
 
 _DEMOROU = "O diagnóstico do Elefante demorou demais. Tente de novo."
+# Quem recebe o 409 é outra aba, outra pessoa ou quem recarregou a página: o
+# diagnóstico só tem o POST (nenhum GET do último inventário) e a tela mostra só a
+# resposta do PRÓPRIO pedido — o resultado do que está rodando não chega a quem foi
+# recusado. O texto não promete mostrá-lo: manda rodar de novo depois (o novo compara
+# com o último inventário gravado). Até _TIMEOUT_S (3 min): "alguns minutos".
+_OCUPADO = ("Já existe um diagnóstico do Elefante em andamento para esta escola (aberto "
+            "em outra aba, por outra pessoa ou antes de a página ser recarregada). O "
+            "resultado dele não aparece aqui: aguarde alguns minutos e rode de novo; o "
+            "novo diagnóstico mostra o que mudou desde o último.")
+_LOCK_NS = 0x4445                      # 'DE' — namespace do advisory lock do Postgres
 _FORA_DO_AR = ("Não foi possível rodar o diagnóstico agora: a conexão com o site do "
                "Elefante falhou ou ele não respondeu. Tente de novo em alguns minutos.")
 
@@ -75,6 +88,55 @@ def _erro_da_coleta(exc: BaseException) -> Exception | None:
     if demorou:
         return ErroConector(_DEMOROU, codigo="timeout", recuperavel=True)
     return ErroConector(_FORA_DO_AR, codigo="indisponivel_externo", recuperavel=True)
+
+
+# UM diagnóstico por escola de cada vez: cada um abre um navegador (Chromium) e loga
+# com a conta do robô, e cliques repetidos abriam um navegador por clique. DENTRO do
+# worker, um threading.Lock por escola; ENTRE workers (uvicorn sobe --workers 2), em
+# Postgres, também um advisory lock numa conexão dedicada — o mesmo desenho da
+# consulta ao vivo do Matific (``aovivo._lock_consulta``), com outro namespace. Quem
+# chega com um em andamento NÃO espera: recebe ``ocupado`` (409) na hora.
+_travas: dict[int, threading.Lock] = {}
+_travas_guarda = threading.Lock()
+
+
+def _trava_da_escola(escola_id: int) -> threading.Lock:
+    with _travas_guarda:
+        trava = _travas.get(escola_id)
+        if trava is None:
+            trava = _travas[escola_id] = threading.Lock()
+        return trava
+
+
+@contextmanager
+def _um_por_escola(escola_id: int):
+    trava = _trava_da_escola(escola_id)
+    if not trava.acquire(blocking=False):
+        raise ErroConector(_OCUPADO, codigo="ocupado", recuperavel=True)
+    conn = None
+    travou_pg = False
+    try:
+        if engine.dialect.name == "postgresql":
+            conn = engine.connect()
+            travou_pg = bool(conn.execute(text("SELECT pg_try_advisory_lock(:ns, :k)"),
+                                          {"ns": _LOCK_NS, "k": int(escola_id)}).scalar())
+            # O advisory lock é da SESSÃO: o commit só encerra a transação (a conexão
+            # não fica "idle in transaction" durante o robô) e a trava continua.
+            conn.commit()
+            if not travou_pg:
+                raise ErroConector(_OCUPADO, codigo="ocupado", recuperavel=True)
+        yield
+    finally:
+        if conn is not None:
+            if travou_pg:
+                try:
+                    conn.execute(text("SELECT pg_advisory_unlock(:ns, :k)"),
+                                 {"ns": _LOCK_NS, "k": int(escola_id)})
+                    conn.commit()
+                except Exception:  # noqa: BLE001 — a conexão é descartada (a sessão do
+                    conn.invalidate()  # Postgres acaba e leva a trava), não volta ao pool
+            conn.close()
+        trava.release()
 
 
 def _linha(db: Session, escola_id: int) -> Configuracao | None:
@@ -148,7 +210,7 @@ def executar(db: Session, escola_id: int, *, agora: datetime | None = None) -> d
                                codigo=vault.CODIGO_CREDENCIAL_ILEGIVEL, recuperavel=False)
         raise ErroConector(
             "As credenciais do Elefante não estão configuradas. Configure em "
-            "Sincronização automática → Elefante.", codigo="sem_credencial",
+            "Integrações → Elefante → “Configurar conexão”.", codigo="sem_credencial",
             recuperavel=False)
     conector = connectors.obter("elefante")
     if conector is None or not hasattr(conector, "diagnosticar_endpoints"):
@@ -178,13 +240,21 @@ def executar(db: Session, escola_id: int, *, agora: datetime | None = None) -> d
                 raise       # defeito nosso: sobe cru (500), já no log ERROR
             raise erro from exc
 
-    inventario = asyncio.run(_coletar())
-
-    inventario["gerado_em"] = agora.isoformat() + "Z"
-    # Solta a conexão do banco (o robô rodou fora dela); relê para o diff/salvar.
+    # Solta a conexão do banco ANTES do robô (login + sondagem, até ``_TIMEOUT_S``):
+    # a leitura da credencial (e a autenticação da requisição) abriu a transação, e
+    # ela ficaria "idle in transaction" segurando uma conexão do pool durante toda a
+    # I/O externa — a regra do módulo (coleta, placar ao vivo, "Testar conexão").
+    # Só leituras até aqui; a credencial já está decifrada em memória. O diff e a
+    # gravação abaixo reabrem a conexão sob demanda.
     db.rollback()
-    anterior = _carregar(db, escola_id)
-    diff = _comparar(anterior, inventario)
-    _salvar(db, escola_id, inventario)
+    # A trava cobre o navegador e a gravação do inventário (dois diagnósticos da
+    # mesma escola também não disputam o "último inventário").
+    with _um_por_escola(escola_id):
+        inventario = asyncio.run(_coletar())
+
+        inventario["gerado_em"] = agora.isoformat() + "Z"
+        anterior = _carregar(db, escola_id)
+        diff = _comparar(anterior, inventario)
+        _salvar(db, escola_id, inventario)
     return {"inventario": inventario, "diff": diff,
             "anterior_em": (anterior or {}).get("gerado_em")}

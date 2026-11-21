@@ -279,6 +279,11 @@ class Decisao:
     aluno_id: int | None = None        # quem reusar (ou o melhor candidato da revisão)
     motivo: str = ""                   # ra|uuid|identificador|exato|abreviacao|…
     candidatos: tuple[int, ...] = ()   # todos os plausíveis (para o aviso/auditoria)
+    # Só no CRIAR: fichas SEM matrícula no ano ativo, da sala do ANO ANTERIOR (a mesma
+    # sala, de quem repetiu, ou a da série anterior, de quem passou de ano), cujo nome
+    # se parece com o da linha sem identificador que prove ser a mesma criança. A
+    # ficha nova nasce (o nome sozinho não atravessa o ano), e o aviso as nomeia.
+    parecidos_ano_anterior: tuple[int, ...] = ()
 
 
 @dataclass
@@ -292,13 +297,21 @@ class ContextoCasamento:
       * roster por SALA — quem está na sala (série+letra) do ano ativo; é o roster
         que o motor único recebe, o mesmo dos imports de plataforma;
       * índice por NOME — a escola inteira, para reconhecer MUDANÇA DE SALA
-        (trocar de turma não faz de ninguém uma pessoa nova).
+        (trocar de turma não faz de ninguém uma pessoa nova);
+      * roster da SALA DO ANO ANTERIOR — quem NÃO tem matrícula no ano ativo, pela
+        sala da matrícula mais recente de ano anterior. Não é o roster da sala (a
+        mesma série+letra no ano novo é outra coorte, G_VIRADA-7): só reaproveita a
+        ficha com identificador forte e, sem ele, aponta a ficha parecida no aviso
+        (``Decisao.parecidos_ano_anterior``).
     """
     por_ra: dict[str, matching.Identidade] = field(default_factory=dict)
     _por_sala: dict[str, dict[int, matching.Identidade]] = field(default_factory=dict)
     _por_nome: dict[str, dict[int, matching.Identidade]] = field(default_factory=dict)
     _sala_de: dict[int, str] = field(default_factory=dict)
     _nome_de: dict[int, str] = field(default_factory=dict)
+    _por_sala_anterior: dict[str, dict[int, matching.Identidade]] = field(
+        default_factory=dict)
+    _sala_anterior_de: dict[int, str] = field(default_factory=dict)
     # Fichas que ESTE arquivo já atribuiu a alguma linha (reuso seguro ou criação):
     # quem já tem dono no arquivo não é a ficha "renumerada" de outra linha.
     reivindicados: set[int] = field(default_factory=set)
@@ -326,6 +339,29 @@ class ContextoCasamento:
         self._nome_de[aid] = nome_novo
         if ident.ra:
             self.por_ra.setdefault(ident.ra, ident)
+        sala_anterior = self._sala_anterior_de.get(aid)
+        if sala_anterior is not None:
+            if self._sala_de.get(aid) is not None:
+                # Ganhou sala no ano ativo (esta importação o matriculou): sai do
+                # roster do ano anterior — dali em diante, vale o roster da sala.
+                self._por_sala_anterior.get(sala_anterior, {}).pop(aid, None)
+                del self._sala_anterior_de[aid]
+            else:
+                self._por_sala_anterior.setdefault(sala_anterior, {})[aid] = ident
+
+    def registrar_ano_anterior(self, ident: matching.Identidade, chave_sala: str) -> None:
+        """Põe no roster da SALA DO ANO ANTERIOR quem não tem matrícula no ano ativo
+        (chamar depois de ``registrar``, com a sala da matrícula mais recente de ano
+        anterior)."""
+        if ident.id is None or not chave_sala or self._sala_de.get(ident.id) is not None:
+            return
+        self._por_sala_anterior.setdefault(chave_sala, {})[ident.id] = ident
+        self._sala_anterior_de[ident.id] = chave_sala
+
+    def roster_ano_anterior(self, chave_sala: str | None) -> list[matching.Identidade]:
+        if not chave_sala:
+            return []
+        return list(self._por_sala_anterior.get(chave_sala, {}).values())
 
     def registrar_ra(self, ident: matching.Identidade) -> None:
         """Só o RA (usado por quem NÃO é candidato por nome — aluno excluído):
@@ -358,6 +394,58 @@ def _identidade_da_linha(linha: LinhaMatricula) -> matching.Identidade:
                                nascimento=linha.nascimento, ra=linha.ra or "")
 
 
+def chave_da_serie_anterior(chave_sala: str) -> str | None:
+    """A sala de onde vem, na virada, quem passou de ano: "5|A" → "4|A". ``None``
+    quando a chave não é série+letra (Fase, Maternal…) ou é a 1ª série."""
+    num, sep, letra = (chave_sala or "").partition("|")
+    if not sep or not letra or not num.isdigit() or int(num) < 2:
+        return None
+    return f"{int(num) - 1}|{letra}"
+
+
+# Identificadores FORTES (nascimento/RA/UUID iguais; a chamada fica de fora, porque é
+# numeração da sala de OUTRO ano): os únicos que reaproveitam, pela sala do ano
+# anterior, a ficha de quem não tem matrícula no ano ativo.
+_MOTIVOS_IDENTIFICADOR = frozenset({"identificador", "uuid"})
+
+
+def _sala_do_ano_anterior(linha: LinhaMatricula, ident: matching.Identidade,
+                          ctx: ContextoCasamento) -> tuple[Decisao | None, tuple[int, ...]]:
+    """Passo 4 de ``resolver_linha``, antes de CRIAR: a linha contra o roster da sala
+    do ANO ANTERIOR.
+
+    Quem repete a série continua na mesma série+letra; quem passou de ano vem da série
+    anterior. A ficha que a coleta criou com o nome abreviado e sem RA nem nascimento
+    ("LUIZA F COSTA") não está no roster da sala do ano ativo (G_VIRADA-7), e a linha
+    com o nome completo abria uma 2ª ficha EM SILÊNCIO — a antiga, com a conta da
+    plataforma e o histórico, ficava sem matrícula no ano e fora de "Fundir
+    duplicatas". Aqui:
+      * identificador forte (nascimento/RA/UUID igual; chamada não conta) na MESMA
+        sala do ano anterior → REUSAR (quem repetiu, provado);
+      * só o nome parecido (abreviação, variante, 2+ candidatos), na mesma sala ou na
+        da série anterior → a ficha nova nasce (a regra de G_VIRADA-7 fica: o nome
+        sozinho não atravessa o ano), e as fichas parecidas vão para o aviso.
+    Ficha que outra linha do arquivo já reconhece (``ctx.reivindicados``) não é
+    "parecida" de ninguém."""
+    sem = _sem_chamada(ident)
+    res = matching.classificar_linha(
+        sem, [_sem_chamada(c) for c in ctx.roster_ano_anterior(linha.chave_sala)])
+    if (res.status == matching.VINCULADO and res.aluno_id is not None
+            and res.motivo in _MOTIVOS_IDENTIFICADOR):
+        return (Decisao(REUSAR, res.aluno_id, f"sala_do_ano_anterior_{res.motivo}",
+                        (res.aluno_id,)), ())
+    parecidos: list[int] = []
+    if res.status in (matching.VINCULADO, matching.REVISAR):
+        parecidos.extend(res.candidatos)
+    anterior = chave_da_serie_anterior(linha.chave_sala)
+    if anterior is not None:
+        res_serie = matching.classificar_linha(
+            sem, [_sem_chamada(c) for c in ctx.roster_ano_anterior(anterior)])
+        if res_serie.status in (matching.VINCULADO, matching.REVISAR):
+            parecidos.extend(res_serie.candidatos)
+    return None, tuple(dict.fromkeys(i for i in parecidos if i not in ctx.reivindicados))
+
+
 def resolver_linha(linha: LinhaMatricula, ctx: ContextoCasamento) -> Decisao:
     """PORTA ÚNICA de identidade da Lista Piloto. Ordem (mais forte primeiro):
 
@@ -373,7 +461,10 @@ def resolver_linha(linha: LinhaMatricula, ctx: ContextoCasamento) -> Decisao:
        chamada não conta (é numeração da sala) e exige-se prova de identidade
        (nascimento/RA/UUID iguais) para reusar; sem prova, ou com 2+ homônimos em
        outras salas, vai para REVISÃO (nunca funde duas crianças às cegas).
-    4. Nada plausível → CRIAR.
+    4. **Sala do ANO ANTERIOR** (quem não tem matrícula no ano ativo:
+       ``_sala_do_ano_anterior``) — só com identificador forte reaproveita; só pelo
+       nome, a linha cai no CRIAR com as fichas parecidas no aviso.
+    5. Nada plausível → CRIAR.
 
     VETO SÓ PELO Nº DE CHAMADA não abre ficha nova: a chamada é numeração da SALA
     (a secretaria renumera a turma), então um cadastro de nome plausível que só
@@ -421,7 +512,12 @@ def resolver_linha(linha: LinhaMatricula, ctx: ContextoCasamento) -> Decisao:
         return Decisao(REVISAR, matching.melhor_candidato({c.id: c for c in fora}),
                        "homonimos_em_outras_salas",
                        tuple(sorted(c.id for c in fora)))  # type: ignore[arg-type]
-    return Decisao(CRIAR, None, res.motivo or "novo")
+    # (4) A SALA DO ANO ANTERIOR (quem não tem matrícula no ano ativo): reaproveita só
+    # com identificador forte; só pelo nome, a ficha nova nasce com o aviso da parecida.
+    reuso, parecidos = _sala_do_ano_anterior(linha, ident, ctx)
+    if reuso is not None:
+        return reuso
+    return Decisao(CRIAR, None, res.motivo or "novo", parecidos_ano_anterior=parecidos)
 
 
 # Motivos de REUSAR decididos SÓ pela semelhança do NOME — nenhum identificador
@@ -544,20 +640,240 @@ def aviso_turma_arquivada(turma: str, linhas: int, *, previa: bool = False) -> s
                 "da planilha nessa turma NÃO serão aplicadas ao confirmar — nenhuma "
                 "ficha nem matrícula nova nasce em turma arquivada, e as matrículas "
                 "que já existem nela continuam como estão. Se a turma deve receber "
-                "alunos, reative-a antes em Turmas › “Mostrar turmas arquivadas e de "
-                "outros anos letivos” › Reativar.")
+                "alunos, reative-a antes em Minha Escola › Turmas: ligue “Mostrar "
+                "arquivadas e de outros anos” e use “Reativar” na linha dela.")
     return (f"A turma “{turma}” está ARQUIVADA no cadastro: {linhas} linha(s) da "
             "planilha nessa turma NÃO foram aplicadas — nenhuma ficha nem "
             "matrícula nova foi criada nela, e as matrículas que já existiam "
             "continuam como estavam. Se a turma deve receber alunos, reative-a em "
-            "Turmas › “Mostrar turmas arquivadas e de outros anos letivos” › "
-            "Reativar e envie a planilha de novo.")
+            "Minha Escola › Turmas (ligue “Mostrar arquivadas e de outros anos” e "
+            "use “Reativar” na linha dela) e envie a planilha de novo.")
 
 
-def aviso_revisao(nome_linha: str, turma: str, nomes_candidatos: str) -> str:
+def ano_da_lista_diverge(ano_lista: int | None, ano_escola: int,
+                         anos_por_aba: dict[str, int] | None = None) -> bool:
+    """A Lista Piloto é de OUTRO ano letivo que o ativo da escola? Sem o ano (nem na
+    planilha nem no nome do arquivo) não dá para saber: não diverge.
+
+    ``anos_por_aba`` (``ListaPilotoAnalise.anos_por_aba``): basta UMA aba importada
+    de outro ano — uma aba velha de 2026 à frente das de 2027 não libera as de 2027
+    para o ano 2026 (as abas de anos diferentes entre si sempre divergem)."""
+    if anos_por_aba and any(a != ano_escola for a in anos_por_aba.values()):
+        return True
+    return ano_lista is not None and ano_lista != ano_escola
+
+
+def _abas_de_cada_ano(anos_por_aba: dict[str, int], limite: int = 6) -> str:
+    """"2026 na aba “3º Ano A”; 2027 nas abas “5º Ano A” e “5º Ano B”" — por ano."""
+    por_ano: dict[int, list[str]] = {}
+    for aba, ano in anos_por_aba.items():
+        por_ano.setdefault(ano, []).append(aba)
+    partes = []
+    for ano in sorted(por_ano):
+        abas = por_ano[ano]
+        nomes = [f"“{a}”" for a in abas[:limite]]
+        if len(abas) > limite:
+            nomes.append(f"mais {len(abas) - limite}")
+        lista = nomes[0] if len(nomes) == 1 else f"{', '.join(nomes[:-1])} e {nomes[-1]}"
+        partes.append(f"{ano} na aba {lista}" if len(abas) == 1
+                      else f"{ano} nas abas {lista}")
+    return "; ".join(partes)
+
+
+def aviso_ano_da_lista(ano_lista: int | None, origem: str | None, ano_escola: int, *,
+                       previa: bool, anos_por_aba: dict[str, int] | None = None,
+                       ) -> str | None:
+    """O aviso do ANO da Lista Piloto, ou ``None`` quando é o ano da escola.
+
+    A confirmação aplica a lista ao ano letivo ATIVO da escola: a de 2027 enviada com a
+    escola ainda em 2026 moveria as matrículas de 2026 para as turmas do ano seguinte,
+    marcaria os formandos "fora da lista piloto" e recalcularia as Notas de 2026 — e a
+    matrícula não guarda histórico para desfazer. Por isso a lista de outro ano é
+    recusada (a confirmação devolve este texto com 409; ``previa=True`` é o da prévia).
+    ``origem`` diz onde corrigir o ano, se ele é que está errado: "planilha" (a célula
+    "Lista Piloto:") ou "arquivo" (o nome do arquivo, quando a célula falta).
+
+    Abas de anos DIFERENTES entre si (``anos_por_aba``): o aviso nomeia as abas de
+    cada ano — a lista não é de ano nenhum, e só as abas do ano da escola podem ir.
+
+    Sem o ano, a prévia pede para conferir (a confirmação segue, como sempre seguiu)."""
+    efeito = "Ela não pode ser gravada" if previa else "Nada foi gravado"
+    if anos_por_aba and len(set(anos_por_aba.values())) > 1:
+        return (f"As abas desta Lista Piloto são de anos letivos diferentes "
+                f"({_abas_de_cada_ano(anos_por_aba)}), e a escola está no ano letivo "
+                f"{ano_escola}. {efeito}: gravar as abas de outro ano mudaria as turmas, "
+                f"as matrículas e o ranking de {ano_escola}. Deixe na planilha só as abas "
+                f"da Lista Piloto de {ano_escola} e envie de novo; se o ano escrito no "
+                "topo de uma aba (“Lista Piloto:”) está errado, corrija-o.")
+    if ano_lista is None:
+        if not previa:
+            return None
+        return (f"A planilha não diz de que ano é esta Lista Piloto: ao gravar, ela vale "
+                f"para o ano letivo {ano_escola} da escola. Confira se é a lista de "
+                f"{ano_escola} antes de gravar.")
+    if not ano_da_lista_diverge(ano_lista, ano_escola):
+        return None
+    if origem == "arquivo":
+        de_onde = (f"O nome do arquivo indica a Lista Piloto de {ano_lista} (a planilha "
+                   "não traz o ano)")
+        onde_corrigir = "corrija o ano no nome do arquivo"
+    else:
+        de_onde = f"Esta é a Lista Piloto de {ano_lista}"
+        onde_corrigir = "corrija o ano escrito no topo da planilha (“Lista Piloto:”)"
+    if ano_lista > ano_escola:
+        situacao = f"e a escola ainda está no ano letivo {ano_escola}"
+        caminho = (f"Peça ao administrador global para trocar o ano letivo ativo da escola "
+                   f"para {ano_lista} e envie a planilha de novo.")
+    else:
+        situacao = f"e a escola já está no ano letivo {ano_escola}"
+        caminho = (f"Envie a Lista Piloto de {ano_escola}; se o ano letivo da escola é que "
+                   "está errado, peça ao administrador global para corrigi-lo.")
+    return (f"{de_onde}, {situacao}. {efeito}: gravá-la mudaria as turmas, as matrículas "
+            f"e o ranking de {ano_escola}. {caminho} Se a lista é mesmo de {ano_escola}, "
+            f"{onde_corrigir} e envie de novo.")
+
+
+#: Situação de uma ficha que não está ativa, como os avisos da importação a descrevem.
+_SITUACAO_DA_FICHA = {"arquivado": "arquivada", "transferido": "marcada como transferida",
+                      "fora_lista_piloto": "fora da Lista Piloto"}
+
+
+@dataclass(frozen=True)
+class FichaCandidata:
+    """Onde está a ficha que um aviso manda abrir: a situação (``Aluno.status``) e a
+    turma da matrícula mais recente (a do ano letivo ativo, quando houver).
+
+    ``turma_a_vista``: a turma aparece em Minha Escola › Turmas sem ligar "Mostrar
+    arquivadas e de outros anos" (turma ativa, do ano letivo ativo)."""
+    nome: str
+    status: str = "ativo"
+    turma: str | None = None
+    ano: int | None = None
+    turma_a_vista: bool = True
+
+
+def como_abrir_ficha_inativa(ficha: FichaCandidata) -> str:
+    """A frase que diz como ABRIR uma ficha que não está ativa. A pesquisa do topo da
+    página só acha fichas ativas (``routers.sistema.pesquisa_global``), e a lista de
+    Alunos só mostra os ativos do ano: o caminho é o painel da turma da ficha, com
+    "Mostrar arquivados" (``GET /turmas/{id}/alunos?incluir_inativos``), que lista a
+    turma pelas matrículas do ano DELA — inclusive a de um ano anterior."""
+    situacao = _SITUACAO_DA_FICHA.get(ficha.status, "inativa")
+    if not ficha.turma:
+        # Sem matrícula nenhuma, nenhuma tela de lista a mostra: não prometer caminho.
+        return (f"A ficha “{ficha.nome}” está {situacao} e sem turma, por isso não "
+                "aparece na pesquisa do topo da página nem nas turmas: para abri-la, "
+                "fale com a equipe que implantou o Constela (Suporte › Ainda precisa "
+                "de ajuda?).")
+    if ficha.turma_a_vista:
+        turma = f"abra a turma {ficha.turma}"
+    else:
+        turma = ("ligue “Mostrar arquivadas e de outros anos”, abra a turma "
+                 f"{ficha.turma}" + (f" de {ficha.ano}" if ficha.ano else ""))
+    return (f"A ficha “{ficha.nome}” está {situacao} e por isso não aparece na pesquisa "
+            f"do topo da página: para abri-la, vá a Minha Escola › Turmas, {turma}, "
+            "ligue “Mostrar arquivados” e use “Visualizar” na linha dela.")
+
+
+def aviso_revisao(nome_linha: str, turma: str, nomes_candidatos: str,
+                  motivo: str = "", *, previa: bool = False,
+                  ficha: FichaCandidata | None = None) -> str:
+    """O aviso da linha que foi para REVISÃO (nada criado nem alterado nela).
+
+    ``mudanca_de_sala_sem_prova`` (nome idêntico em outra sala, ou numa ficha sem turma
+    no ano, sem RA/nascimento que provem ser a mesma criança — o caso em massa da
+    virada, com as fichas criadas pela coleta) tem o seu caminho: não há duplicata
+    nenhuma, e "Fundir duplicatas" nem mostra quem está sem turma no ano ativo. O
+    caminho que funciona é a própria ficha (a pesquisa do topo a acha; Editar dados ›
+    Turma a matricula, e o próximo envio da planilha a reconhece pelo roster da sala).
+    Os outros motivos (nomes parecidos na mesma sala, disputa entre linhas) continuam
+    em "Fundir duplicatas".
+
+    ``ficha``: onde está a ficha candidata. Quando ela NÃO está ativa (arquivada,
+    transferida, fora da Lista Piloto), a pesquisa do topo não a acha: o aviso diz a
+    situação, como abri-la (``como_abrir_ficha_inativa``) e que, depois de levá-la à
+    turma, é preciso "Reativar". Sem ``ficha`` (ou com a ficha ativa), o texto de antes.
+
+    ``previa=True``: a redação da PRÉVIA (nada foi gravado ainda) — "Esta linha
+    ficará para revisão: nada será criado nem alterado nela"."""
+    nada = ("Esta linha ficará para revisão: nada será criado nem alterado nela"
+            if previa else "Nada foi criado nem alterado nesta linha")
+    if motivo == "mudanca_de_sala_sem_prova":
+        if ficha is not None and ficha.status != "ativo":
+            mesma = (f"{como_abrir_ficha_inativa(ficha)} Se for a mesma criança, nos três "
+                     f"pontinhos da ficha › Editar dados, escolha a turma {turma} e, "
+                     "depois, nos três pontinhos, use “Reativar”; no próximo envio desta "
+                     "planilha, a ficha recebe os dados da linha.")
+        else:
+            mesma = ("Se for a mesma criança, procure o nome na "
+                     "pesquisa do topo da página, abra a ficha e, nos três pontinhos › "
+                     f"Editar dados, escolha a turma {turma}; no próximo envio desta "
+                     "planilha, a ficha recebe os dados da linha.")
+        return (f"“{nome_linha}” (turma {turma}) tem o mesmo nome de um aluno já "
+                "cadastrado em outra turma ou sem turma neste ano letivo "
+                f"({nomes_candidatos}), mas nenhum dado dos dois registros (RA ou data "
+                f"de nascimento) confirma que é a mesma criança. {nada}. {mesma} "
+                "Se forem crianças "
+                "diferentes, registre a data de nascimento de cada uma (na ficha, em "
+                "Editar dados, e na planilha) e envie de novo: com datas diferentes, a "
+                "linha vira um cadastro novo.")
     return (f"“{nome_linha}” (turma {turma}) parece ser o mesmo aluno de: "
-            f"{nomes_candidatos} — mas a correspondência NÃO é segura. Nada foi "
-            "criado nem alterado nesta linha, para não abrir uma segunda ficha da "
+            f"{nomes_candidatos} — mas a correspondência NÃO é segura. {nada}, "
+            "para não abrir uma segunda ficha da "
             "mesma criança nem misturar duas crianças diferentes. Resolva em "
             "Alunos › Fundir duplicatas; se forem pessoas diferentes, preencha RA "
             "ou data de nascimento distintos na planilha e reimporte.")
+
+
+def aviso_parecido_do_ano_anterior(nome_linha: str, turma: str,
+                                   fichas: list[FichaCandidata], *,
+                                   previa: bool = False) -> str:
+    """A linha virou ficha NOVA, mas o nome se parece com o de ficha(s) do ANO ANTERIOR
+    sem matrícula no ano ativo (``Decisao.parecidos_ano_anterior``).
+
+    A regra não muda (o nome sozinho não atravessa o ano: a criança nova do 4º A não
+    herda a ficha de quem era do 4º A, G_VIRADA-7), mas a ficha nova não nasce calada:
+    se for a mesma criança (quem repetiu, ou passou de ano), a ficha antiga tem a conta
+    da plataforma e o histórico, e o aviso diz como juntá-las. "Fundir duplicatas" não
+    mostra quem está sem turma no ano; o caminho é a ficha ANTIGA (a pesquisa do topo a
+    acha quando está ativa; inativa, ``como_abrir_ficha_inativa``) › "Fundir com outro
+    aluno", cuja busca acha a nova (a partir da nova, a antiga não aparece)."""
+    def onde(f: FichaCandidata) -> str:
+        return f"no {f.turma} em {f.ano}" if f.turma and f.ano else "no ano anterior"
+
+    feito = "será cadastrado(a)" if previa else "foi cadastrado(a)"
+    junta = "não vai juntá-las" if previa else "não as juntou"
+    se = "Depois de gravar, se" if previa else "Se"
+    fundir = f"“Fundir com outro aluno” e escolha “{nome_linha}”"
+    porque = "junte as duas fichas para não separar o histórico e as contas das plataformas"
+    if len(fichas) == 1:
+        f = fichas[0]
+        inicio = (f"“{nome_linha}” (turma {turma}) {feito} como aluno novo, mas o nome se "
+                  f"parece com o de “{f.nome}”, ficha que estava {onde(f)} e não tem turma "
+                  "neste ano letivo. Nenhum dado das duas (RA ou data de nascimento) "
+                  f"confirma que é a mesma criança, e por isso a importação {junta}.")
+        if f.status == "ativo":
+            caminho = (f"{se} for a mesma criança (quem repetiu ou passou de ano), {porque}: "
+                       f"procure “{f.nome}” na pesquisa do topo da página, abra a ficha e, "
+                       f"nos três pontinhos, use {fundir} — é a partir da ficha antiga que "
+                       "a busca acha a nova.")
+        else:
+            caminho = (f"{como_abrir_ficha_inativa(f)} {se} for a mesma criança (quem "
+                       f"repetiu ou passou de ano), {porque}: na ficha antiga, nos três "
+                       f"pontinhos, use “Reativar” e, depois, {fundir}.")
+    else:
+        lista = [f"“{f.nome}” ({onde(f)})" for f in fichas]
+        inicio = (f"“{nome_linha}” (turma {turma}) {feito} como aluno novo, mas o nome se "
+                  "parece com o de fichas do ano anterior que não têm turma neste ano "
+                  f"letivo: {', '.join(lista[:-1])} e {lista[-1]}. Nenhum dado (RA ou data "
+                  "de nascimento) confirma que alguma é a mesma criança, e por isso a "
+                  f"importação {junta}.")
+        caminho = (f"{se} uma delas for a mesma criança (quem repetiu ou passou de ano), "
+                   f"{porque}: abra a ficha antiga e, nos três pontinhos, use {fundir} — é "
+                   "a partir da ficha antiga que a busca acha a nova. As fichas ativas "
+                   "aparecem na pesquisa do topo da página.")
+        for f in fichas:
+            if f.status != "ativo":
+                caminho += (f" {como_abrir_ficha_inativa(f)} Antes de fundir, use "
+                            "“Reativar” nos três pontinhos dela.")
+    return f"{inicio} {caminho} Se forem crianças diferentes, não é preciso fazer nada."

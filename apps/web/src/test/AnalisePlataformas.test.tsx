@@ -378,7 +378,12 @@ describe("Evolução SÓ da escola (o modo da ficha da escola)", () => {
     telaPlataformas("?escola=3");
     const escola = await screen.findByTestId("tabela-evolucao-escola");
     const primeiro = within(escola).getAllByRole("row")[1];
-    expect(within(primeiro).getAllByText(`sem dado (${TEXTO_SERIES_SUPRIMIDAS})`)).toHaveLength(4);
+    // Todas as séries com poucos alunos é PROTEÇÃO (G_ANALISE-2): "protegido", com o porquê na
+    // dica — não "sem dado (… para proteger as crianças)".
+    const celulas = within(primeiro).getAllByText("protegido");
+    expect(celulas).toHaveLength(4);
+    expect(celulas.every((c) => c.getAttribute("title") === TEXTO_SERIES_SUPRIMIDAS)).toBe(true);
+    expect(within(primeiro).queryByText(/sem dado/)).toBeNull();
     expect(screen.queryByTestId("evolucao-escola-sem-numero")).toBeNull();
     expect(screen.queryByTestId("motivos-evolucao-escola")).toBeNull();
   });
@@ -415,9 +420,10 @@ describe("Escolas no período (tela Escolas)", () => {
     semear();
     abrir();
     await screen.findByTestId("tabela-escolas-periodo");
-    // Alfa: o Matific inteiro sem dado — o porquê uma vez, mais a coleta.
+    // Alfa: o Matific inteiro escondido por poucos alunos medidos — "Protegido" (o nome da
+    // legenda), o porquê uma vez, mais a coleta.
     expect(screen.getByTestId("escola-periodo-2"))
-      .toHaveTextContent("Sem dado: menos de 5 alunos com dado desta plataforma no período");
+      .toHaveTextContent("Protegido: menos de 5 alunos com dado desta plataforma no período");
     // Delta: o acerto sem dado; o desempenho protegido (em complemento). A 1ª célula é a caixa
     // "Comparar" da tela Escolas.
     const delta = screen.getByTestId("escola-periodo-5");

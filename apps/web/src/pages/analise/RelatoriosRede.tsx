@@ -20,7 +20,8 @@ import { IconePastel, Mensagem, type TomPastel } from "../../components/ui";
 import { nomeArquivoCsv, type CelulaCsv, type TabelaCsv } from "../../lib/csvRanking";
 import {
   ROTULO_CATEGORIA, ROTULO_COBERTURA, ROTULO_ESTADO, ROTULO_NIVEL, ROTULO_POSICAO, ROTULO_SITUACAO, ROTULO_TENDENCIA,
-  avaliacaoPelaBaseGeral, coberturaDe, diaBR, estadoDoEixo, numeroBR, porNome, rotuloComponente, rotuloCobertura,
+  avaliacaoPelaBaseGeral, coberturaDe, diaBR, estadoDoEixo, numeroBR, numeroProtegido, porNome, rotuloComponente,
+  rotuloCobertura,
   rotuloEtapa, rotuloSerie, temPendencia, textoPendencia,
 } from "./formato";
 import type { MetricasElefante, MetricasMatific, RespostaIndicadoresRede, RespostaPlataformas } from "./tipos";
@@ -182,7 +183,7 @@ export function tabelaCsvAcompanhamento(d: RespostaDiagnostico, hoje?: Date): Ta
 /** Métrica de plataforma para o CSV: o número, ou "protegido"/"sem dado" escritos. */
 function metrica(v: number | null | undefined, campo: string, bloco: MetricasElefante | MetricasMatific | null): CelulaCsv {
   if (v != null) return v;
-  return (bloco?.metricas_protegidas ?? []).includes(campo) ? "protegido" : "sem dado";
+  return numeroProtegido(bloco, campo) ? "protegido" : "sem dado";
 }
 
 /** Uma linha por escola (ordem alfabética), as colunas só dos módulos contratados. Com uma

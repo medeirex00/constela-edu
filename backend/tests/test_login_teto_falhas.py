@@ -222,15 +222,15 @@ def test_teto_global_soma_os_ips_bloqueia_todos_e_alerta(db, escola_completa,
     assert {b.detalhes["motivo"] for b in bloqueios} == {"teto_global"}
 
 
-def test_limite_por_conta_e_ip_segue_igual_com_os_tetos_novos(db, escola_completa):
-    """O freio antigo continua: a 9ª falha na MESMA conta pelo mesmo IP dá 429 com
-    a mesma mensagem, bem antes do teto do IP."""
+def test_limite_por_conta_e_ip_recusa_com_mensagem_generica(db, escola_completa):
+    """O limite por conta e IP age antes do teto público sem anunciar a conta."""
     emails = _contas(db, escola_completa["escola"], 1)
     cli = TestClient(app)
-    codigos = [_login(cli, emails[0], ERRADA).status_code for _ in range(9)]
-    assert codigos == [401] * 8 + [429]
-    nona = _login(cli, emails[0], ERRADA)
-    assert nona.json()["detail"].startswith("Muitas tentativas. Aguarde ")
+    respostas = [_login(cli, emails[0], ERRADA) for _ in range(8)]
+    assert all(r.status_code == 401 for r in respostas)
+    nona = _login(cli, emails[0], SENHA)
+    assert nona.status_code == 401
+    assert nona.json() == respostas[0].json()
 
 
 # --- Achado 18: a quem pedir um link novo ---------------------------------------

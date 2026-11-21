@@ -28,16 +28,16 @@ Até esta rodada a configuração era `registerType: "autoUpdate"`:
 
 | Situação | O que acontece |
 |---|---|
-| App logado, pessoa usando (já tocou/digitou) | Aviso no canto: **"Nova versão do Constela disponível — Salve o que estiver editando: atualizar recarrega a página."** Botões **Atualizar agora** e **Depois**. Nada recarrega sem o clique. |
+| App logado, pessoa usando (já tocou/digitou) | Aviso no canto: **"Nova versão do Constela disponível — Salve o que estiver editando: atualizar recarrega a página."** Botões **Atualizar agora** e **Depois**. Enquanto o aviso espera numa aba servida pelo service worker, nada recarrega sem o clique: as telas dela seguem abrindo pela versão antiga, do cache. A página que veio da **rede** (1ª visita, Ctrl+Shift+R, plano B) mostra o mesmo aviso, mas é a exceção da última linha: ao abrir depois do deploy uma tela que ainda não tinha aberto, recarrega uma vez, sozinha. |
 | "Atualizar agora" | O service worker novo assume (`SKIP_WAITING`) e a página recarrega **uma vez**, já na versão nova. |
 | "Depois" | O aviso some. A versão nova entra na **próxima abertura** do app (ver linha abaixo). |
 | Abertura do app (F5, nova aba, ícone instalado) com versão nova esperando, nos primeiros 10 s e antes de qualquer toque | Troca direta, **sem cartão**: o pedido de troca sai 1 s depois de a página carregar e ela recarrega uma vez, já na nova. Se a pessoa tocar ou digitar antes da recarga, a troca é **cancelada** e vira o aviso acima (nada do que ela digitou se perde). **Um F5 comum basta — não precisa de hard refresh.** |
 | Página que veio da **rede** com versão esperando ao abrir: Ctrl+Shift+R, a recarga do plano B, o telão `/p/` (o service worker nunca serve esse HTML) | **Nada**: ela já é a versão mais nova que havia quando abriu. Antes ela tentava trocar e, com outra aba do Constela aberta segurando o service worker antigo, recarregava a cada 4 s até a outra aba fechar (medido: 23 recargas em 90 s). |
 | Telão `/p/…` e vitrine `/rede/p/…` | Troca e recarrega **sozinha** (sem formulário e sem ninguém para clicar). Sem aviso na TV. |
-| Outra aba aplicou a versão nova | Esta aba **não** recarrega sozinha: avisa "O Constela foi atualizado em outra aba. Recarregue esta página quando terminar o que está fazendo." com o botão **Recarregar**. |
+| Outra aba aplicou a versão nova | Esta aba **não** recarrega na hora: avisa "O Constela foi atualizado em outra aba. Recarregue esta página quando terminar o que está fazendo." com o botão **Recarregar**. Mas os arquivos da versão antiga já não existem: nem no cache do service worker novo, que passou a controlar esta aba, nem no servidor. Se a pessoa abrir uma tela que esta aba ainda não tinha aberto, ela recarrega **uma vez, sozinha**, já na versão nova, sem perder o login (o socorro da última linha); a tela de antes já estava sendo deixada. |
 | Procura por versão nova | A cada **1 hora**, ao **voltar para a aba** (se a última procura tiver 5+ min) e quando a **conexão volta**. Sem conexão, não procura. A versão que chega é vista pelo próprio registro do service worker (`updatefound`/`statechange`), não só pelos avisos do plugin: o workbox-window desliga o ouvinte dele na 1ª atualização "externa", e uma 1ª instalação que falhasse (rede da escola caiu, 5xx) deixava a aba e o telão sem ver nenhum deploy seguinte. O mesmo worker não vira aviso duas vezes (o "Depois" não volta a cada hora). A **1ª instalação** do service worker (1ª visita, nenhum worker ativo no registro) não é versão nova e é ignorada: no `installed` dela o Chromium ainda a mostra em `waiting` por um instante, e com o precache lento (186 arquivos, 3,8 MB: passar de 10 s é plausível na rede da escola) isso virava o aviso no `/login` e troca + plano B no telão e na vitrine. |
 | O service worker novo não assume em 4 s depois do pedido | Plano B: desregistra o service worker e recarrega (a página vem da rede). **Não apaga o cache do PWA**: outra aba aberta ainda roda a versão antiga com ele. Na troca **automática**, no máximo **uma vez a cada 10 min por aba** (marca `pwa_plano_b_em` na sessionStorage); barrado, o app volta ao aviso e o telão tenta de novo quando o intervalo passa. O clique em **Atualizar agora** não é barrado pela marca (cada clique é a pessoa pedindo; não há laço): numa página que veio da rede o worker novo nunca assume, e só o plano B a atualiza. |
-| Chunk de tela que sumiu no deploy (aba muito antiga) | Continua o socorro que já existia (`lib/atualizacao.ts`): limpa o cache e recarrega uma vez por sessão. |
+| Chunk de tela que sumiu no deploy: a aba do "atualizado em outra aba", ou a página que veio da rede (1ª visita, Ctrl+Shift+R, plano B), abre depois do deploy uma tela que ainda não tinha aberto | Socorro de `lib/atualizacao.ts`: desregistra o service worker e recarrega da rede, **uma vez por sessão**, já na versão nova (o login fica). **Não apaga o cache do PWA**, o mesmo cuidado do plano B: o cache é de todas as abas do navegador. Antes ele apagava, e a outra aba que esperava o clique na versão antiga recarregava sozinha na próxima tela, e a aba já na versão nova deixava de abrir sem internet até o próximo deploy. O botão **Recarregar** da tela "Algo deu errado" faz o mesmo. Evitar até esta recarga pediria manter os arquivos da versão anterior no servidor por um tempo depois do deploy (decisão de infraestrutura, não tomada). |
 
 O aviso tem `role="status"` (anuncia ao leitor de tela sem tirar o foco de quem
 digita) e fica fora do roteador e do `LimiteErro` — aparece até numa tela que
@@ -133,6 +133,11 @@ uma vez); o plano B fica para o caso raro.
   abrir de novo resolve (a troca acontece na abertura).
 - O telão da escola se atualiza sozinho em até 1 hora depois de um deploy (ou na
   hora, se a TV for religada).
+- "A página recarregou sozinha quando abri uma tela", logo depois de uma
+  atualização: é esperado na aba que mostrava "atualizado em outra aba" (ou na que
+  foi aberta pela primeira vez, ou com Ctrl+Shift+R, antes do deploy). Os arquivos da
+  versão anterior saíram do servidor; a página recarrega uma vez, já na versão nova, e
+  o login continua.
 
 ## Produção (nada foi feito) — a transição do 1º deploy
 

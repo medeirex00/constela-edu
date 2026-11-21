@@ -37,7 +37,9 @@ const FORMATOS = [
 // Calendário oficial dos bimestres e elegibilidade às premiações: a cópia única fica em
 // lib/calendarioBimestres.ts (o menu, o Ranking e a Visão Geral também usam). Os nomes
 // continuam exportados daqui para quem já importava desta página.
-import { bimestreDeHoje, participaDePremiacao } from "../lib/calendarioBimestres";
+import {
+  bimestreDeHoje, participaDePremiacao, semCalendarioOficial, useCalendarioBimestres,
+} from "../lib/calendarioBimestres";
 
 export { bimestreDeHoje, participaDePremiacao };
 
@@ -59,7 +61,7 @@ function SetaSelect() {
 }
 
 export default function Relatorios() {
-  const { escolaId, usuario } = useApp();
+  const { escolaId, escolaAtual, usuario } = useApp();
   const idExportacoes = useId();
   const idCertificados = useId();
   // Professor exporta só o superficial (ranking e alunos das turmas dele);
@@ -68,8 +70,15 @@ export default function Relatorios() {
     ["admin", "coordenador"].includes(usuario?.cargo ?? "");
   // Módulo fora do plano da rede: o Catálogo de Livros (Leitura) e os certificados da
   // plataforma não aparecem — o backend responderia 403 (o lote de certificados já
-  // filtrava assim).
-  const { leitura, matematica } = useModulos();
+  // filtrava assim). Vale o plano da ESCOLA selecionada (item de /escolas): o admin
+  // global recebe em /auth/me o catálogo inteiro, e numa escola de rede com um módulo
+  // só a tela oferecia o que a rede não contratou. Sem o plano na resposta, o do usuário.
+  const doUsuario = useModulos();
+  const planoDaEscola = escolaAtual?.modulos;
+  const leitura = planoDaEscola?.length ? planoDaEscola.includes("leitura") : doUsuario.leitura;
+  const matematica = planoDaEscola?.length
+    ? planoDaEscola.includes("matematica")
+    : doUsuario.matematica;
   const relatorios = (gestor
     ? RELATORIOS
     : RELATORIOS.filter((r) => r.tipo === "ranking" || r.tipo === "alunos"))
@@ -98,9 +107,16 @@ export default function Relatorios() {
   // Bimestre IMPRESSO na arte da plataforma. O backend cai no bimestre do MÊS de
   // emissão quando não recebe o parâmetro — e aí o mesmo aluno, com o mesmo dado,
   // recebe "3" num dia e "4" no seguinte se a entrega atravessa a virada. Quem
-  // emite escolhe; o padrão é o bimestre de hoje, para a tela não mudar nada
-  // para quem não liga para isso.
-  const [bimestre, setBimestre] = useState(String(bimestreDeHoje(new Date())));
+  // emite escolhe; o padrão é o bimestre de hoje pelo calendário OFICIAL, que vem
+  // do backend. Ano sem calendário conhecido não tem "de hoje": o seletor abre
+  // vazio e os modelos da plataforma esperam a escolha — antes abria no 1º (de
+  // 2027 em diante, o ano todo) e esse número ia impresso.
+  const calendario = useCalendarioBimestres(escolaId);
+  const hoje = new Date();
+  const sugerido = bimestreDeHoje(hoje, calendario);
+  const [bimestreEscolhido, setBimestre] = useState<string | null>(null);
+  const bimestre = bimestreEscolhido ?? (sugerido != null ? String(sugerido) : "");
+  const semCalendario = semCalendarioOficial(hoje, calendario);
   // O erro aparece PERTO do botão que o causou: o da exportação sobre os cartões
   // de exportação; o do certificado (409/422 com o motivo do backend) dentro do
   // cartão de certificados — antes ficava no topo, fora da vista de quem clicou.
@@ -123,20 +139,25 @@ export default function Relatorios() {
     }
   }
 
+  // As artes das plataformas imprimem o bimestre (e só saem com ele escolhido); o
+  // Geral não imprime.
   const todosModelos: {
     chave: string; rotulo: string; detalhe: string; icone: LucideIcon; tom: TomPastel; caminho: string;
+    imprimeBimestre: boolean;
   }[] = [
     {
       chave: "cert-geral", rotulo: "Geral", detalhe: "turma, nota e posição", icone: Award, tom: "ambar",
-      caminho: `/escolas/${escolaId}/certificados/${alunoId}`,
+      caminho: `/escolas/${escolaId}/certificados/${alunoId}`, imprimeBimestre: false,
     },
     {
       chave: "cert-elefante", rotulo: "Elefante Letrado", detalhe: "arte oficial · leitura", icone: BookOpen,
       tom: "violeta", caminho: `/escolas/${escolaId}/certificados/${alunoId}?modelo=elefante&bimestre=${bimestre}`,
+      imprimeBimestre: true,
     },
     {
       chave: "cert-matific", rotulo: "Matific", detalhe: "arte oficial · matemática", icone: Calculator,
       tom: "teal", caminho: `/escolas/${escolaId}/certificados/${alunoId}?modelo=matific&bimestre=${bimestre}`,
+      imprimeBimestre: true,
     },
   ];
   const modelos = todosModelos.filter(
@@ -251,6 +272,7 @@ export default function Relatorios() {
                 <span className="relative block">
                   <select className={ESTILO_SELECT} value={bimestre}
                           onChange={(e) => setBimestre(e.target.value)}>
+                    {bimestre === "" && <option value="" disabled>Selecione…</option>}
                     {[1, 2, 3, 4].map((b) => (
                       <option key={b} value={b}>{b}º Bimestre</option>
                     ))}
@@ -259,6 +281,13 @@ export default function Relatorios() {
                 </span>
               </Campo>
             </div>
+            {sugerido == null && (
+              <p className="text-xs text-zinc-500 dark:text-zinc-400">
+                {semCalendario
+                  ? `O calendário oficial de ${hoje.getFullYear()} não está cadastrado no sistema: escolha o bimestre que o certificado vai afirmar.`
+                  : "Escolha o bimestre que o certificado vai afirmar."}
+              </p>
+            )}
             {foraDaPremiacao > 0 && (
               <p className="text-xs text-zinc-500 dark:text-zinc-400">
                 As premiações são do <strong>1º ao 5º ano</strong>;{" "}
@@ -282,7 +311,7 @@ export default function Relatorios() {
                       aria-label={rotulo}
                       aria-describedby={idDetalhe}
                       aria-busy={ocupado === m.chave}
-                      disabled={!alunoId || ocupado !== ""}
+                      disabled={!alunoId || ocupado !== "" || (m.imprimeBimestre && !bimestre)}
                       onClick={() => baixar(m.caminho, m.chave)}
                       className="flex min-w-0 items-center gap-3 rounded-2xl border border-zinc-200 bg-white p-4 text-left shadow-cartao transition-colors hover:border-indigo-300 hover:bg-indigo-50/40 disabled:cursor-not-allowed disabled:opacity-60 disabled:hover:border-zinc-200 disabled:hover:bg-white dark:border-zinc-700 dark:bg-zinc-900 dark:hover:border-indigo-500/50 dark:hover:bg-indigo-500/10 dark:disabled:hover:border-zinc-700 dark:disabled:hover:bg-zinc-900"
                     >
@@ -297,6 +326,11 @@ export default function Relatorios() {
               </div>
               {!alunoId && !carregandoAlunos && (
                 <p className="mt-2 text-xs text-zinc-500 dark:text-zinc-400">Escolha um aluno para liberar os modelos.</p>
+              )}
+              {alunoId && !bimestre && modelos.some((m) => m.imprimeBimestre) && (
+                <p className="mt-2 text-xs text-zinc-500 dark:text-zinc-400">
+                  Escolha o bimestre para liberar os modelos das plataformas.
+                </p>
               )}
             </div>
 
@@ -317,8 +351,10 @@ export default function Relatorios() {
                 </p>
                 <p>
                   O <strong>bimestre</strong> é o período que o documento afirma, e não a data em que
-                  ele sai: dá para emitir hoje um certificado do 3º bimestre. O seletor abre no
-                  bimestre de hoje pelo calendário oficial, mas a sua escolha é que vale.
+                  ele sai: dá para emitir hoje um certificado do 3º bimestre.{" "}
+                  {sugerido != null
+                    ? "O seletor abre no bimestre de hoje pelo calendário oficial, mas a sua escolha é que vale."
+                    : "Sem o calendário oficial do ano no sistema, o seletor abre vazio: a escolha é sua."}
                 </p>
               </div>
             </details>

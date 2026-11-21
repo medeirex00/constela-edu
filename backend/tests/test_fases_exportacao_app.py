@@ -21,7 +21,7 @@ def test_exportacao_do_ranking_geral_sem_a_fase(cliente, cenario):  # noqa: F811
     texto = r.content.decode("utf-8-sig")
     assert "Fase Teste" not in texto
     linhas = list(csv.reader(io.StringIO(texto), delimiter=";" if ";" in texto else ","))
-    assert len(linhas) - 1 == 6        # 3 do fixture-base (3º Ano A) + 3 do 4º Ano
+    assert len(linhas) - 1 == 3        # os 3 do 4º Ano; os 3 do fixture-base não têm retrato nenhum (DEC-19)
 
 
 def test_cartaz_geral_gera_sem_a_fase(cliente, cenario):  # noqa: F811

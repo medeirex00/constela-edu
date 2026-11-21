@@ -8,15 +8,21 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 
 import { cifrar, decifrar } from "./cifra";
 
+let ultimaGravacao = Promise.resolve();
+
+function alterarDisco(alterar: () => Promise<void>): Promise<void> {
+  const resultado = ultimaGravacao.then(alterar);
+  ultimaGravacao = resultado.catch(() => undefined);
+  return resultado;
+}
+
 export const armazenamentoCifrado = {
   getItem: async (chave: string): Promise<string | null> => {
     const bruto = await AsyncStorage.getItem(chave);
     return bruto === null ? null : decifrar(bruto);
   },
-  setItem: async (chave: string, valor: string): Promise<void> => {
-    await AsyncStorage.setItem(chave, await cifrar(valor));
-  },
-  removeItem: async (chave: string): Promise<void> => {
-    await AsyncStorage.removeItem(chave);
-  },
+  setItem: (chave: string, valor: string): Promise<void> =>
+    alterarDisco(async () => { await AsyncStorage.setItem(chave, await cifrar(valor)); }),
+  removeItem: (chave: string): Promise<void> =>
+    alterarDisco(() => AsyncStorage.removeItem(chave)),
 };

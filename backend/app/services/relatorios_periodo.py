@@ -115,14 +115,18 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
+from functools import cache
 
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from app.core.tempo import hoje_br, para_br
-from app.models import (Aluno, Escola, EventoAluno, Leitura, Matricula,
+from app.models import (Aluno, Escola, EventoAluno, Importacao, Leitura, Matricula,
                         SnapshotElefante, SnapshotMatific, Turma)
+from app.models.plataformas import IMPORTACAO_SEM_QUESTOES
 from app.services import matific_destaque, periodos
+from app.services.evolucao import (IMPORTACAO_AJUSTE_MANUAL, sem_ajustes_superados_matific,
+                                   sem_ajustes_superados_vitalicio)
 # A faixa de anos aceita é UMA só para o relatório e para a análise (que mede com as
 # funções deste módulo): o pacote ``analise`` só a declara — o ``__init__`` dele não
 # importa nada daqui, então não há ciclo.
@@ -243,9 +247,8 @@ def resolver_janela(preset: str, ano_letivo: int, *,
             raise RelatorioInvalido(
                 "Período personalizado exige data inicial E data final.")
         if inicio > fim:
-            raise RelatorioInvalido(
-                f"A data inicial ({inicio.strftime('%d/%m/%Y')}) é posterior à "
-                f"final ({fim.strftime('%d/%m/%Y')}) — inverta as duas.")
+            # A frase da fonte única (``periodos``): a mesma do 422 das outras rotas.
+            raise RelatorioInvalido(periodos.mensagem_datas_invertidas(inicio, fim))
     # Dia de BRASÍLIA (não o relógio do servidor, em UTC): depois das 21h do último
     # dia do mês, `date.today()` já virava o mês e "mês anterior" pulava um mês.
     ini, fi, rotulo = periodos.resolver(
@@ -256,12 +259,19 @@ def resolver_janela(preset: str, ano_letivo: int, *,
 def _coorte(db: Session, escola_id: int, ano: int, *,
             turma_id: int | None = None,
             aluno_id: int | None = None,
-            turma_ids: list[int] | None = None) -> dict[int, dict]:
+            turma_ids: list[int] | None = None,
+            populacao: periodos.PopulacaoDoPeriodo | None = None) -> dict[int, dict]:
     """População ATIVA MATRICULADA no ano, já recortada pelo escopo. UMA query.
 
     ``turma_ids`` é o recorte de PERMISSÃO (professor restrito às turmas dele),
     não de escopo: ele se aplica também ao relatório "da escola", senão um
     professor pediria escopo=escola e receberia a escola inteira.
+
+    ``populacao`` de OUTRO ano letivo (período inteiro num ano já encerrado): a turma
+    do escopo e as do professor são as de agora, as únicas que os seletores e as
+    permissões conhecem — elas escolhem QUEM entra pelas matrículas nelas
+    (``PopulacaoDoPeriodo.alunos_das_turmas``), e cada criança segue com a turma e a
+    série do ano ``ano``.
     """
     consulta = (
         select(Aluno.id, Aluno.nome, Turma.id, Turma.nome, Turma.ano_escolar,
@@ -270,12 +280,17 @@ def _coorte(db: Session, escola_id: int, ano: int, *,
         .join(Turma, Matricula.turma_id == Turma.id)
         .where(Aluno.escola_id == escola_id, Aluno.status == "ativo",
                Matricula.ano_letivo == ano))
+    outro_ano = populacao is not None and populacao.outro_ano
     if turma_id is not None:
-        consulta = consulta.where(Turma.id == turma_id)
+        consulta = consulta.where(
+            Aluno.id.in_(populacao.alunos_das_turmas(escola_id, [turma_id])) if outro_ano
+            else Turma.id == turma_id)
     if aluno_id is not None:
         consulta = consulta.where(Aluno.id == aluno_id)
     if turma_ids is not None:
-        consulta = consulta.where(Turma.id.in_(turma_ids))
+        consulta = consulta.where(
+            Aluno.id.in_(populacao.alunos_das_turmas(escola_id, turma_ids)) if outro_ano
+            else Turma.id.in_(turma_ids))
     return {aid: {"nome": nome, "turma_id": tid, "turma": tnome,
                   "ano_escolar": serie, "turno": turno}
             for aid, nome, tid, tnome, serie, turno in db.execute(consulta).all()}
@@ -426,14 +441,42 @@ def _relidos(db: Session, escola_id: int, coorte: dict[int, dict],
     return [(aid, int(n or 0)) for aid, n in db.execute(consulta).all()]
 
 
-# Uma coleta a até ``TOLERANCIA_BORDA`` de uma borda do período é a MEDIDA dessa
-# borda. A agenda diária roda à 0h de Brasília (03:00 UTC) e grava o instante em
-# que a importação termina — medido em produção (backup de 05/10): 25.764
-# retratos do Elefante entre 00:05 e 00:50 —, e esse retrato mede o dia
-# ANTERIOR. Sem a tolerância, a coleta de 01/09 00:10 seria "depois do início"
-# e a de 01/10 00:10 "depois do fim": setembro sairia com um dia trocado (31/08
-# dentro, 30/09 fora).
+# Uma coleta perto de uma borda do período é a MEDIDA dessa borda: de
+# ``TOLERANCIA_BORDA`` ANTES dela até ``tolerancia_depois_da_borda()`` DEPOIS. A coleta
+# da MADRUGADA grava o instante em que a importação termina e mede o dia ANTERIOR —
+# sem a tolerância, a de 01/09 seria "depois do início" e a de 01/10 "depois do fim":
+# setembro sairia com um dia trocado (31/08 dentro, 30/09 fora). As coletas antigas
+# rodavam à 0h de Brasília (backup de 05/10: 25.764 retratos do Elefante entre 00:05
+# e 00:50); desde a correção de fuso (``sync/fuso.py``), a agenda diária automática
+# roda às ``HORA_AGENDA_AUTOMATICA`` (03:00) de Brasília — a janela de depois cobre as
+# duas. ANTES da borda continua 1 h (a partir das 23h da véspera); coleta mais cedo que
+# isso não mede a borda.
 TOLERANCIA_BORDA = timedelta(hours=1)
+
+
+@cache
+def tolerancia_depois_da_borda() -> timedelta:
+    """Até quanto DEPOIS da meia-noite de uma borda a coleta ainda a mede: a hora da
+    agenda diária automática da sincronização mais ``TOLERANCIA_BORDA`` (a duração
+    da coleta). Derivada da agenda, e não de um literal: mudou a hora padrão da
+    coleta da madrugada, a régua do relatório acompanha. Agenda que não é de
+    madrugada (meio-dia em diante) não estica a janela.
+
+    Importação tardia: o relatório não carrega o módulo de sincronização ao ser
+    importado (a agenda só é lida na primeira conta)."""
+    from app.sync.prerequisitos import HORA_AGENDA_AUTOMATICA
+
+    hora, minuto = (int(parte) for parte in HORA_AGENDA_AUTOMATICA.split(":"))
+    if hora >= 12:
+        return TOLERANCIA_BORDA
+    return timedelta(hours=hora, minutes=minuto) + TOLERANCIA_BORDA
+
+
+def _mede_a_borda(instante_br: datetime, borda: datetime) -> bool:
+    """A coleta em ``instante_br`` é a medida da ``borda`` (os dois em Brasília)?"""
+    return -TOLERANCIA_BORDA <= instante_br - borda <= tolerancia_depois_da_borda()
+
+
 # Primeira coleta "zerada" só prova contador zero se a conta for de fato nova:
 # os importadores gravam 0 nas questões quando o relatório não traz a coluna
 # (``importacoes._importar_elefante_resumo``) — com livros ou tempo já
@@ -502,7 +545,7 @@ def _diferenca_de_retratos(serie: list, janela: Janela, campos: tuple[str, ...],
     BRASÍLIA (a janela vem em dias de Brasília; a coleta é gravada em UTC).
 
     BORDA DO INÍCIO (``_inicio``):
-      * ``exato``    — coleta a até ``TOLERANCIA_BORDA`` do início: a medida dele;
+      * ``exato``    — coleta na tolerância do início (``_mede_a_borda``): a medida dele;
       * ``antes``    — só há coleta bem antes: o número INCLUI o que veio entre
         ela e o início (``_antecedencia``) — período AMPLIADO, nunca "completo";
       * ``contador`` — o contador parte do zero (``todo o histórico``, ou conta
@@ -512,7 +555,7 @@ def _diferenca_de_retratos(serie: list, janela: Janela, campos: tuple[str, ...],
         reconstruível). Nunca se zera a base às cegas: num contador vitalício,
         a vida inteira viraria "ganho do período".
     BORDA DO FIM (``_fim``):
-      * ``exato``        — coleta a até ``TOLERANCIA_BORDA`` do fim: a medida dele;
+      * ``exato``        — coleta na tolerância do fim (``_mede_a_borda``): a medida dele;
       * ``em_andamento`` — período que inclui hoje: vale a coleta mais recente,
         se ela é de hoje;
       * ``antes``        — a última coleta é anterior ao fim: o que veio depois
@@ -532,7 +575,7 @@ def _diferenca_de_retratos(serie: list, janela: Janela, campos: tuple[str, ...],
     medida_fim = None
     if not aberto:
         fim_excl = janela.fim + timedelta(microseconds=1)
-        perto = [p for p in pontos if abs(p.br - fim_excl) <= tol]
+        perto = [p for p in pontos if _mede_a_borda(p.br, fim_excl)]
         if perto:
             medida_fim = min(perto, key=lambda p: (abs(p.br - fim_excl), p.br))
     if not dentro and medida_fim is None:
@@ -549,7 +592,7 @@ def _diferenca_de_retratos(serie: list, janela: Janela, campos: tuple[str, ...],
     if ini is None:
         base, ini_estado = None, "contador"      # todo o histórico: o acumulado inteiro
     else:
-        perto = [p for p in pontos if abs(p.br - ini) <= tol and p.br <= atual.br]
+        perto = [p for p in pontos if _mede_a_borda(p.br, ini) and p.br <= atual.br]
         antes = [p for p in pontos if p.br < ini - tol]
         primeiro = dentro[0] if dentro else atual
         if perto:
@@ -635,13 +678,19 @@ def _cobertura(janela: Janela, hoje: date | None, intervalos: list[dict],
                sem_coleta_no_periodo: int = 0,
                coleta_interrompida: int = 0,
                turmas_sem_coleta: list[dict] | None = None,
-               acumulado_na_primeira_coleta: int | None = None) -> dict | None:
+               acumulado_na_primeira_coleta: int | None = None,
+               questoes_nao_vieram: int = 0) -> dict | None:
     """PERÍODO PEDIDO × COBERTURA DAS COLETAS de um número que vem de diferença
     entre retratos. ``None`` quando ninguém tem retrato no período.
 
     ``intervalos``: um por aluno MEDIDO, com ``base``/``atual`` (UTC) e os
     estados das bordas (``inicio``: exato|antes|contador|depois|ano_letivo|
-    regra_oficial; ``fim``: exato|em_andamento|antes|regra_oficial).
+    regra_oficial; ``fim``: exato|em_andamento|antes|regra_oficial) e, no
+    Elefante, ``fim_sem_questoes`` (S9: o fim falta porque a coleta que o mediria
+    veio sem as questões — conta em ``questoes_nao_vieram``, não em
+    ``alunos_sem_fim``) e ``inicio_sem_questoes`` (S9 no início: conta em
+    ``alunos_inicio_sem_questoes``/``..._sem_base``, não em ``alunos_ampliados`` nem
+    em ``alunos_sem_inicio``).
 
     ``status``:
       * ``completa``      — todo aluno medido nas duas bordas;
@@ -652,18 +701,33 @@ def _cobertura(janela: Janela, hoje: date | None, intervalos: list[dict],
         intervalo medido, ou há aluno cuja coleta PAROU antes do período
         (``coleta_interrompida``), ou há turma já coletada sem nenhuma coleta na
         janela (``turmas_sem_coleta``) — nunca "completa" somando só quem foi
-        coletado;
+        coletado; também quando a coleta de algum aluno no período veio SEM as
+        questões (``questoes_nao_vieram``, S9): ela não mede a borda, e a conta
+        dele vai só até a coleta anterior (ou fica sem número);
       * ``regra_oficial`` — (Matific) o número é o da regra oficial e as bordas
         não são verificadas aqui: nunca se afirma "completo";
       * ``sem_intervalo`` — ninguém tem duas pontas: não há número.
     Datas do PERÍODO em dias de Brasília; instantes de COLETA em UTC.
     """
     if not (intervalos or sem_intervalo or regrediu or sem_coleta_no_periodo
-            or coleta_interrompida):
+            or coleta_interrompida or questoes_nao_vieram):
         return None
     sem_inicio = [i for i in intervalos if i["inicio"] in ("depois", "ano_letivo")]
     sem_fim = [i for i in intervalos if i["fim"] == "antes"]
+    # "A última coleta é de X" (``alunos_sem_fim``, ``coleta_fim_mais_cedo``): só quem
+    # NÃO tem coleta depois de X no período. O fim que falta porque a coleta seguinte
+    # veio sem as questões (S9, ``fim_sem_questoes``) já é dito por
+    # ``alunos_questoes_nao_vieram`` — cada aluno numa causa só.
+    ultima_antes = [i for i in sem_fim if not i.get("fim_sem_questoes")]
     ampliados = [i for i in intervalos if i["inicio"] == "antes"]
+    # A coleta do INÍCIO veio sem as questões (S9, ``inicio_sem_questoes``): houve coleta,
+    # então "não há coleta perto do início" (``alunos_ampliados``) e "sem coleta no
+    # início" (``alunos_sem_inicio``) não falam desses alunos — o aviso próprio diz de
+    # onde a conta partiu. O status e ``inicio_coberto`` seguem as bordas de fato.
+    ampliados_sq = [i for i in ampliados if i.get("inicio_sem_questoes")]
+    ampliados_outros = [i for i in ampliados if not i.get("inicio_sem_questoes")]
+    sem_inicio_sq = [i for i in sem_inicio if i.get("inicio_sem_questoes")]
+    sem_inicio_outros = [i for i in sem_inicio if not i.get("inicio_sem_questoes")]
     oficiais = [i for i in intervalos if "regra_oficial" in (i["inicio"], i["fim"])]
     completos = [i for i in intervalos
                  if i["inicio"] in ("exato", "contador")
@@ -673,7 +737,7 @@ def _cobertura(janela: Janela, hoje: date | None, intervalos: list[dict],
     if not intervalos:
         status = "sem_intervalo"
     elif (sem_inicio or sem_fim or sem_intervalo or regrediu or sem_coleta_no_periodo
-          or coleta_interrompida or turmas_sem_coleta):
+          or coleta_interrompida or turmas_sem_coleta or questoes_nao_vieram):
         status = "parcial"
     elif oficiais:
         status = "regra_oficial"
@@ -681,7 +745,19 @@ def _cobertura(janela: Janela, hoje: date | None, intervalos: list[dict],
         status = "ampliada"
     else:
         status = "completa"
-    antecedencias = [i["antecedencia"] for i in ampliados if i.get("antecedencia")]
+    def _horas(grupo: list[dict]) -> int | None:
+        antecedencias = [i["antecedencia"] for i in grupo if i.get("antecedencia")]
+        return (round(max(antecedencias).total_seconds() / 3600)
+                if antecedencias else None)
+
+    def _base_mais_antiga(grupo: list[dict]) -> str | None:
+        bases_do_grupo = [i["base"] for i in grupo if i["base"] is not None]
+        return min(bases_do_grupo).isoformat() if bases_do_grupo else None
+
+    def _base_mais_tardia(grupo: list[dict]) -> str | None:
+        bases_do_grupo = [i["base"] for i in grupo if i["base"] is not None]
+        return max(bases_do_grupo).isoformat() if bases_do_grupo else None
+
     fim_efetivo = _fim_efetivo(janela, hoje)
     return {
         "regra": regra,
@@ -690,12 +766,10 @@ def _cobertura(janela: Janela, hoje: date | None, intervalos: list[dict],
         "periodo_fim_efetivo": fim_efetivo.isoformat() if fim_efetivo else None,
         "em_andamento": _periodo_aberto(janela, hoje),
         "coleta_inicio": min(bases).isoformat() if bases else None,
-        "coleta_inicio_mais_tardio": (max(i["base"] for i in sem_inicio
-                                          if i["base"] is not None).isoformat()
-                                      if any(i["base"] for i in sem_inicio) else None),
+        "coleta_inicio_mais_tardio": _base_mais_tardia(sem_inicio_outros),
         "coleta_fim": max(atuais).isoformat() if atuais else None,
-        "coleta_fim_mais_cedo": (min(i["atual"] for i in sem_fim).isoformat()
-                                 if sem_fim else
+        "coleta_fim_mais_cedo": (min(i["atual"] for i in ultima_antes).isoformat()
+                                 if ultima_antes else
                                  (min(atuais).isoformat() if atuais else None)),
         "inicio_coberto": bool(intervalos) and not sem_inicio,
         "fim_coberto": bool(intervalos) and not sem_fim,
@@ -703,15 +777,25 @@ def _cobertura(janela: Janela, hoje: date | None, intervalos: list[dict],
         # (Matific) base nula numa janela que começa antes de 01/01: o contador é
         # do ano, então o que veio antes da virada não entra.
         "inicio_do_contador_anual": any(i["inicio"] == "ano_letivo" for i in intervalos),
-        "antecedencia_max_horas": (round(max(antecedencias).total_seconds() / 3600)
-                                   if antecedencias else None),
+        # de "não há coleta perto do início" (sem os da coleta do início sem questões)
+        "antecedencia_max_horas": _horas(ampliados_outros),
+        "coleta_base_ampliados": _base_mais_antiga(ampliados_outros),
         "status": status,
         "completa": status == "completa",
         "alunos_cobertura_completa": len(completos),
         "alunos_cobertura_parcial": len({id(i) for i in (*sem_inicio, *sem_fim)}),
-        "alunos_sem_inicio": len(sem_inicio),
-        "alunos_sem_fim": len(sem_fim),
-        "alunos_ampliados": len(ampliados),
+        "alunos_sem_inicio": len(sem_inicio_outros),
+        "alunos_sem_fim": len(ultima_antes),
+        "alunos_ampliados": len(ampliados_outros),
+        # (Elefante, S9) a coleta do INÍCIO veio sem as questões. Com uma coleta
+        # anterior, a conta parte dela e INCLUI o intervalo até o início (o status é
+        # 'ampliada'); sem ela, começa na primeira coleta com as questões no período e o
+        # que veio antes dela fica fora (o status é 'parcial').
+        "alunos_inicio_sem_questoes": len(ampliados_sq),
+        "coleta_base_inicio_sem_questoes": _base_mais_antiga(ampliados_sq),
+        "antecedencia_inicio_sem_questoes_horas": _horas(ampliados_sq),
+        "alunos_inicio_sem_questoes_sem_base": len(sem_inicio_sq),
+        "primeira_coleta_inicio_sem_questoes": _base_mais_tardia(sem_inicio_sq),
         "alunos_sem_intervalo": sem_intervalo,
         # dos "sem intervalo": a única coleta do período é a que mede o INÍCIO
         # (ex.: dia 1º, antes da coleta seguinte) — "nenhuma antes" seria falso
@@ -730,12 +814,19 @@ def _cobertura(janela: Janela, hoje: date | None, intervalos: list[dict],
         # tem coleta no início: o histórico existe na plataforma, mas o
         # contador não diz quando foi feito — por isso fica fora da conta.
         "acumulado_na_primeira_coleta": acumulado_na_primeira_coleta,
+        # (Elefante, S9) alunos cuja coleta no período veio SEM as questões (a
+        # plataforma deixou de mandá-las): ela não serve de borda, e a conta deles
+        # vai só até a coleta anterior — ou fica sem número
+        "alunos_questoes_nao_vieram": questoes_nao_vieram,
     }
 
 
 def _retratos(db: Session, escola_id: int, coorte: dict[int, dict], modelo
               ) -> dict[int, list]:
-    """Série de retratos por aluno. UMA query; sem N+1."""
+    """Série de retratos por aluno. UMA query; sem N+1.
+
+    MATIFIC: sem o ajuste manual que uma coleta posterior do mesmo ano desmentiu
+    (``matific_destaque.sem_ajustes_superados``) — a mesma série das premiações."""
     if not coorte:
         return {}
     series: dict[int, list] = {}
@@ -744,7 +835,56 @@ def _retratos(db: Session, escola_id: int, coorte: dict[int, dict], modelo
                                  modelo.aluno_id.in_(coorte.keys()))
             .order_by(modelo.aluno_id, modelo.data_referencia, modelo.id)).scalars():
         series.setdefault(snap.aluno_id, []).append(snap)
+    if modelo is SnapshotMatific:
+        return sem_ajustes_superados_matific(db, escola_id, series)
     return series
+
+
+def _retratos_das_questoes(db: Session, escola_id: int, coorte: dict[int, dict]
+                           ) -> tuple[dict[int, list], dict[int, list]]:
+    """(retratos que MEDEM as questões, retratos que não medem) do Elefante, por
+    aluno. UMA query.
+
+    Não medem: os gravados por uma sincronização em que as questões não vieram da
+    plataforma (S9; ``Importacao.status == IMPORTACAO_SEM_QUESTOES``). Quem leu um
+    livro novo ganhou ali um retrato com as questões da coleta ANTERIOR e a data de
+    agora: usado como borda, ele dava "0 no período" com cobertura completa.
+
+    Nem o AJUSTE MANUAL que uma coleta posterior desmentiu
+    (``evolucao.sem_ajustes_superados_vitalicio``, a regra única do contador vitalício
+    do Elefante — a da série da Evolução, da gamificação, dos insights e da Análise):
+    ele sai da série, como o do Matific nas premiações. O ajuste vale, como base e como
+    estado atual, só até a próxima coleta não manual, sem recorte por ano; e só a coleta
+    que MEDE as questões o desmente — a regra roda sobre os retratos válidos, já sem os
+    da S9."""
+    if not coorte:
+        return {}, {}
+    validos: dict[int, list] = {}
+    sem_questoes: dict[int, list] = {}
+    manuais: set[int] = set()   # ids das importações de ajuste manual
+    for snap, status, tipo in db.execute(
+            select(SnapshotElefante, Importacao.status, Importacao.tipo)
+            .outerjoin(Importacao, Importacao.id == SnapshotElefante.importacao_id)
+            .where(SnapshotElefante.escola_id == escola_id,
+                   SnapshotElefante.aluno_id.in_(coorte.keys()))
+            .order_by(SnapshotElefante.aluno_id, SnapshotElefante.data_referencia,
+                      SnapshotElefante.id)).all():
+        alvo = sem_questoes if status == IMPORTACAO_SEM_QUESTOES else validos
+        alvo.setdefault(snap.aluno_id, []).append(snap)
+        if tipo == IMPORTACAO_AJUSTE_MANUAL:
+            manuais.add(snap.importacao_id)
+    if manuais:
+        validos = {aid: sem_ajustes_superados_vitalicio(serie, manuais)
+                   for aid, serie in validos.items()}
+    return validos, sem_questoes
+
+
+def _bordas(ganho: dict | None) -> tuple | None:
+    """O que decide a conta de um aluno: as duas coletas e o estado das bordas."""
+    if ganho is None:
+        return None
+    return (ganho["_data_base"], ganho["_data_atual"], ganho["_inicio"], ganho["_fim"],
+            ganho["_medido"])
 
 
 def _matific(db: Session, escola_id: int, coorte: dict[int, dict], janela: Janela,
@@ -822,7 +962,8 @@ def _intervalo_matific(janela: Janela, ini_ano: datetime, ganho) -> dict | None:
     if base is None:
         inicio = ("contador" if janela.inicio is not None and janela.inicio >= ini_ano
                   else "ano_letivo")
-    elif janela.inicio is not None and _br(base) > janela.inicio + TOLERANCIA_BORDA:
+    elif (janela.inicio is not None
+          and _br(base) > janela.inicio + tolerancia_depois_da_borda()):
         # a base oficial é uma coleta bem DENTRO do período (comparado em
         # Brasília): não havia coleta anterior, e o começo ficou de fora
         inicio = "depois"
@@ -832,15 +973,34 @@ def _intervalo_matific(janela: Janela, ini_ano: datetime, ganho) -> dict | None:
             "antecedencia": None}
 
 
+def _do_periodo_em_diante(retratos: list, janela: Janela) -> list:
+    """Os retratos que não são de ANTES do período: a partir do início pedido menos
+    ``TOLERANCIA_BORDA`` (a coleta que mede o início entra), na régua de
+    ``_diferenca_de_retratos`` (Brasília)."""
+    if janela.inicio is None:
+        return retratos
+    limite = janela.inicio - TOLERANCIA_BORDA
+    return [s for s in retratos if _br(_sem_tz(s.data_referencia)) >= limite]
+
+
 def _elefante_questoes(db: Session, escola_id: int, coorte: dict[int, dict],
                        janela: Janela, bloco: BlocoElefante,
                        por_aluno: dict[int, dict], hoje: date | None = None) -> None:
-    """Questões do Elefante: só existem como acumulado no retrato."""
-    series = _retratos(db, escola_id, coorte, SnapshotElefante)
+    """Questões do Elefante: só existem como acumulado no retrato.
+
+    O retrato gravado por uma sincronização em que as questões não vieram (S9) não
+    serve de borda (``_retratos_das_questoes``): a conta do aluno vai até a coleta
+    anterior, ou fica sem número. Quem foi afetado por isso — sem ele, as bordas
+    seriam outras — entra em ``alunos_questoes_nao_vieram`` e a cobertura não é
+    "completa"; não é contado como "sem coleta", lacuna nem "uma coleta só". O ajuste
+    manual que a coleta seguinte desmentiu também não é borda
+    (``evolucao.sem_ajustes_superados_vitalicio``): a conta vai de coleta a coleta."""
+    campos = ("questoes_tentativas", "questoes_acertos")
+    series, sem_questoes = _retratos_das_questoes(db, escola_id, coorte)
     tentativas = acertos = 0
     sem = 0
     sem_intervalo = so_inicio = regrediu = sem_coleta = acumulado_antes = 0
-    interrompida = 0
+    interrompida = nao_vieram = 0
     bases: list[datetime] = []
     atuais: list[datetime] = []
     intervalos: list[dict] = []
@@ -855,34 +1015,66 @@ def _elefante_questoes(db: Session, escola_id: int, coorte: dict[int, dict],
             "turma_id": info["turma_id"], "turma": info["turma"], "alunos": 0,
             "com_coleta": 0, "ja_coletada": False})
         turma["alunos"] += 1
-        turma["ja_coletada"] = turma["ja_coletada"] or bool(series.get(aid))
-        ganho = _diferenca_de_retratos(
-            series.get(aid, []), janela,
-            ("questoes_tentativas", "questoes_acertos"), hoje=hoje)
+        serie = series.get(aid, [])
+        excluidos = sem_questoes.get(aid, [])
+        turma["ja_coletada"] = turma["ja_coletada"] or bool(serie) or bool(excluidos)
+        ganho = _diferenca_de_retratos(serie, janela, campos, hoje=hoje)
+        # A coleta sem questões explica a conta deste aluno? Só quando, lida, ela
+        # mediria o FIM que falta (a conta vai só até a coleta anterior) ou daria a
+        # única diferença a medir (sem ela, ele fica fora) — é o que o aviso diz. Esse
+        # aluno fica só nessa causa: não entra também em "a última coleta é de X"
+        # (``fim_sem_questoes``), cuja data passaria a ser a da coleta ANTERIOR, com
+        # uma mais recente no período. A que mudaria só o INÍCIO, ou um fim já medido
+        # por outra coleta, não é motivo: a borda do início (ampliada, sem coleta no
+        # início) é que explica o número, como para qualquer aluno.
+        # Nem a coleta sem questões de ANTES do período (fora da tolerância do
+        # início): ela só seria a base, e o aviso fala de "coleta no período". Sem
+        # outra base, o aluno é "uma única coleta no período" (revisão final).
+        excluidos = _do_periodo_em_diante(excluidos, janela)
+        com = (_diferenca_de_retratos(serie + excluidos, janela, campos, hoje=hoje)
+               if excluidos else None)
+        afetado = com is not None and _bordas(ganho) != _bordas(com) and (
+            ganho is None or not ganho["_medido"]
+            or (ganho["_fim"] == "antes"
+                and (ganho["_data_atual"], ganho["_fim"]) != (com["_data_atual"], com["_fim"])))
+        if afetado:
+            nao_vieram += 1
+            turma["com_coleta"] += 1     # houve coleta no período, só sem as questões
         if ganho is None:
+            if afetado:
+                continue
             sem += 1
-            if _sem_coleta_no_periodo(series.get(aid, []), janela, hoje):
+            if _sem_coleta_no_periodo(serie, janela, hoje):
                 sem_coleta += 1
-            elif _coleta_interrompida(series.get(aid, []), janela):
+            elif _coleta_interrompida(serie, janela):
                 interrompida += 1
             continue
-        turma["com_coleta"] += 1
+        if not afetado:
+            turma["com_coleta"] += 1
         if not ganho["_medido"]:
             # Uma coleta só no período e nenhuma antes: não há diferença a
             # medir. Somar 0 diria "não respondeu nada" — é "não dá para medir".
-            sem_intervalo += 1
-            if ganho["_inicio"] == "exato":
-                so_inicio += 1
+            # (Se a outra coleta veio sem as questões, o motivo é esse, não este.)
+            if not afetado:
+                sem_intervalo += 1
+                if ganho["_inicio"] == "exato":
+                    so_inicio += 1
             continue
         if ganho["_regrediu"]:
             regrediu += 1
             continue
+        inicio_sq = _inicio_veio_sem_questoes(excluidos, janela, ganho)
         intervalos.append({"base": ganho["_data_base"], "atual": ganho["_data_atual"],
                            "inicio": ganho["_inicio"], "fim": ganho["_fim"],
-                           "antecedencia": ganho["_antecedencia"]})
+                           "antecedencia": ganho["_antecedencia"],
+                           "fim_sem_questoes": afetado,
+                           "inicio_sem_questoes": inicio_sq})
         tentativas += ganho["questoes_tentativas"]
         acertos += ganho["questoes_acertos"]
-        if ganho["_inicio"] == "depois":
+        # "A primeira coleta já trazia N questões" acompanha "sem coleta no início para
+        # N estudante(s)" (``alunos_sem_inicio``): soma só quem está nessa frase. Quem teve
+        # a coleta do início sem as questões tem o aviso próprio, sem esse acumulado.
+        if ganho["_inicio"] == "depois" and not inicio_sq:
             acumulado_antes += ganho["_base_tentativas"]
         if ganho["_data_base"] is not None:
             bases.append(ganho["_data_base"])
@@ -914,7 +1106,8 @@ def _elefante_questoes(db: Session, escola_id: int, coorte: dict[int, dict],
                                           coleta_interrompida=interrompida,
                                           turmas_sem_coleta=turmas_sem_coleta,
                                           acumulado_na_primeira_coleta=(
-                                              acumulado_antes or None))
+                                              acumulado_antes or None),
+                                          questoes_nao_vieram=nao_vieram)
     bloco.suporte["questoes"] = {
         "campo": "SnapshotElefante.questoes_* (diferença entre retratos)",
         "classificacao": "SUPORTADO COM RESSALVA",
@@ -927,6 +1120,21 @@ def _elefante_questoes(db: Session, escola_id: int, coorte: dict[int, dict],
                     "coleta no fim, termina na última — nos dois casos o número "
                     "NÃO é do período inteiro (veja cobertura_questoes)",
     }
+
+
+def _inicio_veio_sem_questoes(excluidos: list, janela: Janela, ganho: dict) -> bool:
+    """Houve coleta no INÍCIO do período (na tolerância dele, ``_mede_a_borda``), mas ela
+    veio sem as questões (S9) — e por isso a conta do aluno partiu de outra coleta: de uma
+    anterior (``antes``: o número INCLUI esse intervalo) ou da primeira com as questões
+    no período (``depois``: o que veio até ela fica fora). O número e o status não
+    mudam; muda o que o aviso diz: não é "não há coleta perto do início" nem "sem coleta
+    no início" — a coleta existiu, só sem as questões. ``excluidos``: os retratos sem
+    as questões do aluno, já sem os de antes do período."""
+    if janela.inicio is None or ganho["_inicio"] not in ("antes", "depois"):
+        return False
+    atual = _br(ganho["_data_atual"])
+    return any(_mede_a_borda(p.br, janela.inicio) and p.br <= atual
+               for p in _pontos(excluidos))
 
 
 def _janela_efetiva(bases: list[datetime], atuais: list[datetime]) -> dict | None:
@@ -978,20 +1186,39 @@ def gerar(db: Session, escola_id: int, *, preset: str,
     if escopo == "aluno" and aluno_id is None:
         raise RelatorioInvalido("O escopo 'aluno' exige aluno_id.")
 
-    ano = escola.ano_letivo_ativo
-    janela = resolver_janela(preset, ano, inicio=inicio, fim=fim, hoje=hoje)
+    janela = resolver_janela(preset, escola.ano_letivo_ativo, inicio=inicio, fim=fim,
+                             hoje=hoje)
+    # De que ano letivo são as crianças, as turmas e o contador do Matific: o do período
+    # quando ele cai inteiro num ano já encerrado (a mesma regra das premiações e do
+    # ranking por período); senão, o ativo. A resposta diz qual (``populacao``).
+    populacao = periodos.populacao_do_periodo(janela.inicio, janela.fim,
+                                              escola.ano_letivo_ativo)
+    ano = populacao.ano_letivo
     coorte = _coorte(db, escola_id, ano,
                      turma_id=turma_id if escopo in ("turma", "aluno") else None,
                      aluno_id=aluno_id if escopo == "aluno" else None,
-                     turma_ids=turma_ids)
+                     turma_ids=turma_ids, populacao=populacao)
+
+    # O NOME da turma do recorte, do banco: com a coorte vazia (turma nova, ou com todos
+    # transferidos) não há linha de resultado de onde tirá-lo, e o PDF — que circula
+    # sozinho — dizia só o id ("Turma: 2"). Nome de turma não é dado de criança. Só de
+    # turma desta escola: o pedido não empresta nome de turma alheia ao papel.
+    turma_nome = None
+    if escopo == "turma":
+        turma = db.get(Turma, turma_id)
+        if turma is not None and turma.escola_id == escola_id:
+            turma_nome = turma.nome
 
     saida: dict = {
-        "escola": {"id": escola_id, "nome": escola.nome, "ano_letivo": ano},
+        "escola": {"id": escola_id, "nome": escola.nome,
+                   "ano_letivo": escola.ano_letivo_ativo},
+        "populacao": populacao.como_dict(),
         "periodo": {"preset": janela.preset, "rotulo": janela.rotulo,
                     "inicio": janela.inicio.isoformat() if janela.inicio else None,
                     "fim": janela.fim.isoformat() if janela.fim else None,
                     "inclusivo": True},
         "escopo": {"tipo": escopo, "turma_id": turma_id, "aluno_id": aluno_id,
+                   "turma_nome": turma_nome,
                    "restrito_a_turmas": (sorted(turma_ids)
                                          if turma_ids is not None else None)},
         "plataformas": list(plats),
@@ -1045,7 +1272,14 @@ def gerar(db: Session, escola_id: int, *, preset: str,
         {"plataforma": "elefante", "metrica": "pontos_de_dificuldade",
          "por_que": MOTIVO_ELEFANTE_PONTOS})
 
-    com_atividade = set(ele_por_aluno) | set(mat_por_aluno)
+    # `mat_por_aluno` guarda todo aluno MEDIDO (o 0 medido aparece na tabela por
+    # aluno), mas ter retrato não é ter atividade: toda coleta grava retrato de todo
+    # aluno com conta. Ativo no Matific é quem teve ganho — a mesma regra de
+    # `matific.alunos_com_atividade` e da Visão Geral. (O Elefante já só põe em
+    # `ele_por_aluno` quem teve sinal real.)
+    mat_ativos = {aid for aid, m in mat_por_aluno.items()
+                  if m["atividades"] or m["estrelas"]}
+    com_atividade = set(ele_por_aluno) | mat_ativos
     saida["alunos"]["com_atividade"] = len(com_atividade)
     saida["alunos"]["sem_atividade"] = len(coorte) - len(com_atividade)
 

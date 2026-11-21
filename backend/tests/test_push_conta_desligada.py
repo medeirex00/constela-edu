@@ -9,9 +9,9 @@ tela bloqueada. O app não se descadastra sozinho no 401, e a conta revogada nem
 conseguiria chamar ``/dispositivos/remover``.
 
 Agora: ``notificar_escola`` só manda para aparelho de conta ATIVA (cobre também
-as contas desligadas antes da correção, sem migração); desativar, excluir e
-promover a Secretaria apagam os aparelhos da conta e contam
-``dispositivos_removidos`` na auditoria. O envio ao Expo é trocado por uma
+as contas desligadas antes da correção, sem migração); desativar, excluir,
+promover a Secretaria e trocar a senha (AUTH-1) apagam os aparelhos da conta e
+contam ``dispositivos_removidos`` na auditoria. O envio ao Expo é trocado por uma
 captura (sem rede). Dados 100% fictícios.
 """
 import pytest
@@ -155,19 +155,22 @@ def test_reativar_a_conta_nao_traz_o_aparelho_de_volta(db, escola_completa, clie
     assert TOKEN_PROF in capturados
 
 
-def test_controle_trocar_a_senha_de_conta_ativa_mantem_o_aparelho(db, escola_completa,
-                                                                 cliente, capturados):
-    """A troca de senha também revoga sessões, mas a conta segue ativa: o aparelho
-    fica (o app registra de novo ao entrar com a senha nova, sem duplicar)."""
+def test_trocar_a_senha_de_conta_ativa_apaga_o_aparelho(db, escola_completa,
+                                                       cliente, capturados):
+    """A troca de senha revoga as sessões e, com elas, o aparelho — mesmo com a
+    conta ativa (auditoria técnica, AUTH-1): é o que se faz quando o celular some
+    ou a sessão foi roubada, e o app já em 401 não consegue se descadastrar. A
+    dona registra o aparelho de novo ao entrar com a senha nova. (Antes este
+    controle afirmava o contrário: o aparelho ficava.)"""
     eid = escola_completa["escola"].id
     prof_id, _ = _professora_com_aparelho(db, eid)
     r = cliente.patch(f"{API}/escolas/{eid}/usuarios/{prof_id}",
                       json={"senha": "Outra-Senha-Forte-77"})
     assert r.status_code == 200, r.text
-    assert _aparelhos(db, prof_id) == 1
-    assert "dispositivos_removidos" not in _auditoria(db, "usuario.senha_redefinida", prof_id)
+    assert _aparelhos(db, prof_id) == 0
+    assert _auditoria(db, "usuario.senha_redefinida", prof_id)["dispositivos_removidos"] == 1
     push.notificar_escola(db, eid, titulo="t", corpo="c")
-    assert TOKEN_PROF in capturados
+    assert TOKEN_PROF not in capturados
 
 
 def test_promocao_a_secretaria_apaga_os_aparelhos_da_escola(db, escola_completa,

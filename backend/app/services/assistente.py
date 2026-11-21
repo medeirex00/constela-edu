@@ -6,8 +6,9 @@ Regras inegociáveis:
   * O modelo recebe instruções para responder apenas com base nesse
     contexto e recusar qualquer outra coisa.
   * Toda conversa fica registrada em `conversas_ia`/`mensagens_ia`.
-  * Se o provedor externo falhar, o provedor local responde — o assistente
-    nunca sai do ar por causa de terceiros.
+  * Se o provedor externo falhar (erro de rede, chave recusada, resposta fora do
+    formato ou qualquer outra exceção dele), o provedor local responde — o
+    assistente nunca sai do ar por causa de terceiros.
 
 Provedor externo e LGPD (dados de crianças — decisão documentada):
   * O provedor PADRÃO é `local`: determinístico, sem rede, sem chave. Por
@@ -65,11 +66,17 @@ from app.models import (
     Nota,
     Turma,
 )
-from app.services import evolucao, insights
+from app.services import elegibilidade, evolucao, insights, scoring
+from app.services import modulos as svc_modulos
 from app.services.ia import ErroProvedorIA, obter_provedor
 from app.services.ia.provedores import LocalProvedor
 
 PROVEDORES_VALIDOS = ("local", "anthropic", "openai")
+CONTINGENCIA = "local (contingência)"
+
+
+class ConversaNaoEncontrada(LookupError):
+    """A conversa pedida não existe ou não é de quem pergunta (a rota responde 404)."""
 
 
 def _config_row(db: Session, escola_id: int) -> Configuracao | None:
@@ -110,6 +117,22 @@ def config_assistente(db: Session, escola_id: int) -> dict:
     }
 
 
+def provedor_em_uso(config: dict) -> str:
+    """Quem de fato responde, a partir de ``config_assistente``: o provedor
+    externo só com chave utilizável. Sem ela (DEK trocada sem recadastro,
+    ambiente sem AI_API_KEY) a criação dele falha e o assistente responde no
+    modo local — é isso que o selo da tela do Assistente tem de dizer."""
+    if config["provedor"] in _PROVEDORES_EXTERNOS and config["chave_definida"]:
+        return config["provedor"]
+    return "local"
+
+
+_MSG_SEM_CHAVE = "Informe a chave de API do provedor escolhido."
+_MSG_CHAVE_ILEGIVEL = ("A chave de API salva não abre mais com a chave de cifra do "
+                       "servidor (trocada desde que foi gravada): informe a chave de "
+                       "API de novo.")
+
+
 def salvar_config_assistente(db: Session, escola_id: int, provedor: str,
                              api_key: str | None, modelo: str | None) -> dict:
     """Grava provedor/modelo e a chave de API CIFRADA (``cifrar_segredo``: Fernet
@@ -125,13 +148,11 @@ def salvar_config_assistente(db: Session, escola_id: int, provedor: str,
     if provedor != provedor_anterior and not api_key:
         valores.pop("api_key_cifrada", None)
     if provedor != "local" and not api_key and not valores.get("api_key_cifrada"):
-        raise ValueError("Informe a chave de API do provedor escolhido.")
+        raise ValueError(_MSG_SEM_CHAVE)
     if provedor != "local" and not api_key and not _chave_legivel(valores):
         # "Manter a atual" manteria uma cifra que nada abre (DEK trocada): recusa sem
         # tocar no que está gravado (voltar às chaves antigas ainda a reabriria).
-        raise ValueError("A chave de API salva não abre mais com a chave de cifra do "
-                         "servidor (trocada desde que foi gravada): informe a chave de "
-                         "API de novo.")
+        raise ValueError(_MSG_CHAVE_ILEGIVEL)
 
     valores["provedor"] = provedor
     valores["modelo"] = (modelo or "").strip()
@@ -152,11 +173,19 @@ def salvar_config_assistente(db: Session, escola_id: int, provedor: str,
 
 
 def _provedor_da_escola(db: Session, escola_id: int):
-    """Provedor conforme a configuração da escola; sem ela, o do ambiente."""
+    """Provedor conforme a configuração da escola; sem ela, o do ambiente.
+
+    Provedor externo da escola sem chave utilizável levanta ``ErroProvedorIA``
+    com a causa real (a mesma frase do salvar): a chave salva pela tela não abre
+    mais (DEK trocada) ou não existe. Sem isto, o provedor recebia a chave vazia
+    e culpava a variável de ambiente AI_API_KEY, que não é o que se conserta."""
     row = _config_row(db, escola_id)
     valores = dict(row.valor or {}) if row else {}
     if not valores.get("provedor"):
         return obter_provedor()
+    if valores["provedor"] in _PROVEDORES_EXTERNOS and not _chave_legivel(valores):
+        raise ErroProvedorIA(_MSG_CHAVE_ILEGIVEL if valores.get("api_key_cifrada")
+                             else _MSG_SEM_CHAVE)
     return obter_provedor(
         provedor=valores["provedor"],
         api_key=decifrar_segredo(valores.get("api_key_cifrada")),
@@ -188,7 +217,9 @@ def montar_contexto(db: Session, escola_id: int) -> str:
     escola = db.get(Escola, escola_id)
     ano = escola.ano_letivo_ativo
 
-    ranking = db.execute(
+    # As turmas que concorrem (1º ao 5º ano): as Fases não entram no ranking.
+    premiaveis = elegibilidade.turmas_premiaveis(db, escola_id, ano)
+    alunos_com_nota = db.execute(
         select(Nota, Aluno, Turma)
         .join(Aluno, Nota.aluno_id == Aluno.id)
         .join(Matricula, (Matricula.aluno_id == Aluno.id) & (Matricula.ano_letivo == ano))
@@ -196,36 +227,76 @@ def montar_contexto(db: Session, escola_id: int) -> str:
         # Aluno.status: aluno arquivado/inativo NUNCA entra no contexto da IA —
         # sua Nota órfã (arquivar não a apaga) não pode reintroduzir o nome dele,
         # inclusive na ida ao provedor externo. Mesmo filtro do ranking/painel.
+        # Turma premiável: a Nota de quem foi para turma de Fase continua no banco,
+        # com a posição de um cálculo antigo (ou sem posição) — fora do ranking,
+        # como no Ranking Geral (``rankings._apenas_premiaveis``).
         .where(Nota.escola_id == escola_id, Nota.ano_letivo == ano,
-               Aluno.status == "ativo")
+               Aluno.status == "ativo", Turma.id.in_(premiaveis))
         .order_by(Nota.posicao)
     ).all()
+    # AUSÊNCIA NÃO É ZERO (DEC-19): a criança sem dado em nenhuma plataforma não tem
+    # lugar nem "geral 0,0" no ranking — como no Ranking Geral, no Top 10 e no telão.
+    ranking = [linha for linha in alunos_com_nota
+               if linha[0].aferido_leitura or linha[0].aferido_matematica]
+
+    # CONTRATO: o que a rede não assinou não entra no contexto — nem a nota, nem
+    # o pódio, nem os ganhos daquela plataforma. Com provedor externo o contexto
+    # sai da infraestrutura (minimização), e o modo local responderia "os
+    # melhores no Matific" a uma rede que só contratou Leitura. Escola sem rede
+    # (ou com os dois módulos) segue com tudo, como sempre.
+    contratadas = scoring.dimensoes_contratadas(db, escola)
+    com_matematica = "matematica" in contratadas
+    com_leitura = "leitura" in contratadas
+
+    def por_plataforma(nota: Nota) -> str:
+        partes = []
+        if com_matematica:
+            partes.append(f", Matific {nota.nota_matific:.1f}")
+        if com_leitura:
+            partes.append(f", Elefante {nota.nota_elefante:.1f}")
+        return "".join(partes)
 
     linhas_ranking = [
-        f"- {nota.posicao}º: {aluno.nome} ({turma.nome}) — geral {nota.nota_geral:.1f}, "
-        f"Matific {nota.nota_matific:.1f}, Elefante {nota.nota_elefante:.1f}"
+        f"- {nota.posicao}º: {aluno.nome} ({turma.nome}) — geral {nota.nota_geral:.1f}"
+        f"{por_plataforma(nota)}"
         for nota, aluno, turma in ranking[:15]
     ]
-    # Pódios por PLATAFORMA — para perguntas "melhores do Matific/Elefante".
-    def podio(metrica) -> list[str]:
-        ordenado = sorted(ranking, key=lambda r: metrica(r[0]), reverse=True)
+    # Pódios por PLATAFORMA — para perguntas "melhores do Matific/Elefante". Só quem
+    # tem dado DAQUELA plataforma (sem ele, o 0,0 é ausência, não nota).
+    def podio(metrica, aferido) -> list[str]:
+        ordenado = sorted((r for r in ranking if aferido(r[0])),
+                          key=lambda r: metrica(r[0]), reverse=True)
         return [
             f"- {i}º: {aluno.nome} ({turma.nome}) — nota {metrica(nota):.1f}"
             for i, (nota, aluno, turma) in enumerate(ordenado[:10], start=1)
         ]
-    linhas_matific = podio(lambda n: n.nota_matific)
-    linhas_elefante = podio(lambda n: n.nota_elefante)
+    com_dado = {nota.aluno_id for nota, _aluno, _turma in ranking}
     linhas_alunos = [
         f"- {aluno.nome}: turma {turma.nome}, {nota.posicao}º lugar, "
-        f"geral {nota.nota_geral:.1f}, Matific {nota.nota_matific:.1f}, "
-        f"Elefante {nota.nota_elefante:.1f}"
-        for nota, aluno, turma in ranking
+        f"geral {nota.nota_geral:.1f}{por_plataforma(nota)}"
+        if nota.aluno_id in com_dado else
+        f"- {aluno.nome}: turma {turma.nome}, ainda sem dados das plataformas "
+        "(sem lugar no ranking)"
+        for nota, aluno, turma in alunos_com_nota
     ]
 
-    itens_evolucao = evolucao.ranking_evolucao(db, escola_id, dias=30)[:10]
+    def ganhos_do_periodo(ganhos: dict) -> str:
+        partes = []
+        if com_matematica:
+            partes.append(f"+{ganhos['atividades']:.0f} atividades")
+        if com_leitura:
+            partes.append(f"+{ganhos['livros']:.0f} livros")
+        return ", ".join(partes)
+
+    # A MESMA régua do Ranking de Evolução (web, app, telão, mural, /insights):
+    # sem retrato ANTERIOR à janela, o acumulado de vida não vira "evolução" (a
+    # criança do 1º retrato no mês não lidera), e só as turmas que concorrem —
+    # as Fases ficam fora da lista (a régua continua a da escola inteira).
+    itens_evolucao = evolucao.ranking_evolucao(
+        db, escola_id, dias=30, base_no_periodo=True, turma_ids=premiaveis)[:10]
     linhas_evolucao = [
         f"- {item.posicao}º: {item.nome} ({item.turma}) — evolução {item.nota_evolucao:.1f} "
-        f"(+{item.ganhos['atividades']:.0f} atividades, +{item.ganhos['livros']:.0f} livros)"
+        f"({ganhos_do_periodo(item.ganhos)})"
         for item in itens_evolucao
     ]
 
@@ -236,19 +307,35 @@ def montar_contexto(db: Session, escola_id: int) -> str:
         for item in indices
     ]
 
-    alertas = insights.alertas_da_escola(db, escola_id)
-    linhas_alertas = [f"- [{alerta['gravidade']}] {alerta['texto']}" for alerta in alertas]
+    # "Queda de acertos nas questões" é dado do Elefante (Leitura): fora do plano,
+    # não entra (nem na seção ALERTAS, nem no total do RESUMO) — com contrato
+    # mudado ou escola movida, retratos antigos ainda o disparam.
+    alertas = [alerta for alerta in insights.alertas_da_escola(db, escola_id)
+               if com_leitura or alerta["tipo"] != "queda_acertos"]
+    linhas_alertas =[f"- [{alerta['gravidade']}] {alerta['texto']}" for alerta in alertas]
 
     resumo_escola = evolucao.resumo_escola(db, escola_id)
     linhas_turmas = [
         f"- {t['turma']['nome']} ({t['turma']['ano_escolar']}): {t['total_alunos']} alunos, "
-        f"média geral {t['media_geral']:.1f}, {t['indicadores']['livros_unicos']} livros lidos"
+        f"média geral {t['media_geral']:.1f}"
+        + (f", {t['indicadores']['livros_unicos']} livros lidos" if com_leitura else "")
         for t in resumo_escola["turmas"] if t
     ]
 
     def secao(nome: str, linhas: list[str], vazio: str) -> str:
         corpo = "\n".join(linhas) if linhas else vazio
         return f"### {nome}\n{corpo}\n"
+
+    # O que ficou fora do plano é dito com todas as letras (sem dado de criança):
+    # o modelo e o modo local respondem "não faz parte do plano", em vez de "não
+    # há dados" ou de um pódio vindo de retrato antigo.
+    fora_do_plano = [
+        f"- {svc_modulos.CATALOGO[modulo]['nome']}: não faz parte do plano desta rede; "
+        "o sistema não tem dados dela para responder."
+        for modulo, contratado in (("leitura", com_leitura),
+                                   ("matematica", com_matematica))
+        if not contratado
+    ]
 
     return "\n".join([
         secao("RESUMO", [
@@ -257,9 +344,14 @@ def montar_contexto(db: Session, escola_id: int) -> str:
             f"- Turmas: {len(resumo_escola['turmas'])}",
             f"- Alertas ativos: {len(alertas)}",
         ], "- Sem dados."),
+        *([secao("FORA_DO_PLANO", fora_do_plano, "")] if fora_do_plano else []),
         secao("RANKING", linhas_ranking, "- Nenhuma nota calculada ainda."),
-        secao("RANKING_MATIFIC", linhas_matific, "- Nenhuma nota calculada ainda."),
-        secao("RANKING_ELEFANTE", linhas_elefante, "- Nenhuma nota calculada ainda."),
+        *([secao("RANKING_MATIFIC",
+                 podio(lambda n: n.nota_matific, lambda n: n.aferido_matematica),
+                 "- Nenhuma nota calculada ainda.")] if com_matematica else []),
+        *([secao("RANKING_ELEFANTE",
+                 podio(lambda n: n.nota_elefante, lambda n: n.aferido_leitura),
+                 "- Nenhuma nota calculada ainda.")] if com_leitura else []),
         secao("EVOLUCAO", linhas_evolucao, "- Sem dados de evolução no período."),
         secao("INDICES", linhas_indices, "- Sem índices calculados."),
         secao("ALERTAS", linhas_alertas, "- Nenhum alerta no momento."),
@@ -468,57 +560,98 @@ def _reidentificar(texto: str, mapa: dict[str, str]) -> str:
     return texto
 
 
+def _contingencia(sistema: str, mensagens: list[dict]) -> tuple[str, str]:
+    return LocalProvedor().responder(sistema, mensagens), CONTINGENCIA
+
+
+def _responder(db: Session, escola_id: int, sistema: str,
+               mensagens: list[dict]) -> tuple[str, str]:
+    """(resposta, quem respondeu) pelo provedor da escola. Quando o externo falha,
+    responde o modo local (``CONTINGENCIA``): o assistente nunca sai do ar.
+
+    Antes da chamada ao provedor EXTERNO, faz o commit da transação (até aqui, só
+    leituras): durante a rede (no máximo ``ia.provedores.PRAZO_TOTAL_S``, a chamada
+    inteira), a conexão do banco volta ao pool em vez de ficar presa "idle in
+    transaction"."""
+    try:
+        # A criação pode falhar (ex.: chave ausente/errada): cai no modo local.
+        provedor = _provedor_da_escola(db, escola_id)
+    except ErroProvedorIA as erro:
+        logger.warning("Provedor de IA indisponível; usando modo local: %s",
+                       erro, exc_info=True)
+        return _contingencia(sistema, mensagens)
+    if provedor.nome not in _PROVEDORES_EXTERNOS:
+        return provedor.responder(sistema, mensagens), provedor.nome
+
+    # LGPD: nenhum dado identificável de criança (nome, pedaço de nome, RA,
+    # e-mail, nº de documento) sai para provedor externo. Limpa contexto +
+    # conversa inteira (histórico incluso); reidentifica aqui.
+    mapa = _mapa_pseudonimos(db, escola_id)
+    pseudonimizar = _Pseudonimizador(mapa, _identificadores_da_ficha(db, escola_id))
+    sistema_env = pseudonimizar(sistema, conversa=False) + _NOTA_PSEUDONIMO
+    mensagens_env = [
+        {"papel": m["papel"], "conteudo": pseudonimizar(m["conteudo"])}
+        for m in mensagens
+    ]
+    db.commit()
+    try:
+        resposta = _reidentificar(provedor.responder(sistema_env, mensagens_env), mapa)
+    except ErroProvedorIA as erro:
+        logger.warning("Provedor de IA indisponível; usando modo local: %s",
+                       erro, exc_info=True)
+        return _contingencia(sistema, mensagens)
+    except Exception:  # noqa: BLE001 — terceiro fora do contrato: o plano B responde
+        # Exceção que o provedor não converteu em ErroProvedorIA (formato novo da
+        # resposta, defeito do SDK): vai ao log de erro, e quem pergunta não vê 500.
+        logger.exception("Falha inesperada no provedor de IA externo; usando modo local")
+        return _contingencia(sistema, mensagens)
+    return resposta, provedor.nome
+
+
+def _conversa_do_usuario(db: Session, conversa_id: int, escola_id: int,
+                         usuario_id: int) -> ConversaIA:
+    conversa = db.get(ConversaIA, conversa_id)
+    if conversa is None or conversa.escola_id != escola_id \
+            or conversa.usuario_id != usuario_id:
+        raise ConversaNaoEncontrada("Conversa não encontrada.")
+    return conversa
+
+
 def perguntar(db: Session, escola_id: int, usuario_id: int,
               pergunta: str, conversa_id: int | None = None) -> dict:
-    """Fluxo completo: contexto → provedor → registro da conversa."""
-    if conversa_id is not None:
-        conversa = db.get(ConversaIA, conversa_id)
-        if conversa is None or conversa.escola_id != escola_id \
-                or conversa.usuario_id != usuario_id:
-            raise ValueError("Conversa não encontrada.")
-    else:
-        titulo = pergunta.strip()[:80] or "Nova conversa"
-        conversa = ConversaIA(escola_id=escola_id, usuario_id=usuario_id, titulo=titulo)
-        db.add(conversa)
-        db.flush()
+    """Fluxo completo: contexto → provedor → registro da conversa.
 
-    historico = db.execute(
-        select(MensagemIA).where(MensagemIA.conversa_id == conversa.id)
-        .order_by(MensagemIA.id.desc()).limit(MAX_MENSAGENS_CONTEXTO)
-    ).scalars().all()
+    Primeiro só LÊ (conversa, histórico, contexto); a conversa nova e as duas
+    mensagens são gravadas DEPOIS da resposta, numa transação curta (com provedor
+    externo, ``_responder`` encerra a de leitura antes da rede).
+
+    Levanta ``ConversaNaoEncontrada`` quando ``conversa_id`` não é de quem pergunta
+    (ou deixou de existir enquanto o provedor respondia)."""
+    if conversa_id is not None:
+        _conversa_do_usuario(db, conversa_id, escola_id, usuario_id)
+        historico = db.execute(
+            select(MensagemIA).where(MensagemIA.conversa_id == conversa_id)
+            .order_by(MensagemIA.id.desc()).limit(MAX_MENSAGENS_CONTEXTO)
+        ).scalars().all()
+    else:
+        historico = []
     mensagens = [
         {"papel": m.papel, "conteudo": m.conteudo} for m in reversed(historico)
     ]
     mensagens.append({"papel": "usuario", "conteudo": pergunta})
 
     sistema = INSTRUCOES + montar_contexto(db, escola_id)
+    resposta, provedor_usado = _responder(db, escola_id, sistema, mensagens)
 
-    try:
-        # A criação pode falhar (ex.: chave ausente/errada) — por isso fica
-        # dentro do try: o assistente nunca sai do ar.
-        provedor = _provedor_da_escola(db, escola_id)
-        if provedor.nome in _PROVEDORES_EXTERNOS:
-            # LGPD: nenhum dado identificável de criança (nome, pedaço de nome,
-            # RA, e-mail, nº de documento) sai para provedor externo. Limpa
-            # contexto + conversa inteira (histórico incluso); reidentifica aqui.
-            mapa = _mapa_pseudonimos(db, escola_id)
-            pseudonimizar = _Pseudonimizador(
-                mapa, _identificadores_da_ficha(db, escola_id))
-            sistema_env = pseudonimizar(sistema, conversa=False) + _NOTA_PSEUDONIMO
-            mensagens_env = [
-                {"papel": m["papel"], "conteudo": pseudonimizar(m["conteudo"])}
-                for m in mensagens
-            ]
-            resposta = _reidentificar(provedor.responder(sistema_env, mensagens_env), mapa)
-        else:
-            resposta = provedor.responder(sistema, mensagens)
-        provedor_usado = provedor.nome
-    except ErroProvedorIA as erro:
-        logger.warning("Provedor de IA indisponível; usando modo local: %s",
-                       erro, exc_info=True)
-        resposta = LocalProvedor().responder(sistema, mensagens)
-        provedor_usado = "local (contingência)"
-
+    if conversa_id is not None:
+        # Relida: a conversa pode ter sido apagada enquanto o provedor respondia
+        # (retenção, exclusão da conta): 404, não mensagem órfã.
+        conversa = _conversa_do_usuario(db, conversa_id, escola_id, usuario_id)
+    else:
+        titulo = pergunta.strip()[:80] or "Nova conversa"
+        conversa = ConversaIA(escola_id=escola_id, usuario_id=usuario_id, titulo=titulo)
+        db.add(conversa)
+        db.flush()
     conversa.provedor = provedor_usado
     db.add(MensagemIA(conversa_id=conversa.id, papel="usuario", conteudo=pergunta))
     db.add(MensagemIA(conversa_id=conversa.id, papel="assistente", conteudo=resposta))
@@ -536,9 +669,19 @@ def purgar_conversas_ia_expiradas(db: Session, dias: int | None = None) -> int:
     """Retenção LGPD (direito ao esquecimento / minimização): apaga conversas do
     assistente com created_at mais antigo que `dias` (padrão
     settings.IA_RETENCAO_DIAS). A cascata (migração 0003) remove as mensagens
-    junto. Idempotente. Devolve o nº de conversas apagadas."""
+    junto. Idempotente. Devolve o nº de conversas apagadas.
+
+    `dias` menor que 1 levanta ValueError SEM apagar nada: o corte é "agora -
+    dias", então 0 apagaria todas as conversas (inclusive a de 1 minuto atrás) e
+    um valor negativo poria o corte no futuro — e nas variáveis RETENCAO_*
+    vizinhas 0 quer dizer "desligado". O boot só registra a falha e segue."""
     from app.core.config import settings
     dias = settings.IA_RETENCAO_DIAS if dias is None else dias
+    if dias < 1:
+        raise ValueError(
+            "IA_RETENCAO_DIAS precisa ser 1 ou mais (dias de guarda das conversas do "
+            "assistente; padrão 90): com 0 ou negativo a purga apagaria todas as "
+            "conversas. Nenhuma conversa foi apagada.")
     # created_at é gravado em UTC mas a coluna DateTime (sem tz) devolve NAIVE do
     # banco (SQLite/Postgres); usa corte NAIVE em UTC para casar a comparação.
     # synchronize_session=False: DELETE puro em SQL (a cascata 0003 apaga as

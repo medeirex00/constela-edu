@@ -18,6 +18,14 @@ const CHAVE_SECURESTORE = "constela_cache_chave_v1";
 // A chave fica em memória após o 1º acesso (evita ir ao SecureStore a cada
 // leitura/escrita do cache).
 let chaveMemo: CryptoJS.lib.WordArray | null = null;
+let ultimoAcesso = Promise.resolve();
+
+/** A primeira abertura e a remoção da chave precisam ter a mesma ordem no cofre. */
+function emOrdem<T>(acessar: () => Promise<T>): Promise<T> {
+  const resultado = ultimoAcesso.then(acessar);
+  ultimoAcesso = resultado.then(() => undefined, () => undefined);
+  return resultado;
+}
 
 function bytesParaHex(bytes: Uint8Array): string {
   let hex = "";
@@ -32,15 +40,17 @@ async function bytesAleatorios(n: number): Promise<CryptoJS.lib.WordArray> {
   return CryptoJS.enc.Hex.parse(bytesParaHex(bytes));
 }
 
-async function obterChave(): Promise<CryptoJS.lib.WordArray> {
-  if (chaveMemo) return chaveMemo;
-  let b64 = await SecureStore.getItemAsync(CHAVE_SECURESTORE);
-  if (!b64) {
-    b64 = CryptoJS.enc.Base64.stringify(await bytesAleatorios(32)); // 256 bits
-    await SecureStore.setItemAsync(CHAVE_SECURESTORE, b64);
-  }
-  chaveMemo = CryptoJS.enc.Base64.parse(b64);
-  return chaveMemo;
+function obterChave(): Promise<CryptoJS.lib.WordArray> {
+  return emOrdem(async () => {
+    if (chaveMemo) return chaveMemo;
+    let b64 = await SecureStore.getItemAsync(CHAVE_SECURESTORE);
+    if (!b64) {
+      b64 = CryptoJS.enc.Base64.stringify(await bytesAleatorios(32)); // 256 bits
+      await SecureStore.setItemAsync(CHAVE_SECURESTORE, b64);
+    }
+    chaveMemo = CryptoJS.enc.Base64.parse(b64);
+    return chaveMemo;
+  });
 }
 
 export async function cifrar(texto: string): Promise<string> {
@@ -74,7 +84,9 @@ export async function decifrar(blob: string): Promise<string | null> {
 }
 
 /** Rotaciona a chave (logout): o cache antigo vira ilegível. Chamar no `sair`. */
-export async function esquecerChave(): Promise<void> {
-  chaveMemo = null;
-  await SecureStore.deleteItemAsync(CHAVE_SECURESTORE);
+export function esquecerChave(): Promise<void> {
+  return emOrdem(async () => {
+    chaveMemo = null;
+    await SecureStore.deleteItemAsync(CHAVE_SECURESTORE);
+  });
 }

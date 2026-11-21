@@ -14,7 +14,8 @@ import { describe, expect, it } from "vitest";
 
 import { TEXTO_SUPRESSAO, evolucao } from "./AnaliseFixturesDiagnostico";
 import {
-  TEXTO_SERIES_SUPRIMIDAS, evolucaoSeriesSuprimidas, plataformasComEpsilon, renderEscolas, semearEscolas,
+  ESCOLAS_DO_CONTEXTO, TEXTO_SERIES_SUPRIMIDAS, evolucaoSeriesSuprimidas, plataformasComEpsilon, renderEscolas,
+  semearEscolas,
 } from "./EscolasRedeFixtures";
 import { admin, antes, chamadas, consulta, semCausalidade, semJargao } from "./SecretariaFixtures";
 import { api, escolaFake, responder, responderErro, screen, userEvent, waitFor, within } from "./utils";
@@ -72,15 +73,18 @@ describe("Ficha da escola — o que ela mostra", () => {
     await abrirFicha("/rede/escolas/2");
     const bloco = await screen.findByTestId("ficha-plataformas");
     expect(within(bloco).getByTestId("plataforma-elefante")).toHaveTextContent("70%");
-    expect(within(bloco).getByTestId("plataforma-matific")).toHaveTextContent("Sem dado do Matific");
+    // Poucos alunos medidos: "Protegido", como a situação de uso lá em cima — não "Sem dado".
+    expect(within(bloco).getByTestId("plataforma-matific"))
+      .toHaveTextContent("Protegido: menos de 5 alunos com dado desta plataforma no período.");
     expect(screen.getByTestId("ficha-recorte-plataformas")).toHaveTextContent("Vale aqui: período (Ano letivo de 2026) e série (1º ao 5º ano).");
     expect(screen.getByTestId("ficha-ultima-coleta")).toHaveTextContent("Última coleta: Elefante 18/10/2026 · Matific 19/10/2026.");
     expect(bloco.querySelector("[data-natureza=plataforma]")).toHaveTextContent("Plataforma");
     expect(screen.getByLabelText("Período")).toHaveValue("ano_letivo");
-    await userEvent.selectOptions(screen.getByLabelText("Período"), "mes");
-    await waitFor(() => expect(chamadas("/redes/1/analise/plataformas").some((c) => consulta(c).get("periodo") === "mes"))
-      .toBe(true));
-    expect(screen.getByTestId("onde")).toHaveTextContent("/rede/escolas/2?periodo=mes");
+    // (A Secretaria escolhe o ano letivo ou um bimestre inteiro — G_GRUPO-2.)
+    await userEvent.selectOptions(screen.getByLabelText("Período"), "bimestre_3");
+    await waitFor(() => expect(chamadas("/redes/1/analise/plataformas")
+      .some((c) => consulta(c).get("periodo") === "bimestre_3")).toBe(true));
+    expect(screen.getByTestId("onde")).toHaveTextContent("/rede/escolas/2?periodo=bimestre_3");
     // A situação de uso continua sendo a do ano letivo.
     expect(screen.getByTestId("ficha-situacao-uso")).toHaveTextContent("Com uso no ano letivo");
     const oQueMede = screen.getByTestId("ficha-o-que-mede");
@@ -274,13 +278,104 @@ describe("Ficha da escola — escola que não é da rede", () => {
     expect(await screen.findByTestId("analise-escola-indicador-saresp")).toBeInTheDocument();
   });
 
-  it("as duas listas da rede falham: o erro aparece (nunca a ficha de outra escola)", async () => {
+  it("as duas listas da rede falham e a escola não está na lista da sessão: o erro aparece, sem ler a escola", async () => {
+    semearEscolas();
+    responderErro("GET", "/redes/1/dashboard", 500, "FALHA-DO-PAINEL");
+    responderErro("GET", "/redes/1/analise/plataformas", 500, "FALHA-DAS-PLATAFORMAS");
+    // A inativa (6) não está na lista da sessão: só o painel ou as plataformas a confirmariam.
+    renderEscolas("/rede/escolas/6");
+    expect(await screen.findByText(/FALHA-DO-PAINEL/, undefined, { timeout: 3000 })).toBeInTheDocument();
+    expect(screen.queryByTestId("ficha-cadastro-carregando")).toBeNull();
+    expect(leuDaEscola(6)).toBe(false);
+  });
+
+  it("as duas listas falham com a escola na lista da sessão (Secretaria): a ficha abre e cada bloco diz o erro", async () => {
     semearEscolas();
     responderErro("GET", "/redes/1/dashboard", 500, "FALHA-DO-PAINEL");
     responderErro("GET", "/redes/1/analise/plataformas", 500, "FALHA-DAS-PLATAFORMAS");
     renderEscolas("/rede/escolas/2");
-    expect(await screen.findByText(/FALHA-DO-PAINEL/)).toBeInTheDocument();
+    // O nome vem da lista da sessão (só escolas da rede dela): nunca a ficha de outra escola.
+    expect(await screen.findByRole("heading", { level: 1, name: "EMEF Sintética Alfa" })).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByTestId("ficha-sem-cadastro")).toHaveTextContent("FALHA-DO-PAINEL"),
+                  { timeout: 3000 });
+    await waitFor(() => expect(screen.getByText(/Não foi possível carregar o uso das plataformas: FALHA-DAS-PLATAFORMAS/))
+      .toBeInTheDocument(), { timeout: 3000 });
+    // As avaliações da escola não dependem das listas da rede.
+    expect(await screen.findByTestId("analise-escola-indicador-saresp")).toHaveTextContent("219,6");
+  });
+
+  // A lista da sessão é lida no login: a escola movida para outra rede (ou excluída) depois dele
+  // continua nela até recarregar. Quando uma lista da rede CHEGA sem a escola, a sessão não confirma
+  // mais nada — a ficha diz que a escola não é desta rede (nunca quebra a página nem mostra a ficha
+  // de uma escola que a rede não tem).
+  it.each([
+    ["o painel e as plataformas chegam sem ela", () => {}],
+    ["o painel falha e as plataformas chegam sem ela",
+     () => responderErro("GET", "/redes/1/dashboard", 500, "FALHA-DO-PAINEL")],
+    ["as plataformas falham e o painel chega sem ela",
+     () => responderErro("GET", "/redes/1/analise/plataformas", 500, "FALHA-DAS-PLATAFORMAS")],
+  ])("escola na lista VELHA da sessão (saiu da rede depois do login), %s: 'Escola não encontrada'", async (_, falha) => {
+    semearEscolas();
+    falha();
+    // O servidor barra a escola que não é mais da rede.
+    responderErro("GET", (c) => c.startsWith("/escolas/77/"), 403, "Acesso negado: a escola não é da sua rede.");
+    renderEscolas("/rede/escolas/77", {
+      escolas: [...ESCOLAS_DO_CONTEXTO, escolaFake({ id: 77, nome: "EMEF Sintética Movida" })],
+    });
+    expect(await screen.findByTestId("ficha-nao-encontrada", undefined, { timeout: 3000 }))
+      .toHaveTextContent("Esta escola não está nesta rede");
+    expect(screen.getByRole("heading", { level: 1, name: "Escola não encontrada" })).toBeInTheDocument();
+    // E continua assim (nada de a ficha voltar depois, nem a página quebrar).
+    await new Promise((r) => setTimeout(r, 100));
+    expect(screen.getByTestId("ficha-nao-encontrada")).toBeInTheDocument();
+    expect(screen.queryByTestId("ficha-situacao-uso")).toBeNull();
+    expect(screen.queryByText("EMEF Sintética Movida")).toBeNull();
+  });
+});
+
+describe("Ficha da escola — a Secretaria não espera o painel nem as plataformas", () => {
+  /** O painel e as plataformas da rede nunca respondem (a leitura lenta da rede). */
+  const listasDaRedePresas = () => {
+    responder("GET", "/redes/1/dashboard", () => new Promise(() => {}));
+    responder("GET", "/redes/1/analise/plataformas", () => new Promise(() => {}));
+  };
+
+  it("escola da lista da sessão: as avaliações e a evolução saem já; o cadastro diz 'carregando', nunca 'sem cadastro'", async () => {
+    semearEscolas();
+    listasDaRedePresas();
+    renderEscolas("/rede/escolas/2");
+    expect(await screen.findByRole("heading", { level: 1, name: "EMEF Sintética Alfa" })).toBeInTheDocument();
+    await waitFor(() => expect(chamadas("/escolas/2/analise"))
+      .toEqual(["/escolas/2/analise?periodo=ano_letivo&so_avaliacoes=true"]));
+    expect(chamadas("/redes/1/analise/plataformas/evolucao").map((c) => consulta(c).get("escola_id"))).toEqual(["2"]);
+    expect(screen.getByTestId("ficha-cadastro-carregando")).toHaveTextContent("Carregando o cadastro da escola...");
+    expect(screen.queryByTestId("ficha-sem-cadastro")).toBeNull();
+    expect(screen.queryByTestId("ficha-cadastro")).toBeNull();
+    expect(screen.getByText("Carregando o uso das plataformas...")).toBeInTheDocument();
+    // As avaliações aparecem sem esperar as listas da rede.
+    expect(await screen.findByTestId("analise-escola-indicador-saresp")).toHaveTextContent("219,6");
+    expect(screen.queryByTestId("ficha-nao-encontrada")).toBeNull();
+  });
+
+  it("escola fora da lista da sessão (inativa, de outra rede ou inexistente): nenhuma leitura dela enquanto as listas não chegam", async () => {
+    semearEscolas();
+    listasDaRedePresas();
+    renderEscolas("/rede/escolas/6");
+    await waitFor(() => expect(chamadas("/redes/1/dashboard").length).toBeGreaterThan(0));
+    await new Promise((r) => setTimeout(r, 50));
+    expect(leuDaEscola(6)).toBe(false);
+    expect(screen.queryByRole("heading", { level: 1 })).toBeNull();
+  });
+
+  it("o admin global não confirma pela lista da sessão (ela não diz a rede da escola): espera, como antes", async () => {
+    semearEscolas();
+    listasDaRedePresas();
+    responder("GET", "/redes", [{ id: 1, nome: "Rede Sintética Norte" }, { id: 2, nome: "Rede Sintética Sul" }]);
+    renderEscolas("/rede/escolas/2?rede=1", { usuario: admin });
+    await waitFor(() => expect(chamadas("/redes/1/dashboard").length).toBeGreaterThan(0));
+    await new Promise((r) => setTimeout(r, 50));
     expect(leuDaEscola(2)).toBe(false);
+    expect(screen.queryByTestId("ficha-cadastro-carregando")).toBeNull();
   });
 });
 

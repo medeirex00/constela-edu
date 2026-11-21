@@ -1126,16 +1126,41 @@ def test_scheduler_liga_e_desliga(monkeypatch):
 
 
 def test_enfileirar_agendados_enfileira_vencidos(db, escola_completa):
-    from datetime import datetime
+    """Atraso CURTO (uma rodada perdida, um reinício): enfileira, como sempre."""
+    from datetime import timedelta
     from app.models.sincronizacao import SincronizacaoConfig, SincronizacaoExecucao
     from app.sync import service
     e = escola_completa["escola"].id
     db.add(SincronizacaoConfig(escola_id=e, plataforma="matific", ativo=True,
                                cadencia="diaria", hora_local="03:00",
-                               proxima_execucao=datetime(2020, 1, 1)))
+                               proxima_execucao=service._agora() - timedelta(hours=2)))
     db.commit()
     assert service.enfileirar_agendados(db) == 1
     assert db.query(SincronizacaoExecucao).filter_by(escola_id=e, origem="scheduler").first()
+
+
+@pytest.mark.parametrize("cadencia,atraso", [("diaria", 3), ("semanal", 8)])
+def test_agenda_vencida_ha_mais_que_a_cadencia_so_recalcula(db, escola_completa,
+                                                            cadencia, atraso):
+    """N4: agenda parada há dias (agendador desligado; salva antes de ligá-lo) não
+    roda na 1ª rodada, a qualquer hora — religar entre 07:30 e 10:30 de Brasília
+    colidia com o backup. Só a próxima data é recalculada; nada vai para a fila."""
+    from datetime import timedelta
+    from app.models.sincronizacao import SincronizacaoConfig, SincronizacaoExecucao
+    from app.sync import service
+    e = escola_completa["escola"].id
+    agora = service._agora()
+    cfg = SincronizacaoConfig(escola_id=e, plataforma="matific", ativo=True,
+                              cadencia=cadencia, hora_local="03:00", dia_semana=0,
+                              proxima_execucao=agora - timedelta(days=atraso))
+    db.add(cfg)
+    db.commit()
+    assert service.enfileirar_agendados(db) == 0
+    assert db.query(SincronizacaoExecucao).filter_by(escola_id=e).count() == 0
+    db.refresh(cfg)
+    assert cfg.proxima_execucao > agora                 # no próximo horário dela
+    assert cfg.proxima_execucao == service.calcular_proxima(cfg, agora)
+    assert service.enfileirar_agendados(db) == 0        # não vence de novo já
 
 
 def test_calcular_proxima_semanal(db):
@@ -1161,6 +1186,72 @@ def test_executar_lento_abre_alerta(db, escola_completa, monkeypatch):
     ex = service.enfileirar(db, escola.id, "matific", origem="manual")
     service.executar(db, ex)
     assert db.query(SincronizacaoAlerta).filter_by(escola_id=escola.id, tipo="lento").first()
+
+
+def test_lento_fecha_depois_de_sem_atualizacao_dentro_do_normal(db, escola_completa,
+                                                               monkeypatch):
+    """A12 (resíduo): o 'lento' ficava aberto depois de uma 'sem_atualizacao' rápida —
+    só a 'concluida' o avaliava. Sem atualização dentro do normal fecha; lenta não
+    abre (a régua do normal é a das concluídas)."""
+    from app.core.config import settings
+    from app.models.sincronizacao import SincronizacaoAlerta
+    from app.sync import connectors, orchestrator, service, vault
+    escola = escola_completa["escola"]
+    vault.salvar_credencial(db, escola.id, "matific", Credenciais(usuario="u", senha="p"))
+    arq = ArquivoObtido(conteudo=b"PK", nome_arquivo="m.xlsx", plataforma="matific")
+    monkeypatch.setitem(connectors._REGISTRO, "matific", ConectorFake(arquivos=[arq]))
+    monkeypatch.setattr(orchestrator, "_parsear", lambda a: _analise_ana())
+
+    def _lento_aberto():
+        db.expire_all()
+        return db.query(SincronizacaoAlerta).filter_by(
+            escola_id=escola.id, tipo="lento", resolvido=False).first() is not None
+
+    monkeypatch.setattr(settings, "SYNC_LENTO_S", 0)   # a 1ª (concluida) é "lenta"
+    ex = service.enfileirar(db, escola.id, "matific", origem="manual")
+    service.executar(db, ex)
+    assert ex.status == "concluida" and _lento_aberto()
+
+    # Mesmo dado: 'sem_atualizacao', ainda "lenta" pelo piso 0 — não fecha nem reabre.
+    ex = service.enfileirar(db, escola.id, "matific", origem="manual")
+    service.executar(db, ex)
+    assert ex.status == "sem_atualizacao" and _lento_aberto()
+
+    monkeypatch.setattr(settings, "SYNC_LENTO_S", 3600)  # dentro do normal
+    ex = service.enfileirar(db, escola.id, "matific", origem="manual")
+    service.executar(db, ex)
+    assert ex.status == "sem_atualizacao"
+    assert not _lento_aberto()
+
+
+def test_sem_atualizacao_lenta_nao_abre_o_lento(db, escola_completa, monkeypatch):
+    """A 'sem_atualizacao' só FECHA o 'lento': fora do normal, sem 'lento' aberto antes,
+    ela não o abre (a régua do normal é a das concluídas)."""
+    from app.core.config import settings
+    from app.models.sincronizacao import SincronizacaoAlerta
+    from app.sync import connectors, orchestrator, service, vault
+    escola = escola_completa["escola"]
+    vault.salvar_credencial(db, escola.id, "matific", Credenciais(usuario="u", senha="p"))
+    arq = ArquivoObtido(conteudo=b"PK", nome_arquivo="m.xlsx", plataforma="matific")
+    monkeypatch.setitem(connectors._REGISTRO, "matific", ConectorFake(arquivos=[arq]))
+    monkeypatch.setattr(orchestrator, "_parsear", lambda a: _analise_ana())
+
+    def _lento_aberto():
+        db.expire_all()
+        return db.query(SincronizacaoAlerta).filter_by(
+            escola_id=escola.id, tipo="lento", resolvido=False).first() is not None
+
+    monkeypatch.setattr(settings, "SYNC_LENTO_S", 3600)   # a 1ª (concluida) é normal
+    ex = service.enfileirar(db, escola.id, "matific", origem="manual")
+    service.executar(db, ex)
+    assert ex.status == "concluida" and not _lento_aberto()
+
+    # Mesmo dado, e qualquer duração passa do limite: 'sem_atualizacao' "lenta".
+    monkeypatch.setattr(service, "limite_lento_ms", lambda *a, **k: (-1, None))
+    ex = service.enfileirar(db, escola.id, "matific", origem="manual")
+    service.executar(db, ex)
+    assert ex.status == "sem_atualizacao"
+    assert not _lento_aberto()
 
 
 def test_dashboard_global_ok(db, escola_completa):
@@ -1289,7 +1380,7 @@ def test_erro_generico_nao_vaza_segredo(db, escola_completa, monkeypatch):
 def test_enfileirar_agendados_multi_escola(db, escola_completa):
     """Duas escolas com agenda vencida → cada uma enfileira a SUA execução, sem
     interferência entre tenants."""
-    from datetime import datetime
+    from datetime import timedelta
     from app.models import Escola
     from app.models.sincronizacao import SincronizacaoConfig, SincronizacaoExecucao
     from app.sync import service
@@ -1298,9 +1389,10 @@ def test_enfileirar_agendados_multi_escola(db, escola_completa):
     db.add(outra)
     db.flush()
     for eid in (e1, outra.id):
+        # Vencida há pouco (atraso de dias só recalcula — N4).
         db.add(SincronizacaoConfig(escola_id=eid, plataforma="matific", ativo=True,
                                    cadencia="diaria", hora_local="03:00",
-                                   proxima_execucao=datetime(2020, 1, 1)))
+                                   proxima_execucao=service._agora() - timedelta(hours=1)))
     db.commit()
     assert service.enfileirar_agendados(db) == 2
     assert db.query(SincronizacaoExecucao).filter_by(

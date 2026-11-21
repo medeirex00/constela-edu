@@ -21,7 +21,7 @@ import { useApp } from "../../../context/AppContext";
 import { useApi } from "../../../hooks/useApi";
 import { usePerfil } from "../../../hooks/usePerfil";
 import type { ApiError } from "../../../lib/api";
-import { useApiExata } from "../../analise/comum";
+import { periodoDaRede, useApiExata } from "../../analise/comum";
 import { porNome } from "../../analise/formato";
 import type { JanelaAnalise, RespostaIndicadoresRede } from "../../analise/tipos";
 import type { DashboardRede, DestaquesRede } from "../comum";
@@ -213,10 +213,13 @@ export function useSerieDaPagina(): [number | null, (s: number | null) => void] 
   return [serie, definir];
 }
 
-/** O período da tela (na URL) e como trocá-lo — sem mexer no período global do sistema. */
+/** O período da tela (na URL) e como trocá-lo — sem mexer no período global do sistema. Para a
+ *  Secretaria, um período que não é o ano letivo nem um bimestre inteiro (link antigo) abre no
+ *  ano letivo (`periodoDaRede`). */
 export function usePeriodoDaPagina(): [Periodo, (p: Periodo) => void] {
   const [params, setParams] = useSearchParams();
-  const periodo = periodoDaUrl(params);
+  const { secretaria } = usePerfil();
+  const periodo = periodoDaRede(periodoDaUrl(params), secretaria);
   const definir = useCallback((p: Periodo) => {
     setParams(new URLSearchParams(comConsulta(`?${params.toString()}`, periodoParaUrl(p)).split("?")[1] ?? ""),
               { replace: true });

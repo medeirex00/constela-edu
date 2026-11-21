@@ -35,6 +35,11 @@
  * ninguém fez atividade — o que era falso justamente quando o dado existia e
  * foi descartado pelo filtro de ano. Nada aqui recalcula: só lê e formata.
  *
+ * ANO DAS CRIANÇAS: num período de um ano letivo já encerrado (a cerimônia de 2026
+ * feita depois da virada), o backend monta os pódios com as crianças e as turmas
+ * daquele ano e diz isso em `populacao`; a tela avisa, e também quando o período
+ * passa por dois anos letivos (aí valem as crianças de agora).
+ *
  * ÍNDICE OCULTO: com poucos alunos com atividade no período, o backend devolve
  * as linhas da Matemática com `valor: null` (o índice, junto das estrelas e das
  * atividades, revelaria a mediana da escola — e com ela a contagem de uma
@@ -71,7 +76,7 @@ import type { ReactNode } from "react";
 import { Link } from "react-router-dom";
 
 import GerarCertificados from "../components/GerarCertificados";
-import { SeletorPeriodo, periodoParaQuery } from "../components/SeletorPeriodo";
+import { SeletorPeriodo, avisoPopulacao, periodoParaQuery } from "../components/SeletorPeriodo";
 import { MolduraPilula, estiloSelectPilula } from "../components/SeletorPilula";
 import { SeletorTurno } from "../components/SeletorTurno";
 import { SeloFrescor, type Frescor } from "../components/SeloFrescor";
@@ -97,7 +102,7 @@ import { useApp } from "../context/AppContext";
 import { useApi } from "../hooks/useApi";
 import { useModulos } from "../hooks/useModulos";
 import { usePerfil } from "../hooks/usePerfil";
-import { bimestreEmCurso } from "../lib/calendarioBimestres";
+import { bimestreEmCurso, useCalendarioBimestres } from "../lib/calendarioBimestres";
 import { nota as fmtNota, numero, tempoLeitura } from "../lib/formato";
 import { bimestreDoPeriodo } from "../lib/tiposCertificados";
 import type { AlunoParaCertificado, ModeloCertificado } from "../lib/tiposCertificados";
@@ -162,7 +167,12 @@ interface ReguaMatematica {
 
 /** `frescor`: DE QUANDO é o dado dos pódios (`frescor_ranking`, o mesmo bloco
  *  de `/ranking/frescor`, com a população do pódio). Um pódio de "outubro"
- *  montado com a última coleta de 01/10 parece completo e não é. */
+ *  montado com a última coleta de 01/10 parece completo e não é. Vem `null` num
+ *  período de um ano já encerrado: o selo só sabe medir as crianças do ano atual, e
+ *  sem selo é melhor que um selo de outra população.
+ *  `populacao`: de que ANO LETIVO são as crianças e as turmas dos pódios — num
+ *  período de um ano já encerrado (a cerimônia de 2026 depois da virada), as daquele
+ *  ano; num período que passa por dois anos, as do ano atual (a tela avisa). */
 type RespostaPremiacoes = PremiacoesT & {
   regua_matematica?: ReguaMatematica;
   frescor?: Frescor | null;
@@ -175,6 +185,18 @@ function soData(iso: string | null | undefined): string | null {
   return partes.length === 3 && partes[0].length === 4
     ? `${partes[2]}/${partes[1]}/${partes[0]}`
     : null;
+}
+
+/** O período RESPONDIDO pelo backend contém o dia de hoje? O "Nº bimestre" é resolvido
+ *  no ANO LETIVO da escola: na virada (escola ainda no ano anterior), o "1º bimestre" é
+ *  o do ano passado, já encerrado, enquanto o 1º do ano novo está em curso. Ponta sem
+ *  data é aberta. Compara o texto AAAA-MM-DD, sem passar por fuso (como `soData`). */
+function periodoContemHoje(p: { inicio: string | null; fim: string | null }, hoje: Date): boolean {
+  const dois = (n: number) => String(n).padStart(2, "0");
+  const dia = `${hoje.getFullYear()}-${dois(hoje.getMonth() + 1)}-${dois(hoje.getDate())}`;
+  const inicio = p.inicio?.split("T")[0];
+  const fim = p.fim?.split("T")[0];
+  return (!inicio || inicio <= dia) && (!fim || dia <= fim);
 }
 
 /** A janela usada na Matemática difere do período pedido? Devolve o texto a
@@ -831,8 +853,11 @@ export default function Premiacoes() {
   const modulos = useModulos();
   // Certificados: a rota já barra a Secretaria (RotaSemSecretaria); o botão some
   // também aqui, para nenhum caminho oferecer o que o backend recusa.
-  const { secretaria } = usePerfil();
+  const { secretaria, gestor } = usePerfil();
   const podeEmitir = !secretaria && escolaId != null;
+  // Quem só vê as próprias turmas (o professor: a mesma regra de
+  // `permissoes.turmas_permitidas` — nem global, nem admin/coordenação, nem Secretaria).
+  const soSuasTurmas = !gestor && !secretaria;
   const [turmaId, setTurmaId] = useState("");
   // Premiação cujo ranking completo está aberto (null = só os cartões).
   const [rankingAberto, setRankingAberto] = useState<CategoriaPremiacao | null>(null);
@@ -884,12 +909,22 @@ export default function Premiacoes() {
   // Régua da Matemática: o período do cabeçalho pode não ser o intervalo usado.
   const regua = dados?.regua_matematica;
   const avisoJanela = dados ? janelaDivergente(dados) : null;
+  // De que ano são as crianças e as turmas dos pódios: num período de um ano já
+  // encerrado, as daquele ano; num período que passa por dois anos, as de agora. A
+  // turma escolhida e as turmas do professor são as de agora (só quem está nelas HOJE
+  // aparece): a frase diz isso, a mesma do Relatório por Período.
+  const avisoAno = avisoPopulacao(dados?.populacao,
+                                  turmaId ? "turma" : soSuasTurmas ? "suas_turmas" : undefined);
 
   // Chip do cabeçalho: só quando o período escolhido É o bimestre em curso
-  // ("Este bimestre" ou o número dele), pelo calendário oficial.
-  const bimestre = bimestreEmCurso(new Date());
-  const ehBimestreEmCurso = bimestre != null
-    && (periodo.preset === "bimestre" || periodo.preset === `bimestre_${bimestre.numero}`);
+  // ("Este bimestre" ou o número dele), pelo calendário oficial (o do backend), e o
+  // período que o backend respondeu para este pódio contém hoje — o número sozinho não
+  // basta: na virada, o "1º bimestre" da escola ainda em 2026 é o de 2026, encerrado.
+  const calendario = useCalendarioBimestres(escolaId);
+  const bimestre = bimestreEmCurso(new Date(), calendario);
+  const ehBimestreEmCurso = bimestre != null && dados != null
+    && (periodo.preset === "bimestre" || periodo.preset === `bimestre_${bimestre.numero}`)
+    && periodoContemHoje(dados.periodo, new Date());
 
   // De onde sai o Top N do lote (D7): a premiação, o período e o recorte da tela.
   const nomeTurma = turmaId ? (turmas ?? []).find((t) => String(t.id) === turmaId)?.nome : undefined;
@@ -945,6 +980,13 @@ export default function Premiacoes() {
       {/* Data do dado: o backend já manda o bloco na resposta (sem pedido a
           mais); só as dimensões contratadas aparecem. */}
       {dados && <SeloFrescor frescor={dados.frescor} dimensoes={["leitura", "matematica"]} />}
+
+      {avisoAno && (
+        <Faixa papel="note" tom={dados?.populacao?.origem === "atravessa_anos" ? "alerta" : "info"}
+               icone={CalendarClock}>
+          {avisoAno}
+        </Faixa>
+      )}
 
       {avisoJanela && (
         <Faixa papel="note" tom="alerta" icone={AlertTriangle}>
@@ -1096,7 +1138,7 @@ export default function Premiacoes() {
         contexto={certificados?.contexto ?? ""}
         // Período de um bimestre (ex.: "3º bimestre" já fechado): o seletor do bimestre
         // impresso abre nele, não no bimestre de hoje.
-        bimestreInicial={bimestreDoPeriodo(periodo.preset)}
+        bimestreInicial={bimestreDoPeriodo(periodo.preset, new Date(), calendario)}
         aberto={certificados != null}
         aoFechar={() => setCertificados(null)}
       />

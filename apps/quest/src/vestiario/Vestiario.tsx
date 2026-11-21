@@ -5,7 +5,7 @@
  * sequência cinematográfica). Os thumbnails são chips 2D (o preview 3D é o
  * herói — só um contexto WebGL por tela).
  */
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { ApiError } from "@constela/core";
 import { escolherNome, trocarAvatar } from "@constela/quest-core";
@@ -14,6 +14,7 @@ import type { Avatar } from "@constela/quest-core";
 import { InvocacaoSkate } from "../cosmo/InvocacaoSkate";
 import { Palco3D } from "../personagem/Palco3D";
 import { narrar, tocar } from "../audio/audio";
+import { soLetrasDoNome } from "../cerimonia/nome";
 import { useSessao } from "../estado/sessao";
 import { AmbienteEspacial } from "../lobby/AmbienteEspacial";
 import "./vestiario.css";
@@ -79,6 +80,9 @@ export function Vestiario() {
   const [salvando, setSalvando] = useState(false);
   const [erro, setErro] = useState("");
   const [invocandoSkate, setInvocandoSkate] = useState(false);
+  // Apelido e roupas devolvem o perfil inteiro. Aplicar as respostas na ordem
+  // das ações evita voltar ao apelido ou à roupa que aparecia antes.
+  const fila = useRef<Promise<void>>(Promise.resolve());
 
   useEffect(() => { setApelido(perfil?.nome ?? ""); }, [perfil?.nome]);
 
@@ -87,7 +91,10 @@ export function Vestiario() {
   const aba = ABAS.find((a) => a.id === abaId)!;
   const eq = (slot: string) => (avatar[slot] as string) ?? PADRAO[slot];
 
-  async function definir(slot: string, valor: string) {
+  function definir(slot: string, valor: string) {
+    fila.current = fila.current.then(() => enviarTroca(slot, valor)).catch(() => undefined);
+  }
+  async function enviarTroca(slot: string, valor: string) {
     setErro("");
     try {
       atualizarPerfil(await trocarAvatar({ [slot]: valor }));
@@ -103,13 +110,18 @@ export function Vestiario() {
     tocar("sucesso");
     if (slot === "veiculo" && valor === "skate") { setInvocandoSkate(true); narrar("Skate voador!"); }
   }
-  function equipar(slot: string, valor: string) { if (eq(slot) !== valor) void definir(slot, valor); }
-  function alternar(slot: string, valor: string) { void definir(slot, eq(slot) === valor ? "nenhum" : valor); }
+  function equipar(slot: string, valor: string) { if (eq(slot) !== valor) definir(slot, valor); }
+  function alternar(slot: string, valor: string) { definir(slot, eq(slot) === valor ? "nenhum" : valor); }
 
-  async function salvarApelido() {
+  function salvarApelido() {
     const novo = apelido.trim();
-    if (salvando || novo === perfil?.nome) return;
-    setSalvando(true); setErro("");
+    if (salvando || novo.length < 2 || novo === perfil?.nome) return;
+    setSalvando(true);
+    fila.current = fila.current.then(() => enviarApelido(novo)).catch(() => undefined);
+  }
+
+  async function enviarApelido(novo: string) {
+    setErro("");
     try { atualizarPerfil(await escolherNome(novo)); tocar("sucesso"); narrar(`Agora você é ${novo}!`); }
     catch (e) {
       setErro(e instanceof ApiError && e.status !== 0 ? e.message
@@ -154,7 +166,7 @@ export function Vestiario() {
             <span>Meu apelido</span>
             <div className="apelido-linha">
               <input value={apelido} maxLength={20}
-                     onChange={(e) => setApelido(e.target.value.replace(/[^\p{L} ]/gu, ""))}
+                     onChange={(e) => setApelido(soLetrasDoNome(e.target.value))}
                      onKeyDown={(e) => e.key === "Enter" && salvarApelido()} aria-label="Meu apelido" />
               <button className="botao3d sol" onClick={salvarApelido}
                       disabled={salvando || apelido.trim().length < 2 || apelido.trim() === perfil.nome}>Salvar</button>

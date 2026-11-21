@@ -188,3 +188,173 @@ test("conflito de identidade revela a segunda confirmação e a envia", async ()
     expect(ultima.confirmar_conflito).toBe("FUNDIR MESMO COM CONFLITO");
   });
 });
+
+// --- A7: o que a fusão faz com as leituras repetidas, ANTES do FUNDIR ---------
+// A regra (fica a data da ficha principal) não muda; a tela passa a dizer quantos
+// livros têm data diferente e qual bimestre perde o livro, e respeita a direção.
+
+const PREVIA_LEITURAS = {
+  livros_repetidos: 3, com_data_diferente: 2, no_bimestre: 1,
+  // "(o bimestre atual)" só aparece quando o backend diz que ele está em curso.
+  bimestre: { numero: 3, rotulo: "3º bimestre", inicio: "2026-07-24", fim: "2026-10-04",
+              ano: 2026, atual: true },
+  por_bimestre: [{ numero: 3, rotulo: "3º bimestre", livros: 1 }],
+  exemplos: [{ livro_id: 5, livro: "Livro Ficticio A", data_manter: "2026-03-25",
+               data_remover: "2026-08-06", deixa_de_contar_em: 3 }],
+};
+
+async function abrirFusaoCom(nomeOutro: string) {
+  responder("GET", /\/alunos\?busca=/, {
+    itens: [{ id: 20, nome: nomeOutro, status: "ativo", turma: "3º Ano A" }],
+    total: 1, pagina: 1, por_pagina: 8,
+  });
+  renderComApp(<AcoesAluno aluno={aluno} escolaId={1} aoMudar={vi.fn()} />);
+  await userEvent.click(screen.getByLabelText("Ações de Ana Souza"));
+  await userEvent.click(await screen.findByText("Fundir com outro aluno"));
+  await userEvent.type(screen.getByPlaceholderText(/Buscar o cadastro duplicado/), "Ana");
+  await userEvent.click(await screen.findByRole("button", { name: new RegExp(nomeOutro) }));
+}
+
+test("a prévia mostra os livros repetidos com data diferente antes do FUNDIR", async () => {
+  responder("GET", /\/alunos\/fundir\/previa/, (caminho: string) => {
+    const q = new URL(`http://x${caminho}`).searchParams;
+    return {
+      manter: { id: Number(q.get("manter_id")), nome: "x" },
+      remover: { id: Number(q.get("remover_id")), nome: "y" },
+      leituras: PREVIA_LEITURAS,
+    };
+  });
+  await abrirFusaoCom("Ana Souza Duplicada");
+
+  const aviso = await screen.findByRole("note", { name: /Livros repetidos com data diferente/ });
+  expect(aviso).toHaveTextContent("2 livros estão nas duas fichas com datas diferentes");
+  expect(aviso).toHaveTextContent("Fica a data de “Ana Souza”");
+  expect(aviso).toHaveTextContent("1 no 3º bimestre (o bimestre atual)");
+  expect(aviso).toHaveTextContent("Livro Ficticio A: fica 25/03/2026, sai 06/08/2026");
+  // a consulta foi feita na direção que está na tela
+  const consultas = api.mock.calls.map(([c]) => String(c)).filter((c) => c.includes("/fundir/previa"));
+  expect(consultas.at(-1)).toContain("manter_id=10&remover_id=20");
+});
+
+test("trocar a ficha principal refaz a prévia na outra direção", async () => {
+  responder("GET", /\/alunos\/fundir\/previa/, (caminho: string) => {
+    const q = new URL(`http://x${caminho}`).searchParams;
+    return {
+      manter: { id: Number(q.get("manter_id")), nome: "x" },
+      remover: { id: Number(q.get("remover_id")), nome: "y" },
+      leituras: PREVIA_LEITURAS,
+    };
+  });
+  await abrirFusaoCom("Ana Souza Duplicada");
+  await screen.findByRole("note", { name: /Livros repetidos/ });
+  await userEvent.click(screen.getByRole("button", { name: "trocar" }));
+  await vi.waitFor(() => {
+    const consultas = api.mock.calls.map(([c]) => String(c)).filter((c) => c.includes("/fundir/previa"));
+    expect(consultas.at(-1)).toContain("manter_id=20&remover_id=10");
+  });
+  expect(await screen.findByRole("note", { name: /Livros repetidos/ }))
+    .toHaveTextContent("Fica a data de “Ana Souza Duplicada”");
+});
+
+test("se a prévia falhar, avisa e não bloqueia a fusão", async () => {
+  responderErro("GET", /\/alunos\/fundir\/previa/, 500, "Banco ocupado");
+  responder("POST", /\/alunos\/fundir$/, { ok: true });
+  await abrirFusaoCom("Ana Souza Duplicada");
+  expect(await screen.findByText(/Não foi possível conferir as leituras repetidas/)).toBeInTheDocument();
+  await userEvent.type(screen.getByPlaceholderText("FUNDIR"), "FUNDIR");
+  expect(screen.getByRole("button", { name: /Fundir cadastros/ })).toBeEnabled();
+});
+
+// --- Direção da fusão: a ficha aberta não fica como principal só por estar aberta.
+// A prévia traz a sugestão (mesma regra do lote) e o aviso de nome abreviado.
+
+function previaComSugestao(manterSugerido: number) {
+  return (caminho: string) => {
+    const q = new URL(`http://x${caminho}`).searchParams;
+    const manter = Number(q.get("manter_id"));
+    const remover = Number(q.get("remover_id"));
+    const nomes: Record<number, string> = { 10: "Ana Souza", 20: "Ana Souza Lima Ficticia" };
+    return {
+      manter: { id: manter, nome: nomes[manter] },
+      remover: { id: remover, nome: nomes[remover] },
+      sugestao: { manter_id: manterSugerido, remover_id: manterSugerido === 10 ? 20 : 10,
+                  motivo: "lista_piloto" },
+      nome: { mantem_abreviado: manter !== manterSugerido, fica: nomes[manter], sai: nomes[remover] },
+      leituras: { livros_repetidos: 0, com_data_diferente: 0, no_bimestre: 0, bimestre: null,
+                  por_bimestre: [], exemplos: [] },
+    };
+  };
+}
+
+test("abre com a ficha sugerida como principal, não com a ficha aberta", async () => {
+  responder("GET", /\/alunos\/fundir\/previa/, previaComSugestao(20));
+  responder("POST", /\/alunos\/fundir$/, { ok: true });
+  await abrirFusaoCom("Ana Souza Lima Ficticia");
+
+  expect(await screen.findByText(/Sugestão do sistema: manter este cadastro/)).toBeInTheDocument();
+  expect(screen.getByText("Fica como principal:").parentElement)
+    .toHaveTextContent("Ana Souza Lima Ficticia");
+  expect(screen.queryByRole("note", { name: /nome abreviado/ })).toBeNull();
+
+  await userEvent.type(screen.getByPlaceholderText("FUNDIR"), "FUNDIR");
+  await userEvent.click(screen.getByRole("button", { name: /Fundir cadastros/ }));
+  await vi.waitFor(() => {
+    const post = api.mock.calls.find(([c, o]) => String(c).endsWith("/alunos/fundir")
+      && (o as RequestInit)?.method === "POST");
+    expect(JSON.parse(String((post![1] as RequestInit).body)))
+      .toMatchObject({ manter_id: 20, remover_id: 10 });
+  });
+});
+
+test("trocar contra a sugestão avisa do nome abreviado e não é desfeito", async () => {
+  responder("GET", /\/alunos\/fundir\/previa/, previaComSugestao(20));
+  await abrirFusaoCom("Ana Souza Lima Ficticia");
+  await screen.findByText(/Sugestão do sistema/);
+
+  await userEvent.click(screen.getByRole("button", { name: "trocar" }));
+  const aviso = await screen.findByRole("note", { name: /nome abreviado/ });
+  expect(aviso).toHaveTextContent("o nome que fica é “Ana Souza”");
+  expect(aviso).toHaveTextContent("vai sair no certificado");
+  expect(screen.getByText(/O sistema sugere manter/)).toHaveTextContent("Ana Souza Lima Ficticia");
+  // a nova consulta (outra direção) não devolve a escolha para a sugestão
+  expect(screen.getByText("Fica como principal:").parentElement).toHaveTextContent("Ana Souza");
+  expect(screen.getByText("Fica como principal:").parentElement)
+    .not.toHaveTextContent("Ana Souza Lima Ficticia");
+  // não bloqueia: com FUNDIR digitado, o botão libera
+  await userEvent.type(screen.getByPlaceholderText("FUNDIR"), "FUNDIR");
+  expect(screen.getByRole("button", { name: /Fundir cadastros/ })).toBeEnabled();
+});
+
+test("enquanto a prévia confere, FUNDIR digitado não libera o botão", async () => {
+  // Sem a prévia, o gestor fundiria na direção da ficha aberta (que pode ser o
+  // stub) sem ver a sugestão, o aviso de nome abreviado nem as datas descartadas.
+  let liberar: () => void = () => {};
+  const chegou = new Promise<void>((r) => { liberar = r; });
+  const previa = previaComSugestao(10);
+  responder("GET", /\/alunos\/fundir\/previa/,
+    (caminho: string) => chegou.then(() => previa(caminho)));
+  responder("POST", /\/alunos\/fundir$/, { ok: true });
+  await abrirFusaoCom("Ana Souza Lima Ficticia");
+
+  expect(await screen.findByText(/Conferindo as leituras das duas fichas/)).toBeInTheDocument();
+  await userEvent.type(screen.getByPlaceholderText("FUNDIR"), "FUNDIR");
+  const botao = screen.getByRole("button", { name: /Fundir cadastros/ });
+  expect(botao).toBeDisabled();
+  await userEvent.click(botao);
+  expect(api.mock.calls.some(([c, o]) => String(c).endsWith("/alunos/fundir")
+    && (o as RequestInit)?.method === "POST")).toBe(false);
+
+  liberar();
+  expect(await screen.findByText(/Sugestão do sistema: manter este cadastro/)).toBeInTheDocument();
+  expect(screen.queryByText(/Conferindo as leituras/)).toBeNull();
+  expect(screen.getByRole("button", { name: /Fundir cadastros/ })).toBeEnabled();
+});
+
+test("quando a ficha aberta já é a sugerida, ela continua principal", async () => {
+  responder("GET", /\/alunos\/fundir\/previa/, previaComSugestao(10));
+  await abrirFusaoCom("Ana Souza Lima Ficticia");
+  expect(await screen.findByText(/Sugestão do sistema: manter este cadastro/)).toBeInTheDocument();
+  expect(screen.getByText("Fica como principal:").parentElement).toHaveTextContent("Ana Souza");
+  expect(screen.getByText("Fica como principal:").parentElement)
+    .not.toHaveTextContent("Lima Ficticia");
+});

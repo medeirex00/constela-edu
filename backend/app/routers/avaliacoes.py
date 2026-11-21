@@ -13,7 +13,9 @@ coordenador em ``/escolas/{id}/indicadores``). O catálogo e a lista de presets 
 leitura e continuam abertos a quem está logado.
 """
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
-from pydantic import BaseModel
+from typing import Annotated, Literal
+
+from pydantic import BaseModel, Field
 from sqlalchemy import delete as sa_delete, select
 from sqlalchemy.orm import Session
 
@@ -105,7 +107,10 @@ def analisar(
     if len(conteudo) > _MAX_BYTES:
         raise HTTPException(status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
                             "Arquivo muito grande. Extraia/reduza a planilha antes de subir.")
-    return svc.analisar_planilha(conteudo, arquivo.filename or "")
+    try:
+        return svc.analisar_planilha(conteudo, arquivo.filename or "")
+    except svc.ImportacaoRecusada as exc:   # planilha recusada antes de abrir (inflada)
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
 
 
 @router.post("/importar")
@@ -365,6 +370,19 @@ class _MapeamentoIn(BaseModel):
     col_turma: int | None = None
     etapa_fixa: str | None = None
     componente_fixo: str | None = None
+    # O texto do cabeçalho (a linha antes dos dados) de cada coluna mapeada, como estava
+    # no arquivo conferido na tela. Cada coleta confere o arquivo baixado contra ele
+    # (``svc.conferir_arquivo_da_fonte``); sem ele, a 1ª coleta vira a referência.
+    cabecalho: dict[Literal["col_inep", "col_valor", "col_etapa", "col_componente",
+                            "col_turma"], Annotated[str, Field(max_length=200)]] | None = None
+    # As linhas do topo do arquivo conferido na tela, do começo até a linha antes dos dados
+    # (como a análise as mostrou, sem as células vazias). No arquivo oficial do INEP, só o
+    # topo diz a ETAPA (os nomes das variáveis são os mesmos em todas): a fonte guarda só a
+    # etapa tirada dele (``svc.etapa_do_arquivo_inep``), e cada coleta confere que o arquivo
+    # da URL é dessa etapa. Até 20 linhas: a análise mostra as 20 primeiras.
+    topo: Annotated[list[Annotated[list[Annotated[str, Field(max_length=500)]],
+                                   Field(max_length=1000)]],
+                    Field(max_length=20)] | None = None
 
 
 class _FonteIn(BaseModel):
@@ -389,6 +407,10 @@ def _fonte_saida(f: FonteAvaliacao, av: AvaliacaoExterna | None) -> dict:
         "proxima_coleta": f.proxima_coleta.isoformat() if f.proxima_coleta else None,
         "ultimo_status": f.ultimo_status, "ultimo_erro": f.ultimo_erro,
         "ultimo_resumo": f.ultimo_resumo,
+        # O robô AUTOMÁTICO está ligado neste servidor? Desligado (o padrão), a fonte
+        # mensal não é coletada sozinha e a "próxima coleta" não acontece: só o
+        # "Coletar agora". A tela usa isto para não prometer a coleta automática.
+        "robo_habilitado": svc.robo_habilitado(),
     }
 
 
@@ -431,11 +453,25 @@ def criar_fonte(
         raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
     av = svc.obter_avaliacao(db, dados.avaliacao)
     cadencia = "mensal" if dados.cadencia == "mensal" else "manual"
+    mapeamento = dados.mapeamento.model_dump(exclude={"cabecalho", "topo"})
+    # O que a tela conferiu no arquivo analisado: o cabeçalho das colunas mapeadas e, no
+    # arquivo do INEP, a etapa (REV3-INDIC-2: sem ela, a 1ª coleta adotava a etapa que o
+    # arquivo da URL declarasse, e o de Anos Finais passava por Anos Iniciais).
+    conferido: dict = {}
+    colunas = svc.colunas_do_cabecalho(mapeamento, dados.mapeamento.cabecalho)
+    if colunas:
+        conferido["colunas"] = colunas
+    etapa_do_arquivo = svc.etapa_do_arquivo_inep(dados.mapeamento.topo,
+                                                 dados.mapeamento.linha_dados)
+    if etapa_do_arquivo:
+        conferido["etapa_do_arquivo"] = etapa_do_arquivo
+    if conferido:
+        mapeamento["cabecalho"] = conferido
     fonte = FonteAvaliacao(
         avaliacao_id=av.id, nome=dados.nome.strip(), url=dados.url.strip(),
         edicao=dados.edicao, indicador=dados.indicador.strip(),
         unidade=dados.unidade.strip(), cadencia=cadencia,
-        mapeamento=dados.mapeamento.model_dump(),
+        mapeamento=mapeamento,
         proxima_coleta=svc._agora() if cadencia == "mensal" else None)
     db.add(fonte)
     db.flush()

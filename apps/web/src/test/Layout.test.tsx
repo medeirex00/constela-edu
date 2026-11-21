@@ -523,6 +523,43 @@ describe("Layout — casca: rolagem do menu, trilha, cartão da escola e avatar"
     expect(base).toHaveAttribute("data-visivel", "nao");
   });
 
+  it("a seta de rolagem fica FORA da lista que rola: nunca em cima de um rótulo", async () => {
+    // Dentro da lista (presa à borda, sobre o esmaecido) a seta caía em cima do rótulo
+    // que passava ali — "Regras de⌄pontuação" numa janela de 768 px com todos os grupos
+    // abertos. Agora ela mora na folga entre a lista e o cabeçalho/rodapé, posicionada
+    // para fora da caixa da lista. (A medida no navegador real está no relatório.)
+    escolaConfigurada();
+    const coordenadora = usuarioFake({ is_global: false, cargo: "coordenador", nome: "Coordenadora" });
+    renderComApp(<LayoutReal />, { rota: "/", usuario: coordenadora, escolas: [escolaFake({ id: 1 })] });
+    await sessaoAberta(coordenadora);
+    const lista = screen.getByRole("navigation", { name: "Menu principal" });
+    const caixa = lista.parentElement as HTMLElement;
+    const setaTopo = caixa.querySelector(':scope > [data-seta="topo"]') as HTMLElement;
+    const setaBase = caixa.querySelector(':scope > [data-seta="base"]') as HTMLElement;
+    expect(setaTopo).not.toBeNull();
+    expect(setaBase).not.toBeNull();
+    // Nenhuma seta (nenhum desenho) dentro da área que rola; os esmaecidos seguem lá.
+    expect(lista.querySelector("[data-seta]")).toBeNull();
+    expect(lista.querySelector('[data-degrade] svg')).toBeNull();
+    expect(lista.querySelectorAll("[data-degrade]")).toHaveLength(2);
+    // Presas à caixa da lista e empurradas para FORA dela (acima e abaixo).
+    expect(caixa.className).toContain("relative");
+    expect(setaTopo.className).toMatch(/\babsolute\b/);
+    expect(setaTopo.className).toMatch(/\btop-0\b/);
+    expect(setaTopo.className).toMatch(/(^|\s)-translate-y-full\b/);
+    expect(setaBase.className).toMatch(/\bbottom-0\b/);
+    expect(setaBase.className).toMatch(/(^|\s)translate-y-full\b/);
+    expect(setaTopo).toHaveAttribute("aria-hidden", "true");
+    expect(setaBase).toHaveAttribute("aria-hidden", "true");
+    // E seguem o mesmo aviso dos esmaecidos.
+    act(() => rolarLista(lista, { total: 900, altura: 600, topo: 0 }));
+    expect(setaTopo).toHaveAttribute("data-visivel", "nao");
+    expect(setaBase).toHaveAttribute("data-visivel", "sim");
+    act(() => rolarLista(lista, { total: 900, altura: 600, topo: 300 }));
+    expect(setaTopo).toHaveAttribute("data-visivel", "sim");
+    expect(setaBase).toHaveAttribute("data-visivel", "nao");
+  });
+
   it("trilha: os três níveis (início, contexto e página) levam o texto inteiro no title", async () => {
     escolaConfigurada();
     const secretaria = usuarioFake({ nome: "Equipe SEDUC", cargo: "coordenador", rede_id: 1, escola_id: null });

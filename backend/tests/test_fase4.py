@@ -1,5 +1,6 @@
 """Testes da Fase 4 — gamificação, relatórios, administração e utilidades."""
 import json
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
@@ -7,6 +8,7 @@ from app.models import Importacao, Leitura, Livro, SnapshotElefante, SnapshotMat
 from app.services import backup as svc_backup
 from app.services import gamificacao as svc_gami
 from app.services import scoring
+from tests._ano_letivo import escola_no_ano_de_hoje  # noqa: F401 — fixture
 
 
 def _dados_basicos(db, escola_completa):
@@ -98,8 +100,21 @@ def test_ranking_leitura_historico_inclui_snapshot_elefante(cliente, db, escola_
     assert all(i["aluno_id"] != ana.id for i in r_mes.json())
 
 
+def _ana_cresceu_no_mes(db, escola_completa, importacao):
+    """Retrato ANTIGO de Ana (antes da janela de 30 dias), com menos atividades:
+    ela CRESCEU no mês. Os destaques do mural usam a régua justa (o acumulado de
+    um 1º retrato não é evolução do período), então "Ana é o destaque do mês"
+    precisa de crescimento dentro da janela, não só de um retrato recente."""
+    escola = escola_completa["escola"]
+    ana = escola_completa["alunos"][0]
+    db.add(SnapshotMatific(escola_id=escola.id, aluno_id=ana.id, importacao_id=importacao.id,
+                           data_referencia=datetime.now(timezone.utc) - timedelta(days=45),
+                           atividades=10, estrelas=40, pontuacao_media=4.0))
+    db.commit()
+
+
 def test_mural_traz_destaques_e_eventos(cliente, db, escola_completa):
-    _dados_basicos(db, escola_completa)
+    _ana_cresceu_no_mes(db, escola_completa, _dados_basicos(db, escola_completa))
     escola = escola_completa["escola"]
     resposta = cliente.get(f"/api/v1/escolas/{escola.id}/gamificacao/mural")
     assert resposta.status_code == 200
@@ -116,7 +131,7 @@ def test_mural_reusa_series_sem_recarregar_por_janela(db, escola_completa):
     contagem de SELECTs e confirma que o RESULTADO não mudou."""
     from sqlalchemy import event
 
-    _dados_basicos(db, escola_completa)
+    _ana_cresceu_no_mes(db, escola_completa, _dados_basicos(db, escola_completa))
     escola = escola_completa["escola"]
 
     engine = db.get_bind()

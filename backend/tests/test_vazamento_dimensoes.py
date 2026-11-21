@@ -44,13 +44,14 @@ from app.models import (
 )
 from app.services import scoring
 from tests.regua_legada import referencias_legado_com_vazamento
+from tests._ano_letivo import ANO
 
 # ---------------------------------------------------------------------------
 # Montagem
 # ---------------------------------------------------------------------------
 
 def _escola(db):
-    esc = Escola(nome="EM VAZAMENTO", ano_letivo_ativo=2026, status="ativa")
+    esc = Escola(nome="EM VAZAMENTO", ano_letivo_ativo=ANO, status="ativa")
     db.add(esc)
     db.flush()
     for ns, val in scoring.PESOS_PADRAO.items():
@@ -68,7 +69,7 @@ def _escola(db):
                             codigos=["D"], pontos_padrao=4.0, ordem=1))
     db.add(ReferenciaNormalizacao(escola_id=esc.id, modo="auto"))
     turma = Turma(escola_id=esc.id, nome="4ºA", ano_escolar="4º Ano",
-                  ano_letivo=2026, status="ativa")
+                  ano_letivo=ANO, status="ativa")
     db.add(turma)
     # E-mail único por escola: um mesmo teste monta duas escolas (o A/B recalcula
     # a mesma base com as duas réguas, e a varredura monta a sua).
@@ -97,7 +98,7 @@ def _aluno(db, esc, turma, imp, nome, *, ele=None, mat=None):
     db.add(a)
     db.flush()
     db.add(Matricula(escola_id=esc.id, aluno_id=a.id, turma_id=turma.id,
-                     ano_letivo=2026))
+                     ano_letivo=ANO))
     if ele is not None:
         db.add(SnapshotElefante(escola_id=esc.id, aluno_id=a.id,
                                 importacao_id=imp.id, **_ele(ele)))

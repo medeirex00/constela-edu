@@ -11,6 +11,7 @@ seus próprios testes em test_reset_senha.py.
 import pytest
 from fastapi.testclient import TestClient
 
+from app.core.rate_limit import chave_conta_ip, identidade_da_conta, limitador_login
 from app.core.security import hash_senha
 from app.main import app
 from app.models import Usuario
@@ -90,30 +91,24 @@ def test_username_repetido_e_invalido_sao_recusados(db, contas):
 # --- Limitador de tentativas ---------------------------------------------------
 
 def test_limitador_soma_email_e_username_no_mesmo_contador(db, contas):
-    """Tentar pelo e-mail e depois pelo @username não pode dobrar o orçamento
-    de força bruta contra a mesma conta. Conta DEDICADA: o limitador vive na
-    memória do processo e um bloqueio vazaria para os demais testes."""
-    db.add(Usuario(escola_id=contas["escola"].id, nome="Alvo Limite",
-                   email="limite@teste.local", username="limite",
-                   senha_hash=hash_senha("s3nh4!!!"), cargo="professor"))
+    """O limite atingido pelo e-mail também bloqueia o acesso pelo username."""
+    usuario = Usuario(escola_id=contas["escola"].id, nome="Alvo Limite",
+                      email="limite@teste.local", username="limite",
+                      senha_hash=hash_senha("s3nh4!!!"), cargo="professor")
+    db.add(usuario)
     db.commit()
 
     cliente = TestClient(app)
-    bloqueado_em = None
-    for tentativa in range(1, 30):
-        resposta = cliente.post("/api/v1/auth/login",
-                                data={"username": "limite@teste.local",
-                                      "password": "senha-errada"})
-        if resposta.status_code == 429:
-            bloqueado_em = tentativa
-            break
-    assert bloqueado_em is not None, "o limitador nunca bloqueou"
+    respostas = [cliente.post("/api/v1/auth/login",
+                              data={"username": usuario.email, "password": "senha-errada"})
+                 for _ in range(limitador_login.max_tentativas)]
+    assert all(r.status_code == 401 for r in respostas)
+    assert limitador_login.bloqueado(chave_conta_ip(identidade_da_conta(usuario), "testclient"))
 
-    # Pelo USERNAME a mesma conta já deve estar bloqueada (mesmo contador).
     via_username = cliente.post("/api/v1/auth/login",
-                                data={"username": "limite",
-                                      "password": "senha-errada"})
-    assert via_username.status_code == 429
+                                data={"username": usuario.username, "password": "s3nh4!!!"})
+    assert via_username.status_code == 401
+    assert via_username.json() == respostas[0].json()
 
 
 # --- Listagem respeita a matriz por cargo -------------------------------------

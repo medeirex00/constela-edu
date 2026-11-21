@@ -27,6 +27,10 @@ export interface Escola {
   logotipo_url: string | null;
   ano_letivo_ativo: number;
   status: string;
+  /** Módulos do plano da escola (os da rede dela), só no item de GET /escolas. Ausente = API
+   *  antiga. É por aqui que a tela sabe o que a escola SELECIONADA contratou: o admin global
+   *  recebe em /auth/me o catálogo inteiro. */
+  modulos?: string[];
 }
 
 export interface Aluno {
@@ -312,6 +316,19 @@ export interface HistoricoLeituras {
   itens: LeituraHistorico[];
 }
 
+/** De que ano letivo vêm as crianças, as turmas e a série de uma consulta por período
+ *  (`periodos.populacao_do_periodo` no backend): o do período quando ele cai inteiro num
+ *  ano letivo já encerrado (`ano_do_periodo`); senão, o ativo (`ano_ativo`), declarado
+ *  quando o período passa por mais de um ano (`atravessa_anos`). */
+export type OrigemPopulacao = "ano_ativo" | "ano_do_periodo" | "atravessa_anos";
+
+/** O bloco `populacao` das premiações e do Relatório por Período. */
+export interface PopulacaoDoPeriodo {
+  ano_letivo: number;
+  origem: OrigemPopulacao;
+  ano_letivo_ativo?: number;
+}
+
 /** Item do ranking de leitura por período (livros/pontos/tempo no intervalo). */
 export interface RankingLeituraItem {
   posicao: number;
@@ -322,6 +339,9 @@ export interface RankingLeituraItem {
   livros: number;
   pontos: number;
   tempo_leitura_min: number;
+  /** O ano letivo da criança, da turma e da série desta linha, e por quê. */
+  ano_letivo?: number;
+  populacao?: OrigemPopulacao;
 }
 
 /** Ranking de Matemática por período (estrelas/atividades do Matific). */
@@ -334,6 +354,9 @@ export interface RankingMatematicaItem {
   estrelas: number;
   atividades: number;
   pontuacao_media: number;
+  /** O ano letivo da criança, da turma e da série desta linha, e por quê. */
+  ano_letivo?: number;
+  populacao?: OrigemPopulacao;
 }
 
 /** Um colocado no pódio de uma premiação. */
@@ -381,6 +404,9 @@ export interface Premiacoes {
   /** Presente com `?turnos=true` (visão "todas as turmas"): os mesmos pódios
    *  quebrados por TURNO. O front mostra as abas de turno só quando há mais de um. */
   turnos?: PremiacoesTurno[];
+  /** De que ano letivo são as crianças e as turmas dos pódios (e o contador do
+   *  Matific): num período de um ano já encerrado, as daquele ano. */
+  populacao?: PopulacaoDoPeriodo;
 }
 
 /** Aluno no painel de gestão da turma — com nota, posição e data de cadastro. */
@@ -411,14 +437,28 @@ export interface Correspondencia {
   // Motor único (prévia = confirmação): "vinculado" (vincula automático),
   // "revisar" (possível duplicata — o gestor decide), "bloqueado" (conflito de
   // identidade). "exato"/"provavel"/"nao_encontrado" = casamento por nome (fallback
-  // fora da turma) mantidos por compatibilidade.
+  // fora da turma) mantidos por compatibilidade. "ignorado" = a confirmação ignora a
+  // linha (``motivo``: conta_esquecida — aluno excluído para sempre —,
+  // identidade_aposentada…); sem aluno nem alternativa a escolher.
   status: "vinculado" | "revisar" | "bloqueado"
-    | "exato" | "provavel" | "nao_encontrado";
+    | "exato" | "provavel" | "nao_encontrado" | "ignorado";
   aluno_id: number | null;
   aluno_nome: string | null;
   similaridade: number | null;
   motivo?: string;   // uuid|identificador|exato|abreviacao|parcial|variante|typo|conflito
   alternativas: { aluno_id: number; nome: string; turma?: string; similaridade: number }[];
+  /** ONDE A FICHA NOVA NASCE (status "nao_encontrado"/"bloqueado"), decidido pelo
+   *  backend — a tela não adivinha a turma pelo nome:
+   *  - `turma_id`/`turma_nome`: a turma cadastrada que recebe a ficha (a tela manda
+   *    `criar_em_turma_id` = `turma_id`);
+   *  - `turma_nova`: a sala do relatório não tem turma no cadastro; a confirmação
+   *    cria uma com este nome (a tela manda `criar_em_turma_nome` = a turma do
+   *    relatório como veio — `dados.turma_relatorio` ou `turma_detectada`);
+   *  - os três nulos: a linha não cria ficha (vínculo ou revisão) ou o relatório
+   *    não informa turma — a tela pede a turma. */
+  turma_id?: number | null;
+  turma_nome?: string | null;
+  turma_nova?: string | null;
 }
 
 export interface LinhaAnalise {
@@ -587,6 +627,9 @@ export interface EventoMural {
  *  uma unica viagem de rede para o mobile hidratar todas as telas. */
 export interface PacoteSincronizacao {
   gerado_em: string;
+  /** Módulos que a rede da escola contratou. O módulo fora do plano não aparece
+   *  no app nem zerado. Ausente (servidor antigo) = os dois, como antes. */
+  modulos?: Dimensao[];
   dashboard: Dashboard;
   /** LEGADO: ordem única por nota geral. */
   ranking: RankingItem[];

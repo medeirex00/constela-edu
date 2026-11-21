@@ -74,6 +74,11 @@ const BACKEND_ENV: Record<string, string> = {
   AUTOMACAO_VERIFICAR_NO_BOOT: "false",
   PYTHONIOENCODING: "utf-8",
   E2E_ANALISE_PASTA: PASTA_DADOS,
+  // Uploads e exportações numa pasta TEMPORÁRIA, nunca nas do checkout: o expurgo de
+  // fundo da API (core/expurgo_arquivos.py) roda no boot e aplica a retenção em
+  // UPLOADS_DIR/temporarios e EXPORTS_DIR — sem DADOS_DIR, em dev, <repo>/exports, onde
+  // ficam entregas guardadas à mão (REV2-OPS-1). A suíte do backend já faz o mesmo.
+  DADOS_DIR: path.join(os.tmpdir(), "constela-e2e-analise-dados"),
   ...Object.fromEntries(Object.keys(SENHAS_PADRAO).map((k) => [k, process.env[k] as string])),
 };
 

@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import Boolean, Float, ForeignKey, Index, String
+from sqlalchemy import Boolean, Float, ForeignKey, Index, String, func, text, true
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.database import Base
@@ -31,13 +31,17 @@ class Rede(Base):
     # uma vez e conferido na prévia (o arquivo mostra o nome do CODMUN) — nunca
     # casado pelo nome do município.
     codigo_municipio_estadual: Mapped[str | None] = mapped_column(String(8), default=None)
-    status: Mapped[str] = mapped_column(String(20), default="ativa")  # ativa | inativa
+    # Os server_default repetem os da 0015 (as migrações são a verdade do banco; o ORM
+    # sempre grava pelo `default`).
+    status: Mapped[str] = mapped_column(String(20), default="ativa",  # ativa | inativa
+                                        server_default="ativa")
     # Painel público da Secretaria (vitrine SEM login): quando definido, habilita
     # /publico/rede/{token} com as MELHORES ESCOLAS (top 5 em leitura e matemática)
     # — NUNCA nome de criança. Nulo = desligado. Trocar o token invalida o link.
     token_publico: Mapped[str | None] = mapped_column(String(64), unique=True,
                                                       index=True, default=None)
-    created_at: Mapped[datetime] = mapped_column(default=agora)
+    created_at: Mapped[datetime] = mapped_column(default=agora,
+                                                 server_default=text("CURRENT_TIMESTAMP"))
 
 
 class ModuloRede(Base):
@@ -74,8 +78,10 @@ class ModuloRede(Base):
         ForeignKey("redes.id", ondelete="CASCADE"), index=True)
     # Chave do catálogo (app/services/modulos.py): "leitura" | "matematica" | ...
     modulo: Mapped[str] = mapped_column(String(30))
-    ativo: Mapped[bool] = mapped_column(Boolean, default=True)
-    updated_at: Mapped[datetime] = mapped_column(default=agora, onupdate=agora)
+    # Os server_default repetem os da 0026 (o ORM sempre grava pelo `default`).
+    ativo: Mapped[bool] = mapped_column(Boolean, default=True, server_default=true())
+    updated_at: Mapped[datetime] = mapped_column(default=agora, onupdate=agora,
+                                                 server_default=func.now())
 
 
 class MetaRede(Base):

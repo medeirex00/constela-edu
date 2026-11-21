@@ -2,8 +2,8 @@
 
 Regras do dono:
   * o catálogo é OFICIAL e somente leitura para a escola (professor, coordenador,
-    admin da escola) e para a Secretaria — só o Admin Global cria, corrige nível
-    ou título e exclui;
+    admin da escola) — só o Admin Global cria, corrige nível ou título e exclui; a
+    Secretaria nem o lê (o acervo é o histórico de leitura das crianças, S_G_GRUPO-2);
   * a correção vale para as PRÓXIMAS leituras: cada ``Leitura`` guarda o nível
     congelado do momento em que foi registrada, então o histórico e as notas
     gravadas não mudam — e nada de "recálculo pendente" genérico;
@@ -72,8 +72,9 @@ def test_escola_e_secretaria_so_leem_o_catalogo(db, escola_completa, perfil):
         cliente = _usuario(db, escola, f"{perfil}@catalogo.local", perfil)
     base = f"{API}/escolas/{escola.id}/livros"
 
-    # LER continua liberado para quem já lia.
-    assert cliente.get(base).status_code == 200
+    # LER continua liberado para quem é da escola. A Secretaria não lê o acervo: com
+    # uma ou duas leitoras, ele é o histórico de leitura delas (S_G_GRUPO-2).
+    assert cliente.get(base).status_code == (403 if perfil == "secretaria" else 200)
 
     respostas = [
         cliente.post(base, json={"titulo": "Livro Novo", "nivel_codigo": "D"}),
@@ -166,8 +167,11 @@ def test_patch_vale_para_as_proximas_leituras_e_preserva_o_historico(
     assert notas() == antes
 
     # Título também vale daqui para a frente; um metadado sem efeito na nota, não.
+    # (Livro fora do catálogo com leituras: só acento/caixa/espaço muda — outro
+    # título faria a coleta criar um segundo livro; ver
+    # test_aud2_plat_livro_renomear_coleta.)
     assert cliente_global.patch(
-        url, json={"titulo": "O Mapa Perdido II"}).json()["vale_para_proximas_leituras"] is True
+        url, json={"titulo": "O mapa perdido"}).json()["vale_para_proximas_leituras"] is True
     sem_efeito = cliente_global.patch(url, json={"autor": "Rita"}).json()
     assert sem_efeito["vale_para_proximas_leituras"] is False
     assert sem_efeito["aviso_correcao"] is None

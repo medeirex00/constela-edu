@@ -23,9 +23,9 @@ import { AlertTriangle, ChartScatter } from "lucide-react";
 
 import { periodoParaQuery } from "../../components/SeletorPeriodo";
 import { Badge, Card, Carregando, IconePastel, Mensagem, SecaoRecolhivel } from "../../components/ui";
-import { useApp } from "../../context/AppContext";
 import {
   EscolhaIndicador, FiltrosAplicados, Seletor, TD, TH, TITULO_CARTAO, rotuloPeriodo, useApiExata,
+  usePeriodoDaAnalise,
 } from "./comum";
 import { decimal, numeroBR, porNome, rotuloComponente, rotuloEtapa } from "./formato";
 import type {
@@ -245,7 +245,7 @@ export default function RelacaoPlataformas({ redeId, base, params, atualizar }: 
   params: URLSearchParams;
   atualizar: (mudancas: Record<string, string | null>) => void;
 }) {
-  const { periodo } = useApp();
+  const periodo = usePeriodoDaAnalise();
   // A relação é ESCOLA a ESCOLA: indicador só da rede (o ICA) ou não oficial fica de fora.
   const bloqueio = (i: IndicadorAnalise): string | null => {
     if (!i.oficial) return "não é oficial: fica fora da relação";

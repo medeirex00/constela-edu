@@ -9,6 +9,9 @@
  *                      UMA leitura vale, separando o que vem DO LIVRO (título,
  *                      nível, palavras, de onde vieram) do que o Constela
  *                      CALCULA (tamanho típico do nível, base, fatores).
+ *                      A Secretaria vê SÓ pelo nível: o acervo da escola é o
+ *                      histórico de leitura das crianças e fica com quem é da
+ *                      escola (GET /livros e `livro_id` são 403 para ela).
  *   MATIFIC          → atividades e estrelas de um aluno no período; mostra o
  *                      índice da premiação "Melhor Matemática" com a régua da
  *                      escola no MESMO período da tela de Premiações.
@@ -29,7 +32,9 @@ import { useEffect, useId, useState, type ReactNode } from "react";
 import { useApp } from "../context/AppContext";
 import { useApi } from "../hooks/useApi";
 import { useModulos } from "../hooks/useModulos";
+import { usePerfil } from "../hooks/usePerfil";
 import { api, ApiError } from "../lib/api";
+import { nomeDaVersaoDaRegra } from "../lib/regraPontuacao";
 import type { Livro, PaginaLivros } from "../lib/types";
 import { SeletorPeriodo, periodoParaQuery } from "./SeletorPeriodo";
 import { Badge, Botao, IconePastel, Mensagem, estiloInput } from "./ui";
@@ -343,10 +348,18 @@ function ResultadoElefante({ ex }: { ex: ExemploElefanteResposta }) {
       )}
 
       <Avisos avisos={ex.avisos} />
+      {/* A regra pelo nome comum, como o rodapé do "Como funciona?" e o Suporte (o
+          identificador técnico e a versão do catálogo ficam na dica). */}
       <p className="mt-3 text-xs text-zinc-500 dark:text-zinc-400">
-        Regra: {ex.regra}
+        Regra:{" "}
+        <span title={`Identificador da versão: ${ex.regra}`}>{nomeDaVersaoDaRegra(ex.regra)}</span>
         {ex.catalogo?.versao ? (
-          <> · catálogo {ex.catalogo.versao} ({ex.catalogo.n_livros.toLocaleString("pt-BR")} livros)</>
+          <>
+            {" · "}
+            <span title={`Versão do catálogo: ${ex.catalogo.versao}`}>
+              catálogo de {ex.catalogo.n_livros.toLocaleString("pt-BR")} livros
+            </span>
+          </>
         ) : null}
       </p>
     </div>
@@ -354,7 +367,12 @@ function ResultadoElefante({ ex }: { ex: ExemploElefanteResposta }) {
 }
 
 function ExemploElefante({ escolaId }: { escolaId: number }) {
-  const [soNivel, setSoNivel] = useState(false);
+  // O acervo da escola fica com quem é da escola: para a Secretaria, GET /livros e o
+  // exemplo com `livro_id` são 403 (o acervo é o histórico de leitura das crianças).
+  // Ela vê o exemplo SÓ pelo nível — sem a busca no acervo e sem a opção de voltar a ela.
+  const { secretaria } = usePerfil();
+  const [soNivelEscolhido, setSoNivel] = useState(false);
+  const soNivel = secretaria || soNivelEscolhido;
   const [busca, setBusca] = useState("");
   const [buscaAtrasada, setBuscaAtrasada] = useState("");
   const [livro, setLivro] = useState<Livro | null>(null);
@@ -422,8 +440,9 @@ function ExemploElefante({ escolaId }: { escolaId: number }) {
   return (
     <div>
       <p className="text-xs text-zinc-500 dark:text-zinc-400">
-        Escolha um livro do acervo da escola e o ano escolar do aluno. O Constela mostra quanto uma leitura desse
-        livro vale nas premiações e no ranking de leitura.
+        {secretaria
+          ? "Escolha o nível do livro e o ano escolar do aluno. O Constela mostra quanto uma leitura de um livro típico desse nível vale nas premiações e no ranking de leitura."
+          : "Escolha um livro do acervo da escola e o ano escolar do aluno. O Constela mostra quanto uma leitura desse livro vale nas premiações e no ranking de leitura."}
       </p>
 
       <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-[1fr_12rem]">
@@ -511,18 +530,20 @@ function ExemploElefante({ escolaId }: { escolaId: number }) {
               )}
             </div>
           )}
-          <label className="mt-2 flex items-center gap-2 text-xs text-zinc-600 dark:text-zinc-300">
-            <input
-              type="checkbox"
-              className="h-4 w-4 accent-indigo-600"
-              checked={soNivel}
-              onChange={(e) => {
-                setSoNivel(e.target.checked);
-                limparResultado();
-              }}
-            />
-            Informar só o nível (ver o livro típico do nível)
-          </label>
+          {!secretaria && (
+            <label className="mt-2 flex items-center gap-2 text-xs text-zinc-600 dark:text-zinc-300">
+              <input
+                type="checkbox"
+                className="h-4 w-4 accent-indigo-600"
+                checked={soNivel}
+                onChange={(e) => {
+                  setSoNivel(e.target.checked);
+                  limparResultado();
+                }}
+              />
+              Informar só o nível (ver o livro típico do nível)
+            </label>
+          )}
         </div>
 
         <label className="block text-sm">

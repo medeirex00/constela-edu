@@ -11,17 +11,21 @@ import csv
 import io
 import logging
 import mimetypes
+import os
 import re
+import threading
+from contextlib import contextmanager
+from decimal import ROUND_HALF_UP, Decimal
 from pathlib import Path
 
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
 from app.core.tempo import agora_br
 
 from app.models import (Aluno, Escola, Leitura, Livro, Matricula, Nota,
                         SnapshotElefante, Turma)
-from app.services import bimestres, elegibilidade, grupo_pequeno, scoring
+from app.services import bimestres, elegibilidade, grupo_pequeno, scoring, texto_pdf
 
 _log = logging.getLogger(__name__)
 
@@ -53,9 +57,13 @@ def _recorte(consulta, turma_ids: list[int] | None):
     return consulta.where(Matricula.turma_id.in_(turma_ids))
 
 
-def linhas_ranking(db: Session, escola_id: int,
-                   turma_ids: list[int] | None = None) -> tuple[list[str], list[list]]:
-    """``turma_ids`` (professor): só as matrículas do ano ativo nessas turmas —
+def _consulta_ranking_geral(db: Session, escola_id: int,
+                            turma_ids: list[int] | None = None):
+    """``select(Nota, Aluno, Turma)`` de quem está no Ranking Geral exportado (sem
+    ordem): ativos, matriculados no ano numa turma que concorre, com dado de alguma
+    plataforma (aferido em Leitura ou Matemática) — a fonte ÚNICA das linhas (``linhas_ranking``) e da população dos
+    cartões do cartaz (``estatisticas_cartaz``), para os dois nunca divergirem.
+    ``turma_ids`` (professor): só as matrículas do ano ativo nessas turmas —
     recorte pelo ID da turma da matrícula, nunca pelo nome (ver ``_recorte``)."""
     escola = db.get(Escola, escola_id)
     consulta = (
@@ -72,14 +80,37 @@ def linhas_ranking(db: Session, escola_id: int,
         # nem no cartaz — a mesma régua de `rankings._ranking`.
         .where(Matricula.turma_id.in_(elegibilidade.turmas_premiaveis(
             db, escola_id, escola.ano_letivo_ativo)))
-        .order_by(Nota.posicao)
+        # AUSÊNCIA NÃO É ZERO (DEC-19): só quem tem dado de alguma plataforma — o
+        # mesmo corte de ``rankings._ranking(so_com_dado=True)`` da tela e do Top 10.
+        # Conta a EXISTÊNCIA do retrato (``aferido_*``), nunca nota > 0: o retrato
+        # zerado continua. Sem isto, a criança sem nenhum dado saía no CSV/XLSX/PDF e
+        # no cartaz com posição e Nota Geral 0,0 — e, no arquivo do professor,
+        # renumerado 1..N, empurrava a posição de quem vem depois.
+        .where(or_(Nota.aferido_leitura.is_(True), Nota.aferido_matematica.is_(True)))
     )
-    linhas = db.execute(_recorte(consulta, turma_ids)).all()
+    return _recorte(consulta, turma_ids)
+
+
+def linhas_ranking(db: Session, escola_id: int,
+                   turma_ids: list[int] | None = None) -> tuple[list[str], list[list]]:
+    """``turma_ids`` (professor): só as matrículas do ano ativo nessas turmas —
+    recorte pelo ID da turma da matrícula, nunca pelo nome (ver ``_recorte``).
+
+    A nota da plataforma que a criança NÃO USA (sem retrato: ``Nota.aferido_*``
+    falso) sai ``None`` — célula vazia no CSV/Excel, "—" no cartaz e "-" na
+    reserva do PDF —, como a tela (``notaDaMateria``): a coluna vale 0.0 tanto
+    para quem não usa quanto para o zero legítimo, e imprimir 0,0 afirmaria
+    desempenho onde só há ausência de dado (``rankings._ranking``). A Nota Geral
+    e a posição não mudam."""
+    linhas = db.execute(_consulta_ranking_geral(db, escola_id, turma_ids)
+                        .order_by(Nota.posicao)).all()
     cabecalho = ["Posição", "Aluno", "Turma", "Série", "Nota Matific",
                  "Nota Elefante", "Nota Geral"]
     return cabecalho, [
         [nota.posicao, aluno.nome, turma.nome, turma.ano_escolar,
-         nota.nota_matific, nota.nota_elefante, nota.nota_geral]
+         nota.nota_matific if nota.aferido_matematica else None,
+         nota.nota_elefante if nota.aferido_leitura else None,
+         nota.nota_geral]
         for nota, aluno, turma in linhas
     ]
 
@@ -173,7 +204,17 @@ def celula_segura(valor):
 def _celula_xlsx(ws, linha: int, coluna: int, valor):
     """``ws.cell`` que nunca grava fórmula: o openpyxl transforma em fórmula todo
     ``str`` que começa com '=' — aqui ele fica TEXTO (data_type 's'). '+', '-', '@' e
-    os de controle já são gravados como texto pelo openpyxl, que o Excel não avalia."""
+    os de controle já são gravados como texto pelo openpyxl, que o Excel não avalia.
+
+    Caractere de controle C0 que o Excel não aceita (``ILLEGAL_CHARACTERS_RE``: um
+    nome colado de um PDF, vindo da plataforma...) sai do texto ANTES de gravar —
+    o openpyxl levantava ``IllegalCharacterError`` e UM nome derrubava a exportação
+    da escola inteira. A limpeza vem antes da proteção contra fórmula, que vale
+    para o texto já limpo."""
+    from openpyxl.cell.cell import ILLEGAL_CHARACTERS_RE
+
+    if isinstance(valor, str):
+        valor = ILLEGAL_CHARACTERS_RE.sub("", valor)
     celula = ws.cell(row=linha, column=coluna, value=valor)
     if isinstance(valor, str) and celula.data_type == "f":
         celula.data_type = "s"
@@ -230,10 +271,24 @@ def _hex_para_rgb(cor: str) -> tuple[int, int, int]:
 
 
 def _latin1(texto) -> str:
-    """As fontes nativas do PDF só suportam latin-1: os acentos do português
-    passam intactos; qualquer outro caractere vira '?' em vez de derrubar o
-    relatório inteiro com erro 500."""
-    return str(texto).encode("latin-1", "replace").decode("latin-1")
+    """Texto para as fontes nativas do PDF (fpdf2, declaradas em WinAnsi): o mesmo
+    tratamento dos cartões do Quest (``services.texto_pdf``). Os acentos do
+    português passam intactos, e o apóstrofo tipográfico (Sant’Anna), as aspas
+    curvas e o travessão também (cp1252). Antes, com ``encode("latin-1",
+    "replace")``, o nome da criança saía "Sant?Anna" no certificado. Fora do
+    cp1252, a letra sem o sinal; só o que não tem equivalente vira '?' — nunca 500.
+    Quem cria o ``FPDF`` usa ``_novo_fpdf`` (a mesma codificação)."""
+    return texto_pdf.texto_pdf(texto)
+
+
+def _novo_fpdf(**opcoes):
+    """``FPDF`` com as fontes nativas em cp1252 (``texto_pdf.CODIFICACAO``), a
+    codificação do texto de ``_latin1``."""
+    from fpdf import FPDF
+
+    pdf = FPDF(**opcoes)
+    pdf.core_fonts_encoding = texto_pdf.CODIFICACAO
+    return pdf
 
 
 _ROTULO_DIMENSAO = {"leitura": "Leitura", "matematica": "Matemática"}
@@ -243,15 +298,17 @@ def legenda_data_dos_dados(frescor: dict | None, dimensoes) -> str | None:
     """DE QUANDO é o dado de um documento de ranking (cartaz, certificado).
 
     ``"Dados das plataformas: Leitura de 19/10/2026; Matemática de 18/10/2026"``
-    — a data do retrato mais recente de quem concorre, por dimensão: a MESMA do
-    selo de frescor da tela (``services.frescor_ranking``, dia de Brasília). Um
+    — a data da última COLETA da escola entre quem concorre, por dimensão (o ajuste
+    manual não renova essa data; na escola sem coleta nenhuma, a do ajuste mais
+    recente, o único dado que ela tem): a MESMA do selo de frescor da tela
+    (``frescor_ranking``, ``dado_mais_recente_em``, dia de Brasília). Um
     cartaz impresso com a coleta parada há três semanas tinha a mesma cara de um
     de ontem; a data de emissão não diz isso. Nenhuma fórmula muda.
 
     Só dimensões contratadas; sem retrato, "sem dados"; acima do limite do selo,
-    "(mais de N dias)". Texto latin-1 puro (a reserva do PDF usa as fontes
-    nativas do fpdf: nada de reticências, travessão ou aspas curvas). ``None``
-    quando não há o que declarar (frescor indisponível)."""
+    "(mais de N dias)". Texto latin-1 puro, sem reticências, travessão ou aspas
+    curvas (o teste da legenda confere). ``None`` quando não há o que declarar
+    (frescor indisponível)."""
     if not frescor:
         return None
     limite = frescor.get("limite_dias")
@@ -282,7 +339,7 @@ def legenda_data_dos_dados(frescor: dict | None, dimensoes) -> str | None:
 
 def _couber(pdf, texto, largura: float) -> str:
     """Corta o texto para caber na LARGURA REAL da célula (não em nº fixo de
-    letras), terminando com '...' (o '…' não existe em latin-1)."""
+    letras), terminando com '...'."""
     texto = _latin1(texto)
     if pdf.get_string_width(texto) <= largura - 2:
         return texto
@@ -311,10 +368,11 @@ def gerar_pdf(titulo: str, escola_nome: str, cor: str,
               cabecalho: list[str], linhas: list[list],
               nota_dados: str | None = None) -> bytes:
     """PDF simples de tabela (fpdf). ``nota_dados`` = a linha "Dados das
-    plataformas: ..." (``legenda_data_dos_dados``) logo abaixo da faixa."""
-    from fpdf import FPDF
-
-    pdf = FPDF(orientation="P", unit="mm", format="A4")
+    plataformas: ..." (``legenda_data_dos_dados``) logo abaixo da faixa. Valor
+    ausente (``None`` — ex.: nota da plataforma que a criança não usa) sai "-",
+    nunca "None"."""
+    linhas = [["-" if valor is None else valor for valor in linha] for linha in linhas]
+    pdf = _novo_fpdf(orientation="P", unit="mm", format="A4")
     pdf.set_auto_page_break(auto=True, margin=15)
     pdf.add_page()
 
@@ -471,11 +529,20 @@ _IC_ELEFANTE = ('<svg class="ic" width="15" height="14" viewBox="0 0 34 32" fill
 
 
 def _fmt_nota(valor) -> str:
-    """Nota 0–100 com uma casa e vírgula decimal ('85,3'); '—' se vazia."""
+    """Nota 0–100 com uma casa e vírgula decimal ('85,3'); '—' se vazia.
+
+    O 5 arredonda PARA CIMA (87,25 → '87,3'), a partir do número como foi gravado
+    (as notas têm 2 casas, ``scoring._nota_0_100``): o ``:.1f`` arredondava o float
+    binário, e 87,25 saía '87,2' enquanto 87,15 saía '87,2' e 87,45 '87,5'. É a
+    função ÚNICA de nota com uma casa dos documentos (certificado Geral e a reserva
+    dele, cartaz, boletim)."""
     try:
-        return f"{float(valor):.1f}".replace(".", ",")
+        numero = Decimal(repr(float(valor)))
     except (TypeError, ValueError):
         return "—"
+    if not numero.is_finite():
+        return "—"
+    return str(numero.quantize(Decimal("0.1"), rounding=ROUND_HALF_UP)).replace(".", ",")
 
 
 _CERT_TEMPLATE = """<style>
@@ -504,7 +571,7 @@ _CERT_TEMPLATE = """<style>
   .divisor .linha { width:120px; height:1.5px; background:#C9A24B; }
   .divisor .losango { width:9px; height:9px; background:#F5B942; transform:rotate(45deg); }
   .intro { font-size:15px; color:#555; letter-spacing:.5px; }
-  .aluno { font-size:40px; font-weight:700; color:#1B2A4A; margin:14px 0 6px; letter-spacing:.5px; text-transform:uppercase; }
+  .aluno { font-size:⟦TAM_ALUNO⟧px; font-weight:700; color:#1B2A4A; margin:14px 0 6px; letter-spacing:.5px; text-transform:uppercase; }
   .sublinhado { width:60%; max-width:520px; height:1.5px; background:#C9A24B; margin:0 auto 16px; }
   .detalhe { font-size:15.5px; color:#444; line-height:1.7; max-width:640px; }
   .detalhe b { color:#1B2A4A; }
@@ -542,13 +609,116 @@ def _esc_html(texto: str) -> str:
             .replace(">", "&gt;").replace("⟦", "").replace("⟧", ""))
 
 
+# Nome do aluno no certificado GERAL (``.aluno``): 40px de sempre, em maiúsculas, na
+# largura do ``.conteudo`` (A4 paisagem, 297mm, menos 40mm de cada lado, a 96 px/pol).
+_LARGURA_ALUNO_CERT_PX = (297 - 2 * 40) * 96 / 25.4
+_TETO_ALUNO_CERT = 40
+_PISO_ALUNO_CERT = 22
+_ESPACO_LETRAS_ALUNO_CERT_PX = 0.5   # o letter-spacing do .aluno
+# A Georgia Bold (a do certificado no Windows) mede ~1,11× a Helvetica Bold em
+# maiúsculas; a serifa do servidor (Liberation Serif, métrica da Times) ~1,02×.
+# 1,2 dá folga às duas.
+_FATOR_SERIFA_ALUNO_CERT = 1.2
+
+
+def _linhas_do_nome_certificado(palavras: list[str], corpo: int) -> int:
+    """Quantas linhas o nome ocupa no ``.aluno`` com o corpo ``corpo``: a quebra
+    gulosa do navegador (palavra que não cabe desce), com a largura de cada
+    palavra pela métrica da Helvetica Bold com a folga da serifa."""
+    def largura(texto: str) -> float:
+        return (corpo * _FATOR_SERIFA_ALUNO_CERT * _largura_em(texto, "helveticaB")
+                + _ESPACO_LETRAS_ALUNO_CERT_PX * len(texto))
+
+    espaco = largura(" ")
+    linhas, atual = 1, 0.0
+    for palavra in palavras:
+        w = largura(palavra)
+        if atual and atual + espaco + w > _LARGURA_ALUNO_CERT_PX:
+            linhas, atual = linhas + 1, w
+        else:
+            atual = atual + espaco + w if atual else w
+    return linhas
+
+
+def _tam_fonte_aluno_certificado(nome: str) -> int:
+    """Corpo (px) do nome do aluno no certificado Geral: o de sempre (40px) enquanto
+    o nome cabe em DUAS linhas; acima disso, o maior corpo em que ele cabe nelas
+    (piso de 22px).
+
+    O nome fica num fluxo de altura livre e a assinatura é absoluta a 26mm do
+    rodapé: um nome em três linhas empurrava "Emitido em" e "Dados das
+    plataformas" para baixo da linha de assinatura. A conta é pela LARGURA medida
+    das palavras (``_linhas_do_nome_certificado``), não pelo número de letras."""
+    palavras = str(nome or "").upper().split()
+    for corpo in range(_TETO_ALUNO_CERT, _PISO_ALUNO_CERT, -1):
+        if _linhas_do_nome_certificado(palavras, corpo) <= 2:
+            return corpo
+    return _PISO_ALUNO_CERT
+
+
+# ---------------------------------------------------------------------------
+# TETO DE NAVEGADORES. Cada PDF bonito sobe um driver do Playwright (processo Node) e
+# um Chromium inteiro (~150-300 MB). Sem fila, N pedidos juntos (fim de bimestre:
+# coordenações imprimindo cartaz, certificado, relatório) eram N navegadores, e o
+# processo podia estourar a memória do contêiner e derrubar a API inteira. Aqui, no
+# máximo ``NAVEGADORES_SIMULTANEOS`` por processo; o excesso espera a vez até
+# ``ESPERA_POR_NAVEGADOR_S`` e, esgotado o prazo, ``NavegadorOcupado`` — que quem chama
+# já trata como "sem Chromium": cai no PDF simples de reserva (fpdf), com os mesmos
+# números. A exceção é a arte do certificado da plataforma, que não tem reserva
+# equivalente (a dela seria o Geral, de MÉRITO): lá a falta de vaga vira 503 "tente de
+# novo" (``routers/relatorios.conteudo_certificado``). Ajustáveis no ambiente:
+# PDF_NAVEGADORES_SIMULTANEOS e PDF_ESPERA_POR_NAVEGADOR_S.
+# ---------------------------------------------------------------------------
+
+def _numero_do_ambiente(nome: str, padrao: float, minimo: float) -> float:
+    bruto = os.environ.get(nome, "").strip()
+    if not bruto:
+        return padrao
+    try:
+        return max(minimo, float(bruto))
+    except ValueError:
+        _log.warning("%s=%r não é um número; usando %s", nome, bruto, padrao)
+        return padrao
+
+
+NAVEGADORES_SIMULTANEOS = int(_numero_do_ambiente("PDF_NAVEGADORES_SIMULTANEOS", 2, 1))
+ESPERA_POR_NAVEGADOR_S = _numero_do_ambiente("PDF_ESPERA_POR_NAVEGADOR_S", 30.0, 0.0)
+_VAGAS_DE_NAVEGADOR = threading.BoundedSemaphore(NAVEGADORES_SIMULTANEOS)
+
+
+class NavegadorOcupado(RuntimeError):
+    """Todas as vagas de navegador seguiram ocupadas durante a espera."""
+
+
+@contextmanager
+def _navegador():
+    """Um Chromium aberto, DENTRO do teto: a vaga é pega antes de subir o driver e
+    devolvida depois de fechar o navegador — também quando a renderização falha."""
+    if not _VAGAS_DE_NAVEGADOR.acquire(timeout=ESPERA_POR_NAVEGADOR_S):
+        raise NavegadorOcupado(
+            f"{NAVEGADORES_SIMULTANEOS} PDF(s) já em geração; sem vaga em "
+            f"{ESPERA_POR_NAVEGADOR_S:g} s")
+    try:
+        from playwright.sync_api import sync_playwright
+
+        with sync_playwright() as p:
+            try:
+                navegador = p.chromium.launch()
+            except Exception:  # noqa: BLE001 — sem chromium baixado: tenta o Chrome do sistema
+                navegador = p.chromium.launch(channel="chrome")
+            try:
+                yield navegador
+            finally:
+                navegador.close()
+    finally:
+        _VAGAS_DE_NAVEGADOR.release()
+
+
 def _certificado_html_pdf(escola_nome: str, cor: str, aluno_nome: str,
                           turma: str, posicao: int | None, nota_geral: float,
                           ano_letivo: int, logos: tuple[str, str] | None = None,
                           dados_em: str | None = None) -> bytes:
     """Renderiza o certificado bonito em PDF via Chromium (Playwright)."""
-    from playwright.sync_api import sync_playwright
-
     cantos = "".join(
         _CANTO_SVG.replace('class="canto"', f'class="canto {c}"')
         for c in ("c-tl", "c-tr", "c-bl", "c-br"))
@@ -559,27 +729,21 @@ def _certificado_html_pdf(escola_nome: str, cor: str, aluno_nome: str,
             .replace("⟦CABECALHO⟧", _cabecalho_logos(logos))
             .replace("⟦MEDALHA⟧", _MEDALHA_SVG)
             .replace("⟦ESCOLA⟧", _esc_html(escola_nome))
+            .replace("⟦TAM_ALUNO⟧", str(_tam_fonte_aluno_certificado(aluno_nome)))
             .replace("⟦ALUNO⟧", _esc_html(aluno_nome))
             .replace("⟦TURMA⟧", _esc_html(turma or "—"))
-            .replace("⟦NOTA⟧", f"{nota_geral:.1f}".replace(".", ","))
+            .replace("⟦NOTA⟧", _fmt_nota(nota_geral))
             .replace("⟦POSICAO⟧", pos_txt)
             .replace("⟦ANO⟧", str(ano_letivo))
             .replace("⟦DATA⟧", agora_br().strftime("%d/%m/%Y"))
             .replace("⟦DADOS⟧", dados_html))
     doc = f"<!doctype html><html lang='pt-BR'><head><meta charset='utf-8'></head><body>{html}</body></html>"
 
-    with sync_playwright() as p:
-        try:
-            navegador = p.chromium.launch()
-        except Exception:  # noqa: BLE001 — sem chromium baixado: tenta o Chrome do sistema
-            navegador = p.chromium.launch(channel="chrome")
-        try:
-            pagina = navegador.new_page()
-            pagina.set_content(doc, wait_until="networkidle")
-            pdf = pagina.pdf(prefer_css_page_size=True, print_background=True,
-                             landscape=True)
-        finally:
-            navegador.close()
+    with _navegador() as navegador:
+        pagina = navegador.new_page()
+        pagina.set_content(doc, wait_until="networkidle")
+        pdf = pagina.pdf(prefer_css_page_size=True, print_background=True,
+                         landscape=True)
     return pdf
 
 
@@ -614,16 +778,17 @@ _PISO_INSTITUICAO = 9
 _PISO_UMA_LINHA = 11          # abaixo disso, duas linhas maiores leem melhor
 
 
-def _largura_em(texto: str) -> float:
+def _largura_em(texto: str, fonte: str = "helvetica") -> float:
     """Largura do texto em "em" pelas métricas da Helvetica (as do fpdf) — que são
     as do Arial e as da Liberation Sans, a fonte com que o Chromium do servidor
     desenha o certificado (Debian com ``fonts-liberation``, sem Trebuchet MS nem
     Segoe UI: a pilha da arte cai no Arial). Onde a Trebuchet MS existe (Windows)
     o mesmo texto sai MAIS ESTREITO, então a medida é conservadora. Caractere fora
-    da tabela (fora do latin-1) conta 1 em, mais largo que qualquer letra."""
+    da tabela (fora do latin-1) conta 1 em, mais largo que qualquer letra.
+    ``fonte`` = a tabela do fpdf (``"helveticaB"`` para o negrito)."""
     from fpdf.fonts import CORE_FONTS_CHARWIDTHS
 
-    larguras = CORE_FONTS_CHARWIDTHS["helvetica"]
+    larguras = CORE_FONTS_CHARWIDTHS[fonte]
     return sum(larguras.get(c, 1000) for c in texto) / 1000
 
 
@@ -714,21 +879,12 @@ _CERT_PLATAFORMA_TEMPLATE = """<style>
 def _html_para_pdf_paisagem(corpo: str) -> bytes:
     """Renderiza HTML em PDF A4 paisagem via Chromium (Playwright), com fundo
     impresso (para a arte de fundo aparecer)."""
-    from playwright.sync_api import sync_playwright
-
     doc = (f"<!doctype html><html lang='pt-BR'><head><meta charset='utf-8'>"
            f"</head><body>{corpo}</body></html>")
-    with sync_playwright() as p:
-        try:
-            navegador = p.chromium.launch()
-        except Exception:  # noqa: BLE001 — sem chromium baixado: tenta o Chrome do sistema
-            navegador = p.chromium.launch(channel="chrome")
-        try:
-            pagina = navegador.new_page()
-            pagina.set_content(doc, wait_until="networkidle")
-            pdf = pagina.pdf(prefer_css_page_size=True, print_background=True, landscape=True)
-        finally:
-            navegador.close()
+    with _navegador() as navegador:
+        pagina = navegador.new_page()
+        pagina.set_content(doc, wait_until="networkidle")
+        pdf = pagina.pdf(prefer_css_page_size=True, print_background=True, landscape=True)
     return pdf
 
 
@@ -804,9 +960,7 @@ def _certificado_fpdf(escola_nome: str, cor: str, aluno_nome: str,
                       turma: str, posicao: int | None, nota_geral: float,
                       ano_letivo: int, dados_em: str | None = None) -> bytes:
     """Reserva simples (sem navegador): moldura + texto, 100% em Python."""
-    from fpdf import FPDF
-
-    pdf = FPDF(orientation="L", unit="mm", format="A4")
+    pdf = _novo_fpdf(orientation="L", unit="mm", format="A4")
     pdf.add_page()
     r, g, b = _hex_para_rgb(cor)
 
@@ -840,7 +994,7 @@ def _certificado_fpdf(escola_nome: str, cor: str, aluno_nome: str,
     pdf.set_font("helvetica", "", 13)
     pdf.set_y(98)
     detalhe = _latin1(
-        f"da turma {turma}, alcançou a nota geral {nota_geral:.1f}".replace(".", ","))
+        f"da turma {turma}, alcançou a nota geral {_fmt_nota(nota_geral)}")
     if posicao:
         detalhe += f" e a {posicao}ª posição no Ranking Geral"
     pdf.cell(0, 8, detalhe, align="C")
@@ -874,29 +1028,40 @@ def _certificado_fpdf(escola_nome: str, cor: str, aluno_nome: str,
 # alunos, paginada automaticamente pelo Chromium) e um rodapé comemorativo.
 # ---------------------------------------------------------------------------
 
+def _materias_dos_cartoes(modulos) -> list[str]:
+    """As matérias cujos números o cartaz do Ranking Geral mostra nos cartões: as
+    contratadas (``modulos``; ``None`` = todas, como em ``services/modulos``)."""
+    return [m for m in CARTAZ_MATERIAS if modulos is None or m in modulos]
+
+
 def estatisticas_cartaz(db: Session, escola_id: int,
-                        turma_ids: list[int] | None = None) -> dict:
+                        turma_ids: list[int] | None = None,
+                        modulos: set[str] | None = None) -> dict:
     """Totais para os cartões do pôster: atividades (Matific) e livros
-    (Elefante).
+    (Elefante). Módulo fora do plano não é somado (``modulos``; ``None`` = todos):
+    com uma matéria só, os totais são os do cartaz daquela matéria
+    (``estatisticas_cartaz_materia`` — Leitura: livros e tempo; Matemática:
+    atividades e estrelas), dos mesmos alunos.
 
     Soma o SNAPSHOT ATUAL (o mais recente por data de referência — o mesmo
     critério usado no ranking e no painel, via scoring._snapshots_atuais), e só
-    da MESMA população da tabela: alunos ATIVOS matriculados no ano letivo
-    corrente. Assim os números batem com a tabela e com "estudantes ranqueados",
-    sem inflar com alunos de anos anteriores/arquivados nem com correções para
-    menos. Best-effort: qualquer falha vira zero — o cartaz nunca quebra por
-    causa das estatísticas."""
+    da MESMA população da tabela: exatamente os alunos das linhas do cartaz
+    (``_consulta_ranking_geral`` — ativos, matriculados no ano numa turma que
+    concorre, com dado de alguma plataforma (aferido em Leitura ou Matemática);
+    ``turma_ids`` = o recorte do professor). Assim os
+    números batem com a tabela e com "estudantes ranqueados", sem inflar com a
+    Educação Infantil, com quem ainda não tem nota, com alunos de anos anteriores
+    ou arquivados nem com correções para menos. Best-effort: qualquer falha vira
+    zero — o cartaz nunca quebra por causa das estatísticas."""
+    materias = _materias_dos_cartoes(modulos)
     try:
         escola = db.get(Escola, escola_id)
-        consulta_cohort = (
-            select(Aluno.id)
-            .join(Matricula, (Matricula.aluno_id == Aluno.id)
-                  & (Matricula.ano_letivo == escola.ano_letivo_ativo))
-            .where(Aluno.escola_id == escola_id, Aluno.status == "ativo")
-        )
-        if turma_ids is not None:  # professor: só as turmas dele
-            consulta_cohort = consulta_cohort.where(Matricula.turma_id.in_(turma_ids))
-        cohort = set(db.execute(consulta_cohort).scalars().all())
+        cohort = {aluno.id for _nota, aluno, _turma
+                  in db.execute(_consulta_ranking_geral(db, escola_id, turma_ids))}
+        if len(materias) == 1:
+            return estatisticas_cartaz_materia(db, escola_id, materias[0], sorted(cohort))
+        if not materias:
+            return {}
         # Matific é contador DO ANO: o retrato de outro ano letivo não soma.
         m_atuais = scoring.snapshots_matific_do_ano(db, escola_id, escola.ano_letivo_ativo)
         e_atuais = scoring._snapshots_atuais(db, escola_id, SnapshotElefante)
@@ -904,7 +1069,8 @@ def estatisticas_cartaz(db: Session, escola_id: int,
         livros = sum(s.livros_unicos for aid, s in e_atuais.items() if aid in cohort)
         return {"atividades": int(atividades), "livros": int(livros)}
     except Exception:  # noqa: BLE001 — cartões decorativos: nunca derrubam o cartaz
-        return {"atividades": 0, "livros": 0}
+        # Chave ausente vira 0 no cartão (``_cartaz_documento_html``); só as do plano.
+        return {"atividades": 0, "livros": 0} if len(materias) > 1 else {}
 
 
 def estatisticas_cartaz_materia(db: Session, escola_id: int, materia: str,
@@ -933,8 +1099,9 @@ def estatisticas_cartaz_materia(db: Session, escola_id: int, materia: str,
         escola = db.get(Escola, escola_id)
         atuais = scoring.snapshots_matific_do_ano(db, escola_id, escola.ano_letivo_ativo)
         snaps = [s for aid, s in atuais.items() if aid in listados]
+        # As estrelas que CONTAM (no máximo 5 por atividade, o teto do motor).
         return {"atividades": int(sum(s.atividades or 0 for s in snaps)),
-                "estrelas": int(sum(s.estrelas or 0 for s in snaps))}
+                "estrelas": int(sum(scoring.estrelas_que_contam(s) for s in snaps))}
     except Exception:  # noqa: BLE001 — cartões decorativos: nunca derrubam o cartaz
         if materia == "leitura":
             return {"livros": 0, "tempo_leitura_min": 0}
@@ -1121,7 +1288,8 @@ def gerar_cartaz_ranking(escola_nome: str, cor: str, ano_letivo: int,
                          estatisticas: dict,
                          logos: tuple[str, str] | None = None,
                          materia: str | None = None,
-                         dados_em: str | None = None) -> bytes:
+                         dados_em: str | None = None,
+                         modulos: set[str] | None = None) -> bytes:
     """Cartaz do Ranking em PDF (todos os alunos). HTML→Chromium com o layout
     completo; sem navegador, cai para o PDF simples de ranking (reserva).
 
@@ -1133,12 +1301,15 @@ def gerar_cartaz_ranking(escola_nome: str, cor: str, ano_letivo: int,
     `estatisticas_cartaz` no Ranking Geral, `estatisticas_cartaz_materia` (só a
     matéria, só os alunos listados) no cartaz da matéria. ``dados_em`` = a
     linha "Dados das plataformas: ..." (``legenda_data_dos_dados``), impressa
-    ao lado da data de emissão — também na reserva."""
+    ao lado da data de emissão — também na reserva. ``modulos`` = os módulos
+    contratados (``None`` = todos): no Ranking Geral, os cartões só das
+    matérias do plano."""
     titulo = (f"Ranking de {CARTAZ_MATERIAS[materia][0]}" if materia
               else "Ranking Geral")
     try:
         return _cartaz_html_pdf(escola_nome, ano_letivo, linhas, estatisticas, logos,
-                                cabecalho=cabecalho, materia=materia, dados_em=dados_em)
+                                cabecalho=cabecalho, materia=materia, dados_em=dados_em,
+                                modulos=modulos)
     except Exception:  # noqa: BLE001 — sem Chromium/erro: PDF simples de ranking
         return gerar_pdf(titulo, escola_nome, cor, cabecalho, linhas,
                          nota_dados=dados_em)
@@ -1148,9 +1319,12 @@ def _cartaz_documento_html(escola_nome: str, ano_letivo: int, linhas: list[list]
                            estatisticas: dict, logos: tuple[str, str] | None = None,
                            materia: str | None = None,
                            cabecalho: list[str] | None = None,
-                           dados_em: str | None = None) -> str:
+                           dados_em: str | None = None,
+                           modulos: set[str] | None = None) -> str:
     """HTML completo do cartaz (o que o Chromium imprime). Separado da
-    impressão para o conteúdo poder ser conferido sem navegador."""
+    impressão para o conteúdo poder ser conferido sem navegador. ``modulos`` =
+    os módulos contratados (``None`` = todos): decide os cartões do Ranking
+    Geral."""
     def _mil(n) -> str:
         return f"{int(n):,}".replace(",", ".")
 
@@ -1158,22 +1332,27 @@ def _cartaz_documento_html(escola_nome: str, ano_letivo: int, linhas: list[list]
     # Os dois primeiros cartões são DA MATÉRIA do cartaz: no de Leitura não
     # aparece atividade do Matific, no de Matemática não aparece livro do
     # Elefante (os totais vêm de `estatisticas_cartaz_materia`, só dos alunos
-    # listados). O Ranking Geral segue com atividades + livros da escola.
-    if materia == "leitura":
+    # listados). O Ranking Geral segue com atividades + livros — só das
+    # matérias do plano (``modulos``): com uma só, os cartões são os do cartaz
+    # dela; o módulo não contratado não aparece, nem zerado.
+    materias = [materia] if materia else _materias_dos_cartoes(modulos)
+    if materias == ["leitura"]:
         tiles = [
             (_mil(estatisticas.get("livros", 0)), "livros lidos"),
             (_tempo_cartaz(estatisticas.get("tempo_leitura_min", 0)), "tempo de leitura"),
         ]
-    elif materia == "matematica":
+    elif materias == ["matematica"]:
         tiles = [
             (_mil(estatisticas.get("atividades", 0)), "atividades"),
             (_mil(estatisticas.get("estrelas", 0)), "estrelas"),
         ]
-    else:
+    elif materias:
         tiles = [
             (_mil(estatisticas.get("atividades", 0)), "atividades"),
             (_mil(estatisticas.get("livros", 0)), "livros lidos"),
         ]
+    else:
+        tiles = []
     tiles += [
         (_mil(len(linhas)), "estudantes ranqueados"),
         (faixa_n, faixa_r),
@@ -1213,24 +1392,16 @@ def _cartaz_html_pdf(escola_nome: str, ano_letivo: int, linhas: list[list],
                      estatisticas: dict, logos: tuple[str, str] | None = None,
                      cabecalho: list[str] | None = None,
                      materia: str | None = None,
-                     dados_em: str | None = None) -> bytes:
-    from playwright.sync_api import sync_playwright
-
+                     dados_em: str | None = None,
+                     modulos: set[str] | None = None) -> bytes:
     doc = _cartaz_documento_html(escola_nome, ano_letivo, linhas, estatisticas,
                                  logos, materia=materia, cabecalho=cabecalho,
-                                 dados_em=dados_em)
+                                 dados_em=dados_em, modulos=modulos)
 
-    with sync_playwright() as p:
-        try:
-            navegador = p.chromium.launch()
-        except Exception:  # noqa: BLE001 — sem chromium baixado: tenta o Chrome do sistema
-            navegador = p.chromium.launch(channel="chrome")
-        try:
-            pagina = navegador.new_page()
-            pagina.set_content(doc, wait_until="networkidle")
-            pdf = pagina.pdf(prefer_css_page_size=True, print_background=True)
-        finally:
-            navegador.close()
+    with _navegador() as navegador:
+        pagina = navegador.new_page()
+        pagina.set_content(doc, wait_until="networkidle")
+        pdf = pagina.pdf(prefer_css_page_size=True, print_background=True)
     return pdf
 
 
@@ -1313,24 +1484,15 @@ def _relatorio_shell(titulo: str, escola_nome: str, subtitulo: str,
 
 def _relatorio_html_pdf(html_body: str) -> bytes:
     """Renderiza um relatório 'de vitrine' (A4 retrato) com rodapé/numeração."""
-    from playwright.sync_api import sync_playwright
-
     doc = (f"<!doctype html><html lang='pt-BR'><head><meta charset='utf-8'>"
            f"</head><body>{html_body}</body></html>")
-    with sync_playwright() as p:
-        try:
-            navegador = p.chromium.launch()
-        except Exception:  # noqa: BLE001 — sem chromium baixado: tenta o Chrome do sistema
-            navegador = p.chromium.launch(channel="chrome")
-        try:
-            pagina = navegador.new_page()
-            pagina.set_content(doc, wait_until="networkidle")
-            pdf = pagina.pdf(
-                format="A4", print_background=True, display_header_footer=True,
-                header_template="<div></div>", footer_template=_REPORT_FOOTER,
-                margin={"top": "12mm", "bottom": "16mm", "left": "11mm", "right": "11mm"})
-        finally:
-            navegador.close()
+    with _navegador() as navegador:
+        pagina = navegador.new_page()
+        pagina.set_content(doc, wait_until="networkidle")
+        pdf = pagina.pdf(
+            format="A4", print_background=True, display_header_footer=True,
+            header_template="<div></div>", footer_template=_REPORT_FOOTER,
+            margin={"top": "12mm", "bottom": "16mm", "left": "11mm", "right": "11mm"})
     return pdf
 
 
@@ -1479,25 +1641,85 @@ def _motivo_fora_da_comparacao(cartao: dict) -> str:
     return "Sem aluno do 1º ao 5º ano com dado das plataformas contratadas."
 
 
+# Coluna de média 0–100 de cada plataforma no Boletim: (módulo, rótulo, campo do
+# cartão da escola). Só sai a do módulo contratado (``_medias_do_boletim``).
+_MEDIAS_DO_BOLETIM = (("matematica", "Matific", "media_matific"),
+                      ("leitura", "Elefante", "media_elefante"))
+
+
+# O DENOMINADOR de cada média de plataforma do cartão: quantos alunos que concorrem
+# têm nota dela. Zero = nada medido (o cartão manda a média 0,0 por ausência).
+_ALUNOS_COM_A_MEDIA = {"media_matific": "alunos_com_nota_matific",
+                       "media_elefante": "alunos_com_nota_elefante"}
+# A média de uma escola sem nenhum aluno com nota da plataforma. Por extenso, como nas
+# telas da rede: "0,0" se lia como nota zero, e o "—" do Boletim é a matéria escondida
+# para proteger as crianças (grupo pequeno), outro motivo.
+SEM_DADO = "sem dado"
+
+
+def _sem_nota(cartao: dict, campo: str) -> bool:
+    """A média ``campo`` (de plataforma ou a geral) da escola não mediu ninguém?
+    A geral é a média das plataformas com dado: sem nota em nenhuma, não há geral.
+    Cartão sem os contadores (dado montado fora do ``dashboard_rede``) = medida."""
+    contadores = ([_ALUNOS_COM_A_MEDIA[campo]] if campo in _ALUNOS_COM_A_MEDIA
+                  else list(_ALUNOS_COM_A_MEDIA.values()))
+    valores = [cartao[c] for c in contadores if c in cartao]
+    return bool(valores) and not any(valores)
+
+
+def _fmt_media_da_escola(cartao: dict, campo: str) -> str:
+    """Uma média 0–100 da escola no Boletim: '—' se nula (matéria escondida da
+    Secretaria), ``SEM_DADO`` se ninguém tem nota dela (``_sem_nota``), senão a nota."""
+    valor = cartao.get(campo)
+    if valor is not None and _sem_nota(cartao, campo):
+        return SEM_DADO
+    return _fmt_nota(valor)
+
+
+def _rede_sem_nota(dados: dict) -> bool:
+    """A média geral da REDE não mediu ninguém? Ela só pondera as escolas
+    comparadas (``rede._media_geral_das_comparadas``): nenhuma delas com aluno com
+    nota = 0,0 por ausência. Cartões sem os contadores = não dá para saber (medida)."""
+    escolas = dados.get("escolas") or []
+    contadores = list(_ALUNOS_COM_A_MEDIA.values())
+    if not any(c in e for e in escolas for c in contadores):
+        return False
+    return not any(e.get(c) for e in escolas if _escola_comparada(e) for c in contadores)
+
+
+def _medias_do_boletim(dados: dict) -> list[tuple[str, str]]:
+    """``(rótulo, campo)`` das médias de plataforma que o Boletim mostra: só as
+    dos módulos contratados (``dados['modulos']``; sem a chave — dado montado fora
+    do ``dashboard_rede`` — tudo contratado, como em ``services/modulos``). O que
+    a rede não contratou não existe para ela: uma coluna "Matific" com 0,0 em
+    todas as escolas seria lida como nota zero em matemática."""
+    contratados = dados.get("modulos") or [m for m, _, _ in _MEDIAS_DO_BOLETIM]
+    return [(rotulo, campo) for modulo, rotulo, campo in _MEDIAS_DO_BOLETIM
+            if modulo in contratados]
+
+
 def linhas_boletim_rede(dados: dict) -> tuple[list[str], list[list]]:
     """Cabeçalho + linhas do ranking de escolas — base da reserva fpdf e do CSV,
     para o boletim nunca divergir do painel. Só as escolas COMPARADAS
     (``_escola_comparada``): é um ranking, e a escola fora da comparação não tem
-    posição nem índice a mostrar.
+    posição nem índice a mostrar. Só as médias das plataformas contratadas
+    (``_medias_do_boletim``).
 
-    As médias saem por ``_fmt_nota``, como na tabela HTML: a média nula (matéria
-    escondida da Secretaria, grupo pequeno) vira '—', nunca 'None'. O índice
-    segue número (é ele que ordena a tabela)."""
+    As médias saem por ``_fmt_media_da_escola``, como na tabela HTML: a média nula
+    (matéria escondida da Secretaria, grupo pequeno) vira '—', nunca 'None'; a da
+    plataforma em que nenhum aluno da escola tem nota vira ``SEM_DADO``, nunca
+    '0,0'. O índice segue número (é ele que ordena a tabela)."""
     # A coluna que ORDENA a tabela é o Índice (per capita, comparável entre
     # escolas) — sem ela, a Secretaria leria "1º lugar com Geral 25,8" acima de
     # "2º lugar com Geral 100" e concluiria que o boletim está quebrado. As
     # médias 0–100 continuam, como nota INTERNA de cada escola.
-    cabecalho = ["#", "Escola", "Alunos", "Adoção %", "Índice", "Matific",
-                 "Elefante", "Geral"]
+    medias = _medias_do_boletim(dados)
+    cabecalho = ["#", "Escola", "Alunos", "Adoção %", "Índice",
+                 *(rotulo for rotulo, _ in medias), "Geral"]
     linhas = [
         [e.get("posicao", ""), e["nome"], e["total_alunos"], e["adocao"],
-         e.get("pontuacao_geral", 0), _fmt_nota(e["media_matific"]),
-         _fmt_nota(e["media_elefante"]), _fmt_nota(e["media_geral"])]
+         e.get("pontuacao_geral", 0), *(_fmt_media_da_escola(e, campo) for _, campo in medias),
+         _fmt_media_da_escola(e, "media_geral")]
         for e in dados.get("escolas", []) if _escola_comparada(e)
     ]
     return cabecalho, linhas
@@ -1514,17 +1736,37 @@ _PLATAFORMAS_DO_BOLETIM = {
 }
 
 
+def _aviso_anos_letivos_do_boletim(dados: dict) -> str:
+    """O parágrafo do Boletim para a rede com escolas em ANOS LETIVOS diferentes
+    (``anos_letivos`` do ``dashboard_rede`` com mais de um ano), com as escolas de
+    cada ano; ``""`` quando a rede está num ano só (ou o dado não traz os anos)."""
+    anos = dados.get("anos_letivos") or []
+    if len(anos) < 2:
+        return ""
+    por_ano = "".join(
+        f" Em {ano}: " + ", ".join(_esc_html(e["nome"]) for e in dados.get("escolas", [])
+                                   if e.get("ano_letivo") == ano) + "."
+        for ano in anos)
+    return ('<p style="font-size:.72em;color:#5b6474;margin-top:.4em">'
+            '<b>Anos letivos:</b> as escolas da rede estão em anos letivos diferentes ('
+            + ", ".join(map(str, anos)) + '): cada escola é medida no ano letivo dela, '
+            'e a comparação junta anos diferentes até todas passarem para o mesmo ano.'
+            + por_ano + '</p>')
+
+
 def _shell_boletim_rede(rede_nome: str, dados: dict,
                         logos: tuple[str, str] | None = None) -> str:
     t = dados.get("totais", {})
     eq = dados.get("equidade", {})
+    media_da_rede = (SEM_DADO if t.get("media_geral") is not None and _rede_sem_nota(dados)
+                     else _fmt_nota(t.get("media_geral")))
     # Documento para reuniões: cada quadro diz O QUE mede. "adoção" e "média
     # geral" soltos eram lidos como desempenho escolar.
     tiles = [
         (str(t.get("escolas", 0)), "escolas na rede"),
         (f'{int(t.get("alunos", 0)):,}'.replace(",", "."), "alunos"),
         (_fmt_nota(t.get("adocao")) + "%", "alunos com dado de alguma plataforma"),
-        (_fmt_nota(t.get("media_geral")), "média das notas do Constela (0–100)"),
+        (media_da_rede, "média das notas do Constela (0–100)"),
     ]
     # Sem a chave (dado montado fora do ``dashboard_rede``) = tudo contratado,
     # como em ``services/modulos``.
@@ -1558,11 +1800,14 @@ def _shell_boletim_rede(rede_nome: str, dados: dict,
                 f'<td class="esq">{_esc_html(e.get("motivo_atencao") or "")}</td></tr>')
         corpo.append('</tbody></table>')
 
+    # As médias de plataforma: só as dos módulos do plano (``_medias_do_boletim``).
+    medias = _medias_do_boletim(dados)
     corpo.append('<h2 class="secao">Ranking das escolas</h2>')
     corpo.append('<table class="tab"><thead><tr>'
                  '<th>#</th><th class="esq">Escola</th><th>Alunos</th><th>Adoção</th>'
-                 '<th>Índice</th><th>Matific</th><th>Elefante</th><th>Geral</th>'
-                 '</tr></thead><tbody>')
+                 '<th>Índice</th>'
+                 + "".join(f"<th>{rotulo}</th>" for rotulo, _ in medias)
+                 + '<th>Geral</th></tr></thead><tbody>')
     escolas = dados.get("escolas", [])
     for e in [c for c in escolas if _escola_comparada(c)]:
         corpo.append(
@@ -1571,20 +1816,26 @@ def _shell_boletim_rede(rede_nome: str, dados: dict,
             f'<td>{_esc_html(str(e["total_alunos"]))}</td>'
             f'<td>{_fmt_nota(e["adocao"])}%</td>'
             f'<td><b>{_fmt_nota(e.get("pontuacao_geral", 0))}</b></td>'
-            f'<td>{_fmt_nota(e["media_matific"])}</td>'
-            f'<td>{_fmt_nota(e["media_elefante"])}</td>'
-            f'<td>{_fmt_nota(e["media_geral"])}</td></tr>')
+            + "".join(f"<td>{_fmt_media_da_escola(e, campo)}</td>" for _, campo in medias)
+            + f'<td>{_fmt_media_da_escola(e, "media_geral")}</td></tr>')
     corpo.append('</tbody></table>')
     medidas = " e ".join(medida for _, medida in plataformas)
+    colunas_0_100 = " · ".join([*(rotulo for rotulo, _ in medias), "Geral"])
     corpo.append(
         '<p style="font-size:.72em;color:#5b6474;margin-top:.4em">'
         f'<b>Índice</b> (0–1000, calculado pelo Constela): {medidas} por aluno do '
         '1º ao 5º ano, na régua da rede — 1000 é a escola de maior índice do '
         'município. É o número que ordena esta tabela e o único comparável entre '
         'escolas de tamanhos diferentes. '
-        '<b>Matific · Elefante · Geral</b> (0–100): nota INTERNA de cada escola, '
+        f'<b>{colunas_0_100}</b> (0–100): nota INTERNA de cada escola, '
         'calculada contra os próprios alunos dela — servem para acompanhar a escola '
         'ao longo do tempo, não para compará-la com outra.</p>')
+    # Na virada do ano, a rede tem escolas em anos letivos diferentes: cada uma é
+    # medida no ano dela (``rede.dashboard_rede``), e a tabela acima as compara
+    # assim mesmo. O documento diz isso e quem está em cada ano.
+    aviso_anos = _aviso_anos_letivos_do_boletim(dados)
+    if aviso_anos:
+        corpo.append(aviso_anos)
     # Secretaria: os totais e as médias da rede deixam de fora a matéria das
     # escolas com menos de k alunos com dado (grupo pequeno), e o número difere do
     # que o Admin Global vê. O documento diz isso, com o texto do painel.

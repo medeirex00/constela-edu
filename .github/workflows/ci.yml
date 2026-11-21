@@ -411,6 +411,7 @@ jobs:
       - name: Instalar workspaces
         run: npm ci --no-audit --no-fund --legacy-peer-deps
       - name: Instalar navegador do Playwright
+        id: navegador
         run: npx playwright install --with-deps chromium
         working-directory: apps/web
       - name: Rodar E2E (sobe backend + frontend e testa no navegador)
@@ -423,6 +424,50 @@ jobs:
         with:
           name: playwright-report
           path: apps/web/playwright-report
+          retention-days: 7
+      # As outras suítes do Playwright (o `npm run e2e` usa só o playwright.config.ts).
+      # Rodam mesmo que a principal falhe — o job já está reprovado e assim mostra tudo de
+      # uma vez. A varredura visual (playwright.visual.config.ts) é ferramenta local de
+      # capturas e fica fora. backend/tests/test_aud_infra_ci_e2e.py trava que toda config
+      # nova entre aqui.
+      #
+      # Análise e navegação: sobe o backend com o seed INVENTADO (4 contas de teste, rede
+      # fictícia) e o Vite; navega pelos menus dos 4 perfis, confere as travas por URL
+      # direta, o 403 das rotas da análise e a vitrine. O seed só apaga e recria o banco
+      # dentro de E2E_ANALISE_PASTA: a pasta temporária do runner.
+      - name: Rodar E2E da análise e da navegação (backend semeado + web, 4 perfis)
+        id: e2e_analise
+        if: ${{ !cancelled() && steps.navegador.outcome == 'success' }}
+        run: npx playwright test -c playwright.analise.config.ts
+        working-directory: apps/web
+        env:
+          CI: "true"
+          E2E_PYTHON: python
+          E2E_ANALISE_PASTA: ${{ runner.temp }}/e2e-analise
+      - name: Publicar rastros das falhas da análise
+        if: ${{ !cancelled() && steps.e2e_analise.outcome == 'failure' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-analise-resultados
+          path: apps/web/test-results/analise
+          retention-days: 7
+      # Telas públicas (telão e vitrine): só o Vite; a API pública é simulada no próprio
+      # teste, com dados inventados. O relatório vai para uma subpasta própria: na pasta
+      # padrão ele apagaria o da principal.
+      - name: Rodar E2E das telas públicas (contrato e responsividade)
+        id: e2e_publico
+        if: ${{ !cancelled() && steps.navegador.outcome == 'success' }}
+        run: npx playwright test -c playwright.publico.config.ts
+        working-directory: apps/web
+        env:
+          CI: "true"
+          PLAYWRIGHT_HTML_OUTPUT_DIR: playwright-report/publico
+      - name: Publicar relatório das telas públicas
+        if: ${{ !cancelled() && steps.e2e_publico.outcome != 'skipped' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report-publico
+          path: apps/web/playwright-report/publico
           retention-days: 7
 
   docker:

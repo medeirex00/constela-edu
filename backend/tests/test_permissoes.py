@@ -25,14 +25,14 @@ def cenario_professor(db, escola_completa):
     turma_a = escola_completa["turma"]
 
     turma_b = Turma(escola_id=escola.id, nome="5º Ano B", ano_escolar="5º Ano",
-                    ano_letivo=2026)
+                    ano_letivo=escola.ano_letivo_ativo)
     db.add(turma_b)
     db.flush()
     outro = Aluno(escola_id=escola.id, nome="Aluno De Outra Turma")
     db.add(outro)
     db.flush()
     db.add(Matricula(escola_id=escola.id, aluno_id=outro.id,
-                     turma_id=turma_b.id, ano_letivo=2026))
+                     turma_id=turma_b.id, ano_letivo=escola.ano_letivo_ativo))
 
     # Vínculo: cadastro de Professor com o MESMO e-mail do usuário professor.
     professor = Professor(escola_id=escola.id, nome="Prof. Carla",
@@ -326,8 +326,10 @@ def test_professor_ranking_renumerado_1n(cenario_professor, escola_completa, db)
     posicoes = {alunos[0].id: 100, alunos[1].id: 105, alunos[2].id: 110, fora.id: 103}
     valores = {alunos[0].id: 50.0, alunos[1].id: 40.0, alunos[2].id: 30.0, fora.id: 45.0}
     for aid, pos in posicoes.items():
+        # Aferidos em Leitura (nota > 0 só sai de quem tem dado): o Ranking Geral
+        # só lista quem tem dado de alguma dimensão (DEC-19).
         db.add(Nota(escola_id=escola.id, aluno_id=aid, ano_letivo=2026,
-                    nota_geral=valores[aid], posicao=pos))
+                    nota_geral=valores[aid], posicao=pos, aferido_leitura=True))
     db.commit()
 
     r = c["professor"].get(f"/api/v1/escolas/{escola.id}/ranking")

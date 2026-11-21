@@ -14,7 +14,10 @@ USO (aponte para o STAGING, NUNCA para produção):
 
 Segurança:
   * cria escolas descartáveis com prefixo CARGA_TESTE_ e as APAGA no fim
-    (só mexe no que criou);
+    (só mexe no que criou): os workers só reivindicam as execuções que a carga
+    enfileirou — uma coleta real na fila continua na fila — e o prefixo é
+    comparado literalmente (no LIKE, o ``_`` valeria qualquer caractere e
+    "CARGA TESTE ..." contaria como escola de carga);
   * exige --go; sem a flag, só imprime o que faria;
   * RECUSA rodar se o banco tiver escolas de verdade além das de carga, a menos
     que --permitir-dados-reais seja passado (proteção contra apontar p/ produção).
@@ -38,6 +41,12 @@ from app.models import Escola, SincronizacaoExecucao  # noqa: E402
 from scripts._saida import forcar_saida_utf8  # noqa: E402
 
 PREFIXO = "CARGA_TESTE_"
+
+
+def _da_carga():
+    """Escolas da carga: nome que COMEÇA com o prefixo, literalmente (``autoescape``
+    trata o ``_`` como caractere, não como o curinga do LIKE)."""
+    return Escola.nome.startswith(PREFIXO, autoescape=True)
 
 
 def _agora():
@@ -71,7 +80,7 @@ def _limpar() -> int:
     db = SessionLocal()
     try:
         ids = [e.id for e in db.execute(
-            select(Escola).where(Escola.nome.like(f"{PREFIXO}%"))).scalars()]
+            select(Escola).where(_da_carga())).scalars()]
         if ids:
             db.execute(delete(SincronizacaoExecucao)
                        .where(SincronizacaoExecucao.escola_id.in_(ids)))
@@ -82,15 +91,17 @@ def _limpar() -> int:
         db.close()
 
 
-def _worker(claimed: list[int], lock: threading.Lock) -> None:
-    """Reivindica execuções até a fila esvaziar. Cada claim é o UPDATE atômico
-    condicional de service.executar."""
+def _worker(claimed: list[int], lock: threading.Lock, esperados: list[int]) -> None:
+    """Reivindica as execuções DA CARGA (``esperados``) até elas saírem da fila. Cada
+    claim é o UPDATE atômico condicional de service.executar. Execução que a carga
+    não enfileirou (uma coleta real do staging) nunca é selecionada nem tocada."""
     db = SessionLocal()
     try:
         while True:
             candidatos = db.execute(
                 select(SincronizacaoExecucao.id)
-                .where(SincronizacaoExecucao.status == "fila")
+                .where(SincronizacaoExecucao.status == "fila",
+                       SincronizacaoExecucao.id.in_(esperados))
                 .order_by(SincronizacaoExecucao.id).limit(5)).scalars().all()
             if not candidatos:
                 return
@@ -98,6 +109,7 @@ def _worker(claimed: list[int], lock: threading.Lock) -> None:
                 venceu = db.execute(
                     update(SincronizacaoExecucao)
                     .where(SincronizacaoExecucao.id == eid,
+                           SincronizacaoExecucao.id.in_(esperados),
                            SincronizacaoExecucao.status == "fila")
                     .values(status="concluida", iniciada_em=_agora(),
                             finalizada_em=_agora())).rowcount
@@ -122,7 +134,7 @@ def main() -> int:
     db = SessionLocal()
     reais = db.execute(
         select(func.count()).select_from(Escola)
-        .where(~Escola.nome.like(f"{PREFIXO}%"))).scalar_one()
+        .where(~_da_carga())).scalar_one()
     db.close()
 
     print(f"[carga] escolas={args.escolas} workers={args.workers} "
@@ -145,7 +157,7 @@ def main() -> int:
         claimed: list[int] = []
         lock = threading.Lock()
         t0 = time.monotonic()
-        threads = [threading.Thread(target=_worker, args=(claimed, lock))
+        threads = [threading.Thread(target=_worker, args=(claimed, lock, esperados))
                    for _ in range(args.workers)]
         for t in threads:
             t.start()
@@ -155,16 +167,18 @@ def main() -> int:
 
         duplicadas = len(claimed) - len(set(claimed))
         faltando = set(esperados) - set(claimed)
+        fora_da_carga = set(claimed) - set(esperados)
         vazao = len(esperados) / t_proc if t_proc else 0
         print("\n===== RESULTADO =====")
         print(f"execuções enfileiradas : {len(esperados)}")
         print(f"reivindicadas          : {len(claimed)}")
         print(f"DUPLICADAS             : {duplicadas}  (precisa ser 0)")
         print(f"não processadas        : {len(faltando)}  (precisa ser 0)")
+        print(f"fora da carga          : {len(fora_da_carga)}  (precisa ser 0)")
         print(f"tempo p/ enfileirar    : {t_semear:.2f}s")
         print(f"tempo p/ processar     : {t_proc:.2f}s")
         print(f"vazão                  : {vazao:.0f} execuções/s")
-        ok = duplicadas == 0 and not faltando
+        ok = duplicadas == 0 and not faltando and not fora_da_carga
         print(f"\nVEREDITO: {'PASSOU' if ok else 'FALHOU'}")
         return 0 if ok else 1
     finally:

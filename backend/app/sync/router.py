@@ -13,7 +13,8 @@ from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import func, select
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, aliased
+from starlette.concurrency import run_in_threadpool
 
 logger = logging.getLogger("constela.sync")
 
@@ -246,23 +247,41 @@ def status_escola(escola_id: int = Depends(escola_autorizada),
     # quando libera, ela commita, e o que já estivesse carregado seria relido.
     service.liberar_fila_sem_agendador(db, escola_id)
 
-    alunos_ativos = select(func.count(Aluno.id)).where(
-        Aluno.escola_id == escola_id, Aluno.status == "ativo").scalar_subquery()
-    turmas = select(func.count(Turma.id)).where(Turma.escola_id == escola_id).scalar_subquery()
+    # Alunos e turmas do ANO LETIVO ATIVO, pela regra de /alunos (ativo e matriculado
+    # no ano) e de /turmas (do ano e não arquivada) — a mesma do painel da rede
+    # (services/rede.py). Antes eram todo aluno 'ativo' e toda turma de qualquer ano:
+    # na virada, o "Comece aqui" e Integrações somavam os dois anos. O ano vem de um
+    # ALIAS da escola (subconsulta na mesma ida), para não correlacionar com a escola
+    # da consulta principal nem cruzar escolas quando ela não está no FROM.
+    escola_do_ano = aliased(Escola)
+    ano_ativo_da_escola = (select(escola_do_ano.ano_letivo_ativo)
+                           .where(escola_do_ano.id == escola_id).scalar_subquery())
+    alunos_ativos = (select(func.count(Aluno.id)).select_from(Aluno)
+                     .join(Matricula, Matricula.aluno_id == Aluno.id)
+                     .where(Aluno.escola_id == escola_id, Aluno.status == "ativo",
+                            Matricula.ano_letivo == ano_ativo_da_escola)
+                     .scalar_subquery())
+    turmas = select(func.count(Turma.id)).where(
+        Turma.escola_id == escola_id, Turma.ano_letivo == ano_ativo_da_escola,
+        Turma.status == "ativa").scalar_subquery()
+    # O sinal do onboarding continua "a escola já tem turmas" (de qualquer ano), o
+    # mesmo do /onboarding: voltar a pedir a Lista Piloto na virada é decisão de
+    # produto, não desta contagem.
+    tem_turma = select(Turma.id).where(Turma.escola_id == escola_id).exists()
     pendencias = _consulta_pendencias(escola_id, agora).scalar_subquery()
     # O CONTRATO da rede vem na mesma consulta da escola (uma coluna por módulo):
     # antes, a escola de rede relia ``modulos_rede`` uma vez por plataforma com
     # agenda (``plataforma_no_plano``) — 2 idas a mais que a avulsa.
-    linha = db.execute(select(Escola, alunos_ativos, turmas, pendencias,
+    linha = db.execute(select(Escola, alunos_ativos, turmas, tem_turma, pendencias,
                               *svc_modulos.colunas_do_contrato(Escola.rede_id))
                        .where(Escola.id == escola_id)).one_or_none()
     if linha is None:   # removida no meio da requisição: os números, sem a escola
         escola = None
-        qtd_alunos, qtd_turmas, qtd_pendencias = db.execute(
-            select(alunos_ativos, turmas, pendencias)).one()
+        qtd_alunos, qtd_turmas, com_turma, qtd_pendencias = db.execute(
+            select(alunos_ativos, turmas, tem_turma, pendencias)).one()
         modulos = svc_modulos.modulos_da_escola(db, None)
     else:
-        escola, qtd_alunos, qtd_turmas, qtd_pendencias, *desligados = linha
+        escola, qtd_alunos, qtd_turmas, com_turma, qtd_pendencias, *desligados = linha
         modulos = svc_modulos.modulos_das_colunas(desligados)
     qtd_alunos, qtd_turmas = qtd_alunos or 0, qtd_turmas or 0
     escola_nome = escola.nome if escola else ""
@@ -347,7 +366,7 @@ def status_escola(escola_id: int = Depends(escola_autorizada),
     return EscolaStatus(escola_id=escola_id, escola_nome=escola_nome,
                         qtd_alunos=qtd_alunos, qtd_turmas=qtd_turmas,
                         plataformas=plataformas, alertas_abertos=abertos,
-                        lista_piloto_importada=qtd_turmas > 0,
+                        lista_piloto_importada=bool(com_turma),
                         integracao_configurada=len(creds) > 0,
                         agendador_ativo=agendador,
                         pendencias_correspondencia_30d=int(qtd_pendencias or 0))
@@ -416,6 +435,58 @@ def _registrar_validacao(db: Session, escola_id: int, plataforma: str, linha,
                          severidade=severidade)
 
 
+# AS ROTAS DE CREDENCIAL SÃO ``async`` (o login na plataforma é um ``await`` longo), mas
+# a sessão do banco é SÍNCRONA: o corpo de uma rota async roda na thread do event loop
+# do worker, e cada consulta/commit ali parava o worker inteiro (todas as escolas e
+# perfis que caem nele, inclusive o /api/health — ~0,2 s por ida ao banco em produção).
+# Todo trabalho de banco delas roda no threadpool (``run_in_threadpool``), nas funções
+# abaixo; no loop fica só o ``await`` do login. A sessão é usada por uma thread de cada
+# vez (nunca ao mesmo tempo), como numa rota ``def``.
+def _gravar_credencial(db: Session, escola_id: int, plataforma: str, cred: Credenciais,
+                       usuario_id: int):
+    """"Salvar e validar", antes do login: grava a credencial CIFRADA e commita."""
+    linha = vault.salvar_credencial(db, escola_id, plataforma, cred)
+    # A senha recém-cifrada abre com as chaves deste servidor: o alerta "senha
+    # salva ilegível" de uma execução anterior perdeu a causa, qualquer que seja o
+    # resultado do login abaixo (a recusa abre o alerta PRÓPRIO dela).
+    service.resolver_alertas(db, escola_id, plataforma, ("credencial_ilegivel",))
+    if plataforma == "matific":
+        aovivo.limpar_sessao(db, escola_id)     # esquece sessão da credencial antiga
+    registrar(db, "sync.credencial_salva", escola_id=escola_id, usuario_id=usuario_id,
+              entidade="plataforma", detalhes={"plataforma": plataforma})  # sem senha
+    db.commit()
+    return linha
+
+
+def _credencial_para_testar(db: Session, escola_id: int,
+                            plataforma: str) -> tuple[Credenciais | None, bool]:
+    """"Testar conexão", antes do login: ``(credencial decifrada, há linha gravada)``.
+    Solta a conexão do pool antes do ``await`` de I/O longo (navegador)."""
+    cred = vault.obter_credencial(db, escola_id, plataforma)
+    gravada = cred is not None or vault.obter_linha(db, escola_id, plataforma) is not None
+    db.rollback()
+    return cred, gravada
+
+
+def _concluir_validacao(db: Session, escola_id: int, plataforma: str,
+                        resultado: ResultadoValidacao, *, linha_salva=None,
+                        ligar_agenda: bool = False) -> ResultadoTeste:
+    """Depois do login: grava o resultado da validação e monta a resposta."""
+    # Relê a linha DEPOIS do await (I/O longo): não sobrescreve um status que
+    # uma execução concorrente possa ter mudado nesse intervalo (lost update).
+    linha = vault.obter_linha(db, escola_id, plataforma) or linha_salva
+    if linha is not None:
+        _registrar_validacao(db, escola_id, plataforma, linha, resultado)
+    if ligar_agenda and resultado.ok:
+        # Credencial válida → liga a sincronização DIÁRIA automática (se ainda não
+        # houver cadência), para o banco local do ano ficar em dia sozinho.
+        _garantir_agenda_diaria(db, escola_id, plataforma)
+    db.commit()
+    return ResultadoTeste(ok=resultado.ok, mensagem=resultado.mensagem,
+                          codigo=resultado.codigo,
+                          **_conferencia_da_escola(db, escola_id, plataforma, resultado))
+
+
 @router.put("/credenciais/{plataforma}", response_model=ResultadoTeste)
 async def salvar_credenciais(plataforma: str, dados: CredenciaisIn,
                              escola_id: int = Depends(escola_autorizada),
@@ -424,17 +495,13 @@ async def salvar_credenciais(plataforma: str, dados: CredenciaisIn,
     """Grava a credencial CIFRADA e valida IMEDIATAMENTE, com erro claro."""
     _validar_plataforma(plataforma)
     cred = Credenciais(usuario=dados.usuario, senha=dados.senha, extra=dados.extra)
-    linha = vault.salvar_credencial(db, escola_id, plataforma, cred)
-    # A senha recém-cifrada abre com as chaves deste servidor: o alerta "senha
-    # salva ilegível" de uma execução anterior perdeu a causa, qualquer que seja o
-    # resultado do login abaixo (a recusa abre o alerta PRÓPRIO dela).
-    service.resolver_alertas(db, escola_id, plataforma, ("credencial_ilegivel",))
+    linha = await run_in_threadpool(_gravar_credencial, db, escola_id, plataforma, cred,
+                                    usuario.id)
     if plataforma == "matific":
-        aovivo.limpar_sessao(db, escola_id)     # esquece sessão da credencial antiga
-        aovivo.invalidar_cache(escola_id)       # e o ranking cacheado da conta antiga
-    registrar(db, "sync.credencial_salva", escola_id=escola_id, usuario_id=usuario.id,
-              entidade="plataforma", detalhes={"plataforma": plataforma})  # sem senha
-    db.commit()
+        # Depois do commit da credencial nova: libera a memória do ranking ao vivo
+        # da conta antiga neste processo (o carimbo da credencial no cache é o que
+        # impede servi-lo, também no outro worker).
+        aovivo.invalidar_cache(escola_id)
 
     conector = connectors.obter(plataforma)
     try:
@@ -450,18 +517,8 @@ async def salvar_credenciais(plataforma: str, dados: CredenciaisIn,
             mensagem=("Credenciais salvas, mas não foi possível validar o login "
                       "agora. Tente validar novamente mais tarde."),
             codigo="erro_navegador")
-    # Relê a linha DEPOIS do await (I/O longo): não sobrescreve um status que
-    # uma execução concorrente possa ter mudado nesse intervalo (lost update).
-    linha = vault.obter_linha(db, escola_id, plataforma) or linha
-    _registrar_validacao(db, escola_id, plataforma, linha, resultado)
-    if resultado.ok:
-        # Credencial válida → liga a sincronização DIÁRIA automática (se ainda não
-        # houver cadência), para o banco local do ano ficar em dia sozinho.
-        _garantir_agenda_diaria(db, escola_id, plataforma)
-    db.commit()
-    return ResultadoTeste(ok=resultado.ok, mensagem=resultado.mensagem,
-                          codigo=resultado.codigo,
-                          **_conferencia_da_escola(db, escola_id, plataforma, resultado))
+    return await run_in_threadpool(_concluir_validacao, db, escola_id, plataforma,
+                                   resultado, linha_salva=linha, ligar_agenda=True)
 
 
 @router.post("/credenciais/{plataforma}/testar", response_model=ResultadoTeste)
@@ -470,9 +527,10 @@ async def testar_credenciais(plataforma: str,
                              usuario: Usuario = Depends(exigir_papeis("admin", "coordenador")),
                              db: Session = Depends(get_db)):
     _validar_plataforma(plataforma)
-    cred = vault.obter_credencial(db, escola_id, plataforma)
+    cred, gravada = await run_in_threadpool(_credencial_para_testar, db, escola_id,
+                                            plataforma)
     if cred is None:
-        if vault.obter_linha(db, escola_id, plataforma) is not None:
+        if gravada:
             # Há credencial, mas a cifra não abre (chaves trocadas sem recifrar):
             # nada a testar, e "nenhuma configurada" seria mentira. Não grava nada
             # (o /status já deriva 'ilegivel') e não diz por que a cifra falhou.
@@ -481,15 +539,8 @@ async def testar_credenciais(plataforma: str,
         raise HTTPException(status.HTTP_400_BAD_REQUEST,
                             "Nenhuma credencial configurada para esta plataforma.")
     conector = connectors.obter(plataforma)
-    db.rollback()  # solta a conexão do pool antes do await de I/O longo (navegador)
     resultado = await conector.testar_credenciais(cred, _ctx_efemero(escola_id))
-    linha = vault.obter_linha(db, escola_id, plataforma)  # relê fresco após o await
-    if linha is not None:
-        _registrar_validacao(db, escola_id, plataforma, linha, resultado)
-    db.commit()
-    return ResultadoTeste(ok=resultado.ok, mensagem=resultado.mensagem,
-                          codigo=resultado.codigo,
-                          **_conferencia_da_escola(db, escola_id, plataforma, resultado))
+    return await run_in_threadpool(_concluir_validacao, db, escola_id, plataforma, resultado)
 
 
 @router.delete("/credenciais/{plataforma}", status_code=status.HTTP_204_NO_CONTENT)
@@ -501,7 +552,6 @@ def remover_credenciais(plataforma: str,
     vault.remover_credencial(db, escola_id, plataforma)
     if plataforma == "matific":
         aovivo.limpar_sessao(db, escola_id)
-        aovivo.invalidar_cache(escola_id)  # não servir ranking da conta removida
     # Sem credencial não há coleta: as FALHAS dela perderam a causa — ficam no
     # histórico, resolvidas, em vez de abertas para sempre num card "Ainda não
     # configurada". O 'desatualizada' fica: com a agenda ativa, o dado continua
@@ -511,6 +561,11 @@ def remover_credenciais(plataforma: str,
     registrar(db, "sync.credencial_removida", escola_id=escola_id,
               usuario_id=usuario.id, detalhes={"plataforma": plataforma})
     db.commit()
+    if plataforma == "matific":
+        # Depois do commit: libera a memória do ranking da conta removida neste
+        # processo (quem impede servi-lo, aqui e no outro worker, é o carimbo da
+        # credencial no cache — aovivo.placar_matific).
+        aovivo.invalidar_cache(escola_id)
 
 
 # ---------------------------------------------------------------------------

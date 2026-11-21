@@ -54,7 +54,8 @@ from datetime import datetime, timezone
 from decimal import ROUND_HALF_UP, Decimal
 from functools import lru_cache
 
-from app.services.avaliacoes import ImportacaoRecusada
+from app.services import planilhas
+from app.services.avaliacoes import ImportacaoRecusada, exigir_xlsx_contido
 
 PARSER_MUNICIPIOS = "inep_ica_municipios"
 PARSER_UFS = "inep_ica_ufs"
@@ -325,6 +326,9 @@ def _abrir(conteudo: bytes, nome: str):
         raise ImportacaoRecusada(
             f"O arquivo “{nome or 'sem nome'}” não é uma planilha XLSX. Suba a planilha "
             "oficial do INEP como baixada (resultados_e_metas_*.xlsx). Nada foi gravado.")
+    # Planilha inflada: recusada ANTES do openpyxl, com o teto padrão da guarda única
+    # (a planilha real do ICA tem menos de 1 MB).
+    exigir_xlsx_contido(conteudo, max_total=planilhas.XLSX_MAX_DESCOMPRIMIDO)
     from openpyxl import load_workbook
     try:
         return load_workbook(io.BytesIO(conteudo), read_only=True, data_only=True)
@@ -332,6 +336,13 @@ def _abrir(conteudo: bytes, nome: str):
         raise ImportacaoRecusada(
             "Não consegui abrir o arquivo como planilha XLSX (arquivo corrompido ou de "
             "outro formato). Nada foi gravado.") from exc
+
+
+def _max_col(aba) -> int:
+    """Colunas lidas de cada linha: as da dimensão declarada, até
+    ``planilhas.MAX_COLUNAS_LIDAS`` — sem o teto, o openpyxl completa cada linha até a
+    dimensão (A1:XFD…, 16.384 colunas, célula a célula). A planilha real tem dezenas."""
+    return min(aba.max_column or planilhas.MAX_COLUNAS_LIDAS, planilhas.MAX_COLUNAS_LIDAS)
 
 
 def _codigos(linha) -> list[str]:
@@ -343,7 +354,8 @@ def _localizar(wb) -> tuple[str, object, int, list[str]]:
     nome da aba): a linha que tem a coluna de resultado do ICA e o código do
     território. Devolve ``(parser, aba, índice da linha técnica, códigos)``."""
     for aba in wb.worksheets:
-        for i, linha in enumerate(aba.iter_rows(max_row=_LINHAS_TOPO, values_only=True)):
+        for i, linha in enumerate(aba.iter_rows(max_row=_LINHAS_TOPO, max_col=_max_col(aba),
+                                                values_only=True)):
             cods = _codigos(linha)
             if not any(_RE_RESULTADO.match(c) for c in cods):
                 continue
@@ -547,7 +559,7 @@ def ler_planilha_ica(conteudo: bytes, nome: str, *, codigo_ibge: str) -> Leitura
 def _linhas_de_dados(aba, i_tecnica: int):
     """``(valores, células)`` de cada linha não vazia depois da linha técnica — as
     células trazem o formato, que entra na precisão da coluna."""
-    for k, celulas in enumerate(aba.iter_rows(min_row=i_tecnica + 2)):
+    for k, celulas in enumerate(aba.iter_rows(min_row=i_tecnica + 2, max_col=_max_col(aba))):
         if k >= _MAX_LINHAS:
             raise ImportacaoRecusada(
                 f"O arquivo tem mais de {_MAX_LINHAS} linhas — muito maior que a planilha "

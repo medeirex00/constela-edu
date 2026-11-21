@@ -78,14 +78,20 @@ def escolher_nome(dados: schemas.NomeIn,
 def trocar_avatar(dados: schemas.AvatarIn,
                   ctx: ContextoAluno = Depends(get_aluno_atual),
                   db: Session = Depends(get_db)):
+    # Trava a linha antes de mesclar: toques rápidos no vestiário não se apagam.
+    perfil = svc.travar_perfil(db, ctx.perfil)
+    mudancas = dados.model_dump(exclude_none=True)
     try:
-        svc.atualizar_avatar(ctx.perfil, dados.model_dump(exclude_none=True))
+        svc.atualizar_avatar(perfil, mudancas)
     except ValueError as erro:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(erro))
     db.add(ctx.perfil)
+    # Minimização (LGPD), a mesma regra do nome: o log PERMANENTE registra que a
+    # criança trocou a aparência (quais slots e quando) — não a aparência dela (tom
+    # de pele, cabelo...). O valor vigente está no perfil e some com ele na exclusão.
     registrar(db, "quest.avatar", escola_id=ctx.escola_id,
               entidade="aluno", entidade_id=ctx.aluno.id,
-              detalhes={"avatar": ctx.perfil.avatar})
+              detalhes={"slots": sorted(set(mudancas) & set(svc.APARENCIA))})
     db.commit()
     db.refresh(ctx.perfil)
     return _montar(ctx)
@@ -95,7 +101,8 @@ def trocar_avatar(dados: schemas.AvatarIn,
 def trocar_preferencias(dados: schemas.PreferenciasIn,
                         ctx: ContextoAluno = Depends(get_aluno_atual),
                         db: Session = Depends(get_db)):
-    svc.atualizar_preferencias(ctx.perfil, dados.model_dump(exclude_none=True))
+    perfil = svc.travar_perfil(db, ctx.perfil)
+    svc.atualizar_preferencias(perfil, dados.model_dump(exclude_none=True))
     db.add(ctx.perfil)
     db.commit()
     db.refresh(ctx.perfil)

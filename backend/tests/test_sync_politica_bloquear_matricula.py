@@ -163,7 +163,7 @@ def test_bloquear_lista_piloto_e_matific_nao_alternam_a_matricula(
 
 
 def test_bloquear_a_divergencia_vira_aviso_e_nao_conta_como_dado_alterado(
-        db, escola_completa):
+        relogio_no_ano_letivo, db, escola_completa):
     """No núcleo do /confirmar (a mesma chamada da sync): a turma divergente do
     Matific vira AVISO, a matrícula não muda e a criança não entra nos
     "aplicados" (sem número novo, a coleta não recalcula ninguém por ela)."""
@@ -244,7 +244,8 @@ def test_bloquear_chamada_direta_tambem_nao_move(db, escola_completa):
 # ---------------------------------------------------------------------------
 # "permitir": comportamento aprovado em 14/07, idêntico
 # ---------------------------------------------------------------------------
-def test_permitir_a_sync_do_matific_continua_movendo(db, escola_completa, monkeypatch):
+def test_permitir_a_sync_do_matific_continua_movendo(
+        relogio_no_ano_letivo, db, escola_completa, monkeypatch):
     ec = escola_completa
     eid = ec["escola"].id
     a = ec["alunos"][0]
@@ -259,7 +260,8 @@ def test_permitir_a_sync_do_matific_continua_movendo(db, escola_completa, monkey
     assert ex2.qtd_alunos == 1          # a matrícula movida conta como dado alterado
 
 
-def test_sem_politica_a_sync_do_matific_continua_movendo(db, escola_completa, monkeypatch):
+def test_sem_politica_a_sync_do_matific_continua_movendo(
+        relogio_no_ano_letivo, db, escola_completa, monkeypatch):
     ec = escola_completa
     eid = ec["escola"].id
     a = ec["alunos"][0]

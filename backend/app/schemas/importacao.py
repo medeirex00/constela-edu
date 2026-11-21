@@ -1,17 +1,42 @@
 """Schemas do fluxo de importação (PRD §15–§16, §50–§52)."""
 from datetime import datetime
+from typing import Annotated
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, BeforeValidator, Field
 
-from app.schemas.comum import ORMModel
+from app.schemas.comum import ORMModel, _nome_sem_controle
 
 
 class CorrespondenciaOut(BaseModel):
-    status: str  # exato | provavel | nao_encontrado
+    # exato | vinculado | revisar | bloqueado | nao_encontrado | ignorado (a
+    # confirmação ignora a linha; ``motivo`` diz por quê: conta_esquecida…)
+    status: str
     aluno_id: int | None = None
     aluno_nome: str | None = None
     similaridade: float | None = None
+    # O MOTIVO da decisão do motor (``services.importacao._correspondencia``): na
+    # revisão, o de ``identidade_aluno.MOTIVOS`` (nome_incompleto,
+    # contas_repetidas_no_relatorio…), que a tela usa para mandar a linha para
+    # Revisões de identidade em vez de "Criar"; no vínculo, o mesmo que ``via``; sem
+    # candidato, "novo" ou "conflito". Sem o campo aqui, o Pydantic o descartava e a
+    # tela nunca o recebia.
+    motivo: str | None = None
+    via: str | None = None          # como casou (identidade|exato|ra|abreviacao|…)
     alternativas: list[dict] = []
+    # ONDE A FICHA NOVA NASCE (status "nao_encontrado"/"bloqueado") — a decisão da
+    # porta única (``identidade_aluno._turma_para_criar``), para a tela não
+    # adivinhar a turma pelo nome:
+    #   * ``turma_id``/``turma_nome``: a turma cadastrada que recebe a ficha — a tela
+    #     manda ``criar_em_turma_id`` = ``turma_id``;
+    #   * ``turma_nova``: a sala do relatório não tem turma no cadastro, e a
+    #     confirmação cria uma com este nome — a tela manda ``criar_em_turma_nome``
+    #     = a turma do RELATÓRIO como veio (``dados.turma_relatorio`` ou
+    #     ``turma_detectada``), não este nome curto (dele sai a etapa da turma);
+    #   * os três nulos: a linha não cria ficha (vínculo ou revisão) ou o relatório
+    #     não informa turma — aí a tela pede a turma.
+    turma_id: int | None = None
+    turma_nome: str | None = None
+    turma_nova: str | None = None
 
 
 class LinhaAnaliseOut(BaseModel):
@@ -54,17 +79,29 @@ class AnaliseOut(BaseModel):
 
 
 class LinhaConfirmacao(BaseModel):
-    nome: str
+    # O corpo vem do cliente (e da sincronização): o nome — da criança e da turma
+    # nova — perde o caractere de controle invisível, a mesma regra do cadastro
+    # manual (``schemas.comum._nome_sem_controle``). É o nome que fica na ficha.
+    nome: Annotated[str, BeforeValidator(_nome_sem_controle)]
     dados: dict
     aluno_id: int | None = None
     criar_em_turma_id: int | None = None
     # Nome de turma AINDA INEXISTENTE (a lida do PDF): a confirmação cria a
     # turma uma única vez e matricula o aluno nela — primeiro import da escola
     # funciona sem cadastrar turmas antes.
-    criar_em_turma_nome: str | None = None
+    criar_em_turma_nome: Annotated[str | None, BeforeValidator(_nome_sem_controle)] = None
     # COMO o aluno foi identificado (uuid|exato|provavel): a sincronização usa
     # para só mover de turma quem casou com segurança (só vem da sync automática).
     via: str | None = None
+    # "Deixar para a Revisão" (escolha de quem confirma, na prévia): a linha NUNCA
+    # associa nem cria — vai para a Revisão de identidade com o motivo que o backend
+    # achar, ou, se para ele a linha associaria ou criaria (o contexto mudou desde a
+    # prévia: outra conta ignorada, outra linha fixada…), com o motivo
+    # ``deixada_para_revisao``. Antes a tela mandava o mesmo corpo de um "Criar" e
+    # confiava que a confirmação repetiria a prévia. Os campos de turma continuam
+    # valendo como contexto da pendência (a turma do relatório pelo nome, como a
+    # prévia a leu). A sincronização não manda.
+    deixar_para_revisao: bool = False
 
 
 class ImportacaoConfirm(BaseModel):
@@ -178,6 +215,10 @@ class RevisaoIdentidadeOut(ORMModel):
     # Veredito determinístico da triagem ("dá para encerrar com segurança, e por
     # quê") — ver ``services/triagem_revisoes``. Só na listagem da fila.
     triagem: dict | None = None
+    # O nome que "Criar novo aluno" grava (A10: sem o sufixo de turma digitado junto
+    # do nome) e, por turma, só onde ele muda. Só nas pendentes da listagem.
+    nome_ficha_nova: str | None = None
+    nome_ficha_nova_por_turma: dict[str, str] = {}
 
 
 class ResolverRevisaoIn(BaseModel):
@@ -190,8 +231,12 @@ class ResolverRevisaoIn(BaseModel):
 class DefinirIdentidadeEfetivaIn(BaseModel):
     """CONTA DUPLICADA: qual conta da plataforma vale para este aluno.
 
-    As demais ficam APOSENTADAS — preservadas, mas fora da importação e da
-    pontuação. Decisão interna do Constela; nada muda na plataforma externa."""
+    As demais ficam APOSENTADAS — preservadas e fora da importação (não chega
+    dado novo delas). O que já veio delas continua na ficha, porque nem o retrato
+    nem a leitura guardam a conta de origem (identidade_efetiva): as leituras do
+    Elefante continuam contando, os retratos continuam nos períodos que os contêm, e
+    o retrato atual só muda quando entrar uma coleta da conta efetiva. Decisão
+    interna do Constela; nada muda na plataforma externa."""
     aluno_id: int
     id_externo_efetivo: str = Field(min_length=1, max_length=80)
     aposentar: list[str] = Field(default_factory=list)
@@ -237,11 +282,19 @@ class MatriculasAnaliseOut(BaseModel):
     total_registros: int = 0          # linhas na planilha (pode repetir aluno)
     # Resumo por efeito (prévia antes de confirmar): quantos serão CRIADOS vs
     # ATUALIZADOS (já existem) e quantas turmas já existem (duplicidade).
+    # São os números da CONFIRMAÇÃO (a prévia roda a mesma e a desfaz): criados,
+    # atualizados (distintos) e linhas que irão para revisão — nem criam nem alteram.
     alunos_novos: int = 0
     alunos_atualizar: int = 0
+    alunos_em_revisao: int = 0
     turmas_existentes: int = 0
     turmas: list[MatriculaTurmaOut]
     avisos: list[str] = []
+    # A lista é de OUTRO ano letivo que o ativo da escola (``ano_letivo`` ≠ ano ativo):
+    # a confirmação recusa (409) e a tela não deixa gravar. ``aviso_ano`` diz por quê
+    # e o que fazer; sem o ano na planilha, só pede para conferir (não bloqueia).
+    ano_divergente: bool = False
+    aviso_ano: str | None = None
 
 
 class MatriculasResultadoOut(BaseModel):

@@ -10,10 +10,17 @@
  * recebido, conta da plataforma, turma, motivo, candidatos e dados) e envia a
  * escolha EXPLÍCITA do gestor aos endpoints já existentes:
  *   GET  /escolas/{id}/importacoes/revisoes[?situacao=]
+ *   GET  /escolas/{id}/importacoes/contagem-revisoes   (o total real; a lista para em 500)
  *   POST /escolas/{id}/importacoes/revisoes/{rev}/resolver  {aluno_id} | {criar_em_turma_id}
  *   POST /escolas/{id}/importacoes/revisoes/{rev}/descartar {motivo}
  * Vincular, transferir a conta da plataforma, aplicar os dados e auditar é
  * tudo feito pelo backend; depois de cada ação a fila é relida dele.
+ *
+ * TRIAGEM (só leitura, calculada pelo backend em `services/triagem_revisoes`):
+ * cada pendência vem com o selo "Segura" (há evidência objetiva e nenhum
+ * conflito) ou "Decisão humana" (com o porquê). A tela mostra o selo, filtra por
+ * motivo e por "só seguras" — e NÃO resolve nada em lote: cada pendência continua
+ * sendo decidida por um clique de gente.
  */
 import {
   AlertTriangle,
@@ -49,7 +56,7 @@ import {
   estiloInput,
 } from "../components/ui";
 import { useApp } from "../context/AppContext";
-import { useApi } from "../hooks/useApi";
+import { useApi, type ResultadoUseApi } from "../hooks/useApi";
 import { useMutation } from "../hooks/useMutation";
 import { ApiError, api } from "../lib/api";
 import { dataHora, numero } from "../lib/formato";
@@ -63,6 +70,18 @@ export interface CandidatoRevisao {
   nome: string;
   status: string;
   turma: string | null;
+}
+
+/** Veredito determinístico da triagem ("dá para encerrar com segurança, e por quê?"). */
+export interface TriagemRevisao {
+  classificacao: "segura" | "decisao_humana" | "encerrada";
+  motivo: string;
+  motivo_texto: string;
+  aluno_id: number | null;
+  evidencias: string[];
+  conflitos: string[];
+  retrato_superado: boolean | null;
+  irmas: number[];
 }
 
 export interface RevisaoIdentidade {
@@ -88,6 +107,34 @@ export interface RevisaoIdentidade {
   resolucao: Record<string, unknown> | null;
   created_at: string;
   atualizada_em: string;
+  /** Só nas pendentes da listagem (as encerradas não precisam de triagem). */
+  triagem?: TriagemRevisao | null;
+  /** O nome que "Criar novo aluno" grava: o recebido, sem a turma escrita no fim
+   *  (quando é a da sala da linha). Só nas pendentes; ausente em servidor antigo. */
+  nome_ficha_nova?: string | null;
+  /** Onde o nome muda conforme a turma escolhida (o sufixo DAQUELA sala também sai). */
+  nome_ficha_nova_por_turma?: Record<string, string>;
+}
+
+/** O nome que a ficha nova recebe na turma escolhida — o mesmo que o /resolver grava. */
+function nomeDaFichaNova(rev: RevisaoIdentidade, turmaId: number): string {
+  return rev.nome_ficha_nova_por_turma?.[String(turmaId)] ?? rev.nome_ficha_nova ?? rev.nome_recebido;
+}
+
+/** A letra que a leitura do arquivo não conseguiu ler (acento perdido). */
+const LETRA_ILEGIVEL = "�";
+
+/** O nome recebido tem letra ilegível? O /resolver recusa criar a ficha com ela (ela
+ *  nasceria assim no certificado e no ranking); vincular a uma ficha existente vale. */
+function nomeIlegivel(rev: RevisaoIdentidade): boolean {
+  return (rev.nome_recebido ?? "").includes(LETRA_ILEGIVEL);
+}
+
+/** Total real de pendências (a lista vem limitada a `LIMITE_LISTA`). */
+interface ContagemRevisoes {
+  pendentes: number;
+  por_motivo: Record<string, number>;
+  limite_da_lista: number;
 }
 
 export interface ResolucaoRevisao {
@@ -143,6 +190,47 @@ const ROTULO_ORIGEM: Record<string, string> = {
   confirmacao_admin: "Confirmação do Admin Global (reativação)",
 };
 
+/** Nome CURTO de cada motivo, para o filtro (o texto completo vem do backend). */
+const ROTULO_MOTIVO: Record<string, string> = {
+  candidatos_multiplos: "Mais de um candidato",
+  correspondencia_insegura: "Nome parecido",
+  homonimo_em_outra_sala: "Mesmo nome em outra turma",
+  nome_casa_em_outra_sala: "Nome casa em outra turma",
+  identidade_de_ficha_inativa: "Conta de ficha inativa",
+  ficha_inativa: "Ficha inativa",
+  identidade_de_outro_aluno: "Conta de outro aluno",
+  // Três caminhos (a ficha já tem outra conta; outra conta do mesmo relatório ou de
+  // uma pendência leva a ela): nos dois últimos a ficha pode não ter conta nenhuma.
+  outra_identidade_na_plataforma: "Outra conta leva ao mesmo aluno",
+  contas_repetidas_no_relatorio: "Duas contas, nenhuma ficha",
+  ra_repetido: "RA repetido",
+  turma_ambigua: "Turma ambígua",
+  turma_nao_cadastrada: "Turma não cadastrada",
+  sem_turma: "Sem turma",
+  criacao_bloqueada_por_politica: "Criação bloqueada pela política",
+  nome_incompleto: "Nome abreviado",
+  // A disputa pode vir de um relatório anterior que ainda espera aqui, com a conta
+  // numa linha só: "no relatório" seria falso.
+  id_externo_duplicado: "Conta com nomes ou números diferentes",
+  turma_arquivada: "Turma arquivada",
+  turma_fora_do_ano_letivo: "Turma de outro ano",
+  turma_de_outra_etapa: "Turma de outra etapa",
+  identidade_de_outra_escola: "Conta de outra escola",
+  deixada_para_revisao: "Deixada para a Revisão",
+};
+
+/** Lista com marcador: o marcador fica FORA do texto, no recuo da lista, e a 2ª linha
+ *  de um item longo começa alinhada com o texto da 1ª. Com "list-inside" ela voltava
+ *  para baixo do marcador (evidências e conflitos da triagem, que costumam quebrar). */
+const LISTA_COM_MARCADOR = "list-outside list-disc pl-4";
+
+/** Selo da triagem. "Segura" não é decisão: é a conferência automática dizendo que
+ *  não achou conflito — quem vincula continua sendo o gestor. */
+const SELO_TRIAGEM: Record<string, { texto: string; tom: "ok" | "alerta" }> = {
+  segura: { texto: "Segura", tom: "ok" },
+  decisao_humana: { texto: "Decisão humana", tom: "alerta" },
+};
+
 /** Situação da ficha do candidato (o `status` do aluno no backend). */
 const STATUS_FICHA: Record<string, { texto: string; tom: "ok" | "alerta" | "neutro" }> = {
   ativo: { texto: "Ficha ativa", tom: "ok" },
@@ -168,7 +256,9 @@ const ORIENTACAO: Record<string, string> = {
   identidade_de_outro_aluno:
     "A conta da plataforma já está ligada a outro aluno. Vincular a outra ficha transfere a conta.",
   outra_identidade_na_plataforma:
-    "O aluno encontrado já tem outra conta nesta plataforma. Confirme se é a mesma criança antes de vincular.",
+    "Outra conta da plataforma também leva a este aluno: já vinculada à ficha, vinda no mesmo relatório ou esperando em outra pendência desta lista. Confira na plataforma qual conta é desta criança antes de vincular.",
+  contas_repetidas_no_relatorio:
+    "Duas contas da plataforma vieram com o mesmo nome e nenhuma ficha corresponde. Confira na plataforma: se são duas crianças, crie uma ficha para cada; se é a mesma criança com duas contas, crie a ficha numa das pendências e vincule a outra a ela.",
   ra_repetido: "O RA recebido aponta para mais de um aluno. Escolha qual é o dono destes dados.",
   turma_ambigua:
     "Mais de uma turma cadastrada corresponde à sala do relatório. Se a criança não tem ficha, crie-a na turma certa.",
@@ -176,13 +266,20 @@ const ORIENTACAO: Record<string, string> = {
     "A turma do relatório não existe no cadastro. Se a criança já tem ficha, busque-a; se não, crie-a numa turma existente.",
   sem_turma:
     "O relatório não informa a turma. Se a criança já tem ficha, busque-a; se não, crie-a na turma certa.",
+  // Política "bloquear" (services/politica_sync): a plataforma não matricula; a Lista
+  // Piloto, o cadastro em Alunos e o "Criar novo aluno" desta gaveta continuam criando
+  // (o /resolver cria a ficha de propósito). O motivo (texto do backend, logo acima)
+  // já diz que nada corresponde e que a matrícula vem da Lista Piloto: aqui, só o que
+  // fazer, com o nome dos controles da própria gaveta.
+  criacao_bloqueada_por_politica:
+    "Se a criança já tem ficha, busque-a em “Buscar outro aluno da escola” e vincule. Se não tem, use “Criar novo aluno” só depois de confirmar com a secretaria da escola que ela está matriculada.",
   // Motivos da sincronização (identidade e turma, etapa 2).
   nome_incompleto:
     "A plataforma mandou só o nome abreviado. Se reconhece a criança, vincule à ficha dela: a conta fica vinculada e as próximas coletas entram sozinhas. Não crie ficha com o nome abreviado — confira o nome completo na plataforma antes.",
   id_externo_duplicado:
-    "A mesma conta da plataforma veio em mais de uma linha, com nomes ou números diferentes. Confira na plataforma de quem é a conta e vincule à ficha certa; se os números das linhas divergem, só o vínculo é gravado agora, e os números entram numa próxima coleta em que a conta venha numa linha só.",
+    "A mesma conta da plataforma veio com nomes ou números diferentes — neste relatório ou num anterior que ainda espera aqui. Confira na plataforma de quem é a conta e vincule à ficha certa; se os números guardados divergem, só o vínculo é gravado agora, e os números entram numa próxima coleta em que a conta venha numa linha só.",
   turma_arquivada:
-    "A turma do relatório está arquivada. Se ela deve receber alunos, reative-a em Turmas › Mostrar turmas arquivadas › Reativar; se a criança já tem ficha em outra turma, vincule.",
+    "A turma do relatório está arquivada. Se ela deve receber alunos, reative-a em Turmas: ligue “Mostrar arquivadas e de outros anos” e use “Reativar” na linha dela; se a criança já tem ficha em outra turma, vincule.",
   turma_fora_do_ano_letivo:
     "A turma escolhida não é do ano letivo ativo. Vincule a uma ficha ou crie-a numa turma do ano letivo atual.",
   turma_de_outra_etapa:
@@ -193,6 +290,10 @@ const ORIENTACAO: Record<string, string> = {
   // sem fluxo novo.
   identidade_de_outra_escola:
     "Esta conta da plataforma já está vinculada a um aluno de OUTRA escola do Constela. Confira se a credencial e a turma são desta escola. Se a criança mudou de escola, só o Admin Global vincula a conta à ficha dela aqui (a outra escola não é alterada, mas a conta cai em revisão lá na coleta seguinte); se a conta é de outra escola, descarte. Escolher a ficha na importação manual não encerra esta pendência: a decisão é feita aqui.",
+  // "Deixar para a Revisão" na prévia da importação manual (``deixar_para_revisao``):
+  // o backend, sozinho, associaria ou criaria — quem importou preferiu decidir aqui.
+  deixada_para_revisao:
+    "Quem importou preferiu decidir aqui: nada foi associado nem criado. Confira se a criança já tem ficha antes de criar uma.",
 };
 
 /** Rótulos dos dados que ficaram aguardando (chaves de `linhas`). */
@@ -257,6 +358,12 @@ function plural(n: number, um: string, varios: string): string {
   return `${numero(n)} ${n === 1 ? um : varios}`;
 }
 
+/** Frase que abre um bloco começa com maiúscula (o texto da triagem vem em minúscula
+ *  porque também segue "Triagem:" na lista). */
+function comMaiuscula(frase: string): string {
+  return frase.charAt(0).toUpperCase() + frase.slice(1);
+}
+
 /** Mensagem de erro, com o que fazer em seguida (401/403 ganham orientação). */
 function mensagemDeErro(erro: ApiError): string {
   if (erro.status === 401) return "Sua sessão expirou. Entre novamente para continuar.";
@@ -270,6 +377,8 @@ export default function RevisoesIdentidade() {
   const { escolaId } = useApp();
   const [situacao, setSituacao] = useState<Situacao>("pendente");
   const [plataforma, setPlataforma] = useState<FiltroPlataforma>("todas");
+  const [motivo, setMotivo] = useState<string>("todos");
+  const [soSeguras, setSoSeguras] = useState(false);
   const [abertaId, setAbertaId] = useState<number | null>(null);
   const [feedback, setFeedback] = useState<Feedback | null>(null);
   // O painel não pode fechar (Esc/fundo) com uma ação em voo — o resultado do
@@ -282,19 +391,36 @@ export default function RevisoesIdentidade() {
   const pendentes = useApi<RevisaoIdentidade[]>(base);
   const outras = useApi<RevisaoIdentidade[]>(
     base && situacao !== "pendente" ? `${base}?situacao=${situacao}` : null);
+  // O TOTAL real (a lista para em LIMITE_LISTA). Sem ele, a tela usa o tamanho da lista.
+  const contagem = useApi<ContagemRevisoes>(
+    escolaId ? `/escolas/${escolaId}/importacoes/contagem-revisoes` : null);
   const turmasApi = useApi<Turma[]>(escolaId ? `/escolas/${escolaId}/turmas` : null);
   const turmas = turmasApi.dados ?? [];
 
   const lista = situacao === "pendente" ? pendentes : outras;
-  const itens = (lista.dados ?? []).filter(
+  const daPlataforma = (lista.dados ?? []).filter(
     (r) => plataforma === "todas" || r.plataforma === plataforma);
-  const nPendentes = pendentes.dados?.length ?? null;
+  // Motivos presentes na lista (com a contagem) — o filtro só oferece o que existe.
+  const motivosPresentes = Object.entries(
+    daPlataforma.reduce<Record<string, number>>((acc, r) => {
+      acc[r.motivo] = (acc[r.motivo] ?? 0) + 1;
+      return acc;
+    }, {}),
+  ).sort((a, b) => b[1] - a[1]);
+  const seguras = daPlataforma.filter((r) => r.triagem?.classificacao === "segura").length;
+  const itens = daPlataforma
+    .filter((r) => motivo === "todos" || r.motivo === motivo)
+    .filter((r) => !soSeguras || r.triagem?.classificacao === "segura");
+  const totalPendentes = typeof contagem.dados?.pendentes === "number" ? contagem.dados.pendentes : null;
+  const nPendentes = totalPendentes ?? pendentes.dados?.length ?? null;
+  const listaCortada = (pendentes.dados?.length ?? 0) >= LIMITE_LISTA;
   const aberta = abertaId == null
     ? null
     : [...(pendentes.dados ?? []), ...(outras.dados ?? [])].find((r) => r.id === abertaId) ?? null;
 
   function recarregarFila() {
     pendentes.recarregar();
+    contagem.recarregar();
     if (situacao !== "pendente") outras.recarregar();
   }
 
@@ -339,7 +465,7 @@ export default function RevisoesIdentidade() {
 
   const contador = nPendentes === null
     ? null
-    : nPendentes >= LIMITE_LISTA
+    : totalPendentes === null && nPendentes >= LIMITE_LISTA
       ? `${numero(LIMITE_LISTA)}+ pendências`
       : nPendentes === 0 ? "Nenhuma pendência" : plural(nPendentes, "pendência", "pendências");
 
@@ -376,7 +502,7 @@ export default function RevisoesIdentidade() {
             <div className="min-w-0">
               <p>{feedback.texto}</p>
               {feedback.detalhes && feedback.detalhes.length > 0 && (
-                <ul className="mt-1 list-inside list-disc text-xs">
+                <ul className={`mt-1 ${LISTA_COM_MARCADOR} text-xs`}>
                   {feedback.detalhes.map((d, i) => <li key={`${i}-${d}`}>{d}</li>)}
                 </ul>
               )}
@@ -411,7 +537,40 @@ export default function RevisoesIdentidade() {
             </SelectNativo>
           </Campo>
         </div>
+        <div className="w-full sm:w-60">
+          <Campo rotulo="Motivo">
+            <SelectNativo className="w-full" value={motivo}
+              onChange={(e) => setMotivo(e.target.value)}>
+              <option value="todos">Todos</option>
+              {motivo !== "todos" && !motivosPresentes.some(([m]) => m === motivo) && (
+                <option value={motivo}>{ROTULO_MOTIVO[motivo] ?? motivo} (0)</option>
+              )}
+              {motivosPresentes.map(([m, n]) => (
+                <option key={m} value={m}>{ROTULO_MOTIVO[m] ?? m} ({numero(n)})</option>
+              ))}
+            </SelectNativo>
+          </Campo>
+        </div>
+        {situacao !== "resolvida" && situacao !== "descartada" && (
+          <label className="flex items-center gap-2 pb-2 text-sm text-zinc-700 dark:text-zinc-200">
+            <input type="checkbox" checked={soSeguras}
+              onChange={(e) => setSoSeguras(e.target.checked)} />
+            Só as seguras ({numero(seguras)})
+          </label>
+        )}
       </BarraFiltros>
+
+      {daPlataforma.length > 0 && situacao !== "resolvida" && situacao !== "descartada" && (
+      <p className="text-xs text-zinc-500 dark:text-zinc-400">
+        <strong>Segura</strong>: a conferência automática achou evidência (a conta já é da ficha,
+        candidato único com turma e série compatíveis) e nenhum conflito. É só uma indicação —
+        cada pendência continua sendo vinculada por você, uma a uma.
+        {listaCortada && totalPendentes !== null && totalPendentes > LIMITE_LISTA && (
+          <> A fila tem {numero(totalPendentes)} pendências; a lista mostra as {numero(LIMITE_LISTA)} mais
+          recentes, e os filtros valem sobre elas.</>
+        )}
+      </p>
+      )}
 
       {lista.erro && (
         lista.dados ? (
@@ -443,12 +602,12 @@ export default function RevisoesIdentidade() {
         <Card>
           <Vazio
             icone={ShieldCheck}
-            titulo={situacao === "pendente" && plataforma === "todas"
+            titulo={situacao === "pendente" && plataforma === "todas" && motivo === "todos" && !soSeguras
               ? "Nenhuma revisão pendente"
               : "Nenhuma revisão com estes filtros"}
-            descricao={situacao === "pendente" && plataforma === "todas"
+            descricao={situacao === "pendente" && plataforma === "todas" && motivo === "todos" && !soSeguras
               ? "Quando uma importação ou sincronização não conseguir decidir com segurança de quem são os dados, a linha aparece aqui."
-              : "Troque a situação ou a plataforma para ver outras revisões."}
+              : "Troque a situação, a plataforma, o motivo ou desmarque “Só as seguras” para ver outras revisões."}
           />
         </Card>
       )}
@@ -503,6 +662,13 @@ function ItemRevisao({ rev, turmas, aoAbrir }: {
             <div className="flex flex-wrap items-center gap-2">
               <p className="truncate text-[15px] font-semibold text-zinc-900 dark:text-white" title={rev.nome_recebido}>{rev.nome_recebido}</p>
               <Badge tom={rev.plataforma === "matific" ? "info" : "destaque"}>{NOME_PLATAFORMA[rev.plataforma] ?? rev.plataforma}</Badge>
+              {rev.status === "pendente" && rev.triagem && SELO_TRIAGEM[rev.triagem.classificacao] && (
+                <span title={rev.triagem.motivo_texto || undefined}>
+                  <Badge tom={SELO_TRIAGEM[rev.triagem.classificacao].tom}>
+                    {SELO_TRIAGEM[rev.triagem.classificacao].texto}
+                  </Badge>
+                </span>
+              )}
               {rev.status !== "pendente" && (
                 <Badge tom={rev.status === "resolvida" ? "ok" : "neutro"}>
                   {ROTULO_SITUACAO[rev.status] ?? rev.status}
@@ -527,6 +693,11 @@ function ItemRevisao({ rev, turmas, aoAbrir }: {
               <AlertTriangle size={13} aria-hidden className="mt-0.5 shrink-0" />
               <span>Motivo: {rev.motivo_texto || rev.motivo}</span>
             </p>
+            {rev.status === "pendente" && rev.triagem?.motivo_texto && (
+              <p className="text-xs text-zinc-500 dark:text-zinc-400">
+                Triagem: {rev.triagem.motivo_texto}
+              </p>
+            )}
           </div>
           <Botao variante="secundario" onClick={aoAbrir} aria-label={`Ver revisão de ${rev.nome_recebido}`}>
             Ver revisão <ArrowRight size={16} aria-hidden />
@@ -559,24 +730,33 @@ export interface IdentidadeDoAluno {
 /** As contas que o aluno tem NESTA plataforma, com o estado de cada uma.
  *
  * Só aparece quando há mais de uma — que é quando a pergunta existe. Deixa
- * escolher qual vale (a outra fica APOSENTADA: preservada, fora do retrato) e
+ * escolher qual vale (a outra fica APOSENTADA: preservada, fora da importação) e
  * mostra o histórico da decisão: quem, quando e por quê.
+ *
+ * O que já veio da aposentada NÃO sai da ficha: nem o retrato nem a leitura guardam
+ * de qual conta vieram (ALUNOS-4, ``identidade_efetiva``). As leituras do Elefante
+ * continuam contando, os retratos continuam nos períodos em que entraram, e o
+ * retrato atual só muda quando entra uma coleta da conta que vale — no Matific, a
+ * trava contra queda segura essa coleta se a aposentada tinha números maiores. O
+ * texto não promete mais que isso (REV2-COSTURA-3).
  *
  * A frase sobre o Matific não é decoração: aposentar aqui não desativa nada na
  * plataforma, e confundir as duas coisas é o erro que faz alguém achar que
  * "resolveu" a conta duplicada quando ela continua lá. */
 function ContasDaPlataforma({
-  escolaId, plataforma, alunoId, alunoNome, podeDecidir, aoDecidir,
+  escolaId, plataforma, alunoId, alunoNome, contas, podeDecidir, aoDecidir,
 }: {
   escolaId: number | null;
   plataforma: string;
   alunoId: number;
   alunoNome: string;
+  /** As contas do aluno nesta plataforma (``/identidades/{plataforma}/aluno/{id}``),
+   *  consultadas uma vez pelo detalhe — o aviso de duas contas também as usa. */
+  contas: ResultadoUseApi<IdentidadeDoAluno[]>;
   podeDecidir: boolean;
   aoDecidir: () => void;
 }) {
   const base = escolaId ? `/escolas/${escolaId}/importacoes/identidades/${plataforma}` : null;
-  const contas = useApi<IdentidadeDoAluno[]>(base ? `${base}/aluno/${alunoId}` : null);
   const [escolhida, setEscolhida] = useState<string | null>(null);
   const [motivo, setMotivo] = useState("");
   const rotulo = NOME_PLATAFORMA[plataforma] ?? plataforma;
@@ -605,13 +785,25 @@ function ContasDaPlataforma({
   const lista = contas.dados ?? [];
   if (contas.carregando) return <p className="text-sm text-zinc-500">Carregando as contas…</p>;
   if (lista.length < 2) return null;
+  const oQueFica = plataforma === "elefante"
+    ? "as leituras já importadas continuam contando"
+    : "os retratos já importados continuam nos períodos em que entraram";
 
   return (
     <Bloco titulo={`Contas do aluno no ${rotulo}`}>
       <div className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-xs text-amber-900 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-100">
-        <strong>{alunoNome}</strong> tem {lista.length} contas no {rotulo}. Só uma pode
-        alimentar o retrato e a pontuação — a outra fica <strong>aposentada</strong>:
-        preservada com todo o histórico, mas fora da importação.
+        <strong>{alunoNome}</strong> tem {lista.length} contas no {rotulo}. Só uma vale no
+        Constela — a outra fica <strong>aposentada</strong>: preservada com todo o
+        histórico, mas fora da importação. O que já veio dela continua na ficha (o
+        histórico não guarda de qual conta veio): {oQueFica}, e o retrato atual só muda
+        quando entrar uma coleta da conta que vale.
+        {plataforma === "matific" && (
+          <>
+            {" "}Se a conta aposentada tinha números maiores, a coleta automática da que
+            vale fica retida como queda enquanto ficar abaixo deles; para corrigir já,
+            importe o relatório oficial em Importações.
+          </>
+        )}
         <p className="mt-1">
           Aposentar é uma decisão <strong>interna do Constela</strong>. Ela não desativa
           nem remove a conta no {rotulo}.
@@ -628,7 +820,7 @@ function ContasDaPlataforma({
                     <p className="break-all font-mono text-xs">{c.id_externo}</p>
                     <div className="mt-1">
                       <Badge tom={efetiva ? "ok" : "neutro"}>
-                        {efetiva ? "Conta em uso" : "Preservada, não contabilizada"}
+                        {efetiva ? "Conta em uso" : "Preservada, fora da importação"}
                       </Badge>
                     </div>
                     {!efetiva && (
@@ -655,8 +847,9 @@ function ContasDaPlataforma({
         <Card className="mt-2 space-y-2 p-3">
           <p className="text-sm">
             Usar só <span className="font-mono text-xs">{escolhida}</span> e aposentar
-            as demais. Os dados das outras continuam guardados, mas deixam de aparecer
-            no retrato de {alunoNome}. Nada muda no {rotulo}.
+            as demais. Só a conta escolhida envia dados novos ao Constela. Os dados que
+            já entraram ficam na ficha de {alunoNome} e {oQueFica}. O retrato atual só
+            muda quando uma coleta da conta escolhida for aplicada.
           </p>
           <label className="block text-xs">
             Por que esta conta?
@@ -684,10 +877,12 @@ function ContasDaPlataforma({
 /** A ficha já tem OUTRA conta da mesma plataforma.
  *
  * Aqui vincular não é só "dizer de quem é a linha": é escolher qual das duas
- * contas vai alimentar a ficha. A sincronização aplica UMA por vez, então a
- * conta que não for vinculada deixa de aparecer no retrato do aluno — e o
- * gestor precisa saber disso ANTES de clicar, não depois. Nada é bloqueado: a
- * decisão continua sendo dele. */
+ * contas vai alimentar a ficha a partir de agora. Os dados já importados
+ * permanecem, pois a ficha não guarda de qual conta vieram.
+ *
+ * Só aparece quando a ficha TEM outra conta (``fichaJaTemOutraConta``): o motivo
+ * "outra conta leva ao mesmo aluno" também nasce com a outra conta no mesmo
+ * relatório ou numa pendência, e a ficha sem conta nenhuma. */
 function AvisoDuasContas({ plataforma }: { plataforma: string }) {
   return (
     <div
@@ -698,8 +893,8 @@ function AvisoDuasContas({ plataforma }: { plataforma: string }) {
       <p className="font-semibold">Atenção: esta ficha tem duas contas no {plataforma}.</p>
       <ul className="mt-2 list-disc space-y-1 pl-5 text-xs">
         <li>
-          Vincular esta conta faz os dados <strong>dela</strong> valerem para o aluno. Os
-          da outra conta continuam guardados, mas deixam de aparecer no retrato.
+          Depois do vínculo, só esta conta envia dados novos à ficha. Os dados já
+          importados da outra conta permanecem no histórico do aluno.
         </li>
         <li>
           Confirme na própria plataforma que esta conta é <strong>desta criança</strong> —
@@ -820,6 +1015,15 @@ function DetalheRevisao({
     ? rev.candidatos.find((c) => c.aluno_id === rev.aluno_escolhido_id)
       ?? { aluno_id: rev.aluno_escolhido_id, nome: "este aluno", status: "", turma: null }
     : (rev.candidatos.length === 1 ? rev.candidatos[0] : null);
+  // As contas dessa ficha nesta plataforma: o bloco "Contas do aluno" e o aviso de duas
+  // contas. O aviso só vale quando a ficha JÁ tem outra conta em uso — antes ele
+  // aparecia em todo "outra conta leva ao mesmo aluno", e a ficha podia não ter conta
+  // nenhuma (a outra estava no mesmo relatório ou numa pendência).
+  const contasAlvo = useApi<IdentidadeDoAluno[]>(alvoContas
+    ? `/escolas/${escolaId}/importacoes/identidades/${rev.plataforma}/aluno/${alvoContas.aluno_id}`
+    : null);
+  const fichaJaTemOutraConta = (contasAlvo.dados ?? []).some(
+    (c) => c.status !== "aposentada" && c.id_externo !== rev.id_externo);
 
   return (
     <div ref={refRaiz} tabIndex={-1} className="space-y-6 outline-none">
@@ -853,11 +1057,40 @@ function DetalheRevisao({
             <p className="font-medium">Motivo: {rev.motivo_texto || rev.motivo}</p>
             {orientacao && pendente && <p className="mt-1 text-xs">{orientacao}</p>}
           </div>
-          {rev.motivo === "outra_identidade_na_plataforma" && pendente && (
+          {rev.motivo === "outra_identidade_na_plataforma" && pendente && fichaJaTemOutraConta && (
             <AvisoDuasContas plataforma={NOME_PLATAFORMA[rev.plataforma] ?? rev.plataforma} />
           )}
         </Card>
       </Bloco>
+
+      {/* A2. TRIAGEM — o porquê do selo, só leitura. */}
+      {pendente && rev.triagem && SELO_TRIAGEM[rev.triagem.classificacao] && (
+        <Bloco titulo="Triagem automática">
+          <Card className="space-y-2 p-4 text-sm">
+            <div className="flex flex-wrap items-center gap-2">
+              <Badge tom={SELO_TRIAGEM[rev.triagem.classificacao].tom}>
+                {SELO_TRIAGEM[rev.triagem.classificacao].texto}
+              </Badge>
+              <span>{comMaiuscula(rev.triagem.motivo_texto)}</span>
+            </div>
+            {rev.triagem.evidencias.length > 0 && (
+              <ul className={`${LISTA_COM_MARCADOR} space-y-0.5 text-xs text-zinc-600 dark:text-zinc-300`}
+                  aria-label="Evidências da triagem">
+                {rev.triagem.evidencias.map((e) => <li key={e}>{e}</li>)}
+              </ul>
+            )}
+            {rev.triagem.conflitos.length > 0 && (
+              <ul className={`${LISTA_COM_MARCADOR} space-y-0.5 text-xs text-amber-800 dark:text-amber-200`}
+                  aria-label="Conflitos da triagem">
+                {rev.triagem.conflitos.map((c) => <li key={c}>{c}</li>)}
+              </ul>
+            )}
+            <p className="text-xs text-zinc-500 dark:text-zinc-400">
+              A triagem só explica o caso; nada é vinculado sem a sua escolha abaixo.
+            </p>
+          </Card>
+        </Bloco>
+      )}
 
       {/* B. CANDIDATOS ENCONTRADOS */}
       <Bloco titulo="Candidatos encontrados">
@@ -919,6 +1152,7 @@ function DetalheRevisao({
           plataforma={rev.plataforma}
           alunoId={alvoContas.aluno_id}
           alunoNome={alvoContas.nome}
+          contas={contasAlvo}
           podeDecidir={pendente}
           aoDecidir={() => aoDesatualizar(
             "Conta principal definida. A fila foi atualizada com a situação atual.")}
@@ -938,45 +1172,58 @@ function DetalheRevisao({
           {/* CRIAR NOVO ALUNO — só por escolha explícita, com turma escolhida */}
           <Bloco titulo="Criar novo aluno">
             <Card className="space-y-3 p-4">
-              <p className="text-xs text-zinc-500 dark:text-zinc-400">
-                Use apenas se esta criança ainda não tem ficha na escola. Uma ficha nova é criada com o
-                nome recebido e passa a receber estes dados.
-              </p>
-              {turmasErro && turmas.length === 0 ? (
-                <Mensagem tipo="erro">Não foi possível carregar as turmas: {turmasErro.message}</Mensagem>
-              ) : turmasCarregando && turmas.length === 0 ? (
-                <p className="text-xs text-zinc-500">Carregando turmas…</p>
-              ) : turmas.length === 0 ? (
+              {/* Nome com letra ilegível: o /resolver recusa a ficha nova (400). Em vez de
+                  deixar clicar para descobrir depois, o bloco diz o caminho que funciona. */}
+              {nomeIlegivel(rev) ? (
                 <p className="text-sm text-amber-700 dark:text-amber-300">
-                  Não há turma ativa cadastrada no ano letivo. Cadastre a turma (Lista Piloto ou Turmas)
-                  antes de criar o aluno.
+                  O nome recebido tem letra ilegível (“{LETRA_ILEGIVEL}”, acento perdido no arquivo) e a
+                  ficha nova nasceria com ela. Cadastre a criança em Alunos com o nome certo e escolha-a
+                  nesta pendência.
                 </p>
               ) : (
-                <Campo rotulo="Turma da ficha nova">
-                  <select className={estiloInput} value={turmaNova}
-                    onChange={(e) => setTurmaNova(e.target.value)}>
-                    <option value="">Escolha a turma…</option>
-                    {turmas.map((t) => (
-                      <option key={t.id} value={String(t.id)}>{t.nome}</option>
-                    ))}
-                  </select>
-                </Campo>
+                <>
+                  <p className="text-xs text-zinc-500 dark:text-zinc-400">
+                    Use apenas se esta criança ainda não tem ficha na escola. Uma ficha nova é criada com o
+                    nome recebido (sem a turma, quando ela vem escrita no fim do nome) e passa a receber estes
+                    dados.
+                  </p>
+                  {turmasErro && turmas.length === 0 ? (
+                    <Mensagem tipo="erro">Não foi possível carregar as turmas: {turmasErro.message}</Mensagem>
+                  ) : turmasCarregando && turmas.length === 0 ? (
+                    <p className="text-xs text-zinc-500">Carregando turmas…</p>
+                  ) : turmas.length === 0 ? (
+                    <p className="text-sm text-amber-700 dark:text-amber-300">
+                      Não há turma ativa cadastrada no ano letivo. Cadastre a turma (Lista Piloto ou Turmas)
+                      antes de criar o aluno.
+                    </p>
+                  ) : (
+                    <Campo rotulo="Turma da ficha nova">
+                      <select className={estiloInput} value={turmaNova}
+                        onChange={(e) => setTurmaNova(e.target.value)}>
+                        <option value="">Escolha a turma…</option>
+                        {turmas.map((t) => (
+                          <option key={t.id} value={String(t.id)}>{t.nome}</option>
+                        ))}
+                      </select>
+                    </Campo>
+                  )}
+                  {turmaEscolhida && (
+                    <dl className="space-y-0.5 text-xs">
+                      <Linha rotulo="Nome">{nomeDaFichaNova(rev, turmaEscolhida.id)}</Linha>
+                      <Linha rotulo="Turma">{turmaEscolhida.nome} · {turmaEscolhida.ano_escolar}</Linha>
+                      {rev.id_externo && <Linha rotulo={rotuloId}>{rev.id_externo}</Linha>}
+                    </dl>
+                  )}
+                  <Botao variante="secundario" disabled={!turmaEscolhida || resolver.enviando}
+                    onClick={() => {
+                      if (!turmaEscolhida) return;
+                      resolver.limparErro();
+                      setDestino({ tipo: "novo", turmaId: turmaEscolhida.id, turmaNome: turmaEscolhida.nome });
+                    }}>
+                    <UserPlus size={15} /> Criar novo aluno
+                  </Botao>
+                </>
               )}
-              {turmaEscolhida && (
-                <dl className="space-y-0.5 text-xs">
-                  <Linha rotulo="Nome">{rev.nome_recebido}</Linha>
-                  <Linha rotulo="Turma">{turmaEscolhida.nome} · {turmaEscolhida.ano_escolar}</Linha>
-                  {rev.id_externo && <Linha rotulo={rotuloId}>{rev.id_externo}</Linha>}
-                </dl>
-              )}
-              <Botao variante="secundario" disabled={!turmaEscolhida || resolver.enviando}
-                onClick={() => {
-                  if (!turmaEscolhida) return;
-                  resolver.limparErro();
-                  setDestino({ tipo: "novo", turmaId: turmaEscolhida.id, turmaNome: turmaEscolhida.nome });
-                }}>
-                <UserPlus size={15} /> Criar novo aluno
-              </Botao>
             </Card>
           </Bloco>
 
@@ -1010,12 +1257,12 @@ function DetalheRevisao({
               </p>
             ) : (
               <p>
-                Uma ficha nova será criada para <strong>{rev.nome_recebido}</strong> na turma{" "}
+                Uma ficha nova será criada para <strong>{nomeDaFichaNova(rev, destino.turmaId)}</strong> na turma{" "}
                 <strong>{destino.turmaNome}</strong>. Faça isso só se a criança ainda não tiver ficha na
                 escola.
               </p>
             )}
-            <ul className="list-inside list-disc space-y-1 text-zinc-600 dark:text-zinc-300">
+            <ul className={`${LISTA_COM_MARCADOR} space-y-1 text-zinc-600 dark:text-zinc-300`}>
               <li>
                 Os dados pendentes ({ROTULO_FORMATO[rev.formato]?.toLowerCase() ?? "dados da importação"})
                 serão aplicados a {destino.tipo === "aluno" ? "esta ficha" : "esta nova ficha"}.

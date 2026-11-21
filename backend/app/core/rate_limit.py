@@ -7,7 +7,9 @@ na Vercel chamando a API no Railway direto) NÃO há limite de borda. Por isso o
 por IP e um teto GLOBAL (``limitador_ip_falha_login`` e
 ``limitador_global_falha_login``, abaixo), que o router também grava no banco
 (valem entre workers e sobrevivem ao deploy — ver routers/auth.py). Teto e janela
-desses dois vêm das variáveis EDU_LOGIN_TETO_* (config.py).
+desses dois vêm das variáveis EDU_LOGIN_TETO_* (config.py). E um portão de logins
+SIMULTÂNEOS por processo (``portao_login``, ``PortaoDeConcorrencia``): uma rajada
+anônima não ocupa todas as threads e conexões do worker.
 
 LIMITAÇÃO DE ESCALA (conhecida e aceita): o contador DESTE módulo é POR PROCESSO
 — para os limites por (conta, IP) e por conta, é o único que existe. Com N
@@ -15,8 +17,11 @@ workers/réplicas o orçamento efetivo por chave é multiplicado por N e o estad
 não é compartilhado entre instâncias. É aceitável para frear dicionário online
 num deploy pequeno; para ESCALA HORIZONTAL (várias réplicas atrás do
 balanceador) troque por um backend compartilhado (ex.: Redis INCR+EXPIRE) — a
-interface pública (bloqueado/registrar_falha/limpar) foi mantida pequena de
-propósito para essa substituição. Decisão de infraestrutura: pende de aprovação.
+interface pública (bloqueado/registrar_falha/limpar/limpar_prefixo) foi mantida
+pequena de propósito para essa substituição. Decisão de infraestrutura: pende de
+aprovação. Zerar a memória de um processo não alcança os outros: por isso a
+troca de senha libera o login pela CHAVE (``identidade_da_conta``, com a versão
+da sessão lida do banco), e não pela limpeza (``liberar_conta``).
 
 Memória: o dicionário é LIMITADO (_MAX_CHAVES) com descarte de chaves expiradas
 + despejo das mais antigas, para que tentativas com chaves atacante-controladas
@@ -25,6 +30,7 @@ Memória: o dicionário é LIMITADO (_MAX_CHAVES) com descarte de chaves expirad
 from __future__ import annotations
 
 import ipaddress
+import math
 import threading
 import time
 from collections import deque
@@ -43,6 +49,7 @@ class LimitadorTentativas:
         self.max_tentativas = max_tentativas
         self.janela_s = janela_s
         self._eventos: dict[str, deque[float]] = {}
+        self._esperas_persistentes: dict[str, tuple[deque[float], float, float]] = {}
         self._lock = threading.Lock()
 
     def _agora(self) -> float:
@@ -56,11 +63,13 @@ class LimitadorTentativas:
                      if not f or agora - f[-1] > self.janela_s]
         for k in expiradas:
             del self._eventos[k]
+            self._esperas_persistentes.pop(k, None)
         if len(self._eventos) >= _MAX_CHAVES:
             ordenadas = sorted(self._eventos.items(),
                                key=lambda kv: kv[1][-1] if kv[1] else 0.0)
             for k, _ in ordenadas[: max(1, _MAX_CHAVES // 10)]:
                 self._eventos.pop(k, None)
+                self._esperas_persistentes.pop(k, None)
 
     def bloqueado(self, chave: str) -> bool:
         """True se a chave já estourou o limite dentro da janela."""
@@ -73,6 +82,7 @@ class LimitadorTentativas:
                 fila.popleft()
             if not fila:
                 self._eventos.pop(chave, None)
+                self._esperas_persistentes.pop(chave, None)
                 return False
             return len(fila) >= self.max_tentativas
 
@@ -90,14 +100,127 @@ class LimitadorTentativas:
         """Zera o contador (ex.: após login bem-sucedido)."""
         with self._lock:
             self._eventos.pop(chave, None)
+            self._esperas_persistentes.pop(chave, None)
+
+    def limpar_prefixo(self, prefixo: str) -> int:
+        """Zera os contadores de todas as chaves que começam com ``prefixo`` (ex.:
+        as de (conta, IP) de uma conta, em qualquer IP) e devolve quantas eram.
+        Percorre as chaves vivas: é para eventos raros (a redefinição de senha),
+        não para o caminho de cada tentativa."""
+        with self._lock:
+            chaves = [k for k in self._eventos if k.startswith(prefixo)]
+            for k in chaves:
+                del self._eventos[k]
+                self._esperas_persistentes.pop(k, None)
+            return len(chaves)
 
     def segundos_restantes(self, chave: str) -> int:
+        """Segundos até a chave deixar de estar bloqueada; 0 se não está.
+
+        O bloqueio acaba quando a fila de eventos na janela cai abaixo do teto,
+        isto é, quando sai o evento ``len - max_tentativas`` (o mais antigo, com a
+        fila exatamente no teto). Abaixo do teto devolve 0: quem junta vários
+        limitadores (o login) pode tomar o maior sem que o que não bloqueia
+        domine a espera anunciada."""
         agora = self._agora()
         with self._lock:
             fila = self._eventos.get(chave)
             if not fila:
                 return 0
-            return max(0, int(self.janela_s - (agora - fila[0])))
+            vivos = [t for t in fila if agora - t <= self.janela_s]
+            excesso = len(vivos) - self.max_tentativas
+            if excesso < 0:
+                return 0
+            return max(0, int(self.janela_s - (agora - vivos[excesso])))
+
+    def segundos_para_resposta(self, chave: str) -> int:
+        segundos = self.segundos_restantes(chave)
+        agora = self._agora()
+        with self._lock:
+            recusa = self._esperas_persistentes.get(chave)
+            if recusa is not None:
+                fila, cache_ate, bloqueio_ate = recusa
+                if cache_ate > agora and self._eventos.get(chave) is fila:
+                    return max(segundos, math.ceil(bloqueio_ate - agora))
+                self._esperas_persistentes.pop(chave, None)
+        return segundos
+
+    def bloquear_por(self, chave: str, segundos: float, *,
+                     espera_persistente: float | None = None) -> None:
+        """Bloqueia a chave NESTE processo por ``segundos`` (no máximo a janela): a
+        recusa que a camada persistente deu (outro worker contou as falhas) passa a
+        valer aqui sem ida ao banco. Nunca encurta um bloqueio mais longo.
+
+        A fila ganha ``max_tentativas`` eventos no instante que faz o bloqueio acabar
+        daqui a ``segundos`` (``bloqueado`` e ``segundos_restantes`` seguem valendo
+        como para falhas de verdade). As falhas de verdade da chave FICAM, na ordem
+        (REV2-AUTH2-1): quando o bloqueio aprendido acaba, elas seguem contando na
+        janela delas, como se ele não tivesse existido."""
+        agora = self._agora()
+        segundos = max(0.0, min(float(segundos), float(self.janela_s)))
+        if not segundos:
+            return
+        with self._lock:
+            vivos = [t for t in self._eventos.get(chave, ()) if agora - t <= self.janela_s]
+            excesso = len(vivos) - self.max_tentativas
+            espera_local = self.janela_s - (agora - vivos[excesso]) if excesso >= 0 else 0
+            if segundos > espera_local:
+                if chave not in self._eventos and len(self._eventos) >= _MAX_CHAVES:
+                    self._evacuar(agora)
+                marca = agora - self.janela_s + segundos
+                self._eventos[chave] = deque(sorted(vivos + [marca] * self.max_tentativas))
+            if espera_persistente is not None:
+                self._esperas_persistentes[chave] = (
+                    self._eventos[chave], agora + segundos, agora + espera_persistente)
+
+    def falhas_na_janela(self, chave: str) -> int:
+        """Quantas falhas da chave estão na janela, neste processo (o que a camada em
+        memória sabe quando o banco não respondeu a tempo)."""
+        agora = self._agora()
+        with self._lock:
+            fila = self._eventos.get(chave)
+            return sum(1 for t in fila if agora - t <= self.janela_s) if fila else 0
+
+
+class PortaoDeConcorrencia:
+    """Teto de pedidos de uma rota correndo AO MESMO TEMPO neste processo, sem fila:
+    com o teto cheio, ``entrar`` devolve False na hora e quem chamou recusa o pedido
+    sem esperar e sem tocar no banco. Quem entrou chama ``sair`` no fim (``finally``).
+
+    Para rotas anônimas que qualquer um pode disparar em rajada (o /auth/login): sem
+    o portão, a rajada ocupava todas as threads do worker (40 no anyio) e as conexões
+    do pool (10 + 20) e as sessões já abertas esperavam na fila delas. Com ele, a
+    rajada usa no máximo ``vagas`` de cada, e o resto é recusado em microssegundos.
+    Por processo (como os limitadores daqui): com N workers, N × ``vagas``."""
+
+    def __init__(self, vagas: int) -> None:
+        self.vagas = vagas
+        self._ocupadas = 0
+        self._lock = threading.Lock()
+
+    def entrar(self) -> bool:
+        with self._lock:
+            if self._ocupadas >= self.vagas:
+                return False
+            self._ocupadas += 1
+            return True
+
+    def sair(self) -> None:
+        with self._lock:
+            self._ocupadas = max(0, self._ocupadas - 1)
+
+    @property
+    def ocupadas(self) -> int:
+        with self._lock:
+            return self._ocupadas
+
+
+def minutos_de_espera(segundos: int) -> int:
+    """Os minutos do "Aguarde N minuto(s)" dos 429: ``segundos_restantes``
+    arredondado para CIMA, no mínimo 1. Para baixo, 299 s viravam "4 minutos" e
+    quem voltava no tempo anunciado levava outro 429. Fonte única dos textos do
+    login (por conta, por IP e global) e da reautenticação (admin.py)."""
+    return max(1, -(-int(segundos) // 60))
 
 
 def ip_do_cliente(request) -> str:
@@ -189,7 +312,7 @@ def rede_para_limite(ip: str, prefixo_ipv6: int = 64) -> str:
 
 
 # 8 falhas por 5 min por (e-mail, IP): trava dicionário online sem punir
-# um usuário que erra a senha uma ou duas vezes.
+# um usuário que erra a senha uma ou duas vezes. Chave: ``chave_conta_ip``.
 limitador_login = LimitadorTentativas(max_tentativas=8, janela_s=300)
 # Segunda camada, POR CONTA (só e-mail/usuário, sem IP): freia força-bruta
 # distribuída contra UMA conta mesmo que o atacante rode vários IPs. Teto mais
@@ -223,3 +346,62 @@ limitador_global_falha_login = LimitadorTentativas(
 # falha acima do teto chegaria ao alerta).
 alerta_global_login = LimitadorTentativas(
     max_tentativas=1, janela_s=settings.EDU_LOGIN_TETO_GLOBAL_JANELA_S)
+# Logins correndo AO MESMO TEMPO em cada processo (``PortaoDeConcorrencia``): acima
+# disso, 429 na hora, sem tocar no banco. Um login leva ~1–2 s em produção (bcrypt e
+# algumas idas ao banco, a ~195 ms cada) e o uso real tem poucos ao mesmo tempo; com
+# 8, uma rajada anônima ocupa no máximo 8 das 40 threads e 8 das 30 conexões de cada
+# worker, e as sessões já abertas seguem sendo atendidas.
+# Padrão 8 (``EDU_LOGIN_SIMULTANEOS``), lido no boot como os tetos acima.
+portao_login = PortaoDeConcorrencia(vagas=settings.EDU_LOGIN_SIMULTANEOS)
+# No máximo UM aviso de "portão do login cheio" por minuto em cada processo.
+alerta_portao_login = LimitadorTentativas(max_tentativas=1, janela_s=60)
+
+
+def identidade_da_conta(usuario) -> str:
+    """Identidade de uma conta que EXISTE no ``limitador_conta`` e no
+    ``limitador_login``: o e-mail e a versão da sessão (``token_version``), lida
+    do banco no pedido. O /auth/login e a reautenticação
+    (``admin._exigir_senha_atual``) usam esta mesma chave; conta inexistente
+    conta pelo texto digitado (``identidade_digitada``).
+
+    A versão é o que faz a troca de senha liberar o login em TODOS os processos
+    da API: toda substituição da senha (link de redefinição, senha definida pelo
+    admin, troca da própria senha, "Padronizar @", fusão de professores
+    duplicados) sobe o ``token_version`` na mesma transação. Cada processo passa a
+    contar numa chave nova, e as falhas da senha antiga, gravadas na memória de
+    cada processo (ver LIMITAÇÃO DE ESCALA, no topo), deixam de travar. Outras
+    ações do admin que derrubam as sessões (desativar, reativar, promover à
+    Secretaria) também zeram. A versão só sobe por ação do admin ou com a senha
+    atual: errar a senha não muda a chave.
+
+    A chave da conta e a do texto digitado (``identidade_digitada``) vivem em
+    espaços de nomes separados (prefixos ``u:`` e ``t:``). Quando eram o mesmo
+    espaço, um texto que coincidisse com a chave da conta somava falhas nela
+    (REG_SEGURANCA-2)."""
+    return f"u:{usuario.email}#{usuario.token_version or 0}"
+
+
+def identidade_digitada(entrada: str) -> str:
+    """Identidade de um login que NÃO achou conta: o texto digitado, num espaço
+    de nomes próprio (prefixo ``t:``). Texto que não acha conta nunca soma falhas
+    na chave de uma conta que existe (``identidade_da_conta``, prefixo ``u:``):
+    isso preserva o isolamento dos contadores. O login dá a mesma resposta de
+    credencial quando o limite da conta ou do texto é atingido (REV3-SEG-1)."""
+    return f"t:{entrada}"
+
+
+def chave_conta_ip(identidade: str, ip: str) -> str:
+    """Chave do ``limitador_login``: a conta (``identidade_da_conta``, ou
+    ``identidade_digitada`` quando a conta não existe) e o IP completo."""
+    return f"{identidade}|{ip}"
+
+
+def liberar_conta(email: str) -> None:
+    """Apaga deste processo os contadores da conta, em qualquer versão da sessão
+    e em qualquer IP, depois que a senha foi substituída. Só libera memória: quem
+    faz o login com a senha nova entrar, em todos os processos, é a versão nova
+    na chave (``identidade_da_conta``). Os tetos de falha por IP e global (acima)
+    não dependem da conta e ficam como estão."""
+    prefixo = f"u:{email}#"
+    limitador_conta.limpar_prefixo(prefixo)
+    limitador_login.limpar_prefixo(prefixo)

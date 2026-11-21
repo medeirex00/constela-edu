@@ -70,6 +70,42 @@ PRAZOS = {
      "test_teto_total_aborta_perto_do_teto_e_termina_erro_timeout"):
         "SYNC_TETO_EXECUCAO_S=1 contra o atraso de 2,5 s do conector falso: o teto de 2 s "
         "separa o aborto no teto da espera inteira",
+    ("test_aud_misc_assistente_prazo_total.py",
+     "test_resposta_gotejando_estoura_o_prazo_total"):
+        "PRAZO_TOTAL_S=1 contra a resposta que goteja por ~4 s: o teto de 2,5 s "
+        "(PRAZO_TOTAL_TESTE_S + FOLGA_S) separa a desistência no prazo total do "
+        "gotejamento inteiro",
+    ("test_aud_misc_assistente_prazo_total.py",
+     "test_anthropic_ocupada_nao_espera_alem_do_prazo_total"):
+        "o mesmo prazo total de 1 s contra o 529 com Retry-After de 3 s: o teto de 2,5 s "
+        "separa responder na hora de esperar a pausa do SDK",
+    ("test_aud3_indic_download_prazo_total.py",
+     "test_download_que_goteja_para_no_prazo_total"):
+        "AVALIACOES_DOWNLOAD_PRAZO_S=1 contra o arquivo que goteja por ~4 s: o teto de "
+        "2,5 s (PRAZO_TOTAL_TESTE_S + FOLGA_S) separa a desistência no prazo total do "
+        "gotejamento inteiro",
+    ("test_aud3_indic_download_prazo_total.py",
+     "test_coletar_agora_com_download_lento_termina_em_erro_sem_gravar"):
+        "o mesmo prazo total de 1 s pela coleta da fonte (coletar_fonte), contra os ~4 s "
+        "do gotejamento",
+    ("test_aud3_indic_download_prazo_total.py",
+     "test_cabecalho_que_goteja_para_no_prazo_total"):
+        "REV3-INDIC-1: o mesmo prazo total de 1 s contra o CABEÇALHO HTTP que goteja por "
+        "~4 s: o teto de 2,5 s separa a desistência no prazo do gotejamento inteiro",
+    ("test_aud3_indic_download_prazo_total.py",
+     "test_coletar_agora_com_cabecalho_gotejado_diz_que_passou_do_prazo"):
+        "REV3-INDIC-1: o mesmo prazo de 1 s pela coleta da fonte, contra os ~4 s do "
+        "cabeçalho gotejado",
+    ("test_aud3_indic_download_prazo_total.py",
+     "test_conexao_segura_parada_para_no_prazo_total"):
+        "REV3-INDIC-1: prazo total de 1 s contra a conexão segura (TLS) parada, com a "
+        "espera por operação de 3 s: o teto de 2,5 s separa o prazo total da espera por "
+        "operação",
+    ("test_aud_rel_pdf_teto_navegadores.py",
+     "test_sem_vaga_no_prazo_cai_na_reserva_sem_abrir_navegador"):
+        "ESPERA_POR_NAVEGADOR_S=0,2 contra a espera padrão de 30 s com as vagas todas "
+        "ocupadas: o teto de 5 s separa desistir no prazo e sair pela reserva (fpdf) de "
+        "esperar a vaga",
 }
 
 

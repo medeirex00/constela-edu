@@ -129,7 +129,11 @@ def test_a_conta_com_os_retratos_essenciais_e_a_das_funcoes_oficiais(db):
         retrato_elefante(db, e, alunos[6], quando, tentativas=100 - 10 * j, acertos=5 * j)
         retrato_matific(db, e, alunos[6], quando, atividades=3 * j, estrelas=7 * j)
     db.commit()
-    for preset, ini, fim in (("ano_letivo", None, None), ("tudo", None, None),
+    # A janela do ano letivo vai como período personalizado (01/01 a 31/12): a conta é a
+    # mesma, sem a proteção por blocos do calendário — aqui, a folga antes do 1º bimestre
+    # tem só 2 crianças com questões, e o "ano letivo" da rede esconde o acerto (G_GRUPO-2).
+    for preset, ini, fim in (("personalizado", date(2026, 1, 1), date(2026, 12, 31)),
+                             ("tudo", None, None),
                              ("personalizado", date(2026, 3, 1), date(2026, 6, 30)),
                              ("personalizado", date(2025, 12, 1), date(2026, 5, 15))):
         janela = rp.resolver_janela(preset, 2026, inicio=ini, fim=fim, hoje=HOJE)
@@ -494,6 +498,46 @@ def test_cobertura_diferente_nao_reabre_escola_suprimida(db, periodo):
     assert dados["rede"]["alunos"] - z["alunos"] >= 2 * dados["k_minimo"]
 
 
+@pytest.mark.parametrize("periodo", ["ano_letivo", "tudo"])
+def test_cobertura_da_rede_nao_mostra_datas_das_suprimidas(db, periodo):
+    """A coleta e o primeiro evento do Elefante são lidos de TODAS as escolas medidas numa
+    consulta só, e a escola suprimida (k = 5) sai depois, em Python: nem a data do primeiro
+    evento dela, nem a última coleta dela aparecem na cobertura da rede. As suprimidas aqui
+    têm o evento mais ANTIGO e a coleta mais RECENTE da rede — se vazassem, as datas da rede
+    seriam as delas."""
+    from app.models import EventoAluno
+
+    rede, esc = _rede_xyz(db, "Rede Fictícia Datas Suprimidas", "3599934",
+                          {"X": (3, True, True), "Y": (8, False, True), "Z": (20, True, True)})
+    x, y, z = esc["X"], esc["Y"], esc["Z"]
+    aluno = {e.id: db.query(svc.Aluno).filter_by(escola_id=e.id).first() for e in (x, y, z)}
+    for n, (escola, quando) in enumerate([(z, datetime(2026, 3, 2, 12, 0)),
+                                          (z, datetime(2026, 4, 6, 12, 0)),
+                                          (x, datetime(2025, 2, 3, 12, 0)),
+                                          (y, datetime(2025, 1, 6, 12, 0))]):
+        db.add(EventoAluno(escola_id=escola.id, aluno_id=aluno[escola.id].id, plataforma="elefante",
+                           tipo_evento="leitura", ocorrido_em=quando, chave_natural=f"datas-sup-{n}"))
+    # A coleta mais recente da rede é a das suprimidas (Z parou em 29/09).
+    retrato_elefante(db, x, aluno[x.id], datetime(2026, 10, 4, 3, 0), tentativas=9, acertos=3)
+    retrato_matific(db, x, aluno[x.id], datetime(2026, 10, 4, 3, 0), atividades=11, estrelas=3)
+    retrato_matific(db, y, aluno[y.id], datetime(2026, 10, 4, 3, 0), atividades=2, estrelas=3)
+    db.commit()
+
+    dados = svc.plataformas_da_rede(db, rede, preset=periodo, hoje=HOJE)
+    por_id = {e["escola_id"]: e for e in dados["escolas"]}
+    assert por_id[x.id]["suprimido"] and por_id[y.id]["suprimido"] and not por_id[z.id]["suprimido"]
+    cob = dados["cobertura"]
+    # O primeiro evento é o de Z (02/03/2026), nunca o de X (2025) nem o de Y.
+    assert cob["primeiro_evento_elefante"] == datetime(2026, 3, 2, 12, 0).isoformat()
+    # A última coleta e os dias desde ela são os de Z (29/09), nunca os de 04/10 das suprimidas.
+    ultima_z = por_id[z.id]["ultima_coleta"]
+    assert ultima_z["elefante"] is not None and ultima_z["elefante"].startswith("2026-09-")
+    assert cob["ultima_coleta"] == ultima_z
+    assert cob["dias_desde_ultima_coleta"] == (HOJE - date.fromisoformat(
+        max(ultima_z.values())[:10])).days
+    assert "2026-10-0" not in json.dumps(cob) and "2025-" not in json.dumps(cob)
+
+
 def test_sonda_f_literal_3_6_9_nao_recompoe_x(db):
     """O cenário literal de M2 (X = 3, Y = 6, Z = 9): com a faixa de proteção as três somem
     juntas, e o bloco da rede não tem escola visível para somar (sem dado, nunca a soma
@@ -537,7 +581,10 @@ def test_subconjunto_menor_que_k_nao_tem_total_que_refaca_a_taxa(db):
 
 def test_matific_com_poucos_ativos_esconde_estrelas_e_desempenho(db):
     """Com ≥ k alunos com retrato mas < k com atividade, "estrelas ÷ atividades" das duas
-    médias refaria o desempenho escondido: as estrelas por aluno somem junto."""
+    médias refaria o desempenho escondido: as estrelas por aluno somem junto. E as atividades
+    por aluno também (G_GRUPO-4): com 2 crianças somando, "média × medidos" eram as 12
+    atividades delas — a média some e diz que é proteção. As estrelas e o desempenho, que
+    somem pela mesma causa (2 crianças com atividade), têm o mesmo rótulo (REV2-ANALISE-2)."""
     rede = nova_rede(db, nome="Rede Fictícia Poucos Ativos", codigo="3599936")
     e = nova_escola(db, rede, "EMEF Fictícia Poucos Ativos", "35993601")
     alunos = turma_com_alunos(db, e, "3º Ano", 8)
@@ -547,7 +594,10 @@ def test_matific_com_poucos_ativos_esconde_estrelas_e_desempenho(db):
     db.commit()
     (cel,) = _escola(svc.plataformas_da_rede(db, rede, hoje=HOJE), e)["series"]
     mt = cel["matific"]
-    assert mt["alunos_medidos"] == 8 and mt["atividades_por_aluno"] == 1.5
+    assert mt["alunos_medidos"] == 8 and mt["atividades_por_aluno"] is None
+    assert mt["participacao_pct"] == 25.0
+    assert mt["metricas_protegidas"] == ["atividades_por_aluno", "estrelas_por_aluno",
+                                         "desempenho_medio"]
     assert mt["estrelas_por_aluno"] is None and mt["desempenho_medio"] is None
 
 
@@ -675,9 +725,12 @@ def test_metrica_escondida_numa_serie_nao_se_refaz_pelo_total_da_escola(db, clie
     assert cel[4]["estrelas_por_aluno"] == 30.0
     for bloco in (esc["matific"], completa["rede"]["matific"]):
         assert bloco["estrelas_por_aluno"] is None and bloco["desempenho_medio"] is None
-        assert bloco["metricas_protegidas"] == ["estrelas_por_aluno", "desempenho_medio"]
+        # As atividades da criança também (G_GRUPO-4): "total − 4º ano" dava as 10 dela.
+        assert bloco["metricas_protegidas"] == ["estrelas_por_aluno", "desempenho_medio",
+                                                "atividades_por_aluno"]
         assert bloco["texto_metricas_protegidas"] == svc.TEXTO_METRICAS_PROTEGIDAS.format(k=5)
-        assert bloco["atividades_por_aluno"] == 5.38          # o resto do total continua
+        assert bloco["atividades_por_aluno"] is None
+        assert bloco["participacao_pct"] is not None          # o resto do total continua
     assert cel[4]["metricas_protegidas"] == [] and cel[4]["texto_metricas_protegidas"] is None
     # Por série: o 4º ano (sem célula escondida) mostra o total; o 3º, não.
     assert por_serie[4]["rede"]["matific"]["estrelas_por_aluno"] == 30.0
@@ -851,7 +904,8 @@ def test_desempenho_do_total_nao_refaz_as_atividades_escondidas_em_complemento(d
     esc = _escola(completa, e)
     cel = {c["serie"]: c["matific"] for c in esc["series"]}
     assert cel[3]["alunos_medidos"] == 3 and cel[3]["atividades_por_aluno"] is None
-    assert cel[4]["atividades_por_aluno"] is not None and cel[4]["estrelas_por_aluno"] is None
+    # 4º: 2 crianças somando nas atividades — a média some (G_GRUPO-4), como as estrelas.
+    assert cel[4]["atividades_por_aluno"] is None and cel[4]["estrelas_por_aluno"] is None
     assert cel[5]["atividades_por_aluno"] is not None
     for rotulo, total in (("escola", esc["matific"]), ("rede", completa["rede"]["matific"])):
         assert total["atividades_por_aluno"] is None, rotulo

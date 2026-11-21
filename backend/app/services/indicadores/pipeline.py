@@ -101,6 +101,19 @@ def codigo_ibge_da_rede(rede: Rede) -> str | None:
     return ica.normalizar_codigo_ibge(rede.codigo_ibge)
 
 
+def feita_pela_rede(imp: ImportacaoIndicador, rede: Rede) -> bool:
+    """A importação é DESTA rede: recortada pelo município dela e, quando guardou quem a
+    fez (``resumo['rede_id']``), feita por ela. O cadastro recusa o código IBGE de outra
+    rede, mas duas redes antigas podem repetir o código: sem a marca, uma listaria,
+    aplicaria e desfaria a importação da outra (e a consulta conferiria as escolas de
+    uma contra o arquivo importado pela outra). As importações de antes da marca
+    continuam valendo pelo município."""
+    if imp.codigo_territorio_alvo != codigo_ibge_da_rede(rede):
+        return False
+    dona = (imp.resumo or {}).get("rede_id")
+    return dona is None or dona == rede.id
+
+
 def _exigir_codigo(rede: Rede) -> str:
     codigo = codigo_ibge_da_rede(rede)
     if codigo is None:
@@ -453,6 +466,7 @@ def previa(db: Session, rede: Rede, conteudo: bytes, nome: str, *, usuario_id: i
     imp.resumo = {"avisos": [*leitura.avisos, *divergencias, *filter(None, [data_tardia])],
                   "notas_arquivo": leitura.notas_arquivo,
                   "territorios": leitura.territorios, "aba": leitura.aba,
+                  "rede_id": rede.id,      # quem importou (``feita_pela_rede``)
                   **({"pacote": _resumo_pacote(arq.manifesto)} if arq.manifesto else {})}
     return _saida(imp, mudancas=_mudancas_para_tela(plano, leitura))
 
@@ -515,7 +529,7 @@ def aplicar(db: Session, rede: Rede, previa_id: int, conteudo: bytes, nome: str,
     codigo = _exigir_codigo(rede)
     imp = db.get(ImportacaoIndicador, previa_id)
     avaliacao = obter_avaliacao(db, CHAVE_AVALIACAO)
-    if imp is None or imp.avaliacao_id != avaliacao.id or imp.codigo_territorio_alvo != codigo:
+    if imp is None or imp.avaliacao_id != avaliacao.id or not feita_pela_rede(imp, rede):
         raise LookupError("Prévia não encontrada para esta rede.")
     if imp.status != "previa":
         raise ImportacaoRecusada(
@@ -655,8 +669,7 @@ def desfazer(db: Session, rede: Rede, importacao_id: int, *, usuario_id: int | N
     do chamador). Recusa se uma aplicada depois dela viu um número que ela tocou."""
     avaliacao = obter_avaliacao(db, CHAVE_AVALIACAO)
     imp = db.get(ImportacaoIndicador, importacao_id)
-    if (imp is None or imp.avaliacao_id != avaliacao.id
-            or imp.codigo_territorio_alvo != codigo_ibge_da_rede(rede)):
+    if imp is None or imp.avaliacao_id != avaliacao.id or not feita_pela_rede(imp, rede):
         raise LookupError("Importação não encontrada para esta rede.")
     if imp.status != "aplicada":
         raise ImportacaoRecusada(
@@ -717,12 +730,13 @@ def listar(db: Session, rede: Rede) -> list[dict]:
     if codigo is None:
         return []
     avaliacao = obter_avaliacao(db, CHAVE_AVALIACAO)
-    linhas = db.execute(
+    # Do município, as feitas por ESTA rede (``feita_pela_rede``), as 50 mais recentes.
+    linhas = [i for i in db.execute(
         select(ImportacaoIndicador)
         .where(ImportacaoIndicador.avaliacao_id == avaliacao.id,
                ImportacaoIndicador.codigo_territorio_alvo == codigo)
         .order_by(ImportacaoIndicador.created_at.desc(), ImportacaoIndicador.id.desc())
-        .limit(50)).scalars().all()
+        ).scalars() if feita_pela_rede(i, rede)][:50]
     # O conflito é GLOBAL (UF e Brasil são compartilhados entre redes): conta toda
     # importação aplicada depois, de qualquer rede.
     aplicadas = _aplicadas(db, avaliacao.id)

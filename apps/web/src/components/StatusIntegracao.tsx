@@ -50,8 +50,9 @@ export interface Execucao {
   qtd_falhas?: number | null;
   /** Dado gravado, mas o recálculo das notas falhou. */
   recalculo_pendente?: boolean | null;
-  /** nada_mudou | correspondencia_pendente | tudo_em_revisao | queda_retida |
-   *  linhas_descartadas | falha_apos_gravacao | coleta_parcial | código do erro. */
+  /** nada_mudou | correspondencia_pendente | tudo_em_revisao |
+   *  fora_do_ano_sem_conferencia | queda_retida | linhas_descartadas |
+   *  falha_apos_gravacao | coleta_parcial | código do erro. */
   motivo?: string | null;
   periodo?: PeriodoExecucao | null;
 }
@@ -151,6 +152,10 @@ export const TIPO_ALERTA: Record<string, string> = {
   contas_de_outra_escola: "Todas as contas são de outra escola",
   identidade_de_outra_escola: "Contas já vinculadas a outra escola",
   periodo_invalido: "Período inválido",
+  escola_sem_responsavel: "Escola sem administrador ou coordenador ativo",
+  // A coleta foi feita fora do ano letivo ativo da escola (a virada do ano ainda não
+  // foi feita): não criou ficha nem mudou matrícula. A mensagem diz o que fazer.
+  coleta_fora_do_ano_letivo: "Coleta fora do ano letivo ativo",
 };
 export const rotuloAlerta = (tipo: string) => TIPO_ALERTA[tipo] ?? tipo.replace(/_/g, " ");
 
@@ -158,7 +163,7 @@ export const rotuloAlerta = (tipo: string) => TIPO_ALERTA[tipo] ?? tipo.replace(
 const ALERTAS_NAO_FALHA = new Set([
   "desatualizada", "lento", "queda_matific",
   "coleta_parcial", "correspondencia_pendente", "plataforma_sem_dados", "recalculo_pendente",
-  "contas_ausentes", "identidade_de_outra_escola",
+  "contas_ausentes", "identidade_de_outra_escola", "coleta_fora_do_ano_letivo",
 ]);
 
 // Categoria por tipo de alerta — o mesmo mapa do backend (service.CATEGORIA_POR_TIPO),
@@ -178,6 +183,7 @@ const CATEGORIA_POR_TIPO: Record<string, CategoriaFalha> = {
   contas_de_outra_escola: "autenticacao",
   periodo_invalido: "configuracao",
   credencial_ilegivel: "configuracao",
+  escola_sem_responsavel: "configuracao",
 };
 
 // --- Resultado de uma execução (contrato comum da etapa 2) -------------------
@@ -263,6 +269,13 @@ export const CODIGO_ERRO: Record<string, { rotulo: string; frase: string; catego
     frase:
       "A senha salva não pôde ser lida pelo servidor (a chave que a protegia foi trocada) e nada foi coletado. Informe usuário e senha de novo em “Configurar conexão” e clique em “Salvar e validar”; se já fez isso, peça a sincronização de novo.",
   },
+  // A importação automática precisa de um usuário ativo da escola que a assine.
+  escola_sem_responsavel: {
+    rotulo: "Escola sem administrador ou coordenador ativo",
+    categoria: "configuracao",
+    frase:
+      "A escola não tem administrador nem coordenador ativo para assinar a importação automática, e nada foi coletado. Cadastre ou reative um em Usuários e peça a sincronização de novo.",
+  },
 };
 
 /** Motivos de uma execução sem falha (contrato) → texto curto. */
@@ -272,12 +285,19 @@ export const MOTIVO_EXECUCAO: Record<string, string> = {
   // Tudo em revisão e NENHUMA conta da escola conferida: não conta como em dia
   // (credencial de outra escola, casamento quebrado ou 1ª coleta sem vínculo).
   tudo_em_revisao: "nenhuma conta da escola reconhecida",
+  // Coleta de fora do ano letivo ativo (a virada ainda não foi feita) em que nenhuma
+  // conta da escola veio: as crianças sem ficha ficaram para depois da virada e nada
+  // foi atualizado. Também não conta como em dia (backend: REV3-VIRADA-2).
+  fora_do_ano_sem_conferencia: "coleta fora do ano letivo, nenhuma conta da escola reconhecida",
   falha_apos_gravacao: "falhou depois de gravar",
   // Linhas que chegaram com defeito (sem data, sem nome) e não viraram dado.
   linhas_descartadas: "linhas com defeito descartadas",
   // Total do Matific MENOR que o gravado: o valor ficou retido (alerta
   // "Total menor que o gravado"); não há revisão de identidade a fazer.
   queda_retida: "total menor retido para conferência",
+  // Tempo e/ou questões do Elefante sumiram da resposta: ficaram os números de
+  // antes. O motivo não diz QUAIS campos (o alerta crítico diz).
+  campos_nao_atualizados: "tempo ou questões não vieram da plataforma",
 };
 
 /** A última TENTATIVA que terminou: o backend novo informa; no antigo, a
@@ -374,7 +394,8 @@ export function descreverExecucao(e: Pick<Execucao, "status"> & Partial<Pick<Exe
       return {
         rotulo: motivo && MOTIVO_EXECUCAO[motivo]
           ? `sem atualização: ${MOTIVO_EXECUCAO[motivo]}` : "sem atualização",
-        tom: motivo === "tudo_em_revisao" ? "alerta" : "info",
+        tom: motivo === "tudo_em_revisao" || motivo === "fora_do_ano_sem_conferencia"
+          ? "alerta" : "info",
       };
     case "sem_dados":
       return { rotulo: "a plataforma não trouxe dados", tom: "alerta" };
@@ -567,6 +588,17 @@ export function situacaoIntegracao(
     const alunos = contagem && temContagemPorAluno(contagem) ? contagem.qtd_alunos : null;
     const falhas = typeof contagem?.qtd_falhas === "number" ? contagem.qtd_falhas : null;
     const aplicados = alunos !== null ? ` (${plural(alunos, "aluno atualizado", "alunos atualizados")})` : "";
+    // Com o alerta "Formato do relatório mudou" aberto, a tela não sabe se a parte que
+    // falhou NESTA coleta foi só a do formato (repetir não completa — 35993e13), se
+    // houve também uma turma que falhou de passagem (o servidor diz as duas coisas:
+    // "Sincronize de novo para completar" e "o que veio em outro formato não volta"),
+    // ou se o alerta de formato ficou aberto de uma coleta anterior (a parcial com
+    // falha não o fecha) e esta falhou só por tempo esgotado. Quem diz, por execução,
+    // é o alerta "Coleta parcial" (_mensagem_parcial no servidor): a frase manda lê-lo
+    // e repete só o que vale nos três casos (REV2-SYNC2-1).
+    const proximoPasso = alertasAbertos.some((a) => a.tipo === "parser_incompativel")
+      ? `Veja os alertas: o “${TIPO_ALERTA.coleta_parcial}” diz se sincronizar de novo completa o que falhou; o que veio em outro formato não volta com outra coleta (alerta “${TIPO_ALERTA.parser_incompativel}”).`
+      : "Veja o alerta e sincronize de novo para completar.";
     if (alunos === 0 && motivoUltimo === "coleta_parcial") {
       // D2(6): falhou só o endpoint acessório (nomes do Matific) e as contas já
       // ligadas foram CONFERIDAS sem número mudado — nada foi aplicado. Mesma
@@ -574,7 +606,7 @@ export function situacaoIntegracao(
       return {
         chave: "parcial", tom: "parcial", rotulo: "Verificado em parte",
         detalheTecnico: contagem?.erro_resumo || null,
-        frase: `A última sincronização conferiu as contas já ligadas e nenhum número mudou, mas parte da coleta falhou${falhas !== null && falhas > 0 ? ` (${plural(falhas, "falha", "falhas")})` : ""}. Veja o alerta e sincronize de novo para completar.`,
+        frase: `A última sincronização conferiu as contas já ligadas e nenhum número mudou, mas parte da coleta falhou${falhas !== null && falhas > 0 ? ` (${plural(falhas, "falha", "falhas")})` : ""}. ${proximoPasso}`,
       };
     }
     return {
@@ -584,7 +616,9 @@ export function situacaoIntegracao(
         ? `A última sincronização falhou depois de já ter gravado parte dos dados${aplicados}. O que chegou foi aplicado; sincronize de novo para completar.`
         : motivoUltimo === "linhas_descartadas"
           ? `A última sincronização aplicou dados${aplicados}, mas parte das linhas recebidas veio com defeito (sem data ou sem nome) e não virou dado. Veja o alerta; se repetir, envie o relatório manualmente.`
-          : `A última sincronização aplicou dados${aplicados}, mas parte da coleta falhou${falhas !== null && falhas > 0 ? ` (${plural(falhas, "falha", "falhas")})` : ""}. Veja o alerta e sincronize de novo para completar.`,
+          : motivoUltimo === "campos_nao_atualizados"
+            ? `A última sincronização aplicou dados${aplicados}, mas a plataforma deixou de mandar parte dos números (tempo de leitura ou questões): eles ficaram com o valor da coleta anterior, e sincronizar de novo não os traz de volta. O alerta “Formato do relatório mudou” diz quais faltaram.`
+            : `A última sincronização aplicou dados${aplicados}, mas parte da coleta falhou${falhas !== null && falhas > 0 ? ` (${plural(falhas, "falha", "falhas")})` : ""}. ${proximoPasso}`,
     };
   }
   if (statusUltimo === "sem_atualizacao" && motivoUltimo === "tudo_em_revisao") {
@@ -606,6 +640,19 @@ export function situacaoIntegracao(
       frase: `A última coleta terminou sem erro, mas nenhuma conta já ligada a um aluno desta escola veio nela: ${fila}. Por isso ela não conta como dado em dia${desatualizada
         ? " (os dados desta plataforma já estão desatualizados)" : ""}. Se a escola já tinha alunos ligados, confira em “Configurar conexão” se o acesso cadastrado é o desta escola antes de resolver as revisões; se é a primeira coleta, confirme que os nomes são desta escola e resolva as revisões.`,
       link: { para: "/revisoes-identidade", texto: "Ver revisões de identidade" },
+    };
+  }
+  if (statusUltimo === "sem_atualizacao" && motivoUltimo === "fora_do_ano_sem_conferencia") {
+    // Coleta de fora do ano letivo ativo (a virada ainda não foi feita) em que nenhuma
+    // conta já ligada da escola veio: as crianças sem ficha ficaram para depois da
+    // virada (nada na fila de revisão) e o backend NÃO conta como "em dia"
+    // (REV3-VIRADA-2). O alerta "Coleta fora do ano letivo ativo" diz a causa provável.
+    const desatualizada = p.desatualizada || p.frescor === "desatualizado";
+    return {
+      chave: "sem_atualizacao", tom: "alerta",
+      rotulo: "Sem atualização: coleta fora do ano letivo",
+      frase: `A última coleta foi feita fora do ano letivo ativo da escola e nenhuma conta já ligada a um aluno desta escola veio nela: nada foi atualizado e nenhuma ficha foi criada. Por isso ela não conta como dado em dia${desatualizada
+        ? " (os dados desta plataforma já estão desatualizados)" : ""}. Veja o alerta “${TIPO_ALERTA.coleta_fora_do_ano_letivo}”: ele diz o que conferir (o ano letivo ativo da escola e, em “Configurar conexão”, se o acesso cadastrado é o desta escola).`,
     };
   }
   if (statusUltimo === "sem_atualizacao" && motivoUltimo === "correspondencia_pendente") {
@@ -652,6 +699,14 @@ export function situacaoIntegracao(
     return {
       chave: "sem_atualizacao", tom: "alerta", rotulo: "Sem atualização: linhas com defeito",
       frase: "A última coleta terminou sem erro, mas nenhum aluno foi atualizado e parte das linhas recebidas veio com defeito (sem data ou sem nome) e não virou dado. Os dados que já estão aqui continuam valendo; se repetir, envie o relatório manualmente.",
+    };
+  }
+  if (statusUltimo === "sem_atualizacao" && motivoUltimo === "campos_nao_atualizados") {
+    // A resposta perdeu tempo/questões (backend: MOTIVO_CAMPOS_NAO_ATUALIZADOS): não
+    // é "nada mudou" nem conta como dado em dia.
+    return {
+      chave: "sem_atualizacao", tom: "alerta", rotulo: "Sem atualização: tempo ou questões não vieram",
+      frase: "A última coleta terminou sem erro e nenhum aluno foi atualizado, mas a plataforma deixou de mandar parte dos números (tempo de leitura ou questões): eles ficaram com o valor da coleta anterior, e sincronizar de novo não os traz de volta. O alerta “Formato do relatório mudou” diz quais faltaram.",
     };
   }
   if (statusUltimo === "sem_atualizacao" && motivoUltimo === "queda_retida") {

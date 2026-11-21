@@ -17,6 +17,7 @@ Isolamento multi-tenant: toda função exige ``escola_id`` e a unicidade é
 """
 from __future__ import annotations
 
+import hashlib
 import json
 
 from sqlalchemy import select
@@ -47,8 +48,8 @@ def mensagem_credencial_ilegivel(plataformas) -> str:
     ``ilegivel``)."""
     nomes = " e do ".join(_NOME_PLATAFORMA.get(p, str(p)) for p in plataformas)
     return (f"A senha salva do {nomes} não pode mais ser lida pelo servidor e precisa "
-            "ser recadastrada: informe usuário e senha de novo em Sincronização "
-            "automática e clique em “Salvar e validar”.")
+            "ser recadastrada: informe usuário e senha de novo em Integrações → "
+            "“Configurar conexão” e clique em “Salvar e validar”.")
 
 
 def _para_credenciais(payload: dict) -> Credenciais:
@@ -120,6 +121,21 @@ def obter_credencial(db: Session, escola_id: int,
     if linha is None:
         return None
     return _ler(linha)
+
+
+def credencial_da_linha(linha: PlataformaCredencial) -> Credenciais | None:
+    """Decifra a linha já lida (uso efêmero), ou None se a cifra não abrir."""
+    return _ler(linha)
+
+
+def carimbo_da_credencial(linha: PlataformaCredencial) -> str:
+    """Identifica ESTA credencial gravada: muda quando ela é salva de novo (outra
+    conta ou a mesma), removida e recriada, ou recifrada — a cifra é nova a cada
+    gravação. Não muda com o resultado da validação (``marcar_status``). Serve para
+    amarrar o que foi obtido com uma credencial (o ranking ao vivo em cache, a sessão
+    do Matific) a ela, em qualquer processo. É um resumo da cifra: não revela nada."""
+    base = f"{linha.id}|{linha.token_version}|{linha.segredo_cifrado}"
+    return hashlib.sha256(base.encode("utf-8")).hexdigest()[:32]
 
 
 def credencial_legivel(linha: PlataformaCredencial) -> bool:

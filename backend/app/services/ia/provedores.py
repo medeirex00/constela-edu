@@ -8,13 +8,117 @@
 from __future__ import annotations
 
 import re
+import time
 import unicodedata
+
+import httpcore
+import httpx
 
 from app.core.config import settings
 from app.services.ia.base import ErroProvedorIA, ProvedorIA
 
 MODELO_ANTHROPIC_PADRAO = "claude-opus-4-8"
 MODELO_OPENAI_PADRAO = "gpt-4o"
+URL_OPENAI = "https://api.openai.com/v1/chat/completions"
+
+# Prazo das chamadas aos provedores externos. Sem prazo, o SDK da Anthropic espera
+# 600 s pela resposta e tenta mais 2 vezes: até ~30 min por pergunta, com a thread
+# do worker presa. E o prazo do httpx vale POR OPERAÇÃO de rede (cada pedaço que
+# chega recomeça a contagem): uma resposta gotejando (um proxy/CDN no caminho) nunca
+# o estoura. Por isso cada chamada tem um PRAZO TOTAL, contado do início: toda
+# operação de rede (conectar, TLS, enviar, receber cabeçalho e corpo) espera no
+# máximo o que resta dele; esgotado, a chamada falha na hora e o assistente responde
+# no modo local. Sem nova tentativa da Anthropic: a pausa do SDK antes dela (o que o
+# provedor pedir, até 60 s) ficaria fora do prazo, e o modo local já cobre a falha.
+# Pior caso de uma pergunta: PRAZO_TOTAL_S (fora dele, só a consulta de DNS, que
+# tem o prazo do próprio sistema).
+PRAZO_CONEXAO_S = 5.0
+PRAZO_TOTAL_S = 60.0
+NOVAS_TENTATIVAS_ANTHROPIC = 0
+
+
+def _prazo() -> httpx.Timeout:
+    """Prazo por operação, que o httpx exige; o total vem de ``_cliente_http``."""
+    return httpx.Timeout(PRAZO_TOTAL_S, connect=PRAZO_CONEXAO_S)
+
+
+class _RedeComPrazoTotal(httpcore.NetworkBackend):
+    """A rede do httpcore em que cada operação espera no máximo o que resta até
+    ``limite`` (``time.monotonic()``); passado o limite, falha sem esperar."""
+
+    def __init__(self, limite: float):
+        self._limite = limite
+        self._rede = httpcore.SyncBackend()
+
+    def espera(self, timeout: float | None,
+               esgotado: type[httpcore.TimeoutException]) -> float:
+        restante = self._limite - time.monotonic()
+        if restante <= 0:
+            raise esgotado("prazo total da chamada ao provedor de IA esgotado")
+        return restante if timeout is None else min(timeout, restante)
+
+    def connect_tcp(self, host, port, timeout=None, local_address=None,
+                    socket_options=None):
+        fluxo = self._rede.connect_tcp(
+            host, port, timeout=self.espera(timeout, httpcore.ConnectTimeout),
+            local_address=local_address, socket_options=socket_options)
+        return _FluxoComPrazoTotal(fluxo, self)
+
+    def connect_unix_socket(self, path, timeout=None, socket_options=None):
+        fluxo = self._rede.connect_unix_socket(
+            path, timeout=self.espera(timeout, httpcore.ConnectTimeout),
+            socket_options=socket_options)
+        return _FluxoComPrazoTotal(fluxo, self)
+
+    def sleep(self, seconds: float) -> None:
+        self._rede.sleep(seconds)
+
+
+class _FluxoComPrazoTotal(httpcore.NetworkStream):
+    def __init__(self, fluxo: httpcore.NetworkStream, rede: _RedeComPrazoTotal):
+        self._fluxo, self._rede = fluxo, rede
+
+    def read(self, max_bytes: int, timeout: float | None = None) -> bytes:
+        return self._fluxo.read(max_bytes,
+                                timeout=self._rede.espera(timeout, httpcore.ReadTimeout))
+
+    def write(self, buffer: bytes, timeout: float | None = None) -> None:
+        self._fluxo.write(buffer, timeout=self._rede.espera(timeout, httpcore.WriteTimeout))
+
+    def close(self) -> None:
+        self._fluxo.close()
+
+    def start_tls(self, ssl_context, server_hostname=None, timeout=None):
+        fluxo = self._fluxo.start_tls(
+            ssl_context, server_hostname=server_hostname,
+            timeout=self._rede.espera(timeout, httpcore.ConnectTimeout))
+        return _FluxoComPrazoTotal(fluxo, self._rede)
+
+    def get_extra_info(self, info: str):
+        return self._fluxo.get_extra_info(info)
+
+
+class _TransporteComPrazoTotal(httpx.HTTPTransport):
+    """O ``HTTPTransport`` padrão (mesmo TLS, mesmo mapa de erros do httpx) sobre a
+    ``_RedeComPrazoTotal``. O httpx não deixa escolher a rede do httpcore: o pool
+    é refeito com ela (httpx fixado em requirements.txt; a guarda abaixo e o
+    teste do servidor gotejando acusam se a estrutura mudar)."""
+
+    def __init__(self, limite: float):
+        tls = httpx.create_ssl_context()
+        super().__init__(verify=tls)
+        if not isinstance(getattr(self, "_pool", None), httpcore.ConnectionPool):
+            raise RuntimeError("httpx.HTTPTransport sem o _pool esperado: "
+                               "rever _TransporteComPrazoTotal")
+        self._pool = httpcore.ConnectionPool(ssl_context=tls,
+                                             network_backend=_RedeComPrazoTotal(limite))
+
+
+def _cliente_http(limite: float) -> httpx.Client:
+    """Cliente HTTP de UMA chamada a provedor externo: nenhuma operação de rede
+    passa de ``limite`` (``time.monotonic()``). Com o transporte próprio, o httpx
+    não usa proxy de variável de ambiente (HTTPS_PROXY), que o sistema não usa."""
+    return httpx.Client(transport=_TransporteComPrazoTotal(limite), timeout=_prazo())
 
 
 class AnthropicProvedor(ProvedorIA):
@@ -29,30 +133,43 @@ class AnthropicProvedor(ProvedorIA):
     def responder(self, sistema: str, mensagens: list[dict]) -> str:
         import anthropic
 
-        cliente = anthropic.Anthropic(api_key=self._api_key)
+        limite = time.monotonic() + PRAZO_TOTAL_S
         try:
-            resposta = cliente.messages.create(
-                model=self._modelo,
-                max_tokens=settings.AI_MAX_TOKENS,
-                # O contexto da escola (~milhares de tokens) repete a cada
-                # pergunta da conversa: o cache reduz custo/latência.
-                cache_control={"type": "ephemeral"},
-                system=sistema,
-                messages=[
-                    {
-                        "role": "user" if m["papel"] == "usuario" else "assistant",
-                        "content": m["conteudo"],
-                    }
-                    for m in mensagens
-                ],
-            )
-        except anthropic.APIError as erro:
+            with _cliente_http(limite) as http:
+                cliente = anthropic.Anthropic(api_key=self._api_key, timeout=_prazo(),
+                                              max_retries=NOVAS_TENTATIVAS_ANTHROPIC,
+                                              http_client=http)
+                resposta = cliente.messages.create(
+                    model=self._modelo,
+                    max_tokens=settings.AI_MAX_TOKENS,
+                    # O contexto da escola (~milhares de tokens) repete a cada
+                    # pergunta da conversa: o cache reduz custo/latência.
+                    cache_control={"type": "ephemeral"},
+                    system=sistema,
+                    messages=[
+                        {
+                            "role": "user" if m["papel"] == "usuario" else "assistant",
+                            "content": m["conteudo"],
+                        }
+                        for m in mensagens
+                    ],
+                )
+        except anthropic.AnthropicError as erro:
             raise ErroProvedorIA(f"Falha no provedor Anthropic: {erro}") from erro
-        if resposta.stop_reason == "refusal":
-            return "Não posso responder a essa pergunta."
-        return "".join(
-            bloco.text for bloco in resposta.content if bloco.type == "text"
-        ).strip()
+        # Um 200 fora do formato também é falha do provedor: a página HTML de um
+        # proxy no caminho (o SDK a devolve como TEXTO cru, sem ``stop_reason``),
+        # o JSON sem os campos, a resposta sem nenhum bloco de texto.
+        try:
+            if resposta.stop_reason == "refusal":
+                return "Não posso responder a essa pergunta."
+            texto = "".join(
+                bloco.text for bloco in resposta.content if bloco.type == "text"
+            ).strip()
+        except (AttributeError, TypeError) as erro:
+            raise ErroProvedorIA("Resposta inesperada do provedor Anthropic.") from erro
+        if not texto:
+            raise ErroProvedorIA("Resposta vazia do provedor Anthropic.")
+        return texto
 
 
 class OpenAIProvedor(ProvedorIA):
@@ -65,8 +182,6 @@ class OpenAIProvedor(ProvedorIA):
         self._modelo = modelo or MODELO_OPENAI_PADRAO
 
     def responder(self, sistema: str, mensagens: list[dict]) -> str:
-        import httpx
-
         corpo = {
             "model": self._modelo,
             "max_tokens": settings.AI_MAX_TOKENS,
@@ -78,20 +193,29 @@ class OpenAIProvedor(ProvedorIA):
                 for m in mensagens
             ],
         }
+        limite = time.monotonic() + PRAZO_TOTAL_S
         try:
-            resposta = httpx.post(
-                "https://api.openai.com/v1/chat/completions",
-                headers={"Authorization": f"Bearer {self._api_key}"},
-                json=corpo,
-                timeout=60.0,
-            )
-            resposta.raise_for_status()
-            dados = resposta.json()
-            return dados["choices"][0]["message"]["content"].strip()
+            with _cliente_http(limite) as cliente:
+                resposta = cliente.post(
+                    URL_OPENAI,
+                    headers={"Authorization": f"Bearer {self._api_key}"},
+                    json=corpo,
+                )
+                resposta.raise_for_status()
+                dados = resposta.json()
         except httpx.HTTPError as erro:
             raise ErroProvedorIA(f"Falha no provedor OpenAI: {erro}") from erro
-        except (KeyError, IndexError) as erro:
+        except ValueError as erro:
+            # 200 com corpo que não é JSON (página HTML de um proxy/CDN no caminho).
             raise ErroProvedorIA("Resposta inesperada do provedor OpenAI.") from erro
+        try:
+            conteudo = dados["choices"][0]["message"]["content"]
+        except (KeyError, IndexError, TypeError) as erro:
+            raise ErroProvedorIA("Resposta inesperada do provedor OpenAI.") from erro
+        if not isinstance(conteudo, str) or not conteudo.strip():
+            # ``content`` nulo (recusa, chamada de ferramenta) ou vazio.
+            raise ErroProvedorIA("Resposta vazia do provedor OpenAI.")
+        return conteudo.strip()
 
 
 def _plano(texto: str) -> str:
@@ -131,6 +255,12 @@ class LocalProvedor(ProvedorIA):
             return (f"Sobre {aluno['nome']} (dados do sistema):\n{aluno['linha']}\n\n"
                     "Posso detalhar evolução, alertas ou conquistas se você perguntar.")
 
+        # Pergunta de um módulo que a rede não contratou: diz isso, em vez de um
+        # pódio (de retrato antigo) ou de despejar outra seção.
+        fora = self._fora_do_plano(pergunta, secoes.get("FORA_DO_PLANO", ""))
+        if fora:
+            return fora
+
         # "Os 3 melhores do Matific", "top 5 no Elefante", "melhor aluno da
         # escola": monta o pódio certo, na métrica certa, com o N pedido.
         podio = self._top_n(pergunta, secoes.get("ALUNOS", ""))
@@ -164,15 +294,36 @@ class LocalProvedor(ProvedorIA):
                 secoes[atual] += linha + "\n"
         return secoes
 
+    # Palavras de cada módulo na pergunta (as mesmas do pódio, em `_top_n`). A
+    # chave é o começo da linha que assistente.montar_contexto escreve na seção
+    # FORA_DO_PLANO ("- Matemática: não faz parte do plano desta rede; ...").
+    _MODULOS_NA_PERGUNTA = (
+        ("matematica", re.compile(r"\b(matific|matematica)\b")),
+        ("leitura", re.compile(r"\b(elefante|leitura|portugues|letrado)\b")),
+    )
+
+    @classmethod
+    def _fora_do_plano(cls, pergunta: str, secao_fora: str) -> str | None:
+        linhas = [linha.strip()[2:] for linha in secao_fora.splitlines()
+                  if linha.strip().startswith("- ")]
+        citadas = [linha for modulo, padrao in cls._MODULOS_NA_PERGUNTA
+                   if padrao.search(pergunta)
+                   for linha in linhas if _plano(linha).startswith(modulo)]
+        if not citadas:
+            return None
+        return ("\n".join(citadas)
+                + "\n\n(Resposta gerada no modo local, somente com dados do sistema.)")
+
     # Linha da seção ALUNOS: "- NOME: turma T, 3º lugar, geral 8.5, Matific 7.0,
-    # Elefante 9.0" — montada em assistente.montar_contexto.
+    # Elefante 9.0" — montada em assistente.montar_contexto. Cada plataforma é
+    # opcional por si: a que a rede não contratou não vem na linha.
     # A turma ancora em "º lugar" (não na primeira vírgula) para nomes de turma
     # com vírgula ("4º Ano, Integral") não saírem truncados.
     _RE_ALUNO = re.compile(
         r"^- (?P<nome>.+?): turma (?P<turma>.+?), \S+º lugar, .*?"
         r"geral (?P<geral>\d+(?:[.,]\d+)?)"
-        r"(?:, Matific (?P<matific>\d+(?:[.,]\d+)?)"
-        r", Elefante (?P<elefante>\d+(?:[.,]\d+)?))?")
+        r"(?:, Matific (?P<matific>\d+(?:[.,]\d+)?))?"
+        r"(?:, Elefante (?P<elefante>\d+(?:[.,]\d+)?))?")
 
     @classmethod
     def _top_n(cls, pergunta: str, secao_alunos: str) -> str | None:

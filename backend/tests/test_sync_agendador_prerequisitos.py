@@ -342,6 +342,21 @@ def test_teto_coerente_com_a_limpeza_de_orfas(db, teto, travada, timeout, ok, tr
     assert v.critico and v.ok is ok and trecho in v.motivo, v.motivo
 
 
+def test_teto_coerente_diz_o_que_ainda_depende_de_sync_travada(db):
+    """Com o sinal de vida, a órfã em 'executando' é decidida por SYNC_SEM_SINAL_S e
+    pelo log: a limpeza de órfãs não mata mais a coleta viva entre SYNC_TRAVADA_S e o
+    teto. O motivo dava essa justificativa (falsa); agora diz o que de fato depende
+    de SYNC_TRAVADA_S, sem mudar o critério. A verificação 'execucoes_presas' também
+    decide a 'executando' pelo sinal de vida (G_AUTOMACAO-3): não entra mais no
+    motivo."""
+    v = verificar(db, Cfg(SYNC_TETO_EXECUCAO_S=2700, SYNC_TRAVADA_S=1800,
+                          SYNC_TIMEOUT_S=180), "teto_coerente")
+    assert v.ok is False
+    assert "limpeza de órfãs" not in v.motivo and "interrompida" not in v.motivo
+    assert "'execucoes_presas'" not in v.motivo
+    assert "sinal de vida" in v.motivo and "(3600 s)" in v.motivo, v.motivo
+
+
 def test_status_honesto_exige_os_estados_e_as_colunas_do_contrato(db, monkeypatch):
     monkeypatch.setattr(prerequisitos, "_estados_declarados",
                         lambda: ({"concluida", "sem_dados", "erro"}, "ensaio"))
@@ -388,7 +403,8 @@ def test_execucoes_presas(db, escola_completa):
                                  created_at=AGORA - timedelta(minutes=5)))
     db.commit()
     assert verificar(db, cfg, "execucoes_presas").ok is True
-    # 'executando' há 50 min: passou do TETO (45 min) — presa, mesmo antes da limpeza.
+    # 'executando' há 50 min sem nenhum registro no log: sem sinal de vida há mais de
+    # SYNC_SEM_SINAL_S (15 min) — presa (a idade sozinha não decide; G_AUTOMACAO-3).
     presa = SincronizacaoExecucao(escola_id=e, plataforma="elefante", origem="manual",
                                   status="executando",
                                   iniciada_em=AGORA - timedelta(minutes=50),

@@ -8,6 +8,7 @@ As regras (XP por indicador, limiares de conquistas) vivem na tabela
 from __future__ import annotations
 
 from datetime import date, datetime, timedelta, timezone
+from types import SimpleNamespace
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
@@ -20,7 +21,7 @@ from app.models import (
     SnapshotMatific,
     Turma,
 )
-from app.services import dificuldade_livro, evolucao, scoring
+from app.services import dificuldade_livro, elegibilidade, evolucao, matific_destaque, scoring
 
 # Padrões usados até a escola personalizar (namespace gamificacao.*)
 XP_PADRAO = {
@@ -31,6 +32,7 @@ XP_PADRAO = {
     "tempo_leitura_min": 0.2,
 }
 NIVEL_BASE_XP_PADRAO = 100  # XP necessário por nível (linear)
+ANO_INICIO_RANKING_XP_ANUAL = 2027
 
 # --------------------------------------------------------------------------
 # Definições de conquistas — 100% configuráveis pelo painel administrativo
@@ -114,6 +116,7 @@ CONQUISTAS_PADRAO = [
 ]
 
 MINIMO_TENTATIVAS_PCT = 20  # pct_acertos só vale com volume mínimo de questões
+INDICADORES_QUESTOES = frozenset({"questoes_acertos", "pct_acertos"})
 
 
 def _normalizar_conquista(regra: dict, indice: int) -> dict:
@@ -144,23 +147,49 @@ def _normalizar_conquista(regra: dict, indice: int) -> dict:
     }
 
 
+def plataformas_fora_do_plano(db: Session, escola: Escola | None) -> set[str]:
+    """Plataformas de módulo que a rede da escola NÃO contratou — a MESMA régua do
+    motor (``scoring.plataformas_fora_do_contrato``): o XP e as conquistas saem
+    dos mesmos dados que a nota. Vazio para escola sem rede (tudo contratado)."""
+    return scoring.plataformas_fora_do_contrato(db, escola)
+
+
+def plataforma_da_conquista(conquista: dict) -> set[str]:
+    """Plataformas de que uma conquista depende: a do critério (o indicador) e a
+    gravada, quando é uma plataforma (``geral`` não é). Uma conquista "geral" que
+    mede atividades continua sendo do Matific."""
+    return {INDICADORES[conquista["indicador"]]["plataforma"],
+            conquista.get("plataforma")} & {"elefante", "matific"}
+
+
 def listar_conquistas(db: Session, escola_id: int,
-                      incluir_inativas: bool = False) -> list[dict]:
-    """Definições da escola (ou o padrão), normalizadas e ordenadas."""
+                      incluir_inativas: bool = False, *,
+                      plataformas_fora: set[str] | frozenset[str] = frozenset()
+                      ) -> list[dict]:
+    """Definições da escola (ou o padrão), normalizadas e ordenadas.
+
+    ``plataformas_fora``: as conquistas que dependem de plataforma de módulo fora
+    do plano somem (não pontuam, não aparecem, não celebram). A configuração
+    gravada não muda — religar o módulo as traz de volta. Vazio (padrão) = a lista
+    inteira, como a tela de configuração precisa para não perder nenhuma."""
     brutas = scoring.obter_config(db, escola_id, "gamificacao.conquistas",
                                   "lista", CONQUISTAS_PADRAO)
     normalizadas = [_normalizar_conquista(regra, indice)
                     for indice, regra in enumerate(brutas)]
     normalizadas.sort(key=lambda c: (c["ordem"], c["nome"].casefold()))
+    if plataformas_fora:
+        normalizadas = [c for c in normalizadas
+                        if not plataforma_da_conquista(c) & set(plataformas_fora)]
     if incluir_inativas:
         return normalizadas
     return [c for c in normalizadas if c["ativa"]]
 
 
-def _regras(db: Session, escola_id: int):
+def _regras(db: Session, escola_id: int,
+            plataformas_fora: set[str] | frozenset[str] = frozenset()):
     xp = scoring.obter_config(db, escola_id, "gamificacao.xp", "valores", XP_PADRAO)
     base = scoring.obter_config(db, escola_id, "gamificacao.niveis", "base_xp", NIVEL_BASE_XP_PADRAO)
-    conquistas = listar_conquistas(db, escola_id)
+    conquistas = listar_conquistas(db, escola_id, plataformas_fora=plataformas_fora)
     return xp, float(base), conquistas
 
 
@@ -168,7 +197,8 @@ def _valor_indicador(snap_m, snap_e, indicador: str) -> float:
     if indicador == "atividades":
         return float(snap_m.atividades) if snap_m else 0.0
     if indicador == "estrelas":
-        return float(snap_m.estrelas) if snap_m else 0.0
+        # Só as que contam (5 por atividade): estrela sem atividade não desbloqueia.
+        return float(scoring.estrelas_que_contam(snap_m)) if snap_m else 0.0
     if indicador == "livros_unicos":
         return float(snap_e.livros_unicos) if snap_e else 0.0
     if indicador == "tempo_leitura_min":
@@ -199,11 +229,30 @@ def _primeira_conquista(serie_m: list, serie_e: list, indicador: str, limite: fl
     return None
 
 
+def _matific_do_ano(serie_m: list, ano_letivo: int | None):
+    """Último retrato do Matific DENTRO do ano letivo — o contador que vale para o
+    XP dos indicadores (atividades e estrelas).
+
+    MATIFIC É CONTADOR DO ANO (``scoring.snapshots_matific_do_ano``, a regra do
+    motor, do dashboard e do telão): o acumulado de dezembro do ano anterior não
+    é XP do ano novo. ``serie_m`` vem em ordem cronológica. ``ano_letivo=None`` =
+    sem recorte (o último retrato da série)."""
+    if ano_letivo is None:
+        return serie_m[-1] if serie_m else None
+    inicio, fim = matific_destaque.janela_ano_letivo(ano_letivo)
+    do_ano = None
+    for snap in serie_m:
+        if inicio <= evolucao._sem_fuso(snap.data_referencia) <= fim:
+            do_ano = snap
+    return do_ano
+
+
 def xp_do_aluno(snap_m, snap_e, pesos_xp: dict) -> int:
     total = 0.0
     if snap_m:
         total += snap_m.atividades * float(pesos_xp.get("atividades", 0))
-        total += snap_m.estrelas * float(pesos_xp.get("estrelas", 0))
+        # As estrelas que contam (no máximo 5 por atividade), as mesmas da nota.
+        total += scoring.estrelas_que_contam(snap_m) * float(pesos_xp.get("estrelas", 0))
     if snap_e:
         total += snap_e.livros_unicos * float(pesos_xp.get("livros", 0))
         total += snap_e.questoes_acertos * float(pesos_xp.get("acertos", 0))
@@ -220,12 +269,13 @@ def nivel_do_xp(xp: int, base: float) -> tuple[int, int]:
     return nivel, faltam
 
 
-def sequencia_semanas(serie_m: list, serie_e: list) -> int:
+def sequencia_semanas(serie_m: list, serie_e: list, serie_q: list) -> int:
     """Semanas ISO consecutivas (terminando na mais recente com dado) em que
     o aluno registrou algum ganho em qualquer plataforma."""
     semanas: set[tuple[int, int]] = set()
     for serie, campos in ((serie_m, ("atividades", "estrelas")),
-                          (serie_e, ("livros_unicos", "questoes_acertos", "tempo_leitura_min"))):
+                          (serie_e, ("livros_unicos", "tempo_leitura_min")),
+                          (serie_q, ("questoes_acertos",))):
         anterior = None
         for snap in serie:
             ganhou = any(
@@ -250,12 +300,20 @@ def sequencia_semanas(serie_m: list, serie_e: list) -> int:
     return sequencia
 
 
-def _computar_gamificacao(aluno_id: int, serie_m: list, serie_e: list,
-                          pesos_xp: dict, base: float, conquistas_cfg: list) -> dict:
+def _computar_gamificacao(aluno_id: int, serie_m: list, serie_e: list, serie_q: list,
+                          pesos_xp: dict, base: float, conquistas_cfg: list,
+                          ano_letivo: int | None = None, *,
+                          preservar_conquistas_anteriores: bool = False) -> dict:
     """Núcleo do cálculo a partir de séries JÁ carregadas — sem tocar o banco.
-    Permite processar a escola inteira (mural, ranking) sem N+1."""
+    Permite processar a escola inteira (mural, ranking) sem N+1.
+
+    ``ano_letivo``: o XP dos indicadores do Matific usa o contador DESSE ano
+    (:func:`_matific_do_ano`). Na ficha, a partir de 2027, uma conquista de ano
+    anterior continua no histórico mesmo quando o contador corrente é menor."""
     snap_m = serie_m[-1] if serie_m else None
     snap_e = serie_e[-1] if serie_e else None
+    inicio_ano = (matific_destaque.janela_ano_letivo(ano_letivo)[0]
+                  if preservar_conquistas_anteriores and ano_letivo is not None else None)
 
     conquistas = []
     xp_conquistas = 0
@@ -263,6 +321,12 @@ def _computar_gamificacao(aluno_id: int, serie_m: list, serie_e: list,
         valor = _valor_indicador(snap_m, snap_e, regra["indicador"])
         limite = float(regra["limite"])
         atingida = valor >= limite
+        data = (_primeira_conquista(serie_m, serie_e, regra["indicador"], limite)
+                if atingida or inicio_ano is not None else None)
+        if not atingida and data is not None and inicio_ano is not None:
+            if evolucao._sem_fuso(data) < inicio_ano:
+                atingida = True
+                valor = limite
         if atingida:
             xp_conquistas += regra["xp"]
         pct = min(100.0, round(valor / limite * 100, 1)) if limite > 0 else 100.0
@@ -272,12 +336,13 @@ def _computar_gamificacao(aluno_id: int, serie_m: list, serie_e: list,
             "pct": pct,
             "faltam": max(0.0, round(limite - valor, 1)),
             "atingida": atingida,
-            "data": _primeira_conquista(serie_m, serie_e, regra["indicador"], limite)
-            if atingida else None,
+            "data": data if atingida else None,
         })
 
-    # XP = indicadores (contínuo) + bônus das conquistas desbloqueadas
-    xp = xp_do_aluno(snap_m, snap_e, pesos_xp) + xp_conquistas
+    # XP = indicadores (contínuo) + bônus das conquistas desbloqueadas. O
+    # indicador do Matific é o contador DO ANO letivo: sem retrato no ano, ele
+    # não soma XP (antes o acumulado do ano anterior virava XP do ano novo).
+    xp = xp_do_aluno(_matific_do_ano(serie_m, ano_letivo), snap_e, pesos_xp) + xp_conquistas
     nivel, faltam = nivel_do_xp(xp, base)
 
     return {
@@ -286,58 +351,186 @@ def _computar_gamificacao(aluno_id: int, serie_m: list, serie_e: list,
         "xp_conquistas": xp_conquistas,
         "nivel": nivel,
         "xp_para_proximo": faltam,
-        "sequencia_semanas": sequencia_semanas(serie_m, serie_e),
+        "sequencia_semanas": sequencia_semanas(serie_m, serie_e, serie_q),
         "conquistas": conquistas,
         "total_conquistas": sum(1 for c in conquistas if c["atingida"]),
     }
 
 
 def gamificacao_do_aluno(db: Session, escola_id: int, aluno_id: int) -> dict:
-    pesos_xp, base, conquistas_cfg = _regras(db, escola_id)
+    escola = db.get(Escola, escola_id)
+    # CONTRATO: plataforma de módulo fora do plano não dá XP, não conta semana de
+    # sequência nem desbloqueia conquista — a série dela é tratada como vazia.
+    fora = plataformas_fora_do_plano(db, escola)
+    pesos_xp, base, conquistas_cfg = _regras(db, escola_id, fora)
+
     # Ordem cronológica por data_referencia (id desempata): o backfill mensal
     # do Matific insere períodos antigos com id maior.
-    serie_m = db.execute(
-        select(SnapshotMatific).where(SnapshotMatific.aluno_id == aluno_id)
-        .order_by(SnapshotMatific.data_referencia, SnapshotMatific.id)
-    ).scalars().all()
-    serie_e = db.execute(
-        select(SnapshotElefante).where(SnapshotElefante.aluno_id == aluno_id)
-        .order_by(SnapshotElefante.data_referencia, SnapshotElefante.id)
-    ).scalars().all()
-    return _computar_gamificacao(aluno_id, serie_m, serie_e,
-                                 pesos_xp, base, conquistas_cfg)
+    def _serie(modelo, plataforma):
+        if plataforma in fora:
+            return []
+        return db.execute(
+            select(modelo).where(modelo.escola_id == escola_id, modelo.aluno_id == aluno_id)
+            .order_by(modelo.data_referencia, modelo.id)
+        ).scalars().all()
+
+    # O ajuste manual (Matific ou Elefante) que a coleta seguinte desmentiu não conta
+    # semana de ganho nem data de conquista (é a mesma série do mural,
+    # `_series_por_aluno`).
+    serie_m = evolucao.sem_ajustes_superados_matific(
+        db, escola_id, {aluno_id: _serie(SnapshotMatific, "matific")})[aluno_id]
+    brutas_e = {aluno_id: _serie(SnapshotElefante, "elefante")}
+    series_e = evolucao.sem_ajustes_superados_elefante(db, escola_id, brutas_e)
+    series_q = evolucao.series_das_questoes_elefante(
+        db, escola_id, series_e, series_brutas=brutas_e)
+    ano_letivo = escola.ano_letivo_ativo if escola else None
+    return _computar_gamificacao(
+        aluno_id, serie_m, series_e[aluno_id], series_q[aluno_id], pesos_xp, base, conquistas_cfg,
+        ano_letivo=ano_letivo,
+        preservar_conquistas_anteriores=(ano_letivo is not None
+                                         and ano_letivo >= ANO_INICIO_RANKING_XP_ANUAL),
+    )
+
+
+def _series_de_xp(db: Session, escola_id: int, aluno_ids: set[int], fim: datetime,
+                  modelo, campos: tuple) -> dict[int, list]:
+    """Só os campos que dão XP, em lote e só para a coorte do ranking."""
+    series: dict[int, list] = {}
+    consulta = (
+        select(modelo.aluno_id, modelo.importacao_id, modelo.data_referencia, *campos)
+        .where(modelo.escola_id == escola_id, modelo.aluno_id.in_(aluno_ids),
+               modelo.data_referencia <= fim)
+        .order_by(modelo.data_referencia, modelo.id)
+    )
+    for snap in db.execute(consulta):
+        series.setdefault(snap.aluno_id, []).append(snap)
+    return series
+
+
+def _xp_e_conquistas_do_ano(serie_m: list, serie_e: list, serie_q: list,
+                           ano: int, inicio: datetime, fim: datetime,
+                           pesos_xp: dict, conquistas_cfg: list) -> tuple[int, int]:
+    snap_m = _matific_do_ano(serie_m, ano)
+    # Elefante é vitalício. Sem medida anterior ao ano, usa a primeira coleta
+    # do ano como base: seu acumulado veio sem data e não pontua por inteiro.
+    snap_e, base_e = evolucao._janela(serie_e, inicio, fim, base_no_periodo=True)
+    snap_q, base_q = evolucao._janela(serie_q, inicio, fim, base_no_periodo=True)
+    ganhos_e = SimpleNamespace(
+        livros_unicos=evolucao._delta(snap_e, base_e, "livros_unicos"),
+        tempo_leitura_min=evolucao._delta(snap_e, base_e, "tempo_leitura_min"),
+        questoes_acertos=evolucao._delta(snap_q, base_q, "questoes_acertos"),
+    )
+    xp = xp_do_aluno(snap_m, ganhos_e, pesos_xp)
+    total_conquistas = 0
+    for regra in conquistas_cfg:
+        indicador = regra["indicador"]
+        limite = float(regra["limite"])
+        atual, base, serie = ((snap_q, base_q, serie_q) if indicador in INDICADORES_QUESTOES
+                              else (snap_e, base_e, serie_e))
+        if _valor_indicador(snap_m, atual, indicador) < limite:
+            continue
+        # Um limiar já atingido na base vitalícia não é uma conquista do ano.
+        if _valor_indicador(None, base, indicador) >= limite:
+            continue
+        data = _primeira_conquista(serie_m, serie, indicador, limite)
+        if data is not None and inicio <= evolucao._sem_fuso(data) <= fim:
+            xp += regra["xp"]
+            total_conquistas += 1
+    return xp, total_conquistas
+
+
+@scoring.com_leituras_da_requisicao
+def _xp_anual_por_aluno(db: Session, escola_id: int, aluno_ids: set[int], ano: int,
+                       fora: set[str], pesos_xp: dict,
+                       conquistas_cfg: list) -> dict[int, tuple[int, int]]:
+    inicio, fim = matific_destaque.janela_ano_letivo(ano)
+    series_m, series_e, series_q = {}, {}, {}
+    if "matific" not in fora:
+        brutas_m = _series_de_xp(db, escola_id, aluno_ids, fim, SnapshotMatific,
+                                 (SnapshotMatific.atividades, SnapshotMatific.estrelas))
+        series_m = evolucao.sem_ajustes_superados_matific(db, escola_id, brutas_m)
+    if "elefante" not in fora:
+        brutas_e = _series_de_xp(
+            db, escola_id, aluno_ids, fim, SnapshotElefante,
+            (SnapshotElefante.livros_unicos, SnapshotElefante.tempo_leitura_min,
+             SnapshotElefante.questoes_acertos, SnapshotElefante.questoes_tentativas),
+        )
+        series_e = evolucao.sem_ajustes_superados_elefante(db, escola_id, brutas_e)
+        series_q = evolucao.series_das_questoes_elefante(db, escola_id, series_e, series_brutas=brutas_e)
+
+    return {
+        aluno_id: _xp_e_conquistas_do_ano(
+            series_m.get(aluno_id, []), series_e.get(aluno_id, []), series_q.get(aluno_id, []),
+            ano, inicio, fim, pesos_xp, conquistas_cfg,
+        )
+        for aluno_id in aluno_ids
+    }
+
+
+def _xp_legado_por_aluno(db: Session, escola_id: int, aluno_ids: set[int], ano: int,
+                        fora: set[str], pesos_xp: dict,
+                        conquistas_cfg: list) -> dict[int, tuple[int, int]]:
+    """Até 2026 o XP do ranking soma as conquistas do último retrato, de qualquer ano."""
+    matific = ({} if "matific" in fora
+               else scoring._snapshots_atuais(db, escola_id, SnapshotMatific))
+    matific_do_ano = ({} if "matific" in fora
+                      else scoring.snapshots_matific_do_ano(db, escola_id, ano))
+    elefante = ({} if "elefante" in fora
+                else scoring._snapshots_atuais(db, escola_id, SnapshotElefante))
+    resultado = {}
+    for aluno_id in aluno_ids:
+        snap_m = matific.get(aluno_id)
+        snap_e = elefante.get(aluno_id)
+        desbloqueadas = [
+            regra for regra in conquistas_cfg
+            if _valor_indicador(snap_m, snap_e, regra["indicador"]) >= float(regra["limite"])
+        ]
+        xp = (xp_do_aluno(matific_do_ano.get(aluno_id), snap_e, pesos_xp)
+              + sum(regra["xp"] for regra in desbloqueadas))
+        resultado[aluno_id] = (xp, len(desbloqueadas))
+    return resultado
 
 
 def ranking_xp(db: Session, escola_id: int) -> list[dict]:
+    """Ranking de XP da escola, numerado 1..N entre quem CONCORRE.
+
+    AS FASES NÃO CONCORREM (``services.elegibilidade``: ranking e premiação são
+    do 1º ao 5º ano): só entram as turmas premiáveis do ano letivo — o mesmo
+    corte do mural da página Conquistas, do Ranking de Evolução e do telão.
+    Sem ele, a Educação Infantil aparecia no topo, com medalha, e empurrava as
+    posições do Fundamental. Desde 2027, entram apenas os ganhos e as novas
+    conquistas do ano letivo ativo."""
     escola = db.get(Escola, escola_id)
     if escola is None:
         return []
-    pesos_xp, base, conquistas_cfg = _regras(db, escola_id)
-    matific = scoring._snapshots_atuais(db, escola_id, SnapshotMatific)
-    elefante = scoring._snapshots_atuais(db, escola_id, SnapshotElefante)
-
+    ano = escola.ano_letivo_ativo
+    premiaveis = elegibilidade.turmas_premiaveis(db, escola_id, ano)
+    if not premiaveis:
+        return []
     matriculas = db.execute(
         select(Matricula, Turma)
         .join(Turma, Matricula.turma_id == Turma.id)
         .join(Aluno, Matricula.aluno_id == Aluno.id)
         .where(Matricula.escola_id == escola_id,
-               Matricula.ano_letivo == escola.ano_letivo_ativo,
+               Matricula.ano_letivo == ano,
+               Matricula.turma_id.in_(premiaveis),
                Aluno.status == "ativo")
         .options(selectinload(Matricula.aluno))  # evita N+1 em matricula.aluno
     ).all()
+    if not matriculas:
+        return []
+
+    # CONTRATO: plataforma de módulo fora do plano não dá XP nem conquista.
+    fora = plataformas_fora_do_plano(db, escola)
+    pesos_xp, base, conquistas_cfg = _regras(db, escola_id, fora)
+    aluno_ids = {matricula.aluno_id for matricula, _ in matriculas}
+    calcular = _xp_anual_por_aluno if ano >= ANO_INICIO_RANKING_XP_ANUAL else _xp_legado_por_aluno
+    xp_por_aluno = calcular(db, escola_id, aluno_ids, ano, fora, pesos_xp, conquistas_cfg)
 
     itens = []
     for matricula, turma in matriculas:
-        snap_m = matific.get(matricula.aluno_id)
-        snap_e = elefante.get(matricula.aluno_id)
-        desbloqueadas = [
-            regra for regra in conquistas_cfg
-            if _valor_indicador(snap_m, snap_e, regra["indicador"]) >= float(regra["limite"])
-        ]
-        xp = xp_do_aluno(snap_m, snap_e, pesos_xp) \
-            + sum(regra["xp"] for regra in desbloqueadas)
+        xp, conquistas = xp_por_aluno[matricula.aluno_id]
         nivel, _ = nivel_do_xp(xp, base)
-        conquistas = len(desbloqueadas)
         itens.append({
             "aluno_id": matricula.aluno_id,
             "nome": matricula.aluno.nome,
@@ -360,10 +553,16 @@ def biblioteca(db: Session, escola_id: int) -> dict:
     """Todas as conquistas (inclusive inativas e nunca desbloqueadas), com
     quantos alunos já desbloquearam cada uma e o painel de estatísticas."""
     escola = db.get(Escola, escola_id)
-    definicoes = listar_conquistas(db, escola_id, incluir_inativas=True)
+    # CONTRATO: as conquistas (e os indicadores do filtro) de módulo fora do
+    # plano não existem para esta escola — nem com progresso 0.
+    fora = plataformas_fora_do_plano(db, escola)
+    definicoes = listar_conquistas(db, escola_id, incluir_inativas=True,
+                                   plataformas_fora=fora)
 
-    matific = scoring._snapshots_atuais(db, escola_id, SnapshotMatific)
-    elefante = scoring._snapshots_atuais(db, escola_id, SnapshotElefante)
+    matific = ({} if "matific" in fora
+               else scoring._snapshots_atuais(db, escola_id, SnapshotMatific))
+    elefante = ({} if "elefante" in fora
+                else scoring._snapshots_atuais(db, escola_id, SnapshotElefante))
     alunos_ids = [
         matricula.aluno_id
         for matricula in db.execute(
@@ -415,7 +614,8 @@ def biblioteca(db: Session, escola_id: int) -> dict:
     return {"conquistas": conquistas, "estatisticas": estatisticas,
             "raridades": NOMES_RARIDADE,
             "indicadores": {chave: info["rotulo"]
-                            for chave, info in INDICADORES.items()}}
+                            for chave, info in INDICADORES.items()
+                            if info["plataforma"] not in fora}}
 
 
 def gerar_codigo(nome: str, existentes: set[str]) -> str:
@@ -463,12 +663,19 @@ def anonimizar_nome(nome: str | None) -> str:
     return f"{partes[0]} {partes[1][0]}."
 
 
+@scoring.com_leituras_da_requisicao
 def mural(db: Session, escola_id: int,
           serie_m: dict | None = None, serie_e: dict | None = None,
           mapa_dif: dict | None = None, anonimizar: bool = False,
-          base_no_periodo: bool = False,
+          base_no_periodo: bool = True,
           turma_ids: list[int] | None = None) -> dict:
     """Mural da escola: destaques do dia/semana/mês + eventos recentes.
+
+    ``base_no_periodo`` (padrão ``True``, a régua JUSTA): o destaque é quem mais
+    cresceu DENTRO da janela — sem retrato anterior a ela, o acumulado de vida
+    da criança não conta como evolução. É a régua do Ranking de Evolução, do app
+    e do telão; com ``False`` (a régua antiga), quem tinha o 1º retrato dentro
+    do mês virava "Aluno do Mês" com o acumulado do ano inteiro.
 
     ``anonimizar=True`` (uso no painel PÚBLICO sem login) reduz o nome do aluno
     nos destaques e nos eventos a "primeiro nome + inicial" — ver
@@ -493,10 +700,22 @@ def mural(db: Session, escola_id: int,
     # Séries de TODOS os alunos em 2 queries + regras uma única vez. As mesmas
     # séries + o mapa de dificuldade alimentam as 3 janelas do ranking abaixo
     # (dia/semana/mês), evitando que cada janela reexecute essas varreduras.
-    pesos_xp, base, conquistas_cfg = _regras(db, escola_id)
+    escola = db.get(Escola, escola_id)
+    # CONTRATO: plataforma de módulo fora do plano não celebra nada no mural
+    # (web, app e telão sem login) — a série dela é tratada como vazia, e as
+    # conquistas dela nem entram nas regras.
+    fora = plataformas_fora_do_plano(db, escola)
+    pesos_xp, base, conquistas_cfg = _regras(db, escola_id, fora)
     # Reusa as varreduras injetadas (ex.: /sincronizacao mobile) ou carrega.
-    series_m = serie_m if serie_m is not None else evolucao._series_por_aluno(db, escola_id, SnapshotMatific)
-    series_e = serie_e if serie_e is not None else evolucao._series_por_aluno(db, escola_id, SnapshotElefante)
+    if "matific" in fora:
+        series_m = {}
+    else:
+        series_m = serie_m if serie_m is not None else evolucao._series_por_aluno(db, escola_id, SnapshotMatific)
+    if "elefante" in fora:
+        series_e, series_q = {}, {}
+    else:
+        series_e = serie_e if serie_e is not None else evolucao._series_por_aluno(db, escola_id, SnapshotElefante)
+        series_q = evolucao.series_das_questoes_elefante(db, escola_id, series_e)
     if mapa_dif is None:   # a REGRA de dificuldade (fonte única)
         mapa_dif = dificuldade_livro.regra_da_escola(db, escola_id)
     # COORTE do mural = a MESMA de todas as outras superfícies: aluno ATIVO e
@@ -513,7 +732,6 @@ def mural(db: Session, escola_id: int,
     # O filtro é ESTRITAMENTE RESTRITIVO: ninguém passa a aparecer no mural,
     # apenas deixam de aparecer os que já não deviam. Nenhuma regra de exposição
     # do telão muda (slides, anonimização e top-N seguem idênticos).
-    escola = db.get(Escola, escola_id)
     ano = escola.ano_letivo_ativo if escola is not None else 0
     consulta_nomes = (
         select(Aluno.id, Aluno.nome)
@@ -532,7 +750,9 @@ def mural(db: Session, escola_id: int,
     for aluno_id in (set(series_m) | set(series_e)) & set(nomes):
         detalhe = _computar_gamificacao(
             aluno_id, series_m.get(aluno_id, []), series_e.get(aluno_id, []),
-            pesos_xp, base, conquistas_cfg)
+            series_q.get(aluno_id, []),
+            pesos_xp, base, conquistas_cfg,
+            ano_letivo=escola.ano_letivo_ativo if escola is not None else None)
         for conquista in detalhe["conquistas"]:
             data = conquista["data"]
             if data is None:
@@ -556,7 +776,7 @@ def mural(db: Session, escola_id: int,
     def _destaque(dias: int):
         melhor = _melhor_do_ranking(evolucao.ranking_evolucao(
             db, escola_id, dias=dias,
-            serie_m=series_m, serie_e=series_e, mapa_dif=mapa_dif,
+            serie_m=series_m, serie_e=series_e, serie_q=series_q, mapa_dif=mapa_dif,
             base_no_periodo=base_no_periodo, turma_ids=turma_ids))
         if melhor and anonimizar:
             # k-anonimato no PÓDIO: além do nome reduzido, a TURMA também some —

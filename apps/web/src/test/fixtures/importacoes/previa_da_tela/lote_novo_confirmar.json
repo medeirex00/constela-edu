@@ -1,0 +1,21 @@
+{
+  "mensagem": "1 aluno(s) com dado novo importado(s).",
+  "importacao_id": 1,
+  "qtd_alunos": 1,
+  "qtd_erros": 0,
+  "avisos": [
+    "CRIANCA FICTICIA NOVA: níveis K não estão em nenhuma faixa cadastrada — pontuam pela régua global, mas não aparecem no gráfico por faixa (e não pontuam na régua personalizada) até serem incluídos em Métricas → Dificuldade."
+  ],
+  "ignorados": [],
+  "qtd_revisoes": 0,
+  "alunos_aplicados_ids": [
+    4
+  ],
+  "linhas_recebidas": 2,
+  "linhas_em_revisao": 0,
+  "linhas_descartadas": {},
+  "avisos_criticos": [],
+  "contas_em_revisao": 0,
+  "ids_de_outra_escola": [],
+  "criacao_bloqueada": 0
+}

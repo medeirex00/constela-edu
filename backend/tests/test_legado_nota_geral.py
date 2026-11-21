@@ -59,6 +59,7 @@ from app.models import (
 from app.services import dimensoes as svc_dimensoes
 from app.services import insights as svc_insights
 from app.services import scoring
+from tests._ano_letivo import ANO
 
 RAIZ_BACKEND = pathlib.Path(__file__).resolve().parents[1]
 RAIZ_REPO = RAIZ_BACKEND.parent
@@ -237,9 +238,22 @@ ALLOWLIST_FRONT: dict[str, dict] = {
         "porque": ("app em campo: só sai com versão de API (plano, item 11 — "
                    "exige o Sensor 4)."),
     },
-    "apps/mobile/src/telas/PerfilAluno.tsx": {
-        "ocorrencias": 1, "papel": "exibição",
-        "porque": "app em campo (plano, item 11).",
+    "apps/mobile/src/notasDoPerfil.ts": {
+        "ocorrencias": 2, "papel": "schema + exibição",
+        "porque": ("a Nota Geral da ficha do aluno no app, que saiu da tela "
+                   "(telas/PerfilAluno.tsx) para esta lógica pura: mostra '—' sem "
+                   "dado em nenhuma dimensão (D1 de 09/11/2026). App em campo "
+                   "(plano, item 11)."),
+        "pode_sair": "junto com a Nota Geral da ficha do app (plano, item 11 — Sensor 4)",
+    },
+    "apps/mobile/src/test/notasDoPerfil.test.ts": {
+        "ocorrencias": 3, "papel": "fixture de teste",
+        "porque": "perfis falsos do app (o tipo exige o campo); o teste lê o '—' de cada nota.",
+    },
+    "apps/mobile/src/test/audTelasErroServidor.test.ts": {
+        "ocorrencias": 1, "papel": "fixture de teste",
+        "porque": ("item falso do ranking no cache do app (o tipo exige o campo); o "
+                   "teste lê o aviso de erro do servidor, não a nota (MOBILE-4)."),
     },
     "apps/mobile/src/telas/Ranking.tsx": {
         "ocorrencias": 1, "papel": "exibição",
@@ -259,6 +273,11 @@ ALLOWLIST_FRONT: dict[str, dict] = {
     "apps/web/src/test/PerfilAlunoAbas.test.tsx": {
         "ocorrencias": 1, "papel": "fixture de teste",
         "porque": "payload falso do perfil (o tipo exige o campo); o teste lê as abas.",
+    },
+    "apps/web/src/test/PerfilAlunoDimensoes.test.tsx": {
+        "ocorrencias": 1, "papel": "fixture de teste",
+        "porque": ("payload falso do perfil (o tipo exige o campo); o teste lê o '—' "
+                   "das dimensões sem dado (D1 de 09/11/2026)."),
     },
     "apps/web/src/test/PerfilAlunoModulos.test.tsx": {
         "ocorrencias": 1, "papel": "fixture de teste",
@@ -602,6 +621,12 @@ def test_inventario_do_frontend_esta_travado():
     assert not divergentes, (
         f"o número de usos mudou no frontend (esperado, encontrado): "
         f"{divergentes}." + MENSAGEM)
+    # Entrada que não acende mais a varredura deixaria a catraca frouxa: um uso novo
+    # naquele arquivo passaria sem ninguém declarar (a mesma regra do backend).
+    sumiram = sorted(set(ALLOWLIST_FRONT) - set(achados))
+    assert not sumiram, (
+        f"{sumiram} deixaram de usar `nota_geral` — remova-os de ALLOWLIST_FRONT "
+        f"(se o uso só mudou de arquivo, declare o arquivo novo).")
 
 
 # ===========================================================================
@@ -622,7 +647,7 @@ MATIFIC_FRACO = {"atividades": 10, "pontuacao_media": 2.0, "estrelas": 20}
 def escola_mista(db):
     """Escola com as quatro situações que a arquitetura distingue: usa as duas,
     usa só uma, usa só a outra, não usa nenhuma."""
-    escola = Escola(nome="EM LEGADO", ano_letivo_ativo=2026, status="ativa")
+    escola = Escola(nome="EM LEGADO", ano_letivo_ativo=ANO, status="ativa")
     db.add(escola)
     db.flush()
     for namespace, valores in scoring.PESOS_PADRAO.items():
@@ -632,7 +657,7 @@ def escola_mista(db):
                             codigos=["D", "E"], pontos_padrao=4.0, ordem=1))
     db.add(ReferenciaNormalizacao(escola_id=escola.id, modo="auto"))
     turma = Turma(escola_id=escola.id, nome="4ºA", ano_escolar="4º Ano",
-                  ano_letivo=2026, status="ativa")
+                  ano_letivo=ANO, status="ativa")
     db.add(turma)
     db.add(Usuario(escola_id=escola.id, nome="Gestora",
                    email="gestora@legado.local",
@@ -647,7 +672,7 @@ def escola_mista(db):
         db.add(aluno)
         db.flush()
         db.add(Matricula(escola_id=escola.id, aluno_id=aluno.id,
-                         turma_id=turma.id, ano_letivo=2026))
+                         turma_id=turma.id, ano_letivo=ANO))
         if elefante is not None:
             db.add(SnapshotElefante(escola_id=escola.id, aluno_id=aluno.id,
                                     importacao_id=imp.id, **elefante))
@@ -764,14 +789,21 @@ def test_o_top10_do_painel_AINDA_segue_a_ordem_legada(db, escola_mista):
     confundido com fonte oficial, porque é vitrine (pódio, cartaz, telão).
 
     Quando o dono decidir, este teste é o primeiro a cair — e a queda dele é o
-    sinal de que o item 7 do `docs/plano-retirada-nota-geral.md` andou."""
-    escola, _ = escola_mista
+    sinal de que o item 7 do `docs/plano-retirada-nota-geral.md` andou.
+
+    Só quem tem dado de ALGUMA plataforma entra (o corte do telão,
+    `publico._com_algum_dado`): a criança sem plataforma nenhuma não ganha
+    medalha nem "0,0" no Top 5 do painel — ausência não é zero (RANKINGS-4).
+    A ORDEM entre os que ficam continua a única (`Nota.posicao`)."""
+    escola, alunos = escola_mista
     cliente = _logar()
     painel = cliente.get(f"/api/v1/escolas/{escola.id}/dashboard").json()
     top10 = [(i["aluno_id"], i["posicao"]) for i in painel["top10"]]
 
     notas = {n.aluno_id: n for n in db.query(Nota)
-             .filter(Nota.escola_id == escola.id).all()}
+             .filter(Nota.escola_id == escola.id).all()
+             if n.aferido_leitura or n.aferido_matematica}
+    assert alunos["nenhuma"].id not in notas
     esperado = sorted(notas, key=lambda aid: notas[aid].posicao)[:10]
     assert [aid for aid, _pos in top10] == esperado, (
         "o Top 10 mudou de critério — se foi para a ordem POR DIMENSÃO, "

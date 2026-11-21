@@ -178,6 +178,12 @@ def _travada_s(cfg) -> int:
     return max(1, _inteiro(getattr(cfg, "SYNC_TRAVADA_S", None)) or 1800)
 
 
+def _sem_sinal_s(cfg) -> int:
+    """A janela sem sinal de vida que torna órfã uma 'executando' (``SYNC_SEM_SINAL_S``)."""
+    return max(1, _inteiro(getattr(cfg, "SYNC_SEM_SINAL_S", None))
+               or settings.SYNC_SEM_SINAL_S)
+
+
 def _colunas_no_modelo() -> set[str]:
     """Colunas que o MODELO desta versão declara para a tabela de execuções."""
     return set(SincronizacaoExecucao.__table__.columns.keys())
@@ -331,10 +337,15 @@ def _v_teto_coerente(ctx: _Ctx) -> tuple[bool, str]:
     etapa = _inteiro(getattr(ctx.cfg, "SYNC_TIMEOUT_S", None)) or 0
     problemas = []
     if travada <= teto:
+        # A órfã em 'executando' é decidida pelo log (SYNC_SEM_SINAL_S), não por
+        # SYNC_TRAVADA_S — na limpeza e na verificação 'execucoes_presas': nenhuma
+        # das duas acusa mais a coleta viva. O que ainda depende dele é o teto do
+        # sinal de vida (2 × SYNC_TRAVADA_S).
         problemas.append(
-            f"SYNC_TRAVADA_S ({travada} s) não passa do teto ({teto} s): a limpeza de "
-            "órfãs que o agendador roda a cada rodada finalizaria como 'interrompida' "
-            f"uma coleta ainda VIVA entre {travada} s e {teto} s")
+            f"SYNC_TRAVADA_S ({travada} s) não passa do teto ({teto} s): o sinal de "
+            f"vida de uma execução viva, que para em 2 × SYNC_TRAVADA_S ({2 * travada} s), "
+            f"deixaria só {2 * travada - teto} s depois do teto da coleta para a "
+            "aplicação e o recálculo")
     if etapa > teto:
         problemas.append(f"SYNC_TIMEOUT_S ({etapa} s, por etapa) maior que o teto total "
                          f"({teto} s)")
@@ -399,18 +410,15 @@ def _v_selo_frescor(ctx: _Ctx) -> tuple[bool, str]:
 def _v_execucoes_presas(ctx: _Ctx) -> tuple[bool, str]:
     db, agora = ctx.db, ctx.agora
     travada = _travada_s(ctx.cfg)
-    teto = teto_execucao_s(ctx.cfg)
-    limite_exec = min(travada, teto) if teto else travada
-    executando = db.execute(
-        select(SincronizacaoExecucao.id, SincronizacaoExecucao.escola_id,
-               SincronizacaoExecucao.plataforma, SincronizacaoExecucao.iniciada_em)
-        .where(SincronizacaoExecucao.status == "executando",
-               SincronizacaoExecucao.iniciada_em.isnot(None),
-               SincronizacaoExecucao.iniciada_em < agora - timedelta(seconds=limite_exec))
-        .order_by(SincronizacaoExecucao.id)).all()
-    presas = [f"#{i} escola {e}/{p} 'executando' há "
-              f"{int((agora - _naive(ini)).total_seconds() // 60)} min"
-              for i, e, p, ini in executando]
+    sem_sinal = _sem_sinal_s(ctx.cfg)
+    # 'executando' presa = sem SINAL DE VIDA (nenhum registro no log) há mais de
+    # SYNC_SEM_SINAL_S: a MESMA regra do boot (``finalizar_orfas_no_boot``) e da
+    # recuperação no pedido (``service._esta_travada``), numa consulta só. A idade não
+    # prova nada: o teto de 45 min vale só para a coleta; a aplicação e o recálculo
+    # vêm depois, com a execução viva dando sinal.
+    presas = [f"#{ex.id} escola {ex.escola_id}/{ex.plataforma} 'executando' sem sinal "
+              f"de vida há mais de {sem_sinal // 60} min"
+              for ex in service._orfas_em_execucao(db, agora=agora, sem_sinal_s=sem_sinal)]
     corte_fila = agora - timedelta(seconds=travada)
     # O último log de cada uma vem na mesma consulta (o sinal de vida de
     # ``service.ultimo_sinal_de_vida``): uma ida, não uma por execução na fila.
@@ -429,10 +437,12 @@ def _v_execucoes_presas(ctx: _Ctx) -> tuple[bool, str]:
                           f"sinal de vida há mais de {travada // 60} min")
     if presas:
         return False, (f"{len(presas)} execução(ões) presa(s): {_rotulos(presas)}. "
-                       "Libere-as (o boot finaliza as órfãs antigas; a manual é "
-                       "substituída por um novo 'Sincronizar agora') antes de ligar.")
-    return True, (f"Nenhuma execução 'executando' há mais de {limite_exec // 60} min nem "
-                  f"na fila sem sinal de vida há mais de {travada // 60} min.")
+                       "Libere-as antes de ligar (a 'executando' sem sinal de vida é "
+                       "encerrada no boot ou por um novo 'Sincronizar agora'; a manual "
+                       "presa na fila é substituída por um novo 'Sincronizar agora').")
+    return True, (f"Nenhuma execução 'executando' sem sinal de vida há mais de "
+                  f"{sem_sinal // 60} min nem na fila sem sinal de vida há mais de "
+                  f"{travada // 60} min.")
 
 
 def _v_credenciais_legiveis(ctx: _Ctx) -> tuple[bool, str]:

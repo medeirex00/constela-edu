@@ -1,0 +1,76 @@
+{
+  "plataforma": "elefante",
+  "formato": "leituras",
+  "tipo": "pdf",
+  "arquivo_token": "5ee6e4a2f121474fb7e6b7d59667f91d.pdf",
+  "arquivo_nome": "relatorio-ficticio.pdf",
+  "estrategia": "perfil_elefante_estudante",
+  "mensagem_deteccao": "Este arquivo pertence ao Elefante Letrado — relatório individual de CRIANCA FICTICIA NOVA (identificado pelo conteúdo do PDF), turma 3 ANO A · 2 leituras concluídas na plataforma.",
+  "turma_detectada": "3 ANO A",
+  "escola_detectada": "ESCOLA MODELO",
+  "aviso_escola": "Aviso: o relatório é da escola “ESCOLA MODELO” e esta escola está cadastrada como “ESCOLA TESTE”. Nomes variam — confira se o relatório é desta escola antes de confirmar.",
+  "origem_nome": "conteudo",
+  "periodo_inicio": "",
+  "periodo_fim": "",
+  "criacao_bloqueada_por_politica": false,
+  "total_alunos": 1,
+  "total_linhas": 2,
+  "total_erros": 0,
+  "total_avisos": 0,
+  "erros_gerais": [],
+  "linhas": [
+    {
+      "numero": 1,
+      "nome": "CRIANCA FICTICIA NOVA",
+      "dados": {
+        "turma_relatorio": "3 ANO A",
+        "livro": "O Pequeno Livro Azul",
+        "nivel": "K",
+        "genero": "Fantasia",
+        "data": "2026-07-01",
+        "tempo_livro_min": 6,
+        "tempo_leitura_min": 330
+      },
+      "erros": [],
+      "avisos": [],
+      "correspondencia": {
+        "status": "nao_encontrado",
+        "aluno_id": null,
+        "aluno_nome": null,
+        "similaridade": null,
+        "motivo": "novo",
+        "via": null,
+        "alternativas": [],
+        "turma_id": 1,
+        "turma_nome": "3º Ano A",
+        "turma_nova": null
+      }
+    },
+    {
+      "numero": 2,
+      "nome": "CRIANCA FICTICIA NOVA",
+      "dados": {
+        "turma_relatorio": "3 ANO A",
+        "livro": "A Casa Amarela",
+        "nivel": "D",
+        "genero": "Aventura",
+        "data": "2026-07-02",
+        "tempo_livro_min": 8
+      },
+      "erros": [],
+      "avisos": [],
+      "correspondencia": {
+        "status": "nao_encontrado",
+        "aluno_id": null,
+        "aluno_nome": null,
+        "similaridade": null,
+        "motivo": "novo",
+        "via": null,
+        "alternativas": [],
+        "turma_id": 1,
+        "turma_nome": "3º Ano A",
+        "turma_nova": null
+      }
+    }
+  ]
+}

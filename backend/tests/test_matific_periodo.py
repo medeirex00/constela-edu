@@ -9,16 +9,24 @@ intervalo impresso na capa. A importação:
   * reimportar o mesmo período recalcula sobre a mesma base (não dobra);
   * importar um mês antigo (backfill) não rebaixa o estado atual.
 """
-from datetime import datetime, time, timedelta
+from datetime import datetime, time, timedelta, timezone
 
+import pytest
 from sqlalchemy import select
 
 from app.models import SnapshotMatific
+from app.models.base import agora
 from app.services.evolucao import _janela
 from app.services.perfis_pdf import Pagina, Palavra, PerfilMatific
+from tests._relogio import prender
 
 MARCO_INICIO = "2026-03-01"
 MARCO_FIM = "2026-04-01"
+
+
+@pytest.fixture
+def relogio_no_meio_do_ano(monkeypatch):
+    prender(monkeypatch, datetime(2026, 6, 15, 15, tzinfo=timezone.utc))
 
 
 def P(texto: str, x0: float, topo: float) -> Palavra:
@@ -316,7 +324,7 @@ def test_reimportar_o_mesmo_periodo_nao_soma_duas_vezes(
 
 
 def test_backfill_de_mes_antigo_nao_rebaixa_o_estado_atual(
-        cliente, db, escola_completa):
+        relogio_no_meio_do_ano, cliente, db, escola_completa):
     escola_id = escola_completa["escola"].id
     ana = escola_completa["alunos"][0]
     # Estado atual pré-existente (import antigo, acumulado da plataforma).
@@ -340,7 +348,7 @@ def test_backfill_de_mes_antigo_nao_rebaixa_o_estado_atual(
 
 
 def test_acumulado_dentro_do_intervalo_nao_derruba_o_estado(
-        cliente, db, escola_completa):
+        relogio_no_meio_do_ano, cliente, db, escola_completa):
     """Migração do fluxo antigo: o acumulado all-time foi importado DENTRO do
     mês corrente; o leaderboard do mesmo mês chega depois. O total não pode
     despencar para os valores do mês (era 500→30 antes do piso). O período é o
@@ -389,7 +397,7 @@ def test_acumulado_dentro_do_intervalo_nao_derruba_o_estado(
 
 
 def test_periodo_em_andamento_nao_gera_data_futura_nem_engole_edicao_manual(
-        cliente, db, escola_completa):
+        cliente, cliente_global, db, escola_completa):
     """Importar o mês CORRENTE não pode datar o snapshot no futuro — uma
     edição manual feita depois ficaria permanentemente invisível."""
     escola_id = escola_completa["escola"].id
@@ -410,7 +418,9 @@ def test_periodo_em_andamento_nao_gera_data_futura_nem_engole_edicao_manual(
     atual = _snapshots(db, ana.id)[-1]
     assert atual.data_referencia <= agora            # nunca no futuro
 
-    edicao = cliente.put(f"/api/v1/escolas/{escola_id}/matific/{ana.id}", json={
+    # Depois de um relatório do Matific importado, o ajuste manual é do Admin
+    # Global (a escola recebe 403: o dado já veio da plataforma).
+    edicao = cliente_global.put(f"/api/v1/escolas/{escola_id}/matific/{ana.id}", json={
         "atividades": 77, "estrelas": 200, "pontuacao_media": 4.0,
         "motivo": "correção manual"})
     assert edicao.status_code == 200, edicao.text
@@ -465,8 +475,11 @@ def test_evolucao_ordena_por_data_apos_backfill(cliente, db, escola_completa):
     serie = _series_por_aluno(db, escola_id, SnapshotMatific)[ana.id]
     datas = [s.data_referencia for s in serie]
     assert datas == sorted(datas)                     # cronológica
-    # "atual" de uma janela até HOJE é o acumulado, não o mês backfillado.
-    atual, _ = _janela(serie, datetime(2026, 6, 1), datetime(2026, 12, 31))
+    # "atual" de uma janela até HOJE é o acumulado, não o mês backfillado. O fim é o
+    # fim do dia de hoje em UTC (o acumulado é gravado com agora(), em UTC): uma data
+    # escrita no código (31/12/2026 00:00) deixava de cobrir "hoje" a partir de 31/12.
+    hoje_fim = datetime.combine(agora().date(), time.max)
+    atual, _ = _janela(serie, datetime(2026, 6, 1), hoje_fim)
     assert atual.estrelas == 900
 
 

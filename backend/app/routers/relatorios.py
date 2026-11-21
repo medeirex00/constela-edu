@@ -3,14 +3,15 @@
 Cada exportação também deixa uma cópia em /exports e um registro no log.
 """
 import logging
-import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from app.core import expurgo_arquivos
 from app.core.config import settings
 from app.core.database import get_db
 from app.core.deps import escola_autorizada, get_usuario_atual
@@ -32,21 +33,12 @@ logger = logging.getLogger("constela.relatorios")
 def _expurgar_exports_antigos() -> None:
     """Remove cópias de relatórios além da retenção (LGPD/minimização — contêm
     nomes de alunos). Chamado a cada nova exportação — barato e evita acúmulo
-    indefinido de PII em disco. EXPORTS_RETENCAO_DIAS=0 desliga."""
-    dias = settings.EXPORTS_RETENCAO_DIAS
-    if dias <= 0 or not settings.EXPORTS_DIR.exists():
-        return
-    limite = time.time() - dias * 86_400
-    for arquivo in settings.EXPORTS_DIR.iterdir():
-        # Preserva dotfiles de infraestrutura (ex.: .gitkeep) — só expurga as
-        # cópias de relatórios de fato.
-        if arquivo.name.startswith("."):
-            continue
-        try:
-            if arquivo.is_file() and arquivo.stat().st_mtime < limite:
-                arquivo.unlink(missing_ok=True)
-        except OSError:
-            pass
+    indefinido de PII em disco. EXPORTS_RETENCAO_DIAS=0 desliga. A mesma regra do
+    expurgo de fundo (``app/core/expurgo_arquivos.py``): só a cópia com o nome que o
+    app grava (``NOME_DA_COPIA``). Em desenvolvimento ``EXPORTS_DIR`` é
+    ``<repo>/exports``, onde o dono guarda as entregas: um arquivo de outro nome (e as
+    subpastas, e o ``.gitkeep``) fica, por mais velho que seja."""
+    expurgo_arquivos.expurgar_exports()
 
 
 def _arquivar_copia(nome_arquivo: str, conteudo: bytes) -> None:
@@ -131,14 +123,17 @@ def exportar_relatorio(
         # usuário vê — a escola inteira para a gestão (igual a /ranking/cartaz),
         # só as turmas dele para o professor (igual a /ranking/frescor). Este é
         # o ÚNICO caminho do cartaz para o professor (/ranking/cartaz dá 403).
+        # Módulo fora do plano: nem a coluna (acima) nem os cartões dele.
         conteudo = svc.gerar_cartaz_ranking(
             escola.nome, cor, escola.ano_letivo_ativo, cabecalho, linhas,
-            svc.estatisticas_cartaz(db, escola_id, turma_ids=permitidas),
+            svc.estatisticas_cartaz(db, escola_id, turma_ids=permitidas,
+                                    modulos=modulos),
             logos=svc.logos_da_escola(db, escola_id),
             dados_em=svc.legenda_data_dos_dados(
                 frescor_ranking.frescor_da_escola(db, escola, hoje_br(),
                                                   turma_ids=permitidas),
-                ["leitura", "matematica"]))
+                ["leitura", "matematica"]),
+            modulos=modulos)
     elif tipo == "alunos":
         conteudo = svc.gerar_lista_alunos_pdf(
             escola.nome, cor, escola.ano_letivo_ativo, cabecalho, linhas,
@@ -191,8 +186,9 @@ def cartaz_ranking(
     contratado (403); dimensão fora da lista = 422."""
     permissoes.negar_restrito(db, escola_id, usuario)
     escola = db.get(Escola, escola_id)
+    modulos = svc_modulos.modulos_da_escola(db, escola)
     if dimensao:
-        svc_modulos.exigir(svc_modulos.modulos_da_escola(db, escola), dimensao)
+        svc_modulos.exigir(modulos, dimensao)
         cabecalho = svc.cabecalho_cartaz_materia(dimensao)
         itens = _ranking(db, escola_id, escola.ano_letivo_ativo, dimensao=dimensao)
         linhas = [
@@ -206,10 +202,9 @@ def cartaz_ranking(
     else:
         cabecalho, linhas = svc.linhas_ranking(db, escola_id)
         # Nota de plataforma de módulo não contratado não sai no cartaz (a mesma
-        # regra do relatório de ranking).
-        cabecalho, linhas = svc.sem_notas_fora_do_plano(
-            cabecalho, linhas, svc_modulos.modulos_da_escola(db, escola))
-        estatisticas = svc.estatisticas_cartaz(db, escola_id)
+        # regra do relatório de ranking) — nem os cartões dele.
+        cabecalho, linhas = svc.sem_notas_fora_do_plano(cabecalho, linhas, modulos)
+        estatisticas = svc.estatisticas_cartaz(db, escola_id, modulos=modulos)
     # DE QUANDO é o dado do cartaz: a mesma data do selo de frescor do ranking
     # (a escola inteira — o cartaz é da escola inteira), impressa ao lado da
     # data de emissão. Sem isso, um pôster com a coleta parada há semanas
@@ -227,6 +222,7 @@ def cartaz_ranking(
         logos=svc.logos_da_escola(db, escola_id),
         materia=dimensao,
         dados_em=dados_em,
+        modulos=modulos,
     )
     momento = datetime.now(timezone.utc)
     sufixo = f"_{dimensao}" if dimensao else ""
@@ -308,10 +304,25 @@ class PreparoCertificado:
     escola: Escola
     aluno: Aluno
     matricula: tuple | None     # (Matricula, Turma) do ano letivo ativo, ou None
+    # Quem emite abre as telas que as recusas citam? (``_quem_emite_e_gestao``)
+    gestao: bool = True
 
     @property
     def turma_nome(self) -> str | None:
         return self.matricula[1].nome if self.matricula is not None else None
+
+
+def _quem_emite_e_gestao(usuario: Usuario) -> bool:
+    """As recusas do certificado dizem ONDE resolver: Minha Escola › Turmas, Dados e
+    integrações › Integrações, o menu do aluno ("três pontinhos"), Fundir
+    duplicatas. Só a gestão da escola (admin/coordenação sem rede) e o Admin
+    Global abrem essas telas — a mesma régua das guardas RotaGestao/RotaEscolaOp
+    da web. A professora também emite (Meus Relatórios, só dos alunos dela), mas
+    seria mandada a telas que não abre: para ela, a recusa diz o que pedir à
+    coordenação da escola."""
+    if usuario.is_global:
+        return True
+    return permissoes.acesso_total(usuario) and not permissoes.e_secretaria(usuario)
 
 
 def preparar_certificado(db: Session, escola: Escola, usuario: Usuario,
@@ -328,6 +339,7 @@ def preparar_certificado(db: Session, escola: Escola, usuario: Usuario,
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Aluno não encontrado.")
     permissoes.exigir_aluno_permitido(db, escola_id, escola.ano_letivo_ativo,
                                       usuario, aluno_id)
+    gestao = _quem_emite_e_gestao(usuario)
     if aluno.status != "ativo":
         # QUEM NÃO ESTÁ NA POPULAÇÃO ATIVA NÃO RECEBE DOCUMENTO OFICIAL. O ranking,
         # os relatórios e o seletor desta tela já filtram `status == "ativo"`; só
@@ -335,13 +347,17 @@ def preparar_certificado(db: Session, escola: Escola, usuario: Usuario,
         # é um brasão afirmando que ele é da escola — o mesmo tipo de problema que
         # a guarda de "0,0" abaixo existe para evitar. Se a escola decidir que a
         # criança deve receber mesmo assim, o caminho é explícito e auditado:
-        # Alunos › Reativar.
+        # Reativar, na turma dela (a lista de Alunos só mostra os ativos).
+        #
+        # Só a gestão chega aqui: para a professora, o aluno que não está ativo
+        # já é 404 em ``exigir_aluno_permitido`` (só os ativos das turmas dela).
         raise HTTPException(
             status.HTTP_409_CONFLICT,
             f"“{aluno.nome}” está com situação {_SITUACAO.get(aluno.status, aluno.status)!r} "
             "e não faz parte da população ativa da escola — não dá para emitir um "
             "documento oficial em nome dela. Se a criança de fato deve receber, "
-            "reative o cadastro em Alunos › Reativar e emita em seguida.")
+            "reative o cadastro em Minha Escola › Turmas: abra a turma dela, ligue "
+            "“Mostrar arquivados”, use “Reativar” e emita em seguida.")
 
     matricula = db.execute(
         select(Matricula, Turma)
@@ -385,19 +401,29 @@ def preparar_certificado(db: Session, escola: Escola, usuario: Usuario,
     #
     # O caminho da confirmação humana já existe e não é novo: importar a Lista
     # Piloto (que reconhece o cadastro e carimba o campo) ou fundir a duplicata em
-    # Alunos › Duplicatas. Qualquer um dos dois libera a emissão. Esta guarda fica
+    # Alunos › "Fundir duplicatas". Qualquer um dos dois libera a emissão. Esta guarda fica
     # ANTES da escolha do modelo, de propósito: vale para o Mérito e também para
     # as duas artes de participação, que não passam pela guarda de nota.
     if not aluno.da_lista_piloto:
+        # O botão de Integrações se chama "Importar Lista Piloto" até a primeira
+        # importação e "Atualizar Lista Piloto" depois (Sincronizacao.tsx) — e é
+        # justamente na escola que nunca importou que TODA ficha cai aqui.
+        saida = ("Importe ou atualize a Lista Piloto em Dados e integrações › "
+                 "Integrações (botão “Importar Lista Piloto” ou “Atualizar Lista "
+                 "Piloto”), ou funda a ficha repetida em Minha Escola › Alunos › "
+                 "“Fundir duplicatas”, e emita em seguida."
+                 if gestao else
+                 "Peça à coordenação da escola para importar ou atualizar a Lista "
+                 "Piloto, ou para juntar esta ficha à ficha repetida da criança, e "
+                 "emita depois disso.")
         raise HTTPException(
             status.HTTP_409_CONFLICT,
             f"“{aluno.nome}” ainda não está confirmado na Lista Piloto desta "
             "escola, então não dá para emitir um documento oficial no nome dele. "
             "Esta ficha foi criada a partir de um relatório de plataforma e está "
-            "sem RA e sem data de nascimento. Importe a Lista Piloto em Estrutura "
-            "› Matrículas, ou funda a ficha duplicada em Alunos › Duplicatas, e "
-            "emita em seguida.")
-    return PreparoCertificado(escola=escola, aluno=aluno, matricula=matricula)
+            f"sem RA e sem data de nascimento. {saida}")
+    return PreparoCertificado(escola=escola, aluno=aluno, matricula=matricula,
+                              gestao=gestao)
 
 
 def exigir_merito(db: Session, preparo: PreparoCertificado) -> Nota:
@@ -425,37 +451,103 @@ def exigir_merito(db: Session, preparo: PreparoCertificado) -> Nota:
     # banco com a posição de antes — que hoje pertence a outra criança. O
     # Mérito imprime essa posição, então recusa como nos outros casos de
     # população; a arte de participação (sem nota nem posição) não passa aqui.
+    #
+    # MATRÍCULA SÓ NUM ANO ENCERRADO (a formanda ou quem saiu na virada): a
+    # criança não PERDEU a turma, o ano é que virou. Mandar "colocá-la numa turma
+    # deste ano letivo" a punha no ranking, nas premiações e nos certificados do
+    # ano novo sem estar na escola — e o Mérito pedido (o do ano encerrado)
+    # continuava sem caminho: ele é sempre do ano letivo ativo, e voltar o ano é
+    # recusado (histórico protegido). A recusa diz isso, sem mandar matricular.
+    # A Nota do ano encerrado é o resultado oficial daquele ano (histórico, não é
+    # reescrito): a recusa não diz que ela "não vale mais" (REV3-VIRADA-3), e fala
+    # de "a criança" — o nome vem entre aspas e não é antecedente de "ela".
+    if matricula is None:
+        ativo = escola.ano_letivo_ativo
+        ultimo_ano = db.execute(
+            select(func.max(Matricula.ano_letivo))
+            .where(Matricula.aluno_id == aluno.id, Matricula.ano_letivo < ativo)
+        ).scalar_one_or_none()
+        if ultimo_ano is not None:
+            nota_do_ultimo_ano = db.execute(
+                select(Nota.id).where(Nota.aluno_id == aluno.id,
+                                      Nota.ano_letivo == ultimo_ano)
+            ).first() is not None
+            merito = (f"A nota e a posição de {ultimo_ano} continuam guardadas, mas o "
+                      "certificado de Mérito é do ano letivo ativo"
+                      if nota_do_ultimo_ano else
+                      "O certificado de Mérito é do ano letivo ativo")
+            saida = (f"Se a criança saiu da escola ou se formou, não a coloque numa "
+                     f"turma de {ativo} para emitir: ela passaria a contar no ranking e "
+                     f"nas premiações de {ativo}. Se a criança continua na escola, o "
+                     f"certificado sai depois que ela estiver na turma de {ativo} (pela "
+                     f"Lista Piloto de {ativo}, ou no perfil da criança, três pontinhos › "
+                     "“Editar dados” › Turma)."
+                     if preparo.gestao else
+                     f"Se a criança saiu da escola ou se formou, não há certificado de "
+                     f"Mérito de {ativo}. Se a criança continua na escola, peça à "
+                     f"coordenação para colocá-la na turma de {ativo} e emita depois "
+                     "disso.")
+            raise HTTPException(
+                status.HTTP_409_CONFLICT,
+                f"“{aluno.nome}” tem matrícula só em {ultimo_ano}, ano letivo já "
+                f"encerrado, e nenhuma no ano letivo ativo ({ativo}). {merito}, e no "
+                f"ranking de {ativo} a criança não está. {saida}")
     if matricula is None or not elegibilidade.participa_de_premiacao(
             matricula[1].ano_escolar):
         onde = (f"está em {matricula[1].nome!r} sem uma série do 1º ao 5º ano "
                 "reconhecida" if matricula is not None
                 else f"não tem matrícula no ano letivo {escola.ano_letivo_ativo}")
+        saida = ("Coloque a criança numa turma do 1º ao 5º ano deste ano letivo (no "
+                 "perfil dela, três pontinhos › “Editar dados” › Turma): a troca de "
+                 "turma já recalcula as notas e dá a posição atual. Emita em seguida."
+                 if preparo.gestao else
+                 "Peça à coordenação da escola para colocar a criança numa turma do "
+                 "1º ao 5º ano deste ano letivo: a troca de turma já recalcula as "
+                 "notas e dá a posição atual. Emita depois disso.")
         raise HTTPException(
             status.HTTP_409_CONFLICT,
             f"“{aluno.nome}” {onde}, então não está no ranking vigente: a "
             "posição guardada para ela é de um cálculo antigo e não vale mais. "
-            "Matricule a criança numa turma do ano letivo em Estrutura › "
-            "Turmas (o recálculo dá a posição atual) e emita em seguida.")
+            f"{saida}")
     if nota is None or not svc_dimensoes.com_desempenho(db, escola, nota):
+        saida = ("Importe/sincronize os dados da escola (e aguarde o recálculo) "
+                 "antes de emitir." if preparo.gestao else
+                 "Peça à coordenação da escola para importar ou sincronizar os dados "
+                 "das plataformas e emita depois disso.")
         raise HTTPException(
             status.HTTP_422_UNPROCESSABLE_ENTITY,
             "Este aluno ainda não tem nota calculada — não dá para emitir o "
-            "certificado geral. Importe/sincronize os dados da escola (e "
-            "aguarde o recálculo) antes de emitir.")
+            f"certificado geral. {saida}")
     return nota
 
 
+#: O 503 da arte da plataforma sem vaga de navegador no prazo
+#: (``svc.NavegadorOcupado``). O lote o reconhece pelo status e devolve o pedido
+#: inteiro, em vez de recusar a criança.
+NAVEGADOR_OCUPADO = ("Muitos documentos estão sendo gerados agora. Tente de novo "
+                     "em alguns instantes.")
+
+
 def conteudo_certificado(db: Session, preparo: PreparoCertificado,
-                         modelo: str | None, bimestre: int | None) -> bytes:
+                         modelo: str | None, bimestre: int | None, *,
+                         antes_de_desenhar: Callable[[], None] | None = None) -> bytes:
     """O PDF do certificado de UM aluno que já passou por
     :func:`preparar_certificado`. Pode LEVANTAR a guarda de mérito (409/422) no
-    Geral — inclusive quando a arte da plataforma falha e a emissão cai nele."""
+    Geral — inclusive quando a arte da plataforma falha e a emissão cai nele — e
+    503 (:data:`NAVEGADOR_OCUPADO`) quando a arte não acha vaga de navegador no
+    prazo: aí ela NÃO cai no Geral.
+
+    ``antes_de_desenhar`` é chamado depois das leituras do banco e logo antes de cada
+    renderização (o Chromium, segundos): o lote o usa para fechar a transação das
+    leituras (``certificados_lote``). Por isso tudo o que o documento imprime é lido
+    ANTES dele — depois, só o desenho, sem banco."""
     escola, aluno, matricula = preparo.escola, preparo.aluno, preparo.matricula
     escola_id = escola.id
+    desenhar_agora = antes_de_desenhar or (lambda: None)
 
     def _geral() -> bytes:
         nota = exigir_merito(db, preparo)
-        return svc.gerar_certificado(
+        campos = dict(
             escola_nome=escola.nome,
             cor=svc.cor_primaria(db, escola_id),
             aluno_nome=aluno.nome,
@@ -470,6 +562,8 @@ def conteudo_certificado(db: Session, preparo: PreparoCertificado,
                 frescor_ranking.frescor_da_escola(db, escola, hoje_br()),
                 ["leitura", "matematica"]),
         )
+        desenhar_agora()
+        return svc.gerar_certificado(**campos)
 
     if modelo in ("elefante", "matific"):
         # A arte da plataforma NÃO passa pela guarda de mérito do `_geral()`, e isso
@@ -477,9 +571,22 @@ def conteudo_certificado(db: Session, preparo: PreparoCertificado,
         # participação na plataforma, não de mérito. `test_certificado_plataforma`
         # trava esse contrato (aluno sem nenhuma Nota recebe 200). Só a guarda de
         # POPULAÇÃO, acima, vale para os três botões da tela.
+        escola_nome, aluno_nome = escola.nome, aluno.nome
+        desenhar_agora()
         try:
-            return svc.gerar_certificado_plataforma(escola.nome, aluno.nome,
+            return svc.gerar_certificado_plataforma(escola_nome, aluno_nome,
                                                     modelo, bimestre=bimestre)
+        except svc.NavegadorOcupado:
+            # FILA CHEIA NÃO É "SEM CHROMIUM". Todas as vagas de navegador seguiram
+            # ocupadas pela espera inteira (pico de PDFs): a arte existe e sai daqui a
+            # pouco. Cair no Geral, como na falha de render abaixo, trocaria o
+            # documento de participação por um de MÉRITO — com a guarda dele: a
+            # criança sem Nota levaria um 409/422 que não vale para a arte (e, no
+            # lote, ficaria de fora como recusada), e a com Nota, um certificado que
+            # não foi o pedido. Quem pediu tenta de novo.
+            logger.warning("arte do certificado %s sem vaga de navegador; 503", modelo)
+            raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE,
+                                NAVEGADOR_OCUPADO) from None
         except Exception:  # noqa: BLE001 — sem Chromium/erro de render: cai no geral
             logger.warning("arte do certificado %s falhou; caindo no geral", modelo,
                            exc_info=True)

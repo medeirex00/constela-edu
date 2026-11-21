@@ -24,12 +24,17 @@ Como executar (no ambiente de produção, após o deploy e a migração)
     python -m scripts.recalcular_institucional            # todas as escolas
     python -m scripts.recalcular_institucional --rede 3   # só a rede 3
     python -m scripts.recalcular_institucional --escola 42  # só a escola 42
+    python -m scripts.recalcular_institucional --rede 3 --escola 42  # a 42, se for da rede 3
     python -m scripts.recalcular_institucional --dry-run   # só conta, não grava
     python -m scripts.recalcular_institucional --pendentes  # só quem falta (ver abaixo)
 
 ``--pendentes`` seleciona escolas com alguma Nota do ano ativo (aluno ativo e
-matriculado) SEM carimbo institucional OU carimbada com uma versão de dificuldade
-DIFERENTE da vigente (ex.: ``elefante_dificuldade_v1`` quando a vigente é a v2).
+matriculado numa turma que concorre, 1º ao 5º ano) SEM carimbo institucional OU
+carimbada com uma versão de dificuldade DIFERENTE da vigente (ex.:
+``elefante_dificuldade_v1`` quando a vigente é a v2). É a população que o recálculo
+regrava: a Nota antiga de uma criança da Educação Infantil (Fase) fica no banco sem
+ser regravada e, por isso, não conta como pendente — senão a escola nunca saía da
+seleção.
 Trocar a versão da régua NUNCA recalcula nada sozinho: as notas antigas continuam
 valendo (e agregadas pela rede) até este script ser rodado de forma explícita.
 
@@ -45,11 +50,11 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from sqlalchemy import select  # noqa: E402
+from sqlalchemy import and_, select  # noqa: E402
 from sqlalchemy.orm import Session  # noqa: E402
 
 from app.core.database import SessionLocal  # noqa: E402
-from app.models import Aluno, Escola, Nota  # noqa: E402
+from app.models import Escola  # noqa: E402
 from app.services import dificuldade_livro, rede, scoring  # noqa: E402
 from scripts._saida import forcar_saida_utf8  # noqa: E402
 
@@ -57,20 +62,14 @@ from scripts._saida import forcar_saida_utf8  # noqa: E402
 def escolas_com_versao_desatualizada(db: Session) -> list[int]:
     """Escolas com alguma Nota do ano ativo carimbada com versão de dificuldade
     DIFERENTE da vigente. Mesmo recorte de ``rede.escolas_com_notas_pendentes``
-    (aluno ativo, matriculado no ano ativo): o recálculo só regrava essas linhas,
-    então depois dele a escola sai da seleção (IDEMPOTENTE)."""
+    (aluno ativo, matriculado no ano ativo numa turma premiável — a população que
+    ``scoring.recalcular_escola`` regrava): depois do recálculo a escola sai da
+    seleção (IDEMPOTENTE)."""
     carimbo = rede._CARIMBO_INSTITUCIONAL
-    linhas = db.execute(
-        select(Nota.escola_id).distinct()
-        .join(Aluno, Aluno.id == Nota.aluno_id)
-        .join(Escola, Escola.id == Nota.escola_id)
-        .where(Nota.ano_letivo == Escola.ano_letivo_ativo,
-               Aluno.status == "ativo",
-               rede._matriculado_no_ano_ativo(),
-               carimbo.isnot(None),
-               carimbo != dificuldade_livro.VERSAO_VIGENTE)
-    ).all()
-    return sorted(int(escola_id) for (escola_id,) in linhas)
+    ids = [escola_id for (escola_id,) in db.execute(select(Escola.id)).all()]
+    return sorted(rede._pendentes_recalculo(
+        db, ids, pendente=and_(carimbo.isnot(None),
+                               carimbo != dificuldade_livro.VERSAO_VIGENTE)))
 
 
 def escolas_pendentes(db: Session) -> list[int]:
@@ -82,8 +81,10 @@ def escolas_pendentes(db: Session) -> list[int]:
 def main() -> int:
     forcar_saida_utf8()
     parser = argparse.ArgumentParser(description="Recálculo institucional pós-deploy.")
-    parser.add_argument("--rede", type=int, default=None, help="recalcular só as escolas desta rede")
-    parser.add_argument("--escola", type=int, default=None, help="recalcular só esta escola")
+    parser.add_argument("--rede", type=int, default=None,
+                        help="recalcular só as escolas desta rede (com --escola: as duas condições)")
+    parser.add_argument("--escola", type=int, default=None,
+                        help="recalcular só esta escola (com --rede: só se ela for da rede)")
     parser.add_argument("--dry-run", action="store_true", help="apenas listar, sem recalcular")
     parser.add_argument("--pendentes", action="store_true",
                         help="só escolas com alguma Nota do ano ativo SEM o carimbo institucional "
@@ -94,9 +95,12 @@ def main() -> int:
     db = SessionLocal()
     try:
         consulta = select(Escola.id, Escola.nome).order_by(Escola.id)
+        # Os recortes valem JUNTOS: com --rede e --escola, só a escola pedida, se ela
+        # for da rede pedida (antes o --rede caía fora em silêncio e uma escola de
+        # outra rede era recalculada).
         if args.escola is not None:
             consulta = consulta.where(Escola.id == args.escola)
-        elif args.rede is not None:
+        if args.rede is not None:
             consulta = consulta.where(Escola.rede_id == args.rede)
         if args.pendentes:
             # IDEMPOTENTE: depois de recalculada, a escola some desta seleção.
@@ -123,6 +127,10 @@ def main() -> int:
                 print(f"  [{i}/{len(escolas)}] escola {escola_id} — {nome}: FALHOU ({erro})")
 
         print("\nResumo:")
+        if args.dry_run:
+            # Nada foi processado: "escolas processadas: N" se lia como trabalho feito.
+            print(f"  escolas que seriam recalculadas: {len(escolas)} (nada foi gravado)")
+            return 0
         print(f"  escolas processadas: {len(escolas)}")
         print(f"  alunos recalculados: {total_alunos}")
         print(f"  falhas: {len(falhas)}")

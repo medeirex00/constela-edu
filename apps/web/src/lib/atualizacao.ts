@@ -2,16 +2,25 @@
  * Recuperação de DEPLOY (chunk obsoleto).
  *
  * O app é dividido por rota (React.lazy) e servido como PWA. Depois de publicar
- * uma versão nova, o Service Worker / CDN pode continuar servindo um
- * `index.html` ANTIGO por um tempo — e esse HTML aponta para nomes de arquivo
- * de chunk (ex.: `Dashboard-<hash>.js`) que sumiram no build novo. O import
- * dinâmico da tela então dá 404, a Promise rejeita e a página cai em branco ou
- * no LimiteErro — para TODOS os perfis, já que o Dashboard é um chunk lazy.
+ * uma versão nova, os arquivos de chunk da versão anterior (ex.: `Dashboard-<hash>.js`)
+ * deixam de existir no servidor. Uma página que ainda roda a versão anterior e não
+ * tem esses arquivos no cache do service worker que a controla — a aba que ficou para
+ * trás depois que OUTRA aba aplicou a versão nova, ou a página que veio da rede (1ª
+ * visita, Ctrl+Shift+R, plano B) — pede o chunk de uma tela que ainda não abriu, leva
+ * 404, o import dinâmico rejeita e a página cairia em branco ou no LimiteErro.
  *
- * A cura é buscar o shell novo: limpamos o Service Worker + os caches do PWA e
- * recarregamos UMA vez por sessão (guarda contra loop se o chunk estiver de
- * fato quebrado, não só obsoleto).
+ * A cura é buscar a versão nova: desregistramos o service worker e recarregamos (a
+ * página vem da rede) UMA vez por sessão — guarda contra laço se o chunk estiver de
+ * fato quebrado, não só obsoleto. O login fica (está no localStorage).
+ *
+ * NÃO apaga o cache do PWA (o mesmo cuidado do plano B de pwaAtualizacao.ts): o Cache
+ * Storage é de todas as abas do navegador. Outra aba que segue na versão antiga, com
+ * o aviso "Nova versão disponível", abre as telas dela por esse cache; apagá-lo a
+ * fazia recarregar sozinha na próxima tela, e a aba já na versão nova deixava de
+ * abrir sem internet até o próximo deploy. Para a recarga desta aba vir da rede basta
+ * desregistrar.
  */
+import { recarregarSemServiceWorker } from "./pwaAtualizacao";
 
 const CHAVE_GUARDA = "recarga_chunk_obsoleto";
 
@@ -23,25 +32,9 @@ export function ehErroDeChunk(erro: unknown): boolean {
   );
 }
 
-/** Desregistra o Service Worker, apaga os caches e recarrega — força o browser
- *  a baixar o `index.html` e os chunks NOVOS direto da rede. */
-export async function recarregarLimpandoCache(): Promise<void> {
-  try {
-    const regs = (await navigator.serviceWorker?.getRegistrations?.()) ?? [];
-    await Promise.all(regs.map((r) => r.unregister()));
-    if (typeof caches !== "undefined") {
-      const chaves = await caches.keys();
-      await Promise.all(chaves.map((c) => caches.delete(c)));
-    }
-  } catch {
-    /* mesmo se a limpeza falhar, o reload abaixo já ajuda */
-  }
-  window.location.reload();
-}
-
 /** Recupera de um chunk obsoleto no MÁXIMO uma vez por sessão. */
 export function recuperarDeChunkObsoleto(): void {
   if (sessionStorage.getItem(CHAVE_GUARDA)) return; // já tentou nesta sessão → evita loop
   sessionStorage.setItem(CHAVE_GUARDA, "1");
-  void recarregarLimpandoCache();
+  void recarregarSemServiceWorker();
 }

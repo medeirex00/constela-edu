@@ -76,7 +76,6 @@ from __future__ import annotations
 import re
 from collections import Counter
 from dataclasses import dataclass, field
-from decimal import Decimal
 from typing import Callable, Iterable, Iterator, Sequence
 
 from app.services.avaliacoes import ImportacaoRecusada
@@ -117,7 +116,6 @@ ROTULO_UNIVERSO = {
 
 _LINHAS_TOPO = 20
 _MAX_NOTAS = 40
-_TOLERANCIA_RUIDO = 1e-12
 
 ARQUIVO = ('o arquivo oficial do INEP "Ideb por município" '
            "(divulgacao_anos_iniciais_municipios_AAAA.zip) ou o de UF/regiões ou de "
@@ -177,20 +175,8 @@ def rotulo_universo(abrangencia: str, rede: str) -> str:
 
 # --- Células ------------------------------------------------------------------
 
-def texto_limpo(valor) -> str:
-    """O texto da célula (como ``ideb.texto_celula``), sem o ruído binário do float
-    que a planilha às vezes grava (o 0,3 de ``0.1 + 0.2``, escrito 0.30000000000000004):
-    o menor número de casas que reproduz o MESMO float. Vale para a planilha e para o
-    CSV do pacote."""
-    if isinstance(valor, float) and not isinstance(valor, bool) and valor == valor:
-        for casas in range(0, 11):
-            arredondado = round(valor, casas)
-            if abs(arredondado - valor) <= _TOLERANCIA_RUIDO * max(1.0, abs(valor)):
-                texto = repr(arredondado)
-                if "e" in texto or "E" in texto:
-                    texto = format(Decimal(texto), "f")
-                return texto[:-2] if casas == 0 and texto.endswith(".0") else texto
-    return ideb.texto_celula(valor)
+# A limpeza do ruído binário do float é a MESMA do Ideb por escola (``ideb.texto_limpo``).
+texto_limpo = ideb.texto_limpo
 
 
 def ler_celula(texto: str) -> ideb.Celula | None:

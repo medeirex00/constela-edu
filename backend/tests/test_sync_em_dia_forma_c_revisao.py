@@ -31,6 +31,7 @@ from tests._sync_nucleo_fakes import (
     vincular)
 from tests.test_sync_em_dia_forma_c import (
     CID_A, K, _agenda_diaria, _alerta, _da_escola, _status_plataforma)
+from tests._ano_letivo import no_ano_de_hoje
 
 
 def _mensagem(db, eid, plataforma="elefante"):
@@ -60,7 +61,7 @@ def _matific_com_tres_vinculados(db, escola_completa, monkeypatch, linhas_extra=
 # 1. Coleta por período só com a criança pendente: sem falso alarme
 # ---------------------------------------------------------------------------
 def test_periodo_so_com_pendente_nao_acusa_credencial_de_outra_escola(
-        db, cliente, escola_completa, monkeypatch):
+        relogio_no_ano_letivo, db, cliente, escola_completa, monkeypatch):
     """Semana da premiação: no período, só a criança sem vínculo jogou. Antes, a
     execução saía 'tudo_em_revisao' e o alerta e o card mandavam conferir se o
     acesso é de outra escola. Agora é 'correspondencia_pendente' — e o período
@@ -118,8 +119,9 @@ def test_vinculados_todos_de_fichas_inativas_tem_texto_proprio(db, escola_comple
 # ---------------------------------------------------------------------------
 # 3. Queda retida de conta de ficha inativa não "confere a escola"
 # ---------------------------------------------------------------------------
+@no_ano_de_hoje
 def test_queda_de_conta_de_ficha_transferida_nao_conta_como_conferida(
-        db, escola_completa, monkeypatch):
+        relogio_no_ano_letivo, db, escola_completa, monkeypatch):
     """Credencial de outra escola: lá está a criança A (transferida para lá), com
     total menor que o gravado aqui, e uma criança desconhecida. Antes, a queda da
     ficha TRANSFERIDA era retida e contava como "conta da escola conferida": a

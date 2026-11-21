@@ -35,6 +35,25 @@ const TD = `${classesTabela.td} max-sm:px-3`;
 /** Escala da média do Matific (a mesma do Placar da Escola) — o servidor recusa
  *  acima disso (`MatificEdicao.pontuacao_media`, ge=0 le=5). */
 const MEDIA_MAXIMA = 5;
+/** Teto de estrelas por atividade — a mesma regra das Premiações
+ *  (`matific_destaque.limitar_estrelas`); o servidor recusa acima disso (422). */
+const ESTRELAS_POR_ATIVIDADE = 5;
+/** Maior número que o servidor grava (coluna INTEGER): acima disso, 422. */
+const INTEIRO_MAXIMO = 2_147_483_647;
+/** Motivo do ajuste: obrigatório, como no Elefante (o servidor recusa com menos). */
+const MOTIVO_MINIMO = 5;
+const MSG_MOTIVO = `Informe o motivo do ajuste (pelo menos ${MOTIVO_MINIMO} caracteres) — ele fica no histórico de alterações.`;
+
+/** O ajuste manual é a fonte do dado só ENQUANTO a escola não recebe o Matific da
+ *  plataforma. O contador do Matific é acumulado: depois que o dado oficial chega
+ *  (integração ou relatório importado), um número digitado por cima viraria ganho
+ *  falso na próxima coleta — a correção passa a ser do Admin Global, e desligar a
+ *  integração depois não reabre a edição. A trava é do servidor; aqui o gestor só
+ *  não é pego de surpresa. */
+const NOTA_AJUSTE_MANUAL =
+  "Este ajuste existe enquanto a escola não recebe o Matific da plataforma. " +
+  "Depois que o dado oficial chega, a correção passa a ser do Admin Global — desligar a " +
+  "integração não reabre a edição.";
 
 /**
  * Modal de edição isolado: o estado do formulário vive AQUI, não no componente
@@ -87,6 +106,26 @@ function ModalEditarMatific({
       setErro(`A média do Matific vai de 0 a ${MEDIA_MAXIMA} (a mesma escala do Placar da Escola).`);
       return;
     }
+    for (const [campo, valor] of [["atividades", form.atividades], ["estrelas", form.estrelas]] as const) {
+      if (valor > INTEIRO_MAXIMO) {
+        setErro(`O número de ${campo} é grande demais. Confira o valor digitado.`);
+        return;
+      }
+    }
+    const tetoEstrelas = ESTRELAS_POR_ATIVIDADE * form.atividades;
+    if (form.estrelas > tetoEstrelas) {
+      setErro(
+        `O Matific dá no máximo ${ESTRELAS_POR_ATIVIDADE} estrelas por atividade: com ` +
+          `${form.atividades} atividade${form.atividades === 1 ? "" : "s"}, são no máximo ` +
+          `${tetoEstrelas} estrelas. Confira os dois números.`,
+      );
+      return;
+    }
+    const motivo = form.motivo.trim();
+    if (motivo.length < MOTIVO_MINIMO) {
+      setErro(MSG_MOTIVO);
+      return;
+    }
     setSalvando(true);
     setErro("");
     try {
@@ -95,7 +134,7 @@ function ModalEditarMatific({
         body: JSON.stringify({
           atividades: form.atividades,
           estrelas: form.estrelas,
-          motivo: form.motivo || null,
+          motivo,
           // A média só viaja quando foi EDITADA: ausente, o servidor preserva a
           // gravada. É o que mantém editável um registro fora da escala, sem
           // obrigar ninguém a inventar um número de 0 a 5 no lugar do medido.
@@ -104,6 +143,8 @@ function ModalEditarMatific({
       });
       aoSalvo();
     } catch (excecao) {
+      // Inclui o 403 da governança (dado já recebido da plataforma): a mensagem do
+      // servidor aparece.
       setErro(excecao instanceof Error ? excecao.message : "Não foi possível salvar.");
     } finally {
       setSalvando(false);
@@ -115,13 +156,13 @@ function ModalEditarMatific({
       <div className="space-y-4">
         <Campo rotulo="Atividades finalizadas">
           <input
-            type="number" min={0} className={estiloInput} value={form.atividades}
+            type="number" min={0} max={INTEIRO_MAXIMO} className={estiloInput} value={form.atividades}
             onChange={(e) => setForm({ ...form, atividades: Number(e.target.value) })}
           />
         </Campo>
         <Campo rotulo="Estrelas">
           <input
-            type="number" min={0} className={estiloInput} value={form.estrelas}
+            type="number" min={0} max={INTEIRO_MAXIMO} className={estiloInput} value={form.estrelas}
             onChange={(e) => setForm({ ...form, estrelas: Number(e.target.value) })}
           />
         </Campo>
@@ -139,13 +180,14 @@ function ModalEditarMatific({
             </p>
           )}
         </Campo>
-        <Campo rotulo="Motivo da edição (fica no histórico de alterações)">
+        <Campo rotulo="Motivo da edição (obrigatório — fica no histórico de alterações)">
           <input
             className={estiloInput} placeholder="Ex.: correção de erro do relatório"
             value={form.motivo}
             onChange={(e) => setForm({ ...form, motivo: e.target.value })}
           />
         </Campo>
+        <p className="rounded-xl bg-zinc-50 px-3 py-2.5 text-xs text-zinc-600 dark:bg-zinc-800/50 dark:text-zinc-300">{NOTA_AJUSTE_MANUAL}</p>
         {erro && <Mensagem tipo="erro">{erro}</Mensagem>}
         <div className="flex justify-end gap-2.5 pt-1">
           <Botao variante="secundario" onClick={aoFechar} disabled={salvando}>Cancelar</Botao>

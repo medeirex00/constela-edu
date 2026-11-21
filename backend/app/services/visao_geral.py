@@ -17,9 +17,10 @@ O QUE É "ALUNO ATIVO" (a mesma regra nas duas rotas):
   leitura do espelho (``EventoAluno.ocorrido_em``) dentro dela, os dois eixos de
   ``relatorios_periodo._elefante``.
 * Matemática: GANHO > 0 de atividades na janela. Ter retrato não é ter atividade: toda
-  coleta grava retrato de todo aluno, e contar "tem retrato" (o viés de
-  ``relatorios_periodo.gerar`` em ``alunos.com_atividade``) faria a escola parecer
-  inteira ativa. Ganho de estrelas sem atividade não existe (``limitar_estrelas``).
+  coleta grava retrato de todo aluno, e contar "tem retrato" faria a escola parecer
+  inteira ativa. É a mesma regra do Relatório por Período (``matific.alunos_com_atividade``
+  e ``alunos.com_atividade`` de ``relatorios_periodo.gerar``). Ganho de estrelas sem
+  atividade não existe (``limitar_estrelas``).
 * Ativos = a união dos dois conjuntos (só das plataformas contratadas e com dado).
 
 AUSÊNCIA NÃO É ZERO. Sem coleta, o número é ``None`` (lacuna), nunca 0:
@@ -59,6 +60,7 @@ from sqlalchemy.orm import Session
 from app.models import Escola, EventoAluno, Leitura, SnapshotElefante, SnapshotMatific
 from app.services import bimestres, matific_destaque, periodos
 from app.services import relatorios_periodo as rp
+from app.services.evolucao import sem_ajustes_superados_matific
 
 # Os presets de ``periodos`` que têm as DUAS pontas: "tudo" não tem período, e
 # "personalizado" exige datas que esta rota não recebe.
@@ -200,14 +202,19 @@ class _SeriesMatific:
 def _series_matific(db: Session, escola_id: int, coorte: dict[int, dict],
                     ano: int) -> _SeriesMatific:
     """UMA consulta, só as colunas que a regra oficial lê, só em volta do ano letivo
-    (o contador do Matific é do ano: ``ganho_no_periodo`` descarta o resto)."""
+    (o contador do Matific é do ano: ``ganho_no_periodo`` descarta o resto).
+
+    Sem o ajuste manual que uma coleta posterior do mesmo ano desmentiu
+    (``matific_destaque.sem_ajustes_superados``): a mesma série das premiações e do
+    Relatório por Período. A folga em volta do ano não muda isso — o ajuste só é
+    desmentido por coleta do MESMO ano, que está inteiro na consulta."""
     if not coorte:
         return _SeriesMatific({}, {}, None)
     ini_ano, fim_ano = matific_destaque.janela_ano_letivo(ano)
     linhas = db.execute(
         select(SnapshotMatific.aluno_id, SnapshotMatific.id,
                SnapshotMatific.data_referencia, SnapshotMatific.atividades,
-               SnapshotMatific.estrelas)
+               SnapshotMatific.estrelas, SnapshotMatific.importacao_id)
         .where(SnapshotMatific.escola_id == escola_id,
                SnapshotMatific.aluno_id.in_(list(coorte)),
                SnapshotMatific.data_referencia >= ini_ano - _FOLGA_ANO,
@@ -217,6 +224,7 @@ def _series_matific(db: Session, escola_id: int, coorte: dict[int, dict],
     series: dict[int, list] = {}
     for linha in linhas:
         series.setdefault(linha.aluno_id, []).append(linha)
+    series = sem_ajustes_superados_matific(db, escola_id, series)
     chaves = {aid: [matific_destaque._data(s) for s in serie]
               for aid, serie in series.items()}
     ultima = db.execute(

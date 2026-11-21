@@ -4,12 +4,16 @@ SQLAlchemy 2.0 com ORM declarativo. O mesmo código funciona em SQLite
 (desenvolvimento) e PostgreSQL (produção) — basta trocar DATABASE_URL.
 """
 import os
+from datetime import datetime, timezone
 
-from sqlalchemy import create_engine, event
+from sqlalchemy import DateTime, create_engine, event
 from sqlalchemy.engine import make_url
 from sqlalchemy.orm import DeclarativeBase, sessionmaker
+from sqlalchemy.types import TypeDecorator
+from starlette.requests import Request
 
 from app.core.config import settings
+from app.core.mantenedor_do_pool import marcar_abertura, ouvir_devolucoes
 
 is_sqlite = settings.DATABASE_URL.startswith("sqlite")
 
@@ -56,13 +60,15 @@ def opcoes_do_engine(url: str) -> dict:
     da coluna indexada; nenhum índice único de hoje tem nome de pessoa)."""
     if url.startswith("sqlite"):
         return {"connect_args": {"check_same_thread": False}, "hide_parameters": True}
-    # Banco de rede (PostgreSQL em produção): pool dimensionado e verificação
-    # de conexões mortas antes de reusar (pool_pre_ping) evitam erros
-    # intermitentes após timeouts do banco. Total por worker uvicorn =
-    # DB_POOL_SIZE + DB_MAX_OVERFLOW. Conexão NOVA com prazo para abrir
-    # (``argumentos_de_conexao_pg``).
+    # Banco de rede (PostgreSQL em produção): pool dimensionado. Total por worker
+    # uvicorn = DB_POOL_SIZE + DB_MAX_OVERFLOW. Conexão NOVA com prazo para abrir
+    # (``argumentos_de_conexao_pg``). A conexão morta é pega pelo ping SÓ da conexão
+    # parada (``instalar_ping_por_ociosidade``), não pelo ``pool_pre_ping`` (um ping a
+    # cada retirada, uma ida ao banco a mais em toda requisição). O pool LIFO entrega a
+    # conexão devolvida por último — a mais quente, que dispensa o ping; o FIFO padrão
+    # entregaria a parada há mais tempo e o ping voltaria a ser pago.
     opcoes = {
-        "pool_pre_ping": True,
+        "pool_use_lifo": True,
         "pool_size": settings.DB_POOL_SIZE,
         "max_overflow": settings.DB_MAX_OVERFLOW,
         "pool_recycle": settings.DB_POOL_RECYCLE,
@@ -74,7 +80,134 @@ def opcoes_do_engine(url: str) -> dict:
     return opcoes
 
 
+_ULTIMO_USO = "constela_ultimo_uso"
+
+
+def instalar_ping_por_ociosidade(motor, limite_s: float | None = None) -> None:
+    """Testa com um ping só a conexão que ficou PARADA no pool além do limite.
+
+    Antes, ``pool_pre_ping`` mandava um ``SELECT 1`` a cada retirada do pool: em produção
+    (API a ~195 ms do banco) era uma ida a mais em TODA requisição, mesmo na conexão
+    usada um instante antes. Agora a hora do último uso fica no registro da conexão (ao
+    abrir e ao devolver) e, na retirada, só a conexão parada há mais de ``limite_s``
+    (padrão ``DB_PING_OCIOSO_S``, 30 s; ``0`` = sempre, como antes) é pingada. O ping é o
+    do próprio dialeto (``do_ping``: em autocommit, sem abrir transação). Se ele falhar,
+    ``InvalidatePoolError`` (uma ``DisconnectionError``): o pool descarta essa conexão e
+    todas as abertas antes dela (o banco ou o pooler reiniciou: as outras também morreram)
+    e entrega uma nova — o mesmo efeito do ``pool_pre_ping``.
+
+    O que se aceita: a conexão que morre DENTRO da janela (reinício do banco ou do pooler
+    há menos de ``limite_s`` do último uso) dá erro em UMA requisição; o SQLAlchemy vê a
+    desconexão, invalida o pool, e a seguinte reconecta (o ``useApi`` do site repete 5xx
+    uma vez). Use com ``pool_use_lifo`` (``opcoes_do_engine``)."""
+    from time import monotonic
+
+    from sqlalchemy.exc import InvalidatePoolError
+
+    def _agora(_dbapi_connection, registro, *_a) -> None:
+        registro.info[_ULTIMO_USO] = monotonic()
+
+    def _na_retirada(dbapi_connection, registro, _proxy) -> None:
+        limite = settings.DB_PING_OCIOSO_S if limite_s is None else limite_s
+        ultimo = registro.info.get(_ULTIMO_USO)
+        if ultimo is not None and monotonic() - ultimo < limite:
+            return
+        try:
+            motor.dialect.do_ping(dbapi_connection)
+        except motor.dialect.loaded_dbapi.Error as erro:
+            raise InvalidatePoolError("a conexão parada no pool não respondeu ao ping") from erro
+        registro.info[_ULTIMO_USO] = monotonic()
+
+    event.listen(motor, "connect", _agora)
+    event.listen(motor, "checkin", _agora)
+    event.listen(motor, "checkout", _na_retirada)
+
+
+def desligar_prepared_statements(motor) -> None:
+    """``prepare_threshold = None`` em toda conexão nova do psycopg (os outros drivers: nada).
+
+    O psycopg 3 prepara no servidor o comando executado 5 vezes na mesma conexão: a 6ª
+    execução custa uma ida a mais (o PREPARE). Até aqui o ROLLBACK do fim de cada
+    requisição zerava a contagem (e um DEALLOCATE ALL, mais uma ida, se algo tinha sido
+    preparado). Nas leituras sem transação (``leitura_sem_transacao``) não há ROLLBACK: a
+    contagem cresceria de requisição em requisição e o PREPARE cairia numa delas. Sem
+    prepared statements, nenhuma das duas idas; o banco planeja cada comando (frações de
+    milissegundo nestas consultas, contra ~195 ms de cada ida em produção)."""
+    if motor.dialect.driver != "psycopg":
+        return
+
+    def _sem_prepared(dbapi_connection, _registro) -> None:
+        dbapi_connection.prepare_threshold = None
+
+    event.listen(motor, "connect", _sem_prepared)
+
+
+# Nomes com que o PostgreSQL informa um fuso que já é o UTC (sem horário de verão).
+_FUSOS_UTC = frozenset({"utc", "etc/utc", "uct", "etc/uct", "gmt", "etc/gmt", "gmt0",
+                        "etc/gmt0", "greenwich", "etc/greenwich", "universal",
+                        "etc/universal", "zulu", "etc/zulu"})
+
+
+def _sessao_em_utc(dbapi_connection, _registro) -> None:
+    """Põe em UTC a sessão de uma conexão nova que chegou com outro fuso.
+
+    O fuso vem do que o servidor já informou ao abrir a conexão (o ``TimeZone`` do
+    ``ParameterStatus``, lido sem ida ao banco no psycopg 3): no banco em UTC — o padrão do
+    Supabase — nada é enviado. Fora dele, ``SET TIME ZONE 'UTC'`` e ``COMMIT``: sem o
+    COMMIT, o ROLLBACK da devolução da conexão ao pool desfaria o SET."""
+    info = getattr(dbapi_connection, "info", None)
+    try:
+        fuso = info.parameter_status("TimeZone") if info is not None else None
+    except Exception:  # noqa: BLE001 — sem a informação, ajusta (o seguro)
+        fuso = None
+    if (fuso or "").strip().lower() in _FUSOS_UTC:
+        return
+    with dbapi_connection.cursor() as cursor:
+        cursor.execute("SET TIME ZONE 'UTC'")
+    dbapi_connection.commit()
+
+
+def fixar_fuso_utc(motor) -> None:
+    """A sessão do PostgreSQL em UTC em toda conexão nova (os outros bancos: nada).
+
+    As colunas de data e hora são ``timestamp`` SEM fuso e guardam UTC. O que o app grava
+    pelo ORM já sai em UTC pelo tipo da coluna (``DataHoraUTC``), em qualquer sessão; este
+    ajuste alinha o resto ao mesmo relógio — o ``now()``/``CURRENT_TIMESTAMP`` do próprio
+    banco (os ``server_default`` das migrações) e o SQL escrito à mão — quando o banco ou o
+    papel tem outro fuso (``ALTER DATABASE ... SET timezone``, um banco de recuperação
+    criado num servidor brasileiro). Atrás de um pooler em modo transação o ``SET`` não fica
+    na sessão; a gravação pelo ORM continua certa pelo tipo da coluna."""
+    if motor.dialect.name != "postgresql":
+        return
+    event.listen(motor, "connect", _sessao_em_utc)
+
+
+def sessao_de_leitura(motor) -> sessionmaker:
+    """As sessões das rotas ``leitura_sem_transacao``: o MESMO pool, em AUTOCOMMIT.
+
+    O psycopg manda o BEGIN numa ida própria antes da primeira consulta, e o ``close`` da
+    sessão manda o ROLLBACK em outra — duas idas ao banco (~195 ms cada em produção) que
+    não trazem dado. Em AUTOCOMMIT cada consulta roda sozinha, sem BEGIN nem ROLLBACK. A
+    consistência não muda: o isolamento é o padrão do PostgreSQL (READ COMMITTED), em que
+    cada consulta já vê o seu próprio instante. A troca é local na conexão (o atributo
+    ``autocommit`` do psycopg, sem ida) e o SQLAlchemy a desfaz ao devolver a conexão ao
+    pool: as sessões que gravam continuam com transação."""
+    return sessionmaker(bind=motor.execution_options(isolation_level="AUTOCOMMIT"),
+                        autoflush=False, autocommit=False)
+
+
 engine = create_engine(settings.DATABASE_URL, **opcoes_do_engine(settings.DATABASE_URL))
+
+if not is_sqlite:
+    instalar_ping_por_ociosidade(engine)
+    desligar_prepared_statements(engine)
+    fixar_fuso_utc(engine)
+    # A hora de abertura de cada conexão: o mantenedor do pool reabre a que está perto do
+    # ``pool_recycle`` antes que uma requisição a pegue (ligado no startup, ``app.main``).
+    marcar_abertura(engine)
+    # O ouvinte único da devolução, registrado antes de qualquer conexão: o mantenedor
+    # entra e sai dele sem mexer na lista de ouvintes do pool em uso.
+    ouvir_devolucoes(engine)
 
 if is_sqlite:
     # Garante integridade referencial no SQLite (desligada por padrão).
@@ -85,18 +218,101 @@ if is_sqlite:
         cursor.close()
 
 SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False)
+# As rotas de leitura marcadas: sem transação no PostgreSQL; no SQLite (desenvolvimento e
+# testes) a mesma sessão de sempre.
+SessionLeitura = SessionLocal if is_sqlite else sessao_de_leitura(engine)
+
+
+class DataHoraUTC(TypeDecorator):
+    """A coluna de data e hora do app: ``timestamp`` SEM fuso que guarda UTC.
+
+    O padrão ``models.base.agora()`` (e boa parte do código) entrega o instante COM fuso. O
+    psycopg o envia como ``timestamptz`` e o PostgreSQL, para caber numa coluna sem fuso, o
+    converte para a hora local da SESSÃO: com o banco em America/Sao_Paulo, tudo saía 3 h
+    atrasado (o link de redefinição nascia vencido, a coleta viva parecia travada). Aqui o
+    instante com fuso vira UTC sem fuso ANTES de sair — na gravação e na comparação com a
+    coluna —, seja qual for o fuso da sessão, o pooler ou o engine (app, scripts, testes).
+    O que já vem sem fuso é UTC pela convenção do app e passa intacto. O SQLite, que
+    descartava o fuso e gravava o relógio do próprio instante, passa a gravar o mesmo que o
+    PostgreSQL. A leitura não muda: devolve o valor sem fuso, lido como UTC."""
+
+    impl = DateTime
+    cache_ok = True
+
+    def process_bind_param(self, value, dialect):
+        if isinstance(value, datetime) and value.utcoffset() is not None:
+            return value.astimezone(timezone.utc).replace(tzinfo=None)
+        return value
+
+    def coerce_compared_value(self, op, value):
+        # Só o instante passa pela conversão; o resto (o intervalo somado à coluna, a data
+        # comparada com ela) mantém o tipo que o ``DateTime`` lhe daria.
+        if isinstance(value, datetime):
+            return self
+        return self.impl_instance.coerce_compared_value(op, value)
+
+    @property
+    def python_type(self):
+        # O ``TypeDecorator`` não repassa o tipo Python do ``impl`` (levanta
+        # NotImplementedError); quem pergunta o tipo da coluna — o backup, para voltar as
+        # datas do arquivo a ``datetime`` na restauração — precisa da resposta do DateTime.
+        return self.impl_instance.python_type
 
 
 class Base(DeclarativeBase):
-    pass
+    # Toda coluna ``Mapped[datetime]`` dos modelos (Constela Edu e Quest) é ``DataHoraUTC``.
+    # O tipo no banco segue o mesmo ``DateTime`` sem fuso: nenhuma migração muda.
+    type_annotation_map = {datetime: DataHoraUTC}
 
 
-def get_db():
-    db = SessionLocal()
+_MARCA_LEITURA = "_constela_leitura_sem_transacao"
+
+
+def leitura_sem_transacao(endpoint):
+    """Marca uma rota GET que SÓ LÊ para rodar sem transação (``SessionLeitura``).
+
+    Lista FECHADA e explícita — não "todo GET": só a rota cujo código inteiro (a rota, as
+    dependências e os serviços) nunca grava, nunca usa ``FOR UPDATE``, ``SET LOCAL``,
+    advisory lock nem tabela temporária. ``tests/test_leitura_sem_transacao.py`` guarda a
+    lista e roda cada rota marcada com uma sessão que recusa qualquer escrita. Vai logo
+    abaixo do ``@router.get(...)``; devolve a própria função."""
+    setattr(endpoint, _MARCA_LEITURA, True)
+    return endpoint
+
+
+def e_leitura_sem_transacao(endpoint) -> bool:
+    return getattr(endpoint, _MARCA_LEITURA, False) is True
+
+
+def get_db(request: Request = None):  # type: ignore[assignment]
+    """A sessão da requisição. A rota marcada com ``leitura_sem_transacao`` recebe a de
+    ``SessionLeitura``; as demais (e quem chama sem requisição: o boot, os scripts), a de
+    ``SessionLocal``. O ``request`` vem do FastAPI (que o reconhece pela anotação); o
+    endpoint é o da rota casada (``scope["endpoint"]``)."""
+    leitura = request is not None and e_leitura_sem_transacao(request.scope.get("endpoint"))
+    db = (SessionLeitura if leitura else SessionLocal)()
     try:
         yield db
     finally:
         db.close()
+
+
+def _exigir_transacao(db, trava: str) -> None:
+    """Recusa a sessão em AUTOCOMMIT antes de um ``pg_advisory_xact_lock``.
+
+    A trava vale até o fim da TRANSAÇÃO. Em AUTOCOMMIT — a ``SessionLeitura`` das rotas
+    ``leitura_sem_transacao``, que usa o MESMO pool — cada comando é uma transação: a trava
+    cairia no fim do próprio SELECT, a função voltaria normal e nada ficaria travado. Olha
+    a opção da conexão e o modo do driver (sem ida ao banco)."""
+    conexao = db.connection()
+    em_autocommit = (
+        conexao.get_execution_options().get("isolation_level") == "AUTOCOMMIT"
+        or getattr(conexao.connection.dbapi_connection, "autocommit", False) is True)
+    if em_autocommit:
+        raise RuntimeError(
+            f"{trava} exige uma sessão com transação; esta está em AUTOCOMMIT (a sessão das "
+            "rotas de leitura) e a trava cairia no fim do próprio comando, sem travar nada. "
+            "Use a sessão de gravação (SessionLocal).")
 
 
 # Namespace fixo dos advisory locks de importação (o 1º argumento de
@@ -118,9 +334,12 @@ def bloquear_escola_para_importacao(db, escola_id: int) -> None:
 
     SQLite (dev/testes): no-op — banco de um único escritor; produção é Postgres.
     A defesa cross-DB para turmas é o índice único ``uq_turma_escola_ano_nome``
-    (o insert de turma trata a colisão sem estourar 500)."""
+    (o insert de turma trata a colisão sem estourar 500).
+
+    Sessão em AUTOCOMMIT: recusada com ``RuntimeError`` (``_exigir_transacao``)."""
     if db.get_bind().dialect.name == "postgresql":
         from sqlalchemy import text
+        _exigir_transacao(db, "bloquear_escola_para_importacao")
         db.execute(text("SELECT pg_advisory_xact_lock(:ns, :escola)"),
                    {"ns": _NS_IMPORTACAO, "escola": int(escola_id)})
 
@@ -140,15 +359,17 @@ def bloquear_fonte_para_coleta(db, fonte_id: int) -> None:
     adquirir ANTES de baixar/importar e sem commit no meio.
 
     SQLite (dev/testes): no-op — banco de um só escritor. A defesa cross-DB é o
-    índice único ``uq_resultado_natural`` (a 2ª inserção do mesmo fato esbarra)."""
+    índice único ``uq_resultado_natural`` (a 2ª inserção do mesmo fato esbarra).
+
+    Sessão em AUTOCOMMIT: recusada com ``RuntimeError`` (``_exigir_transacao``)."""
     if db.get_bind().dialect.name == "postgresql":
         from sqlalchemy import text
+        _exigir_transacao(db, "bloquear_fonte_para_coleta")
         db.execute(text("SELECT pg_advisory_xact_lock(:ns, :fonte)"),
                    {"ns": _NS_COLETA_AVALIACAO, "fonte": int(fonte_id)})
 
 
-# Namespace dos advisory locks do RECÁLCULO de notas (separado dos de
-# importação e coleta — travas distintas não podem se bloquear entre si).
+# Namespace dos advisory locks do RECÁLCULO de notas.
 _NS_RECALCULO = 4713
 
 
@@ -175,19 +396,59 @@ def bloquear_escola_para_recalculo(db, escola_id: int) -> None:
     fim do recálculo), então deve ser adquirido ANTES de qualquer leitura que
     participe do cálculo e sem commit no meio.
 
-    HIERARQUIA (regra de ouro contra deadlock ENTRE travas): nunca adquirir
-    esta segurando ``_NS_IMPORTACAO`` (4711). Todos os chamadores de
-    ``recalcular_escola`` comitam antes de chamá-lo — inclusive os dois
-    endpoints de importação, que soltam 4711 no commit e só então recalculam.
-    ``tests/test_recalculo_concorrencia.py`` guarda essa ordem.
+    A trava de importação (4711) é tomada primeiro, em modo compartilhado.
+    Ela protege a população do cálculo contra fusão, exclusão e outras
+    mudanças de identidade que tomam 4711 exclusiva. A ordem é sempre
+    4711 → 4713. Quem precisa escrever e recalcular no mesmo commit, como
+    ``importacoes.resolver_revisao``, toma 4711 exclusiva antes das escritas,
+    e mantém a trava até confirmar o trabalho.
 
     SQLite (dev/testes): no-op — banco de um único escritor; produção é
     Postgres. A defesa cross-DB é a própria ``uq_nota_aluno_ano``, que impede a
-    duplicata virar permanente (ao custo do 500 que esta trava elimina)."""
+    duplicata virar permanente (ao custo do 500 que esta trava elimina).
+
+    Sessão em AUTOCOMMIT: recusada com ``RuntimeError`` (``_exigir_transacao``)."""
     if db.get_bind().dialect.name == "postgresql":
         from sqlalchemy import text
+        _exigir_transacao(db, "bloquear_escola_para_recalculo")
+        escola_id = int(escola_id)
+        db.execute(text("SELECT pg_advisory_xact_lock_shared(:ns, :escola)"),
+                   {"ns": _NS_IMPORTACAO, "escola": escola_id})
         db.execute(text("SELECT pg_advisory_xact_lock(:ns, :escola)"),
-                   {"ns": _NS_RECALCULO, "escola": int(escola_id)})
+                   {"ns": _NS_RECALCULO, "escola": escola_id})
+
+
+# Namespace dos advisory locks da REVOGAÇÃO dos cartões do Quest por turma
+# (separado dos de importação, coleta e recálculo; 4714 é o da migração, em
+# app/core/migracoes.py).
+_NS_CARTOES_QUEST = 4715
+
+
+def bloquear_escola_para_cartoes_quest(db, escola_id: int) -> None:
+    """Serializa as revogações de cartões do Quest por turma da MESMA escola
+    (``regenerar``/``rotacionar_codigo`` em POST .../quest/turmas/{id}/cartoes).
+
+    Cada revogação trava as credenciais das crianças em três passos, cada um na
+    sua ordem: inativos da turma, quem saiu dela desde a última folha e os
+    matriculados. Com troca cruzada de crianças desde a última folha (x foi de A
+    para B e y de B para A), a revogação de A travava x e depois y, e a de B
+    travava y e depois x: o PostgreSQL abortava uma das duas com
+    ``DeadlockDetected`` (500, sem PDF).
+
+    PostgreSQL: ``pg_advisory_xact_lock`` faz a 2ª revogação BLOQUEAR até a 1ª
+    commitar; aí ela lê e trava as credenciais já com o código novo da 1ª. É
+    transacional (cai sozinho no commit/rollback), então deve ser adquirido ANTES
+    de ler ou travar qualquer credencial e sem commit no meio. Só esta rota a
+    toma, e antes de qualquer outra trava: sem ciclo entre travas.
+
+    SQLite (dev/testes): no-op — banco de um único escritor.
+
+    Sessão em AUTOCOMMIT: recusada com ``RuntimeError`` (``_exigir_transacao``)."""
+    if db.get_bind().dialect.name == "postgresql":
+        from sqlalchemy import text
+        _exigir_transacao(db, "bloquear_escola_para_cartoes_quest")
+        db.execute(text("SELECT pg_advisory_xact_lock(:ns, :escola)"),
+                   {"ns": _NS_CARTOES_QUEST, "escola": int(escola_id)})
 
 
 # --------------------------------------------------------------------------

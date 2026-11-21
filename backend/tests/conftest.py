@@ -2,13 +2,29 @@
 import io
 import logging
 import os
+import shutil
 import sys
+import tempfile
+from datetime import datetime, timezone
 
 # Sem saída para a internet a partir do runner: o app.main dispara no import o
 # diagnóstico do robô (GET a ipinfo.io/ipapi.co e o Chromium abrindo as páginas de
 # login). Antes de QUALQUER import do app: o Settings lê o ambiente uma vez, no import
 # de app.core.config. Os subprocessos dos testes herdam o valor.
 os.environ["AUTOMACAO_VERIFICAR_NO_BOOT"] = "false"
+
+# As pastas que a API grava (UPLOADS_DIR, EXPORTS_DIR) numa pasta temporária da sessão,
+# nunca no checkout. Sem DADOS_DIR elas seriam <raiz do repositório>/uploads e /exports —
+# onde ficam as entregas do dono —, e o expurgo de fundo (app/core/expurgo_arquivos.py)
+# roda em todo boot do app, isto é, em todo ``with TestClient(app)``; e toda exportação de
+# teste deixaria lá uma cópia. As duas explícitas, e não DADOS_DIR: um UPLOADS_DIR ou
+# EXPORTS_DIR do .env de quem roda ganharia de DADOS_DIR. Antes de QUALQUER import do app,
+# pelo mesmo motivo de acima; os subprocessos dos testes herdam. Apagada no fim da sessão
+# (``pytest_unconfigure``). Quem precisa de pastas próprias continua trocando as duas no
+# ``settings`` com monkeypatch.
+_PASTA_DE_DADOS_DA_SESSAO = tempfile.mkdtemp(prefix="constela-testes-dados-")
+os.environ["UPLOADS_DIR"] = os.path.join(_PASTA_DE_DADOS_DA_SESSAO, "uploads")
+os.environ["EXPORTS_DIR"] = os.path.join(_PASTA_DE_DADOS_DA_SESSAO, "exports")
 
 import pytest
 from fastapi.testclient import TestClient
@@ -29,7 +45,10 @@ from app.models import (
     Turma,
     Usuario,
 )
+from app.models.base import agora
 from app.services import scoring
+from tests import _relogio
+from tests._ano_letivo import ANO_DAS_DATAS_FIXAS, FOLGA_DO_INICIO_DO_ANO
 
 
 def pytest_configure(config):
@@ -101,6 +120,7 @@ def pytest_unconfigure(config):
     está nele sai no fim, como sempre, e o que vier depois vai para ``sys.__stderr__``,
     que o pytest nunca fecha. FileHandler fica como está (tem arquivo próprio), e um
     buffer em memória (o do caplog) não é stream da captura."""
+    shutil.rmtree(_PASTA_DE_DADOS_DA_SESSAO, ignore_errors=True)
     stderr_real = sys.__stderr__
     if stderr_real is None:                        # pythonw: não há para onde mandar
         return
@@ -177,9 +197,49 @@ def db():
 
 
 @pytest.fixture()
-def escola_completa(db):
-    """Escola com admin, turma, alunos e configurações padrão."""
-    escola = Escola(nome="ESCOLA TESTE", ano_letivo_ativo=2026)
+def ano_letivo_da_escola() -> int:
+    """O ano letivo da ``escola_completa``: o do mundo de datas fixas em que a suíte foi
+    escrita (``tests._ano_letivo.ANO_DAS_DATAS_FIXAS``) — Listas Piloto "de 2026",
+    retratos de março, relógios presos em 20/10/2026 —, que vale em qualquer ano.
+
+    O módulo (ou o teste) que grava retratos e leituras "agora" sobrescreve esta fixture
+    com o ano de HOJE (``tests._ano_letivo.escola_no_ano_de_hoje``): senão, a partir de
+    01/01 do ano seguinte, o dado de agora fica fora do ano letivo da escola (TESTES-1)."""
+    return ANO_DAS_DATAS_FIXAS
+
+
+@pytest.fixture()
+def relogio_no_ano_letivo(monkeypatch, ano_letivo_da_escola):
+    """Prende o relógio do app, durante o teste, num instante do ano letivo da escola com
+    pelo menos ``FOLGA_DO_INICIO_DO_ANO`` de ano letivo para trás — e devolve o instante.
+
+    Para o teste que monta "N dias atrás" (ou pede "os últimos 30 dias") com o Matific:
+    o contador dele é DO ANO (``scoring.snapshots_matific_do_ano``, a exceção do início
+    do ano em ``evolucao._janela``), então nas primeiras semanas de janeiro o retrato de
+    N dias atrás é do ano passado e o cenário do teste deixa de existir — com razão. E
+    para o teste da retenção de queda do sync, que conta o ano pelo dia de Brasília
+    enquanto o retrato é gravado em UTC: nas três últimas horas de 31/12 os dois anos
+    discordam e a retenção não roda (a borda é a decisão TESTES-6, do dono). No
+    ano letivo de hoje, fora dessas semanas, o instante é o agora real (só deixa de
+    andar); nelas, é o fim da folga. Num ano letivo que já passou (a escola de datas
+    fixas), é o meio-dia de 31/12 dele.
+
+    Peça-a ANTES das fixtures que fazem login (``cliente``...): o token nasce no relógio
+    preso, que é o mesmo pelo qual o PyJWT confere o ``iat`` e o ``exp``."""
+    ano = ano_letivo_da_escola
+    inicio = datetime(ano, 1, 1, tzinfo=timezone.utc)
+    fim = datetime(ano, 12, 31, 12, tzinfo=timezone.utc)
+    instante = min(max(agora(), inicio + FOLGA_DO_INICIO_DO_ANO), fim)
+    _relogio.prender(monkeypatch, instante)
+    return instante
+
+
+@pytest.fixture()
+def escola_completa(db, ano_letivo_da_escola):
+    """Escola com admin, turma, alunos e configurações padrão, no ano letivo
+    ``ano_letivo_da_escola``."""
+    ano = ano_letivo_da_escola
+    escola = Escola(nome="ESCOLA TESTE", ano_letivo_ativo=ano)
     db.add(escola)
     db.flush()
 
@@ -199,7 +259,7 @@ def escola_completa(db):
     db.add(ReferenciaNormalizacao(escola_id=escola.id, modo="auto"))
 
     turma = Turma(escola_id=escola.id, nome="3º Ano A", ano_escolar="3º Ano",
-                  ano_letivo=2026)
+                  ano_letivo=ano)
     db.add(turma)
     db.flush()
 
@@ -209,7 +269,7 @@ def escola_completa(db):
         db.add(aluno)
         db.flush()
         db.add(Matricula(escola_id=escola.id, aluno_id=aluno.id,
-                         turma_id=turma.id, ano_letivo=2026))
+                         turma_id=turma.id, ano_letivo=ano))
         alunos.append(aluno)
     db.commit()
     return {"escola": escola, "turma": turma, "alunos": alunos, "admin": admin}

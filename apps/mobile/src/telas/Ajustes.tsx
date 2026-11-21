@@ -1,6 +1,7 @@
 /** Perfil do usuário, escola ativa, estado da conexão/cache e logout. */
 import { useNetInfo } from "@react-native-community/netinfo";
 import { useQueryClient } from "@tanstack/react-query";
+import { useState } from "react";
 import { ScrollView, StyleSheet, Text, TouchableOpacity, View } from "react-native";
 
 import { Botao, Cartao, Etiqueta, TextoSuave, Titulo } from "../componentes/basicos";
@@ -12,6 +13,7 @@ export default function Ajustes() {
   const { usuario, escolas, escolaId, selecionarEscola, sair } = useAutenticacao();
   const rede = useNetInfo();
   const clienteQuery = useQueryClient();
+  const [saindo, setSaindo] = useState(false);
 
   const online = rede.isConnected !== false;
   const sincronizacao = clienteQuery.getQueryState(["sincronizacao", escolaId]);
@@ -64,7 +66,18 @@ export default function Ajustes() {
         <TextoSuave>Servidor: {BASE_API}</TextoSuave>
       </Cartao>
 
-      <Botao titulo="Sair da conta" onPress={() => sair()} />
+      <Botao
+        titulo={saindo ? "Saindo..." : "Sair da conta"}
+        desabilitado={saindo}
+        onPress={async () => {
+          setSaindo(true);
+          try {
+            await sair(); // ao terminar, o app volta para a tela de entrar
+          } catch {
+            setSaindo(false);
+          }
+        }}
+      />
     </ScrollView>
   );
 }

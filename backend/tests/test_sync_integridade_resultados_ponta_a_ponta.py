@@ -38,12 +38,14 @@ from app.sync import connectors, orchestrator, service, vault
 from app.sync.connectors import elefante as con_elefante
 from app.sync.connectors import matific as con_matific
 from app.sync.interfaces import Credenciais
+from tests._ano_letivo import escola_no_ano_de_hoje  # noqa: F401 — fixture
 
 API = "/api/v1"
 SCHOOL_UUID = "c93c93c9-0000-0000-0000-000000000001"
 COMP_UUID = "c93c93c9-0000-0000-0000-0000000000cc"
 K1, K2 = "3 ANO A (300396804)", "4 ANO B (300397061)"
 CID1, CID2 = 511434, 600001
+ANO_DAS_LEITURAS = 2026      # as datas fixas das leituras da plataforma falsa
 
 
 # ---------------------------------------------------------------------------
@@ -190,7 +192,8 @@ def _livro(titulo, nivel, quando, tempo_s):
 def _montar(db, escola_completa):
     escola = escola_completa["escola"]
     eid = escola.id
-    t2 = Turma(escola_id=eid, nome="4º Ano B", ano_escolar="4º Ano", ano_letivo=2026)
+    t2 = Turma(escola_id=eid, nome="4º Ano B", ano_escolar="4º Ano",
+               ano_letivo=escola.ano_letivo_ativo)
     db.add(t2)
     db.flush()
     alunos = list(escola_completa["alunos"])
@@ -199,8 +202,24 @@ def _montar(db, escola_completa):
         a = Aluno(escola_id=eid, nome=nome)
         db.add(a)
         db.flush()
-        db.add(Matricula(escola_id=eid, aluno_id=a.id, turma_id=t2.id, ano_letivo=2026))
+        db.add(Matricula(escola_id=eid, aluno_id=a.id, turma_id=t2.id,
+                         ano_letivo=escola.ano_letivo_ativo))
         alunos.append(a)
+    # As leituras do cenário têm datas fixas de 2026 (setembro e outubro). Com o relógio
+    # adiantado a escola já está no ano seguinte (``escola_no_ano_de_hoje``), e o ranking
+    # e as premiações de um período de ano letivo ENCERRADO contam as crianças
+    # matriculadas NAQUELE ano (S_G_VIRADA-2): quem leu em 2026 estava matriculado em
+    # 2026, e o cenário passa a dizer isso.
+    if escola.ano_letivo_ativo != ANO_DAS_LEITURAS:
+        for nome_turma, serie, grupo in (("3º Ano A", "3º Ano", alunos[:3]),
+                                         ("4º Ano B", "4º Ano", alunos[3:])):
+            antiga = Turma(escola_id=eid, nome=nome_turma, ano_escolar=serie,
+                           ano_letivo=ANO_DAS_LEITURAS)
+            db.add(antiga)
+            db.flush()
+            for a in grupo:
+                db.add(Matricula(escola_id=eid, aluno_id=a.id, turma_id=antiga.id,
+                                 ano_letivo=ANO_DAS_LEITURAS))
     esperado = []
     for i, al in enumerate(alunos, start=1):
         livros = [_livro(f"Livro Ficticio {i}-{j}", "E" if j % 2 else "D",
@@ -341,7 +360,13 @@ def test_retrato_gravado_chega_a_nota_aos_rankings_e_as_premiacoes(db, cliente, 
             e = next(x for x in esperado if x["aluno_id"] == p["aluno_id"])
             assert p["valor"] == valor(e), (chave, e["i"])
     assert [p["aluno_id"] for p in cats["melhor_leitor"]["podio"]] == ordem
-    # O bloco de frescor da resposta diz de quando é o dado.
+    # O bloco de frescor da resposta diz de quando é o dado. Com o relógio adiantado a
+    # escola já virou o ano e setembro/2026 é de um ano letivo ENCERRADO: o selo, que só
+    # mede as crianças do ano ativo, não vem ali (REV3-PERIODO-1), e a conferência da
+    # data usa o ano letivo de agora.
+    if dados["populacao"]["origem"] == "ano_do_periodo":
+        assert dados["frescor"] is None
+        dados = _get(cliente, f"{API}/escolas/{eid}/premiacoes?periodo=ano_letivo")
     assert dados["frescor"]["dimensoes"]["leitura"]["dado_mais_recente_em"] == dia_coleta.isoformat()
 
 

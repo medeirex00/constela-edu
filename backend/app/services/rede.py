@@ -43,21 +43,35 @@ from app.models import (
 _CARIMBO_INSTITUCIONAL = Nota.detalhes["regua_institucional"]["versao_dificuldade"].as_string()
 
 
-def _matriculado_no_ano_ativo(turma_ids: list[int] | None = None):
-    """EXISTS: o aluno da Nota tem matrícula no ano letivo ATIVO da escola.
-
-    ``turma_ids`` (opcional) restringe a matrícula que conta a essas turmas —
-    é por onde entra o corte de elegibilidade (só turmas premiáveis). ``None``
-    = qualquer turma (comportamento de sempre)."""
-    consulta = (
+def _matriculado_no_ano_ativo(turma_ids: list[int]):
+    """EXISTS: o aluno da Nota tem matrícula no ano letivo ATIVO da escola numa das
+    ``turma_ids`` — o corte de elegibilidade (só turmas premiáveis) e o do ano: as
+    turmas vêm de ``_premiaveis_do_ano_ativo`` (ou do ramo "turma" de
+    ``_leituras_da_rede``), que só trazem as turmas do ano ativo de cada escola."""
+    return (
         select(Matricula.id)
         .where(Matricula.escola_id == Nota.escola_id,
                Matricula.aluno_id == Nota.aluno_id,
-               Matricula.ano_letivo == Escola.ano_letivo_ativo)
-    )
-    if turma_ids is not None:
-        consulta = consulta.where(Matricula.turma_id.in_(turma_ids))
-    return consulta.exists()
+               Matricula.ano_letivo == Escola.ano_letivo_ativo,
+               Matricula.turma_id.in_(turma_ids))
+    ).exists()
+
+
+def _premiaveis_do_ano_ativo(db: Session, ids: list[int]) -> list[int]:
+    """As turmas que concorrem, só as do ano letivo ATIVO de cada escola
+    (``elegibilidade.turmas_premiaveis_da_rede``). A MESMA população da Visão da
+    Escola (``evolucao.resumo_escola``, que lista só as turmas do ano ativo): a
+    matrícula do ano ativo que ficou numa turma de outro ano — dado legado de antes
+    das travas de escrita — não entra no cartão. Se entrasse, o cartão menos a soma
+    das turmas da Visão da Escola devolveria à Secretaria os números dessa criança."""
+    return elegibilidade.turmas_premiaveis_da_rede(db, ids, no_ano_ativo=True)
+
+
+def _na_turma_do_ano_ativo():
+    """Condição de JOIN: a turma da matrícula é do ano letivo ATIVO da escola (a
+    matrícula já é). Ver ``_premiaveis_do_ano_ativo``: sem ela, a matrícula do ano
+    ativo numa turma de outro ano contava no cartão e não na Visão da Escola."""
+    return and_(Turma.id == Matricula.turma_id, Turma.ano_letivo == Escola.ano_letivo_ativo)
 
 
 def _carimbo_pendente():
@@ -75,16 +89,26 @@ def _carimbo_pendente():
                _CARIMBO_INSTITUCIONAL != dificuldade_livro.VERSAO_VIGENTE)
 
 
-def _pendentes_recalculo(db: Session, ids: list[int]) -> dict[int, int]:
+# Escolas por consulta na contagem de pendentes: cada turma premiável vira um parâmetro
+# do IN (o PostgreSQL aceita até 65.535 por comando), e as turmas se acumulam ano a ano.
+_ESCOLAS_POR_LOTE_DE_PENDENTES = 100
+
+
+def _pendentes_recalculo(db: Session, ids: list[int], pendente=None) -> dict[int, int]:
     """``{escola_id: nº de notas do ano ativo pendentes de recálculo}`` entre os
-    alunos ativos matriculados (ver ``_carimbo_pendente``).
+    alunos ativos matriculados numa turma PREMIÁVEL (ver ``_q_pendentes``).
+    ``pendente``: a condição da Nota (padrão: ``_carimbo_pendente``).
 
     Só CONTA: o que a rede agrega não muda por causa disto — as médias continuam
     lendo qualquer nota carimbada, e trocar a versão da régua não recalcula nada
     sozinho (só o Admin Global, explicitamente, pelo script)."""
-    if not ids:
-        return {}
-    return {linha[0]: int(linha[1] or 0) for linha in db.execute(_q_pendentes(ids)).all()}
+    saida: dict[int, int] = {}
+    for i in range(0, len(ids), _ESCOLAS_POR_LOTE_DE_PENDENTES):
+        lote = ids[i:i + _ESCOLAS_POR_LOTE_DE_PENDENTES]
+        premiaveis = _premiaveis_do_ano_ativo(db, lote)
+        saida.update({linha[0]: int(linha[1] or 0)
+                      for linha in db.execute(_q_pendentes(lote, premiaveis, pendente)).all()})
+    return saida
 
 
 def escolas_com_notas_pendentes(db: Session) -> list[int]:
@@ -96,6 +120,7 @@ def escolas_com_notas_pendentes(db: Session) -> list[int]:
 from app.services import (dificuldade_livro, elegibilidade, grupo_pequeno,
                           matific_destaque, modulos, scoring)
 from app.services.analise import K_MINIMO
+from app.services.indicadores.ica import arredondar
 
 # Regras de "escola que precisa de atenção" (transparentes e auditáveis).
 ADOCAO_BAIXA = 40.0      # % de alunos ativos com nota abaixo disto = pouca adoção
@@ -156,6 +181,30 @@ def _matific_no_ano_ativo(anos: dict[int, int]):
     return or_(*termos) if termos else false()
 
 
+def _estrelas_que_contam():
+    """As estrelas do Matific que CONTAM num retrato, em SQL: no máximo
+    ``ESTRELAS_MAX_POR_ATIVIDADE`` (5) por atividade, negativo = 0 — a regra de
+    ``scoring.estrelas_que_contam`` (fonte única do teto:
+    ``matific_destaque.limitar_estrelas``), a que o motor, os rankings da escola, a
+    Visão da Escola, o telão e o cartaz já seguem. Sem ela, um retrato com 10
+    atividades e 5000 estrelas punha a escola no topo da Matemática da rede enquanto
+    a nota da criança contava 50. Dentro do teto o valor sai intacto."""
+    # Inteiro (5): estrelas e atividades são inteiras, e a soma continua inteira.
+    por_atividade = int(matific_destaque.ESTRELAS_MAX_POR_ATIVIDADE)
+    estrelas = case((SnapshotMatific.estrelas > 0, SnapshotMatific.estrelas), else_=0)
+    teto = case((SnapshotMatific.atividades > 0,
+                 SnapshotMatific.atividades * por_atividade), else_=0)
+    return case((estrelas > teto, teto), else_=estrelas)
+
+
+def _coluna_do_total(modelo, campo: str):
+    """A coluna que ``_q_totais`` soma: a do retrato, salvo as estrelas do Matific,
+    que somam só as que contam (``_estrelas_que_contam``)."""
+    if modelo is SnapshotMatific and campo == "estrelas":
+        return _estrelas_que_contam()
+    return getattr(modelo, campo)
+
+
 def _q_totais(ids: list[int], anos: dict[int, int], modelo, campos: list[str],
               premiaveis: list[int]):
     """Soma, por escola, os campos do snapshot ATUAL de cada aluno (o último por
@@ -165,7 +214,8 @@ def _q_totais(ids: list[int], anos: dict[int, int], modelo, campos: list[str],
     query para a rede inteira e as duas populações. Só números BRUTOS agregados.
 
     RESTRINGE ao MESMO conjunto das contagens de ``_kpis_da_rede`` (aluno ativo
-    E matriculado no ano letivo ATIVO da escola). Sem isso, o snapshot 'preso' de
+    E matriculado no ano letivo ATIVO da escola numa turma desse ano,
+    ``_na_turma_do_ano_ativo``). Sem isso, o snapshot 'preso' de
     um aluno transferido/arquivado (que persiste — o scoring já o filtra de
     propósito) inflava os totais e o ``ativos_*`` frente ao total de alunos. A
     matrícula é ÚNICA por aluno e ano (``uq_matricula_aluno_ano``): a turma é a
@@ -174,7 +224,9 @@ def _q_totais(ids: list[int], anos: dict[int, int], modelo, campos: list[str],
 
     MATIFIC É CONTADOR DO ANO (``_matific_no_ano_ativo``): o retrato "atual" é o
     último DENTRO do ano letivo ativo da escola, ANTES de numerar. Sem o corte, as
-    estrelas/atividades de outro ano entravam nos totais e no PER CAPITA.
+    estrelas/atividades de outro ano entravam nos totais e no PER CAPITA. As
+    estrelas somam só as que CONTAM (no máximo 5 por atividade,
+    ``_estrelas_que_contam``), nos totais, no per capita e em quem soma.
 
     ``com_<campo>``: quantos alunos têm o campo > 0, isto é, SOMAM no total. É o k
     da vitrine pública (``_top_escolas``): ``ativos`` conta também o retrato com
@@ -183,7 +235,7 @@ def _q_totais(ids: list[int], anos: dict[int, int], modelo, campos: list[str],
     numerado = (
         select(
             modelo.escola_id.label("escola_id"),
-            *[getattr(modelo, c).label(c) for c in campos],
+            *[_coluna_do_total(modelo, c).label(c) for c in campos],
             case((Matricula.turma_id.in_(premiaveis), 1), else_=0).label("concorre"),
             func.row_number().over(
                 partition_by=(modelo.escola_id, modelo.aluno_id),
@@ -195,6 +247,7 @@ def _q_totais(ids: list[int], anos: dict[int, int], modelo, campos: list[str],
         .join(Matricula, (Matricula.aluno_id == modelo.aluno_id)
               & (Matricula.escola_id == modelo.escola_id)
               & (Matricula.ano_letivo == Escola.ano_letivo_ativo))
+        .join(Turma, _na_turma_do_ano_ativo())
         .where(modelo.escola_id.in_(ids), Aluno.status == "ativo", *filtro)
         .subquery()
     )
@@ -243,6 +296,15 @@ def _q_medias(ids: list[int], anos: dict[int, int], modelo, coluna, premiaveis: 
     "tem dado" do Matific é ter snapshot DENTRO do ano letivo ativo da escola
     (``_matific_no_ano_ativo``). Só notas CALCULADAS pelo motor vigente (nunca o
     default 0,0). A quarta coluna é o ``grupo_pequeno`` da Secretaria."""
+    colunas = [func.count(Nota.id), func.coalesce(func.sum(case((coluna > 0, 1), else_=0)), 0),
+               func.avg(coluna)]
+    return colunas, _q_notas_medidas(ids, premiaveis, _nota_tem_dado(modelo, anos), colunas)
+
+
+def _nota_tem_dado(modelo, anos: dict[int, int]):
+    """EXISTS: o aluno da Nota tem dado da plataforma de ``modelo`` — o corte de
+    "quem a média mede" de ``_q_medias``. Leitura ITEMIZADA também é dado do
+    Elefante; o Matific só vale DENTRO do ano letivo ativo da escola."""
     tem_dado = (select(modelo.id)
                 .where(modelo.escola_id == Nota.escola_id, modelo.aluno_id == Nota.aluno_id))
     if modelo is SnapshotMatific:
@@ -254,9 +316,16 @@ def _q_medias(ids: list[int], anos: dict[int, int], modelo, coluna, premiaveis: 
             .where(Leitura.escola_id == Nota.escola_id, Leitura.aluno_id == Nota.aluno_id)
             .exists()
         )
-    colunas = [func.count(Nota.id), func.coalesce(func.sum(case((coluna > 0, 1), else_=0)), 0),
-               func.avg(coluna)]
-    return colunas, (
+    return tem_dado
+
+
+def _q_notas_medidas(ids: list[int], premiaveis: list[int], tem_dado, colunas: list):
+    """``colunas`` por escola sobre as Notas que as médias MEDEM: do ano letivo ativo,
+    de aluno ativo matriculado no ano numa turma premiável, calculadas pelo motor
+    vigente (carimbo) e com ``tem_dado`` (``_nota_tem_dado``). A ÚNICA definição da
+    população das médias: a de cada plataforma (``_q_medias``) e o peso da média
+    geral (``_q_medidos_na_media_geral``) saem daqui."""
+    return (
         select(Nota.escola_id, *colunas)
         .join(Aluno, Aluno.id == Nota.aluno_id)
         .join(Escola, Escola.id == Nota.escola_id)
@@ -267,6 +336,23 @@ def _q_medias(ids: list[int], anos: dict[int, int], modelo, coluna, premiaveis: 
                tem_dado,
                _CARIMBO_INSTITUCIONAL.isnot(None))
         .group_by(Nota.escola_id))
+
+
+def _q_medidos_na_media_geral(ids: list[int], anos: dict[int, int], contratados,
+                              premiaveis: list[int]):
+    """(escola, alunos DISTINTOS que a ``media_geral`` da escola mede): quem está em
+    ALGUMA das médias por plataforma CONTRATADAS (``_q_medias``) — a Nota calculada de
+    quem concorre e tem dado do Elefante (retrato ou Leitura) OU do Matific do ano.
+    É o peso da escola na média geral da rede (``PESO_DA_MEDIA_GERAL``).
+
+    Não é a cobertura (``alunos_com_dados``, o numerador da adoção): ela conta
+    qualquer retrato, sem o corte do ano do Matific e sem olhar a Nota. Pesando por
+    ela, a criança que só tem o Matific do ano passado (ou ainda sem Nota calculada)
+    pesava sem ser medida, e a que só tem Leitura itemizada era medida sem pesar."""
+    modelos = _retratos_contratados(contratados)
+    tem_dado = or_(*[_nota_tem_dado(m, anos) for m in modelos]) if modelos else false()
+    medidos = func.count(func.distinct(Nota.aluno_id))
+    return medidos, _q_notas_medidas(ids, premiaveis, tem_dado, [medidos])
 
 
 def _medias_por_plataforma(db: Session, ids: list[int], modelo, coluna,
@@ -281,7 +367,7 @@ def _medias_por_plataforma(db: Session, ids: list[int], modelo, coluna,
     anos = dict(db.execute(select(Escola.id, Escola.ano_letivo_ativo)
                            .where(Escola.id.in_(ids))).all())
     if turmas_premiaveis is None:
-        turmas_premiaveis = elegibilidade.turmas_premiaveis_da_rede(db, ids)
+        turmas_premiaveis = _premiaveis_do_ano_ativo(db, ids)
     _colunas, q = _q_medias(ids, anos, modelo, coluna, turmas_premiaveis)
     linhas = db.execute(q).all()
     if com_positivas:
@@ -291,40 +377,66 @@ def _medias_por_plataforma(db: Session, ids: list[int], modelo, coluna,
 
 def _q_com_dado(ids: list[int], modelo):
     """(escola, aluno) DISTINTOS com retrato da plataforma, entre os alunos ativos e
-    matriculados no ano letivo ativo — o numerador honesto da cobertura: alunos com
-    dado de ALGUMA plataforma (a contagem antiga, por linhas de ``notas``, dava ~100%)."""
+    matriculados no ano letivo ativo numa turma desse ano — o numerador honesto da
+    cobertura: alunos com dado de ALGUMA plataforma (a contagem antiga, por linhas de
+    ``notas``, dava ~100%)."""
     return (select(modelo.escola_id, modelo.aluno_id)
             .join(Aluno, Aluno.id == modelo.aluno_id)
             .join(Escola, Escola.id == modelo.escola_id)
             .join(Matricula, (Matricula.aluno_id == modelo.aluno_id)
                   & (Matricula.escola_id == modelo.escola_id)
                   & (Matricula.ano_letivo == Escola.ano_letivo_ativo))
+            .join(Turma, _na_turma_do_ano_ativo())
             .where(modelo.escola_id.in_(ids), Aluno.status == "ativo")
             .distinct())
 
 
-def _alunos_com_qualquer_dado(db: Session, ids: list[int]) -> dict[int, int]:
-    """Alunos DISTINTOS com dado de ALGUMA plataforma, por escola, sozinho (``_q_com_dado``;
-    os cartões o leem junto com o resto, em ``_leituras_da_rede``)."""
+# O retrato de cada módulo do catálogo: quem tem dado de um módulo, para a COBERTURA.
+_RETRATO_DO_MODULO = (("leitura", SnapshotElefante), ("matematica", SnapshotMatific))
+
+
+def _retratos_contratados(contratados) -> list:
+    """Os modelos de retrato dos módulos CONTRATADOS (``None`` = todos, como a escola
+    avulsa). A cobertura (``alunos_com_dados``) só conta a plataforma que a rede
+    assinou: o retrato antigo de um módulo fora do plano (rede que deixou de contratar
+    a Matemática, escola que veio de outra rede) não é adoção — a mesma regra das
+    médias e do índice (``_cartoes_da_rede``)."""
+    return [modelo for modulo, modelo in _RETRATO_DO_MODULO
+            if contratados is None or modulo in contratados]
+
+
+def _alunos_com_qualquer_dado(db: Session, ids: list[int],
+                              contratados: set[str] | None = None) -> dict[int, int]:
+    """Alunos DISTINTOS com dado de ALGUMA plataforma CONTRATADA, por escola, sozinho
+    (``_q_com_dado``; os cartões o leem junto com o resto, em ``_leituras_da_rede``).
+    ``contratados`` = os módulos da rede (``None`` = todos)."""
     if not ids:
         return {}
     total: dict[int, set[int]] = {}
-    for modelo in (SnapshotElefante, SnapshotMatific):
+    for modelo in _retratos_contratados(contratados):
         for escola_id, aluno_id in db.execute(_q_com_dado(ids, modelo)).all():
             total.setdefault(escola_id, set()).add(aluno_id)
     return {escola_id: len(alunos) for escola_id, alunos in total.items()}
 
 
-def _q_pendentes(ids: list[int]):
-    """As notas do ano ativo pendentes de recálculo por escola (``_carimbo_pendente``)."""
+def _q_pendentes(ids: list[int], premiaveis: list[int], pendente=None):
+    """As notas do ano ativo pendentes de recálculo por escola (``pendente``; padrão:
+    ``_carimbo_pendente``).
+
+    Só a população que o recálculo REGRAVA: aluno ativo, matriculado no ano ativo numa
+    turma de ``premiaveis`` — a mesma de ``scoring._carregar_contexto``, que tira a
+    Educação Infantil (Fases) e a turma sem série antes da conta e deixa no banco a
+    Nota já gravada de quem saiu. Contada aqui, a Nota antiga dessa criança nunca
+    ganhava carimbo: o ``--pendentes`` recalculava a escola a cada rodada sem nunca
+    chegar a "0 escolas", e o ``recalculo_pendente`` do painel nunca zerava."""
     return (select(Nota.escola_id, func.count(Nota.id))
             .join(Aluno, Aluno.id == Nota.aluno_id)
             .join(Escola, Escola.id == Nota.escola_id)
             .where(Nota.escola_id.in_(ids),
                    Nota.ano_letivo == Escola.ano_letivo_ativo,
                    Aluno.status == "ativo",
-                   _matriculado_no_ano_ativo(),
-                   _carimbo_pendente())
+                   _matriculado_no_ano_ativo(turma_ids=premiaveis),
+                   _carimbo_pendente() if pendente is None else pendente)
             .group_by(Nota.escola_id))
 
 
@@ -359,10 +471,11 @@ def _leituras_da_rede(db: Session, escolas: list[Escola], contratados: set[str],
                       com_pendentes: bool) -> dict:
     """Tudo o que os cartões das escolas leem do banco, em DUAS consultas (cada uma um
     ``UNION ALL`` de agregados que já eram consultas separadas, com o MESMO SQL de cada
-    um): (A) turmas, alunos, professores, a lista de turmas (para as premiáveis), quem
-    tem dado de alguma plataforma e — no painel — as notas pendentes; (B), que depende
-    das turmas premiáveis, quem concorre, as médias por plataforma e os totais. Antes
-    eram 17 consultas; em produção cada uma custa ~195 ms de ida e volta ao banco."""
+    um): (A) turmas, alunos, professores, a lista de turmas (para as premiáveis) e quem
+    tem dado de alguma plataforma; (B), que depende das turmas premiáveis, quem
+    concorre, as médias por plataforma, quem a média geral mede (o peso dela na rede),
+    os totais e — no painel — as notas pendentes de recálculo. Antes eram 17 consultas;
+    em produção cada uma custa ~195 ms de ida e volta ao banco."""
     ids = [e.id for e in escolas]
     anos = {e.id: e.ano_letivo_ativo for e in escolas}
     contagens = {
@@ -376,6 +489,7 @@ def _leituras_da_rede(db: Session, escolas: list[Escola], contratados: set[str],
                    [(func.count(func.distinct(Matricula.aluno_id)), _INT)],
                    lambda q: q.join_from(Matricula, Aluno, Aluno.id == Matricula.aluno_id)
                    .join(Escola, Escola.id == Matricula.escola_id)
+                   .join(Turma, _na_turma_do_ano_ativo())
                    .where(Matricula.escola_id.in_(ids),
                           Matricula.ano_letivo == Escola.ano_letivo_ativo,
                           Aluno.status == "ativo")
@@ -387,17 +501,16 @@ def _leituras_da_rede(db: Session, escolas: list[Escola], contratados: set[str],
     larg_a = {_INT: 2, _TXT: 1}
     partes = [m(select(*_ramo(f, [(e, _INT), *c], larg_a)))
               for f, (e, c, m) in contagens.items()]
+    # As turmas premiáveis: só as do ano ativo de cada escola (``_premiaveis_do_ano_ativo``).
     partes.append(select(*_ramo("turma", [(Turma.escola_id, _INT), (Turma.id, _INT),
                                           (Turma.ano_escolar, _TXT)], larg_a))
-                  .where(Turma.escola_id.in_(ids)))
-    for modelo in (SnapshotElefante, SnapshotMatific):
+                  .join_from(Turma, Escola, Escola.id == Turma.escola_id)
+                  .where(Turma.escola_id.in_(ids),
+                         Turma.ano_letivo == Escola.ano_letivo_ativo))
+    for modelo in _retratos_contratados(contratados):
         q = _q_com_dado(ids, modelo)
         partes.append(q.with_only_columns(*_ramo(
             "dado", [(modelo.escola_id, _INT), (modelo.aluno_id, _INT)], larg_a)))
-    if com_pendentes:
-        q = _q_pendentes(ids)
-        partes.append(q.with_only_columns(*_ramo(
-            "pendentes", [(Nota.escola_id, _INT), (func.count(Nota.id), _INT)], larg_a)))
     lido: dict = {"turmas": {}, "alunos": {}, "professores": {}, "pendentes": {}}
     turmas_e_rotulos, com_dado = [], {}
     for fonte, a, b, rotulo in _ler_ramos(db, partes, 8 * len(ids)):
@@ -407,7 +520,7 @@ def _leituras_da_rede(db: Session, escolas: list[Escola], contratados: set[str],
             com_dado.setdefault(a, set()).add(b)
         else:
             lido[fonte][a] = int(b or 0)
-    # (as Fases não concorrem: a mesma regra de ``elegibilidade.turmas_premiaveis_da_rede``)
+    # (as Fases não concorrem: a mesma regra de ``_premiaveis_do_ano_ativo``)
     premiaveis = [tid for tid, rotulo in turmas_e_rotulos
                   if elegibilidade.participa_de_premiacao(rotulo)]
     lido["com_dados"] = {e: len(alunos) for e, alunos in com_dado.items()}
@@ -432,6 +545,11 @@ def _leituras_da_rede(db: Session, escolas: list[Escola], contratados: set[str],
             (n, positivas, media), q = _q_medias(ids, anos, modelo, coluna, premiaveis)
             partes.append(q.with_only_columns(*_ramo(fonte, [
                 (Nota.escola_id, _INT), (n, _INT), (positivas, _INT), (media, _NUM)], larg_b)))
+    # Quem a ``media_geral`` da escola MEDE (está em alguma das médias acima): o peso
+    # dela na média geral da rede, no Panorama Global e na meta (``PESO_DA_MEDIA_GERAL``).
+    medidos, q = _q_medidos_na_media_geral(ids, anos, contratados, premiaveis)
+    partes.append(q.with_only_columns(*_ramo(
+        "med_ger", [(Nota.escola_id, _INT), (medidos, _INT)], larg_b)))
     totais = {"tot_mat": (SnapshotMatific, ["atividades", "estrelas"]),
               "tot_ele": (SnapshotElefante, ["livros_unicos", "tempo_leitura_min"])}
     for fonte, (modelo, campos) in totais.items():
@@ -439,10 +557,18 @@ def _leituras_da_rede(db: Session, escolas: list[Escola], contratados: set[str],
         partes.append(q.with_only_columns(*_ramo(
             fonte, [(escola, _INT), *[(c, _INT) for c in colunas]], larg_b))
             .group_by(escola))
-    linhas_b: dict[str, list] = {f: [] for f in ("alunos_p", *medias, *totais)}
-    for fonte, *resto in _ler_ramos(db, partes, 5 * len(premiaveis) + 8 * len(ids)):
+    if com_pendentes:
+        # Só a população que o recálculo regrava (turmas premiáveis): ``_q_pendentes``.
+        q = _q_pendentes(ids, premiaveis)
+        partes.append(q.with_only_columns(*_ramo(
+            "pendentes", [(Nota.escola_id, _INT), (func.count(Nota.id), _INT)], larg_b)))
+    linhas_b: dict[str, list] = {f: [] for f in ("alunos_p", *medias, "med_ger", *totais,
+                                                 "pendentes")}
+    for fonte, *resto in _ler_ramos(db, partes, 7 * len(premiaveis) + 11 * len(ids)):
         linhas_b[fonte].append(resto)
     lido["alunos_premiaveis"] = {r[0]: int(r[1] or 0) for r in linhas_b["alunos_p"]}
+    lido["medidos_na_media_geral"] = {r[0]: int(r[1] or 0) for r in linhas_b["med_ger"]}
+    lido["pendentes"] = {r[0]: int(r[1] or 0) for r in linhas_b["pendentes"]}
     for fonte in medias:
         # (alunos com dado, média, quantos com a nota > 0) — o formato de sempre.
         lido[fonte] = {r[0]: (int(r[1] or 0), float(r[-1] or 0.0), int(r[2] or 0))
@@ -466,8 +592,8 @@ def _cartoes_da_rede(db: Session, rede_id: int, *, com_contribuintes: bool = Fal
                      ) -> tuple[list[dict], dict[int, int]]:
     """Cartão resumido de CADA escola da rede (contagens + médias + totais brutos
     das plataformas do ano letivo ativo da própria escola), agregado no banco.
-    ``adocao`` = % de alunos ativos com nota (proxy de engajamento). Escolas sem
-    dados entram com zeros. NUNCA expõe PII: só agregados por escola.
+    ``adocao`` = % de alunos ativos com dado de alguma plataforma CONTRATADA (proxy
+    de engajamento). Escolas sem dados entram com zeros. NUNCA expõe PII: só agregados por escola.
 
     ``com_contribuintes`` (só a resposta da Secretaria pede) acrescenta a cada
     cartão a chave INTERNA ``_contribuintes`` (``_contribuintes_do_cartao``),
@@ -494,6 +620,7 @@ def _cartoes_da_rede(db: Session, rede_id: int, *, com_contribuintes: bool = Fal
     # cada aluno (todos e só quem concorre — o numerador do per capita).
     med_ele, med_mat = lido.get("med_ele", {}), lido.get("med_mat", {})
     com_dados_por_escola = lido["com_dados"]
+    medidos_na_media_geral = lido["medidos_na_media_geral"]
     mat, mat_p = lido["tot_mat"], lido["tot_mat_p"]
     ele, ele_p = lido["tot_ele"], lido["tot_ele_p"]
 
@@ -530,6 +657,10 @@ def _cartoes_da_rede(db: Session, rede_id: int, *, com_contribuintes: bool = Fal
         cartoes.append({
             "escola_id": escola.id, "nome": escola.nome, "cidade": escola.cidade,
             "status": escola.status,
+            # O ANO LETIVO em que a escola é medida (coorte, Notas e a janela do
+            # Matific são os do ano ativo DELA): na virada do ano, a rede passa dias
+            # com escolas em anos diferentes, e quem compara precisa saber disso.
+            "ano_letivo": escola.ano_letivo_ativo,
             "latitude": escola.latitude, "longitude": escola.longitude,
             "total_turmas": int(turmas.get(escola.id, 0)),
             "total_professores": int(professores.get(escola.id, 0)),
@@ -544,6 +675,11 @@ def _cartoes_da_rede(db: Session, rede_id: int, *, com_contribuintes: bool = Fal
             # ENGAJAMENTO / COBERTURA — quantos usam (conceito SEPARADO do acima).
             "alunos_com_dados": com_dados,
             "adocao": adocao,
+            # Quem a `media_geral` acima MEDE: quem concorre (1º–5º ano) e está em
+            # alguma das médias por plataforma (``_q_medidos_na_media_geral``). É o
+            # peso da escola na média geral da rede — não a cobertura, que conta
+            # também as Fases, o Matific de outro ano e quem ainda não tem Nota.
+            "alunos_com_dados_premiaveis": int(medidos_na_media_geral.get(escola.id, 0)),
             # Totais brutos das plataformas (para as seções Elefante/Matific da rede).
             "livros": livros,
             "tempo_leitura_min": tempo_min,
@@ -579,10 +715,12 @@ def _cartoes_da_rede(db: Session, rede_id: int, *, com_contribuintes: bool = Fal
             # (``_top_escolas``). Só contagens, nenhum dado individual.
             "com_livros_premiaveis": int(ep["com_livros_unicos"]) if ep else 0,
             "com_estrelas_premiaveis": int(mp["com_estrelas"]) if mp else 0,
-            "livros_por_matricula": round(livros_p / n_p, 1) if n_p else 0.0,
-            "estrelas_por_matricula": round(estrelas_p / n_p, 1) if n_p else 0.0,
-            "atividades_por_matricula": round(atividades_p / n_p, 1) if n_p else 0.0,
-            "tempo_por_matricula_min": round(tempo_p / n_p, 1) if n_p else 0.0,
+            # Para EXIBIR (``_exibir``); régua, índice e ordem leem a conta exata
+            # (``_per_capita_exato``).
+            "livros_por_matricula": _exibir(livros_p / n_p) if n_p else 0.0,
+            "estrelas_por_matricula": _exibir(estrelas_p / n_p) if n_p else 0.0,
+            "atividades_por_matricula": _exibir(atividades_p / n_p) if n_p else 0.0,
+            "tempo_por_matricula_min": _exibir(tempo_p / n_p) if n_p else 0.0,
         })
         if com_contribuintes:
             cartoes[-1]["_contribuintes"] = _contribuintes_do_cartao(
@@ -643,6 +781,40 @@ def _contribuintes_do_cartao(medias: dict, totais: dict) -> dict:
 # a ordem do ranking e a pontuação nunca se contradizem — e a leitura é direta:
 # "1000 = melhor da rede; 500 = metade do desempenho da melhor".
 ESCALA_INDICE = 10.0          # 0–100 do motor → 0–1000 exibido na rede
+
+# PER CAPITA de quem concorre: o campo EXIBIDO no cartão → o numerador dele (o
+# denominador é sempre ``alunos_premiaveis``). O campo do cartão é arredondado para
+# exibir; quem COMPARA escolas (a régua e o índice, a ordem do Ranking da Rede, os
+# destaques e a vitrine) lê a conta exata (``_per_capita_exato``). Comparando o valor
+# arredondado, 12,25 livros por aluno empatava com 12,2: as duas escolas levavam
+# índice 1000 e o desempate pela adoção dava o 1º lugar à que lê menos.
+_NUMERADOR_DO_PER_CAPITA = {
+    "livros_por_matricula": "livros_premiaveis",
+    "estrelas_por_matricula": "estrelas_premiaveis",
+    "atividades_por_matricula": "atividades_premiaveis",
+    "tempo_por_matricula_min": "tempo_premiaveis_min",
+}
+
+
+def _exibir(valor: float) -> float:
+    """Um per capita com 1 casa, meio para cima (o arredondamento da divulgação, o
+    mesmo da Análise Educacional) — só para mostrar, nunca para comparar."""
+    return arredondar(valor, 1)
+
+
+def _per_capita_exato(cartao: dict, chave: str):
+    """O valor de ``chave`` para COMPARAR cartões. Per capita (``_NUMERADOR_DO_PER_CAPITA``)
+    = numerador ÷ ``alunos_premiaveis``, sem arredondar; qualquer outra chave, ou cartão
+    sem o numerador, = o próprio valor do cartão. Nulo continua nulo (a matéria escondida
+    da Secretaria: o numerador sai junto com o per capita)."""
+    numerador = _NUMERADOR_DO_PER_CAPITA.get(chave)
+    valor = cartao.get(chave)
+    if numerador is None or numerador not in cartao or valor is None:
+        return valor
+    total, alunos = cartao[numerador], cartao.get("alunos_premiaveis") or 0
+    if total is None:
+        return None
+    return total / alunos if alunos else 0.0
 
 
 def _indice_da_rede(valor: float, melhor: float) -> float:
@@ -706,16 +878,19 @@ def _pontuar_por_percapita(cartoes: list[dict], sufixo: str = "") -> None:
         ativos_cartao = c.get(f"{ativos}_premiaveis", c[ativos])
         return ativos_cartao > 0 and dimensao in (c.get("modulos") or list(modulos.TODOS))
 
-    melhor_leitura = max((c["livros_por_matricula"] for c in cartoes
+    # A régua e o índice saem do per capita EXATO, não do exibido (``_per_capita_exato``).
+    melhor_leitura = max((_per_capita_exato(c, "livros_por_matricula") for c in cartoes
                           if _na_coorte(c, "leitura", "ativos_elefante")), default=0.0)
-    melhor_matematica = max((c["estrelas_por_matricula"] for c in cartoes
+    melhor_matematica = max((_per_capita_exato(c, "estrelas_por_matricula") for c in cartoes
                              if _na_coorte(c, "matematica", "ativos_matific")), default=0.0)
     for c in cartoes:
         tem_leitura = _na_coorte(c, "leitura", "ativos_elefante")
         tem_matematica = _na_coorte(c, "matematica", "ativos_matific")
-        leitura = (_indice_da_rede(c["livros_por_matricula"], melhor_leitura)
+        leitura = (_indice_da_rede(_per_capita_exato(c, "livros_por_matricula"),
+                                   melhor_leitura)
                    if tem_leitura else 0.0)
-        matematica = (_indice_da_rede(c["estrelas_por_matricula"], melhor_matematica)
+        matematica = (_indice_da_rede(_per_capita_exato(c, "estrelas_por_matricula"),
+                                      melhor_matematica)
                       if tem_matematica else 0.0)
         c["pontuacao_leitura" + sufixo] = leitura
         c["pontuacao_matematica" + sufixo] = matematica
@@ -744,7 +919,19 @@ def tem_dado_de_quem_concorre(cartao: dict) -> bool:
     return bool(cartao.get("dimensoes_pontuadas"))
 
 
-def _ponderada(cartoes: list[dict], chave: str, peso: str = "alunos_com_dados") -> float:
+# Os PESOS da rede que não são por dimensão (``_ponderada``: o peso é o denominador
+# da métrica). O índice 0–1000 é per capita POR MATRÍCULA de quem concorre (livros e
+# estrelas ÷ ``alunos_premiaveis``), então o índice da rede ponderado por ele é o per
+# capita da rede inteira na régua da melhor escola. A média geral 0–100 é desempenho
+# de quem ela MEDE: a Nota calculada de quem concorre e está em alguma das médias por
+# plataforma (``_q_medidos_na_media_geral``). Nenhum dos dois é a cobertura
+# (``alunos_com_dados``), que conta também as crianças das Fases, o retrato do Matific
+# de outro ano e quem ainda não tem Nota calculada.
+PESO_DO_INDICE = "alunos_premiaveis"
+PESO_DA_MEDIA_GERAL = "alunos_com_dados_premiaveis"
+
+
+def _ponderada(cartoes: list[dict], chave: str, peso: str) -> float:
     """Média de ``chave`` sobre ``cartoes`` PONDERADA por ``peso`` (não média de
     médias, que daria peso igual a uma escola de 10 e uma de 500 alunos).
 
@@ -756,6 +943,11 @@ def _ponderada(cartoes: list[dict], chave: str, peso: str = "alunos_com_dados") 
     baixo — o mesmo "ausência vira zero" que a arquitetura elimina no aluno,
     reaparecendo um nível acima. Peso total zero = nada medido → 0.0 (quem
     exibe distingue isso pelo próprio denominador).
+
+    Não há peso padrão: cada chamada diz o denominador da sua métrica. O antigo
+    padrão (``alunos_com_dados``, cobertura de TODOS os matriculados) contava as
+    crianças das Fases, que não entram no índice nem nas médias de escola
+    nenhuma — e era o peso do índice e da média geral da rede.
 
     Valor NULO é a matéria escondida da Secretaria (grupo pequeno, ver
     ``_proteger_cartoes``): sai da conta junto com o seu peso, como ausência.
@@ -772,15 +964,22 @@ def _media_geral_das_comparadas(cartoes: list[dict]) -> float:
     usada pelo painel da rede (``dashboard_rede``), pelo cartão de cada rede no
     Panorama Global e pelo total global (``dashboard_global``).
 
-    Pondera por ``alunos_com_dados`` (o denominador dela É "alunos com algum
-    dado"), mas só sobre as escolas COMPARADAS (``tem_dado_de_quem_concorre``):
-    a escola em que só a Educação Infantil usa a plataforma tem ``media_geral``
-    0,0 por AUSÊNCIA (as médias só olham as turmas premiáveis) e, ao mesmo
-    tempo, ``alunos_com_dados`` > 0 (a cobertura conta as Fases). Somada com
-    esse peso, ela puxava a média para baixo. Quando o Panorama Global tinha a
-    fórmula própria, sobre TODOS os cartões, a mesma rede aparecia com 60 para a
-    Secretaria e 20 para o Admin Global."""
-    return _ponderada([c for c in cartoes if tem_dado_de_quem_concorre(c)], "media_geral")
+    Pondera por ``alunos_com_dados_premiaveis`` (``PESO_DA_MEDIA_GERAL``): quem a
+    ``media_geral`` da escola MEDE, o denominador dela — a Nota calculada de quem
+    CONCORRE (1º–5º ano) e está em alguma das médias por plataforma, com os mesmos
+    cortes delas (``_q_medidos_na_media_geral``: Leitura itemizada conta, o Matific
+    só do ano letivo ativo). Com ``alunos_com_dados`` (cobertura, que conta também as
+    Fases), a escola com mais crianças da Educação Infantil usando a plataforma puxava
+    a média da rede para o lado dela; contado sobre a cobertura de quem concorre, o
+    peso ainda levava a criança que só tem o Matific do ano passado.
+
+    E só sobre as escolas COMPARADAS (``tem_dado_de_quem_concorre``): a escola em
+    que só a Educação Infantil usa a plataforma tem ``media_geral`` 0,0 por
+    AUSÊNCIA. Quando o Panorama Global tinha a fórmula própria, sobre TODOS os
+    cartões, a mesma rede aparecia com 60 para a Secretaria e 20 para o Admin
+    Global."""
+    return _ponderada([c for c in cartoes if tem_dado_de_quem_concorre(c)], "media_geral",
+                      PESO_DA_MEDIA_GERAL)
 
 
 # ---------------------------------------------------------------------------
@@ -843,8 +1042,9 @@ def _proteger_cartoes(cartoes: list[dict]) -> list[dict]:
     escondida inteira também sai da COORTE do índice (nem pontua nem é régua,
     ver ``_pontuar_por_percapita``); a ``media_geral`` e a ``pontuacao_geral``
     da escola passam a ser só das matérias visíveis (nulas se nenhuma sobra) —
-    nunca calculadas com o número escondido. O motivo de atenção é refeito com o
-    índice que a Secretaria vê.
+    nunca calculadas com o número escondido —, e o peso da escola na média geral
+    da rede (``PESO_DA_MEDIA_GERAL``), só de quem a média visível mede. O motivo
+    de atenção é refeito com o índice que a Secretaria vê.
 
     Os totais e as médias ponderadas da rede, montados depois sobre estes
     cartões, deixam a matéria escondida de fora (valor nulo = ausência em
@@ -880,10 +1080,14 @@ def _proteger_cartoes(cartoes: list[dict]) -> list[dict]:
             for campo in campos:
                 c[campo] = None
         if inteiras[c["escola_id"]]:
-            visiveis = [c[media] for media, n in _MEDIA_NO_CARTAO
-                        if c[media] is not None and c[n]]
-            c["media_geral"] = (round(sum(visiveis) / len(visiveis), 1)
-                                if visiveis else None)
+            medidas = [(c[media], c[n]) for media, n in _MEDIA_NO_CARTAO
+                       if c[media] is not None and c[n]]
+            c["media_geral"] = (round(sum(m for m, _ in medidas) / len(medidas), 1)
+                                if medidas else None)
+            # O PESO dela na média geral da rede segue a média: com uma matéria
+            # escondida sobra no máximo UMA visível, e quem a média mede são os
+            # aferidos dela — a criança que só está na matéria escondida não pesa.
+            c[PESO_DA_MEDIA_GERAL] = sum(n for _, n in medidas)
             if not c["dimensoes_pontuadas"]:
                 c["pontuacao_geral"] = None
         motivo = _motivo_atencao(c["total_alunos"], c["alunos_com_dados"],
@@ -927,6 +1131,11 @@ def dashboard_rede(db: Session, rede_id: int, *, secretaria: bool = False) -> di
     índice. A escola não comparada continua na lista — a cobertura (alunos, com
     dados, adoção) é dela também —, mas vai para o fim e sem ``posicao``.
 
+    ANO LETIVO: cada escola é medida no PRÓPRIO ano ativo (o cartão traz
+    ``ano_letivo``) e ``anos_letivos`` lista os anos da rede. Na virada do ano
+    (mais de um), a comparação junta anos diferentes — quem mostra avisa; a
+    escola continua na comparação (tirá-la seria outra regra).
+
     ``secretaria``: os cartões passam por ``_proteger_cartoes`` (grupo pequeno)
     e os totais da rede deixam de fora as matérias escondidas. A resposta ganha
     ``ocultas`` (as escolas com alguma matéria escondida) e
@@ -952,12 +1161,13 @@ def dashboard_rede(db: Session, rede_id: int, *, secretaria: bool = False) -> di
 
     # A média geral e o índice só ponderam as escolas COMPARADAS: o 0 de quem
     # não tem ninguém do 1º–5º ano com dado é ausência, e com o peso dos alunos
-    # da Fase ele baixava o índice da rede usado nas metas. `media_geral` e
-    # `pontuacao_geral` usam o peso genérico porque o denominador delas É
-    # "alunos com algum dado" (ver `_ponderada`).
+    # da Fase ele baixava o índice da rede usado nas metas. E cada um pesa pelo
+    # SEU denominador (ver `_ponderada`), nunca pela cobertura, que conta as
+    # crianças das Fases: a média geral, por quem concorre com dado; o índice,
+    # por quem concorre (`PESO_DO_INDICE`).
     comparadas = [c for c in cartoes if c["comparada"]]
     media_rede = _media_geral_das_comparadas(cartoes)
-    indice_rede = _ponderada(comparadas, "pontuacao_geral")
+    indice_rede = _ponderada(comparadas, "pontuacao_geral", PESO_DO_INDICE)
     # (A `media_geral` nula é a da escola com a matéria escondida da Secretaria
     # e nenhuma outra média visível: fica fora da dispersão, como ausência.)
     medias = [c["media_geral"] for c in comparadas if c["media_geral"] is not None]
@@ -1015,6 +1225,11 @@ def dashboard_rede(db: Session, rede_id: int, *, secretaria: bool = False) -> di
         # Módulos contratados — a interface inteira (cards, abas, rankings,
         # explicador) se adapta a partir daqui.
         "modulos": sorted(contratados),
+        # Os ANOS LETIVOS em que as escolas da rede estão (cada cartão traz o seu
+        # ``ano_letivo``). Mais de um = a virada do ano em andamento: cada escola é
+        # medida no ano dela, e o painel, o Ranking da Rede e o Boletim dizem isso
+        # (como a análise de plataformas, ``analise/plataformas._limitacoes``).
+        "anos_letivos": sorted({c["ano_letivo"] for c in cartoes}),
         "totais": {
             "escolas": len(cartoes),
             "escolas_ativas": sum(1 for c in cartoes if c["status"] == "ativa"),
@@ -1063,6 +1278,7 @@ def dashboard_rede(db: Session, rede_id: int, *, secretaria: bool = False) -> di
         # `python -m scripts.recalcular_institucional --pendentes`.
         "recalculo_pendente": _recalculo_pendente(pendentes),
     }
+    _tirar_totais_fora_do_plano(resposta["totais"], contratados)
     if secretaria:
         _marcar_totais_da_secretaria(resposta["totais"], cartoes)
         # As escolas com alguma matéria escondida (o cartão de cada uma também
@@ -1083,6 +1299,30 @@ _TOTAIS_DA_MATERIA = {
                    ("atividades", "atividades", "ativos_matific"),
                    ("estrelas", "estrelas", "ativos_matific")),
 }
+
+
+# Os totais da REDE de cada módulo (a plataforma dele): saem NULOS quando a rede não
+# contratou o módulo (``_tirar_totais_fora_do_plano``).
+_TOTAIS_DO_MODULO = {
+    "leitura": ("media_elefante", "livros", "tempo_leitura_min", "livros_por_aluno",
+                "ativos_elefante"),
+    "matematica": ("media_matific", "atividades", "estrelas", "ativos_matific"),
+}
+
+
+def _tirar_totais_fora_do_plano(totais: dict, contratados: set[str]) -> None:
+    """Os totais da plataforma de um módulo que a rede NÃO contratou saem nulos (IN
+    PLACE): o retrato antigo do Matific de uma rede que deixou de contratar a
+    Matemática não é número da rede — nem "0", que pareceria medido. As médias,
+    o índice e a adoção já deixavam o módulo de fora; os totais brutos (livros,
+    atividades, estrelas, alunos com dado da plataforma) ainda o somavam, e a meta
+    de "Atividades Matific na rede" media o progresso com eles. Os cartões das
+    escolas continuam com os números de sempre (a tela já não mostra o módulo fora
+    do plano, e o cartão traz ``modulos``)."""
+    for modulo, chaves in _TOTAIS_DO_MODULO.items():
+        if modulo not in contratados:
+            for chave in chaves:
+                totais[chave] = None
 
 
 def _marcar_totais_da_secretaria(totais: dict, cartoes: list[dict]) -> None:
@@ -1194,12 +1434,17 @@ def ranking_escolas(db: Session, rede_id: int, limite: int = 50,
     (``dimensoes_pontuadas`` diz quais). Em TODA métrica, inclusive a
     ``engajamento`` (cobertura, que não tem número escondido), sai também a
     escola sem nenhuma matéria pontuada visível (``comparada = False`` no
-    painel): é a mesma marca de quem a Secretaria compara."""
+    painel): é a mesma marca de quem a Secretaria compara.
+
+    Cada item traz o ``ano_letivo`` em que a escola é medida; os anos da rede
+    inteira estão em ``anos_letivos`` do ``/dashboard``."""
     chave = METRICAS_RANKING.get(metrica, "pontuacao_geral")
     desempate = DESEMPATE_DA_DIMENSAO.get(DIMENSAO_DA_METRICA.get(metrica), "adocao")
     cartoes = [c for c in cartoes_da_rede(db, rede_id, secretaria=secretaria)
                if tem_dado_de_quem_concorre(c) and c[chave] is not None]
-    cartoes.sort(key=lambda c: (-c[chave], -c[desempate], c["nome"].casefold()))
+    # Ordem pela conta EXATA (o per capita exibido é arredondado: 12,25 e 12,2 empatavam).
+    cartoes.sort(key=lambda c: (-_per_capita_exato(c, chave), -c[desempate],
+                                c["nome"].casefold()))
     for posicao, cartao in enumerate(cartoes[:limite], start=1):
         cartao["posicao"] = posicao
     return cartoes[:limite]
@@ -1211,7 +1456,9 @@ def ranking_escolas(db: Session, rede_id: int, limite: int = 50,
 # ---------------------------------------------------------------------------
 
 def _por(total: int, alunos: int) -> float:
-    return round(total / alunos, 1) if alunos else 0.0
+    """Per capita de uma rede, para EXIBIR (``_exibir``); a comparação entre redes lê
+    a conta exata dos totais que vão no cartão (``_per_capita_exato``)."""
+    return _exibir(total / alunos) if alunos else 0.0
 
 
 def dashboard_global(db: Session) -> dict:
@@ -1260,8 +1507,11 @@ def dashboard_global(db: Session) -> dict:
             "ativos_elefante": sum(c["ativos_elefante"] for c in cartoes),
             "ativos_matific": sum(c["ativos_matific"] for c in cartoes),
             "modulos": sorted(modulos.modulos_da_rede(db, rede.id)),
-            # Per capita da rede só de quem concorre (a mesma régua das escolas).
+            # Per capita da rede só de quem concorre (a mesma régua das escolas),
+            # com os numeradores: a régua e o índice entre redes leem a conta exata.
             "alunos_premiaveis": sum(c["alunos_premiaveis"] for c in cartoes),
+            "livros_premiaveis": sum(c["livros_premiaveis"] for c in cartoes),
+            "estrelas_premiaveis": sum(c["estrelas_premiaveis"] for c in cartoes),
             "ativos_elefante_premiaveis": sum(c["ativos_elefante_premiaveis"] for c in cartoes),
             "ativos_matific_premiaveis": sum(c["ativos_matific_premiaveis"] for c in cartoes),
             "livros_por_matricula": _por(sum(c["livros_premiaveis"] for c in cartoes),
@@ -1308,7 +1558,13 @@ def dashboard_global(db: Session) -> dict:
             "media_matific": _ponderada(cartoes_rede, "media_matific", "alunos_com_nota_matific"),
             "media_elefante": _ponderada(cartoes_rede, "media_elefante",
                                          "alunos_com_nota_elefante"),
-            "pontuacao_geral": _ponderada(cartoes_rede, "pontuacao_geral"),
+            # O índice entre redes pesa cada rede por quem concorre nela (o
+            # denominador do per capita da rede) e só olha as redes PONTUADAS: a
+            # rede em que só as Fases têm dado tem índice 0 por ausência, como a
+            # escola não comparada no painel da rede.
+            "pontuacao_geral": _ponderada(
+                [r for r in cartoes_rede if tem_dado_de_quem_concorre(r)],
+                "pontuacao_geral", PESO_DO_INDICE),
             "escolas_em_atencao": sum(r["escolas_em_atencao"] for r in cartoes_rede),
         },
         "redes": cartoes_rede,
@@ -1346,6 +1602,24 @@ METRICAS_META: dict[str, dict] = {
 }
 
 
+# O MÓDULO de cada meta de plataforma: a meta de um módulo que a rede não contratou
+# não é aceita (``definir_meta``) nem mostrada (``metas_com_progresso``). As demais
+# (índice, adoção, média geral) valem em qualquer plano.
+MODULO_DA_META: dict[str, str] = {
+    "media_elefante": "leitura", "livros": "leitura",
+    "media_matific": "matematica", "atividades": "matematica",
+}
+
+
+class MetaForaDoPlano(ValueError):
+    """A meta é de uma plataforma cujo módulo a rede não contratou."""
+
+
+def _meta_no_plano(metrica: str, contratados) -> bool:
+    modulo = MODULO_DA_META.get(metrica)
+    return modulo is None or modulo in contratados
+
+
 def listar_metas(db: Session, rede_id: int) -> list[dict]:
     metas = db.execute(
         select(MetaRede).where(MetaRede.rede_id == rede_id).order_by(MetaRede.metrica)
@@ -1356,9 +1630,18 @@ def listar_metas(db: Session, rede_id: int) -> list[dict]:
 
 def definir_meta(db: Session, rede_id: int, metrica: str, alvo: float,
                  descricao: str | None = None) -> MetaRede:
-    """Upsert: UMA meta por (rede, métrica) — redefinir sobrescreve o alvo."""
+    """Upsert: UMA meta por (rede, métrica) — redefinir sobrescreve o alvo.
+
+    LEVANTA ``MetaForaDoPlano`` para a meta de uma plataforma cujo módulo a rede
+    não contratou (o cadastro da tela nem a oferece; por API direta ela era
+    gravada e o progresso saía do dado de um módulo fora do plano)."""
     if metrica not in METRICAS_META:
         raise ValueError("Métrica de meta inválida.")
+    if not _meta_no_plano(metrica, modulos.modulos_da_rede(db, rede_id)):
+        modulo = modulos.CATALOGO[MODULO_DA_META[metrica]]
+        raise MetaForaDoPlano(
+            f"A meta “{METRICAS_META[metrica]['rotulo']}” é do módulo de {modulo['nome']} "
+            f"({modulo['produto']}), que esta rede não contratou. Nada foi gravado.")
     meta = db.execute(select(MetaRede).where(
         MetaRede.rede_id == rede_id, MetaRede.metrica == metrica)).scalars().first()
     if meta is None:
@@ -1381,7 +1664,7 @@ def remover_meta(db: Session, rede_id: int, metrica: str) -> None:
 _PESO_DA_META = {
     "media_elefante": "alunos_com_nota_elefante",
     "media_matific": "alunos_com_nota_matific",
-    "media_geral": "alunos_com_dados",
+    "media_geral": PESO_DA_MEDIA_GERAL,
 }
 
 
@@ -1406,7 +1689,11 @@ def _meta_medida(metrica: str, cartoes: list[dict]) -> bool:
 def metas_com_progresso(db: Session, rede_id: int, dados: dict | None = None) -> list[dict]:
     """Metas cadastradas + progresso REAL: valor ATUAL da rede / alvo (limitado a
     100%) + quantas escolas COM dados já atingiram (só para métricas comparáveis
-    por escola). Sem meta cadastrada → lista vazia (a UI mostra o convite)."""
+    por escola). Sem meta cadastrada → lista vazia (a UI mostra o convite).
+
+    A meta de um módulo que a rede NÃO contratou (``MODULO_DA_META``) não sai: o
+    "atual" dela seria o dado de uma plataforma fora do plano. A linha continua
+    gravada — se o módulo voltar ao plano, a meta volta com o alvo de antes."""
     metas = db.execute(
         select(MetaRede).where(MetaRede.rede_id == rede_id).order_by(MetaRede.metrica)
     ).scalars().all()
@@ -1414,6 +1701,11 @@ def metas_com_progresso(db: Session, rede_id: int, dados: dict | None = None) ->
         return []
     if dados is None:
         dados = dashboard_rede(db, rede_id)
+    # Os módulos do MESMO painel (o ``dashboard_rede`` os traz); sem eles, os da rede.
+    contratados = set(dados.get("modulos") or modulos.modulos_da_rede(db, rede_id))
+    metas = [m for m in metas if _meta_no_plano(m.metrica, contratados)]
+    if not metas:
+        return []
     totais = dados["totais"]
     # "X de Y escolas atingiram" conta as MESMAS escolas que o ranking, a equidade
     # e o índice comparam (a marca ``comparada``): a escola em que só a Educação
@@ -1485,9 +1777,10 @@ def _top_escolas(cartoes: list[dict], chave: str, contribuintes: str,
     validos = [c for c in cartoes if c["alunos_com_dados"] > 0 and c.get(chave, 0) > 0
                and c.get("alunos_premiaveis", 0) >= K_MINIMO
                and c.get(contribuintes, 0) >= K_MINIMO]
-    validos.sort(key=lambda c: (-c[chave], c["nome"].casefold()))
+    # Ordem pela conta EXATA; o valor publicado é o exibido no cartão (meio para cima).
+    validos.sort(key=lambda c: (-_per_capita_exato(c, chave), c["nome"].casefold()))
     return [{**({"escola_id": c["escola_id"]} if com_id else {}),
-             "nome": c["nome"], "valor": round(float(c[chave]), 1)}
+             "nome": c["nome"], "valor": _exibir(_per_capita_exato(c, chave))}
             for c in validos[:limite]]
 
 

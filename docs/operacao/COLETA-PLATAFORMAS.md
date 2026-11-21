@@ -57,6 +57,16 @@ ou "bloqueio anti-robô da plataforma".
 * **Elefante — agregado parado**: o total de livros do relatório de turma pode
   ficar parado enquanto o detalhe por aluno já tem livro novo. Por isso, a cada
   7 dias a coleta ignora o cursor e recoleta tudo (`DIAS_ENTRE_COLETAS_COMPLETAS`).
+* **Elefante — livros por aluno com a plataforma lenta**: os livros de uma turma
+  saem em lotes de até 6 pedidos ao mesmo tempo, e o prazo de 20 s conta da saída
+  de cada pedido (antes, os últimos de uma turma grande eram abortados sem nem ter
+  saído). O custo, no pior caso: com a plataforma aceitando a conexão e sem
+  responder, uma turma de 40 alunos leva cerca de 7 × 20 s = 140 s para falhar
+  (antes, cerca de 20 s), e uma recoleta completa com umas 15 turmas grandes, cerca
+  de 35 min, perto do teto de 45 min (`SYNC_TETO_EXECUCAO_S`), segurando a vaga das
+  coletas manuais nesse tempo. Não há prazo total por lote: escolhê-lo exige medir a
+  latência e o protocolo (HTTP/1.1 ou HTTP/2) reais do Elefante — um prazo curto
+  cortaria alunos de uma plataforma só lenta que hoje chegam.
 * **Matific — semântica do período**: se `end_date` é inclusivo ou exclusivo não
   foi confirmado na plataforma; a importação por período data o retrato na véspera
   da data final (regra do importador, fora do módulo de sync).
@@ -95,14 +105,14 @@ Alertas (lista "Erros" do card) — mapa único em `backend/app/sync/service.py`
 | `erro_inesperado`, `parser_incompativel`, `interrompida` | processamento | uma execução conclui com dados |
 | `plataforma_indisponivel` | servidor | uma execução conclui com dados |
 | `desatualizada` | aviso | o dado volta a estar em dia, ou a agenda é desligada |
-| `lento` | aviso | uma execução **conclui dentro do normal**: até 2× a mediana das últimas execuções concluídas da integração, nunca menos que `SYNC_LENTO_S` (120 s); com menos de 5 concluídas no histórico, vale só os 120 s |
+| `lento` | aviso | uma execução **termina dentro do normal** — concluída, ou sem atualização (coleta inteira sem nada novo): até 2× a mediana das últimas execuções concluídas da integração, nunca menos que `SYNC_LENTO_S` (120 s); com menos de 5 concluídas no histórico, vale só os 120 s. Só a concluída abre o aviso |
 | `queda_matific` | revisão | uma coleta acumulada não encontra mais queda |
 
 Os alertas abertos desde julho/agosto em produção (`erro_navegador`,
 `falha_autenticacao`, `interrompida`) fecham sozinhos na primeira execução
 bem-sucedida da integração depois do deploy. Não é preciso mexer no banco.
-O `lento` **não** fecha com qualquer sucesso: só quando uma execução conclui
-dentro do limite da linha acima. Numa integração do Elefante com pouco histórico
+O `lento` **não** fecha com qualquer sucesso: só quando uma execução concluída ou
+sem atualização termina dentro do limite da linha acima. Numa integração do Elefante com pouco histórico
 (menos de 5 execuções concluídas) o limite é de 120 s e uma coleta completa leva
 minutos — o aviso pode continuar aberto depois das primeiras coletas, até o
 histórico formar a mediana. Não é falha da escola.
@@ -130,6 +140,12 @@ legítima" abaixo), a linha **não é aplicada** (`orchestrator.reter_quedas_mat
   aluno, gravado × recebido; sem nome);
 * abre o alerta `queda_matific` (revisão humana), que fecha quando a plataforma
   voltar a mandar o acumulado certo.
+
+**Ajuste manual**: se o retrato atual é um ajuste manual do Admin Global, a base
+de cada número é o **menor** entre o ajuste e o último retrato coletado no ano.
+Ajuste para cima (coletado 60, digitado 100): a coleta de 70 entra, e a de 55
+fica retida. Ajuste para baixo (coletado 60, digitado 40): a coleta de 55 entra,
+e a de 35 fica retida. Sem retrato coletado no ano, o ajuste sozinho não é base.
 
 **Virada legítima**: só conta como base de comparação o retrato que está, ao
 mesmo tempo, no ano letivo ativo da escola **e** no ano civil da coleta (relógio
@@ -165,8 +181,10 @@ configurável.
   coleta manual por vez), a thread grava a cada 10 min no log da execução
   "Aguardando a vez: … (N min na fila)" — é isso que os outros workers leem. A
   idade da fila sozinha não cancela nada: um pedido esperando atrás de coletas
-  completas do Elefante roda quando chegar a vez. Execução presa em "executando"
-  além de 60 min continua sendo liberada no boot e pelo próximo pedido manual.
+  completas do Elefante roda quando chegar a vez. Execução em "executando" sem
+  nenhum registro no log há mais de 15 min (`SYNC_SEM_SINAL_S`) é liberada no
+  boot, na leitura do status e pelo próximo pedido manual; a viva grava "Em
+  andamento: …" no log a cada ~2,5 min e não é tocada, por mais longa que seja.
 
 ## 7. Fuso: o que mudou e o impacto em dados antigos
 
@@ -174,9 +192,13 @@ Regra: **negócio em America/Sao_Paulo, armazenamento em UTC**
 (`backend/app/sync/fuso.py`).
 
 * **Agenda**: "03:00" agora é 03:00 em Brasília (06:00 UTC). Antes rodava às
-  03:00 UTC = meia-noite em Brasília. Nada gravado precisa ser reescrito: a
-  `proxima_execucao` das agendas (parada em 18–23/09) é recalculada na primeira
-  rodada do agendador quando ele for religado, ou ao salvar a agenda.
+  03:00 UTC = meia-noite em Brasília. A `proxima_execucao` das agendas paradas em
+  18–23/09 foi calculada pela regra antiga e **não se recalcula sozinha antes de
+  religar**: o pré-requisito `fuso_da_agenda` (`backend/app/sync/prerequisitos.py`)
+  recusa subir o agendador enquanto houver agenda desalinhada. Re-salve cada agenda
+  ativa na tela Integrações antes de religar (salvar recalcula a data). Depois de
+  ligado, a agenda vencida há mais que a própria cadência (1 dia na diária, 7 na
+  semanal) só ganha a próxima data, sem enfileirar.
 * **Elefante, `endPeriodCustom`**: usa o "hoje" de Brasília (era a data UTC).
   Inócuo para os dados (o período é LIFETIME), corrigido por consistência.
 * **Elefante, dia da leitura (`lastReadWhen`)**: a convenção de `Leitura.data` é o
@@ -224,10 +246,16 @@ períodos aproximados saem com "(aproximado: sem calendário oficial de AAAA)".
 "Bimestre anterior" em janeiro/fevereiro é o 4º do ano passado pelo calendário
 **dele** quando houver (jan/2027 → 4º de 2026, 05/10–31/12), mesmo sem o
 calendário do ano corrente.
+O "Nº bimestre" (1º a 4º) é sempre o do ANO LETIVO da escola, o mesmo do preset
+"Ano letivo". Na virada, com a escola ainda no ano anterior, o rótulo diz o ano
+("4º bimestre de 2026 (05/10 a 31/12)").
+No recesso entre dois bimestres, "Este bimestre" é o próximo e "Bimestre
+anterior" é o que acabou de terminar, como em janeiro.
 Para cadastrar sem deploy de código: variável `BIMESTRES_CALENDARIO`, ex.
 `{"2027": [["2027-02-01","2027-04-23"], ["2027-04-26","2027-07-09"],
 ["2027-07-26","2027-10-01"], ["2027-10-04","2027-12-17"]]}` (datas de exemplo —
-usar as da Secretaria). Calendário inválido é ignorado inteiro, com erro no log.
+usar as da Secretaria). Calendário inválido é ignorado inteiro, com erro no log uma
+vez por valor da variável.
 
 ## 10. Validar uma coleta manual (roteiro para a demonstração)
 
@@ -258,12 +286,22 @@ Religar (`SYNC_SCHEDULER_ENABLED=true`) só quando, medido no próprio sistema:
 
 1. **14 dias** consecutivos de coletas (manuais ou assistidas) com sucesso diário
    em **≥ 95%** dos pares escola × plataforma configurados;
-2. **0 execuções presas** no período (nada em "fila"/"executando" além de 30 min);
+2. **0 execuções presas** no período: o pré-requisito `execucoes_presas`, que olha
+   "executando" sem sinal de vida (nenhum registro no log) há mais de 15 min
+   (`SYNC_SEM_SINAL_S`, a mesma regra do boot; a execução viva não conta, por mais
+   antiga que seja) e "fila" sem sinal de vida além de 60 min (`SYNC_TRAVADA_S`);
 3. nenhum alerta de falha aberto sem causa conhecida; `queda_matific` revisados;
 4. backup diário privado verde no período;
 5. decisão explícita do dono (custo/ janela de horário).
 
-Ao religar: `AVALIACOES_ROBO_HABILITADO` continua `false`; na primeira rodada
-TODAS as agendas vencidas (paradas em setembro) entram de uma vez — com
-`SYNC_WORKERS=1` rodam em sequência; considerar espalhar os horários das escolas
-(`hora_local`) antes de ligar.
+**Decisão de 20/11/2026.** Manter o agendador desligado até depois de 01/12/2026.
+O item 1 define a aprovação. Após cinco dias úteis, fazer uma checagem intermediária
+e seguir até completar os 14 dias. Fazer as coletas manuais fora de 07h30–10h30 de
+Brasília. Manter os 15 minutos sem sinal e o monitoramento atual. Concluídos os
+pré-requisitos e autorizado o piloto, começar com uma escola.
+
+Ao religar: `AVALIACOES_ROBO_HABILITADO` continua `false`. As agendas vencidas há
+mais que a cadência (paradas em setembro) não entram de uma vez: só ganham a
+próxima data e rodam no horário delas. As que vencem no mesmo horário entram
+juntas e, com `SYNC_WORKERS=1`, rodam em sequência; considerar espalhar os
+horários das escolas (`hora_local`) antes de ligar.

@@ -34,7 +34,7 @@ import {
   rotuloDoPeriodo,
   tabelaRanking as t,
 } from "../components/RankingUi";
-import { SeletorPeriodo, periodoParaQuery } from "../components/SeletorPeriodo";
+import { SeletorPeriodo, avisoPopulacao, periodoParaQuery } from "../components/SeletorPeriodo";
 import { SeloFrescorDaEscola } from "../components/SeloFrescor";
 import { SeletorTurno } from "../components/SeletorTurno";
 import { TabelaRolavel } from "../components/TabelaRolavel";
@@ -42,11 +42,17 @@ import { Card, Chip, Erro, PageHeader, Vazio } from "../components/ui";
 import { useApp } from "../context/AppContext";
 import { useApi } from "../hooks/useApi";
 import { useJanela } from "../hooks/useJanela";
+import { usePerfil } from "../hooks/usePerfil";
+import { useCalendarioBimestres } from "../lib/calendarioBimestres";
 import { nomeArquivoCsv, type TabelaCsv } from "../lib/csvRanking";
 import { numero, tempoLeitura } from "../lib/formato";
 import { bimestreDoPeriodo } from "../lib/tiposCertificados";
 import { TURNO_SEM, TURNO_TODOS, aplicarTurno, rotuloTurno, turnoEfetivo } from "../lib/turnos";
 import type { RankingLeituraItem, Turma } from "../lib/types";
+
+/** Linha do ranking por período, com o ANO LETIVO da criança e da turma (`ano_letivo`)
+ *  e por quê (`populacao`): num período de um ano já encerrado, as daquele ano. */
+type ItemLeituraPeriodo = RankingLeituraItem;
 
 export default function RankingLeitura({ embutido = false, alvoAcoes }: {
   embutido?: boolean;
@@ -54,6 +60,10 @@ export default function RankingLeitura({ embutido = false, alvoAcoes }: {
   alvoAcoes?: HTMLElement | null;
 } = {}) {
   const { escolaId, periodo, definirPeriodo, turno, definirTurno } = useApp();
+  // Quem só vê as próprias turmas (o professor: a mesma regra de
+  // `permissoes.turmas_permitidas` — nem global, nem admin/coordenação, nem Secretaria).
+  const { gestor, secretaria } = usePerfil();
+  const soSuasTurmas = !gestor && !secretaria;
   // Período TEMPORAL e TURNO vêm do contexto global (seguem o usuário entre as
   // abas). O Elefante traz o TOTAL acumulado por aluno; recortes por semana/mês
   // só têm dados quando há relatório individual datado.
@@ -62,6 +72,9 @@ export default function RankingLeitura({ embutido = false, alvoAcoes }: {
   const { dados: turmas } = useApi<Turma[]>(
     escolaId ? `/escolas/${escolaId}/turmas` : null, { cacheMs: 60_000 });
   const turnoAtivo = turnoEfetivo(turno, turmas);
+  // Calendário oficial do ano, do backend: sem ele a web só conhece 2026 (o número de
+  // "Este bimestre" e o bimestre do lote de "Bimestre passado" sumiam de 2027 em diante).
+  const calendario = useCalendarioBimestres(escolaId);
 
   // Recalcula a URL quando período/turma/série/turno mudam; o hook rebusca sozinho.
   const q = new URLSearchParams(periodoParaQuery(periodo));
@@ -73,14 +86,24 @@ export default function RankingLeitura({ embutido = false, alvoAcoes }: {
     erro,
     carregando,
     recarregar,
-  } = useApi<RankingLeituraItem[]>(
+  } = useApi<ItemLeituraPeriodo[]>(
     escolaId ? `/escolas/${escolaId}/ranking/leitura?${q}` : null,
   );
   const lista = useMemo(() => itens ?? [], [itens]);
+  // De que ano são as crianças e as turmas da lista (todas as linhas dizem o mesmo):
+  // num período de um ano já encerrado, as daquele ano; num que passa por dois anos,
+  // as de agora. A lista vazia não tem o que avisar. A turma escolhida e as turmas do
+  // professor são as de agora (só quem está nelas HOJE aparece): a frase diz isso, a
+  // mesma do Relatório por Período.
+  const primeira = lista[0];
+  const avisoAno = primeira?.populacao && primeira.ano_letivo != null
+    ? avisoPopulacao({ ano_letivo: primeira.ano_letivo, origem: primeira.populacao },
+                     alvo.turma_id ? "turma" : soSuasTurmas ? "suas_turmas" : undefined)
+    : null;
   // Janelamento: em escolas grandes só as primeiras linhas entram no DOM.
   const { visiveis, restantes, mostrarMais } = useJanela(lista);
 
-  const rotuloPeriodo = rotuloDoPeriodo(periodo);
+  const rotuloPeriodo = rotuloDoPeriodo(periodo, new Date(), calendario);
   const turmaEscolhida = alvo.turma_id ? turmas?.find((x) => String(x.id) === alvo.turma_id)?.nome : null;
   const recorte = [
     turmaEscolhida ?? (alvo.ano_escolar ? `${alvo.ano_escolar} (todas as turmas)` : null),
@@ -107,7 +130,7 @@ export default function RankingLeitura({ embutido = false, alvoAcoes }: {
         modeloInicial: "elefante",
         contexto: `Ranking · Leitura no período (pontos) · ${rotuloPeriodo}${recorte ? ` · ${recorte}` : ""}`,
         // Lista de um bimestre: o bimestre impresso abre nele, não no de hoje.
-        bimestreInicial: bimestreDoPeriodo(periodo.preset),
+        bimestreInicial: bimestreDoPeriodo(periodo.preset, new Date(), calendario),
       }}
     />
   );
@@ -165,9 +188,14 @@ export default function RankingLeitura({ embutido = false, alvoAcoes }: {
           <Erro titulo="Não foi possível carregar" descricao={erro.message} aoTentar={recarregar} />
         ) : lista.length === 0 ? (
           <Vazio icone={BookOpen} titulo="Nenhuma leitura no período"
-                 descricao="Sincronize o Elefante Letrado (ou importe o relatório) e use “Todo o histórico” para ver o total acumulado por aluno." />
+                 descricao="Sincronize o Elefante Letrado (ou importe o relatório), ou escolha um período maior, como “Ano letivo”, para ver a leitura do ano inteiro." />
         ) : (
           <>
+            {avisoAno && (
+              <p role="note" className="mx-4 mt-3 rounded-xl bg-amber-50 px-3 py-2 text-xs text-amber-900 ring-1 ring-amber-200 sm:mx-5 dark:bg-amber-500/10 dark:text-amber-200 dark:ring-amber-500/25">
+                {avisoAno}
+              </p>
+            )}
             <FaixaPodio itens={podio} rotulo="Pódio da leitura no período" />
             {/* Celular: os PONTOS (o que ordena) ficam presos à direita. */}
             <TabelaRolavel rotulo="Leitura no período: tabela completa">

@@ -17,6 +17,7 @@ from app.sync import service, vault
 from tests._sync_nucleo_fakes import (
     API, NavElefante, PlacarFake, aluno_el, alertas_abertos, credencial, instalar, livro,
     logs, novo_aluno, rodar)
+from tests._ano_letivo import no_ano_de_hoje
 
 K = "3 ANO A (300396804)"
 CID_A, CID_B = 511434, 600001
@@ -173,7 +174,7 @@ def test_roster_2xx_lista_vazia_continua_sem_dados(db, escola_completa, monkeypa
 # Achado 8 — 'concluida' com linhas que ficaram em revisão NESTA execução.
 # ---------------------------------------------------------------------------
 def test_concluida_com_linhas_em_revisao_mantem_correspondencia_pendente(
-        db, escola_completa, monkeypatch):
+        relogio_no_ano_letivo, db, escola_completa, monkeypatch):
     eid = escola_completa["escola"].id
     politica_sync.definir(db, eid, "bloquear")
     db.commit()
@@ -199,8 +200,13 @@ def test_concluida_com_linhas_em_revisao_mantem_correspondencia_pendente(
 # ---------------------------------------------------------------------------
 # Achado 5 — queda retida do Matific não é "correspondência pendente".
 # ---------------------------------------------------------------------------
-def test_queda_retida_tem_motivo_proprio_e_nao_manda_para_revisao(db, escola_completa,
-                                                                 monkeypatch):
+@no_ano_de_hoje
+def test_queda_retida_tem_motivo_proprio_e_nao_manda_para_revisao(relogio_no_ano_letivo, db,
+                                                                 escola_completa, monkeypatch):
+    # O relógio fica no ano letivo (relogio_no_ano_letivo): a coleta conta o ano pelo
+    # dia de Brasília e o retrato é gravado em UTC; nas três últimas horas de 31/12 os
+    # dois anos discordam e a retenção não roda (a borda é a decisão TESTES-6, do
+    # dono). O teste mede a retenção, não a borda.
     eid = escola_completa["escola"].id
     credencial(db, eid, "matific")
     placar = _placar_3(escola_completa)
@@ -432,8 +438,8 @@ def test_defeito_permanente_nao_mantem_desatualizada_com_dado_chegando(
     assert "coleta_parcial" in alertas_abertos(db, eid, "elefante")   # o defeito segue visível
 
 
-def test_uma_pendencia_nao_abre_desatualizada_no_fim_de_semana(db, escola_completa,
-                                                               monkeypatch):
+def test_uma_pendencia_nao_abre_desatualizada_no_fim_de_semana(
+        relogio_no_ano_letivo, db, escola_completa, monkeypatch):
     ec = escola_completa
     eid = ec["escola"].id
     a, b, c = ec["alunos"]
@@ -533,8 +539,8 @@ def test_parte_recusada_resto_igual_tem_o_codigo_como_motivo(db, escola_completa
 # ---------------------------------------------------------------------------
 # Achado 9 — coleta completa só com pendência fecha falhas antigas.
 # ---------------------------------------------------------------------------
-def test_coleta_completa_com_pendencia_fecha_falha_antiga(cliente_global, db, escola_completa,
-                                                          monkeypatch):
+def test_coleta_completa_com_pendencia_fecha_falha_antiga(
+        relogio_no_ano_letivo, cliente_global, db, escola_completa, monkeypatch):
     eid = escola_completa["escola"].id
     politica_sync.definir(db, eid, "bloquear")
     db.commit()

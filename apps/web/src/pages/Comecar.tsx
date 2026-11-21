@@ -38,6 +38,7 @@ interface PlataformaStatus {
   plataforma: string; conectada: boolean; credencial_status: string;
 }
 interface EscolaStatus {
+  // qtd_alunos e qtd_turmas são do ANO LETIVO ATIVO (como /alunos e /turmas).
   escola_id: number; escola_nome: string; qtd_alunos: number; qtd_turmas: number;
   plataformas: PlataformaStatus[]; lista_piloto_importada: boolean;
   integracao_configurada: boolean;
@@ -99,6 +100,12 @@ export default function Comecar() {
   }
 
   const s = status.dados;
+  // Virada do ano: a escola já tem turmas (de outro ano: lista_piloto_importada, o
+  // sinal do /onboarding) e nenhuma no ano letivo ATIVO — a Lista Piloto do ano ainda
+  // não veio. O passo marcado e a regra (voltar a pedir a Lista na virada) são decisão
+  // do dono (G_VIRADA-2c); só o texto deixa de dizer "Já há 0 turma(s)" e "✓ turmas e
+  // alunos" (REV2-SYNC2-2).
+  const semTurmasNoAno = Boolean(s?.lista_piloto_importada) && s?.qtd_turmas === 0;
 
   return (
     <div className="mx-auto max-w-3xl space-y-6">
@@ -133,7 +140,7 @@ export default function Comecar() {
               <h2 className="text-xl font-bold tracking-tight text-zinc-900 dark:text-white">{s.escola_nome || "Sua escola"}</h2>
               <p className="mt-3 inline-flex flex-wrap items-center gap-2 rounded-full bg-indigo-50 px-3.5 py-1.5 text-sm font-medium text-indigo-800 tabular-nums dark:bg-indigo-500/15 dark:text-indigo-200">
                 <GraduationCap size={15} aria-hidden />
-                {s.qtd_turmas} turma(s) · {s.qtd_alunos} aluno(s) cadastrados.
+                {s.qtd_turmas} turma(s) · {s.qtd_alunos} aluno(s) cadastrados no ano letivo atual.
               </p>
               <p className="mt-4 text-sm leading-relaxed text-zinc-600 dark:text-zinc-300">
                 Vamos importar a lista da escola (uma aba por turma), criar as turmas e
@@ -160,9 +167,14 @@ export default function Comecar() {
       {s && passo === 2 && (
         <div className="space-y-4">
           <CabecalhoPasso icone={Users} titulo="Turmas e alunos (Lista Piloto)" />
-          {s.lista_piloto_importada && (
+          {semTurmasNoAno ? (
+            <div role="status" aria-live="polite"
+                 className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-2.5 text-sm text-amber-900 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-100">
+              A escola ainda não tem turmas no ano letivo atual: importe a Lista Piloto deste ano.
+            </div>
+          ) : s.lista_piloto_importada && (
             <Mensagem tipo="ok">
-              Já há {s.qtd_turmas} turma(s) e {s.qtd_alunos} aluno(s). Você pode importar
+              Já há {s.qtd_turmas} turma(s) e {s.qtd_alunos} aluno(s) no ano letivo atual. Você pode importar
               outra planilha para complementar ou seguir para as integrações.
             </Mensagem>
           )}
@@ -245,14 +257,23 @@ export default function Comecar() {
             </span>
             <h2 className="mt-4 text-2xl font-bold tracking-tight text-zinc-900 dark:text-white">Escola pronta!</h2>
             <p className="mx-auto mt-2 max-w-md text-sm text-zinc-600 dark:text-zinc-300">
-              {s.qtd_turmas} turma(s) e {s.qtd_alunos} aluno(s) cadastrados
-              {s.integracao_configurada
-                ? " e as plataformas conectadas. As atualizações podem rodar automaticamente."
-                : ". Você pode conectar as plataformas quando quiser em Integrações."}
+              {semTurmasNoAno
+                ? `Ainda não há turmas no ano letivo atual: importe a Lista Piloto deste ano.${
+                  s.integracao_configurada
+                    ? " As plataformas já estão conectadas."
+                    : " Você pode conectar as plataformas quando quiser em Integrações."}`
+                : <>
+                  {s.qtd_turmas} turma(s) e {s.qtd_alunos} aluno(s) cadastrados no ano letivo atual
+                  {s.integracao_configurada
+                    ? " e as plataformas conectadas. As atualizações podem rodar automaticamente."
+                    : ". Você pode conectar as plataformas quando quiser em Integrações."}
+                </>}
             </p>
             <div className="mt-4 flex flex-wrap justify-center gap-2">
-              <Badge tom={s.lista_piloto_importada ? "ok" : "alerta"}>
-                {s.lista_piloto_importada ? "✓ turmas e alunos" : "turmas pendentes"}
+              <Badge tom={s.lista_piloto_importada && !semTurmasNoAno ? "ok" : "alerta"}>
+                {semTurmasNoAno
+                  ? "turmas do ano pendentes"
+                  : s.lista_piloto_importada ? "✓ turmas e alunos" : "turmas pendentes"}
               </Badge>
               <Badge tom={s.integracao_configurada ? "ok" : "neutro"}>
                 {s.integracao_configurada ? "✓ integração configurada" : "integração opcional"}

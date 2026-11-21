@@ -7,6 +7,9 @@ pior fundir duas crianças diferentes do que deixar duas fichas duplicadas.
 Por isso o detector é conservador (prefere o falso-negativo):
   * só compara alunos ATIVOS que têm turma no ano letivo ativo;
   * só sugere pares da MESMA turma (nunca entre turmas ou escolas);
+  * a exceção é a MESMA criança em dois anos (``_pares_de_outro_ano``): a ficha
+    sem turma no ano ativo × a da turma com o mesmo RA, ou nome e nascimento —
+    sempre 🔴 "revisar";
   * nome idêntico + mesma turma → 🟢 "alta";
   * nome curto que é começo/abreviação de UM único nome mais completo, mesma
     turma → 🟡 "revisar" (o caso Matific-curto × Lista-Piloto-completo, ex.:
@@ -18,6 +21,7 @@ confirma cada par (checkbox) e a fusão em si é ``alunos_fusao.fundir_par``.
 """
 from __future__ import annotations
 
+import logging
 from collections import defaultdict
 from functools import reduce
 from itertools import combinations
@@ -25,6 +29,7 @@ from itertools import combinations
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from app.core.database import bloquear_escola_para_importacao
 from app.models import (
     Aluno,
     Escola,
@@ -39,10 +44,17 @@ from app.models import (
 )
 from app.services import alunos_fusao
 from app.services._nomes import primeiro_token, tokens
-from app.services.importacao import casa_abreviado, tokens_nome
+from app.services.importacao import casa_abreviado, nome_abreviado, tokens_nome
 from app.services.lista_piloto import ra_util
 from app.services.matching import plausivel
 from app.services.matriculas import chave_turma_norm
+
+logger = logging.getLogger("constela.fusao")
+
+# A falha de UM par no lote: não culpa os dados (a causa costuma ser defeito,
+# trava ou deadlock), diz o que fazer, e o detalhe vai para o log.
+MOTIVO_FALHA_INESPERADA = ("não deu para fundir agora — tente de novo; se repetir, "
+                           "fale com o suporte")
 
 
 def _expande(curto: str, completo: str) -> bool:
@@ -112,7 +124,9 @@ def _candidatos(db: Session, escola_id: int
     """Pares (loser, survivor, confianca, motivo, turma_nome) da MESMA turma.
     ``confianca`` ∈ {"alta","provavel","revisar"} (🟢 aprova em lote / 🟡 lote com
     conferência / 🔴 uma a uma); ``motivo`` ∈ {"nome_identico","subconjunto",
-    "abreviacao","variante"}. survivor = perfil principal (piloto > nome completo)."""
+    "abreviacao","variante","outro_ano"}. survivor = perfil principal (piloto >
+    nome completo). ``outro_ano`` é o único par fora da mesma turma
+    (``_pares_de_outro_ano``)."""
     escola = db.get(Escola, escola_id)
     if escola is None:
         return []
@@ -206,8 +220,13 @@ def _candidatos(db: Session, escola_id: int
 
         # VARIAÇÃO DE GRAFIA / TYPO: nomes DIFERENTES mas quase iguais na mesma turma
         # normalizada, sem conflito de identidade — o motor único marca 'fraco'
-        # (variante LUÍS/LUIZ E erro de digitação GABRYEL/GABRIEL, inclusive no 1º
-        # nome). É o que a comparação por token-set EXATO deixava passar. SEMPRE
+        # (variante num nome do MEIO, como LUÍS/LUIZ em "EUSTÁQUIO LUÍS/LUIZ …", e
+        # erro de digitação de uma letra, como GABRYEL/GABRIEL, este também no 1º
+        # nome). LUÍS/LUIZ no 1º NOME não é 'fraco': a variante exige o 1º nome
+        # igual e o typo fica em 0,75, abaixo de 0,8 — o par nem vira candidato
+        # (``matching.plausivel`` devolve None; decisão C4 do dono, ver
+        # ``test_sync_nao_repete_stub::test_3b``). É o que a comparação por
+        # token-set EXATO deixava passar. SEMPRE
         # "revisar" (nunca pré-marca, nunca funde sozinho): similaridade não distingue
         # "LUÍS/LUIZ" (mesma criança) de "MARIA/MARTA" (diferentes) — só um humano
         # decide. Cada aluno aponta para o MELHOR parceiro (piloto > completo >
@@ -229,6 +248,52 @@ def _candidatos(db: Session, escola_id: int
                 continue                              # `a` é o melhor → não é loser
             pares.append((a, survivor, "revisar", "variante", turma_de[a.id][1]))
             ja_losers.add(a.id)
+    pares.extend(_pares_de_outro_ano(alunos, membros, turma_de))
+    return pares
+
+
+def _pares_de_outro_ano(alunos: list[Aluno], membros: list[Aluno],
+                        turma_de: dict[int, tuple[int, str]]
+                        ) -> list[tuple[Aluno, Aluno, str, str, str]]:
+    """A MESMA criança em dois anos (G_VIRADA-3): ficha ativa SEM turma no ano ativo
+    (a do ano anterior, com as contas e o histórico) × ficha da turma do ano com o
+    MESMO RA (``ra_util``), ou o mesmo nome normalizado e o mesmo nascimento sem RA
+    divergente. É o par que a rematrícula pelo "Cadastrar aluno" criava na virada: a
+    turma deixa de ser o discriminador porque uma das fichas não tem turma no ano.
+
+    Sempre 🔴 "revisar" (nunca pré-marca): o nº de chamada muda de um ano para o
+    outro e não entra; só RA e nascimento decidem, e um humano confere. Só o par
+    INEQUÍVOCO: a ficha de cada lado casa com uma só do outro."""
+    from app.services._nomes import chave_nome
+
+    sem_turma = [a for a in alunos if a.id not in turma_de]
+    if not sem_turma or not membros:
+        return []
+
+    def ra(a: Aluno) -> str:
+        return ra_util((a.ficha or {}).get("ra"))
+
+    def mesma(x: Aluno, y: Aluno) -> bool:
+        rx, ry = ra(x), ra(y)
+        if rx and ry:
+            return rx == ry and not (x.data_nascimento and y.data_nascimento
+                                     and x.data_nascimento != y.data_nascimento)
+        return bool(x.data_nascimento and x.data_nascimento == y.data_nascimento
+                    and chave_nome(x.nome) == chave_nome(y.nome))
+
+    casamentos = [(velha, [m for m in membros if mesma(velha, m)]) for velha in sem_turma]
+    quantas_por_membro: dict[int, int] = defaultdict(int)
+    for _velha, achados in casamentos:
+        for m in achados:
+            quantas_por_membro[m.id] += 1
+    pares: list[tuple[Aluno, Aluno, str, str, str]] = []
+    for velha, achados in casamentos:
+        if len(achados) != 1 or quantas_por_membro[achados[0].id] != 1:
+            continue                                   # ambíguo: não sugere
+        nova = achados[0]
+        survivor = _melhor_perfil(velha, nova)
+        loser = nova if survivor.id == velha.id else velha
+        pares.append((loser, survivor, "revisar", "outro_ano", turma_de[nova.id][1]))
     return pares
 
 
@@ -288,8 +353,21 @@ def plano_deduplicacao(db: Session, escola_id: int) -> list[dict]:
     fica, a turma, a confiança/motivo e o resumo de impacto. Nada é alterado."""
     candidatos = _candidatos(db, escola_id)
     impactos = _impactos_em_lote(db, [loser.id for loser, *_ in candidatos])
-    return [
-        {
+    escola = db.get(Escola, escola_id)
+    repetidas = alunos_fusao.leituras_repetidas(
+        db, escola.ano_letivo_ativo if escola else 0,
+        [(survivor.id, loser.id) for loser, survivor, *_ in candidatos])
+    # O Constela Quest das duas fichas (poucas consultas para o lote inteiro): o que
+    # fica, o cartão que deixa de entrar e o par que não será fundido (as duas com jogo).
+    quest = alunos_fusao.quest_das_fichas(
+        db, {i for loser, survivor, *_ in candidatos for i in (loser.id, survivor.id)})
+    # As duas fichas com conta na mesma plataforma: o par que a fusão recusa.
+    contas = alunos_fusao.contas_em_conflito(
+        db, [(survivor.id, loser.id) for loser, survivor, *_ in candidatos])
+
+    def _linha(loser: Aluno, survivor: Aluno, confianca: str, motivo: str, turma: str) -> dict:
+        plano_quest = alunos_fusao.plano_quest(survivor, loser, quest)
+        return {
             "loser_id": loser.id,
             "manter_id": survivor.id,
             "apagar": loser.nome,
@@ -298,9 +376,77 @@ def plano_deduplicacao(db: Session, escola_id: int) -> list[dict]:
             "confianca": confianca,     # "alta" | "provavel" | "revisar"
             "motivo": motivo,
             "impacto": impactos.get(loser.id, _VAZIO),
+            # O que a fusão faz com os livros que estão nas DUAS fichas. Só descreve
+            # (a data de quem fica é a que vale): o gestor vê antes de confirmar.
+            "leituras": repetidas[(survivor.id, loser.id)],
+            "quest": plano_quest,
+            # Por que o servidor vai recusar este par (None: não recusa) — o MESMO
+            # texto da falha do lote: a tela não o marca nem o põe no "Selecionar todos".
+            "recusa": alunos_fusao.motivo_da_recusa(
+                plano_quest, contas[(survivor.id, loser.id)]),
         }
-        for loser, survivor, confianca, motivo, turma in candidatos
-    ]
+
+    return [_linha(loser, survivor, confianca, motivo, turma)
+            for loser, survivor, confianca, motivo, turma in candidatos]
+
+
+def _motivo_do_principal(melhor: Aluno, outro: Aluno) -> str:
+    """Por que ``_melhor_perfil`` escolheu ``melhor`` (na ordem da regra)."""
+    if melhor.da_lista_piloto != outro.da_lista_piloto:
+        return "lista_piloto"
+    if len(tokens(melhor.nome)) != len(tokens(outro.nome)):
+        return "nome_mais_completo"
+    return "cadastro_mais_antigo"
+
+
+def mantem_nome_abreviado(manter: Aluno, remover: Aluno) -> bool:
+    """A ficha que FICA tem nome abreviado — ou mais curto que o da que sai, sem ser
+    o nome oficial da Lista Piloto? A fusão não muda nome nenhum, e a ficha que
+    fica herda a marca da Lista Piloto da outra (``alunos_fusao.fundir_par``): é
+    esse nome que sai no certificado e nos relatórios.
+
+    O nome OFICIAL da Lista Piloto que fica no lugar de uma ficha de fora dela nunca
+    é aviso, nem com uma inicial no meio ("ZEFA J QUARESMA LIMA", ou o "D AVILA"
+    que perdeu o apóstrofo): é a direção que a própria prévia sugere, e o aviso
+    mandaria trocar contra ela — e apagar o nome oficial."""
+    if manter.da_lista_piloto and not remover.da_lista_piloto:
+        return False
+    if nome_abreviado(manter.nome):
+        return True
+    return not manter.da_lista_piloto and _expande(manter.nome, remover.nome)
+
+
+def previa_da_fusao(db: Session, escola_id: int, manter: Aluno, remover: Aluno) -> dict:
+    """O que a tela mostra ANTES de o gestor digitar FUNDIR (só leitura).
+
+    ``sugestao``: qual ficha deveria ficar como principal, pela MESMA regra da
+    fusão em lote (``_melhor_perfil``: Lista Piloto > nome mais completo > mais
+    antiga). É sugestão: a API continua aceitando a outra direção.
+    ``nome``: se a direção pedida deixa um nome abreviado na ficha que fica."""
+    escola = db.get(Escola, escola_id)
+    melhor = _melhor_perfil(manter, remover)
+    outro = remover if melhor.id == manter.id else manter
+    # A mesma regra que a fusão aplica (com o progresso e as habilidades conferidos).
+    quest = alunos_fusao.plano_quest(manter, remover, alunos_fusao.quest_das_fichas(
+        db, (manter.id, remover.id), com_agregados=True))
+    contas = alunos_fusao.contas_em_conflito(db, [(manter.id, remover.id)])[
+        (manter.id, remover.id)]
+    return {
+        "manter": {"id": manter.id, "nome": manter.nome},
+        "remover": {"id": remover.id, "nome": remover.nome},
+        "sugestao": {"manter_id": melhor.id, "remover_id": outro.id,
+                     "motivo": _motivo_do_principal(melhor, outro)},
+        "nome": {"mantem_abreviado": mantem_nome_abreviado(manter, remover),
+                 "fica": manter.nome, "sai": remover.nome},
+        "leituras": alunos_fusao.leituras_repetidas(
+            db, escola.ano_letivo_ativo if escola else 0, [(manter.id, remover.id)],
+            exemplos=20)[(manter.id, remover.id)],
+        "quest": quest,
+        # Plataformas em que as duas fichas têm conta (contas diferentes) e, se a
+        # fusão vai ser recusada, o porquê — o MESMO texto do 409.
+        "contas_em_conflito": contas,
+        "recusa": alunos_fusao.motivo_da_recusa(quest, contas),
+    }
 
 
 def _plataformas_dos(db: Session, ids: set[int]) -> dict[int, frozenset[str]]:
@@ -373,7 +519,12 @@ def aplicar_deduplicacao(db: Session, escola_id: int, loser_ids: list[int],
         completo automaticamente (resolve o "una um par por vez" sem trabalho manual).
       * CADEIA AMBÍGUA (tem nome idêntico=gêmeo, variante de grafia, ou conflito de
         identidade no meio) → NÃO colapsa; reporta para revisão manual (nunca funde
-        crianças diferentes sem um humano decidir par a par)."""
+        crianças diferentes sem um humano decidir par a par).
+
+    Toma a trava da importação ANTES de recomputar os candidatos e sem escrever
+    nada antes dela (ver ``academico.fundir_alunos``): a coleta em andamento
+    termina, e só então o lote lê e funde. Cai no commit do endpoint."""
+    bloquear_escola_para_importacao(db, escola_id)
     escolhidos = set(loser_ids or [])
     selecionados = [(loser, survivor, motivo)
                     for loser, survivor, _conf, motivo, _turma in _candidatos(db, escola_id)
@@ -439,11 +590,20 @@ def aplicar_deduplicacao(db: Session, escola_id: int, loser_ids: list[int],
                 with db.begin_nested():   # isola a falha do par; o lote segue
                     res = alunos_fusao.fundir_par(db, escola_id, canonico, m, usuario_id)
                 fundidos += 1
+                # O que aconteceu com o Constela Quest do par (de qual ficha ficaram o
+                # perfil e o cartão, e o que saiu) — a resposta não esconde o descarte.
                 detalhes.append({"manter_id": canonico.id, "manter": res["manter_nome"],
-                                 "removido": res["remover_nome"]})
-            except Exception:   # noqa: BLE001
-                falhas.append({"loser_id": m.id,
-                               "motivo": "erro ao fundir (dados inconsistentes)"})
+                                 "removido": res["remover_nome"],
+                                 **{k: v for k, v in res.items() if k.startswith("quest_")}})
+            except alunos_fusao.FusaoRecusada as recusa:
+                # Recusa conhecida (antes de qualquer escrita): o motivo é para quem usa.
+                falhas.append({"loser_id": m.id, "motivo": recusa.motivo})
+            except Exception:   # noqa: BLE001 — isola o par; o lote segue
+                # Sem isto a falha sumia: a rota responde 200 e o middleware não
+                # vê. Só ids no log (o formatador já redige o texto da exceção).
+                logger.exception("fusao_em_lote_falhou", extra={
+                    "escola_id": escola_id, "manter_id": canonico.id, "remover_id": m.id})
+                falhas.append({"loser_id": m.id, "motivo": MOTIVO_FALHA_INESPERADA})
 
     return {"fundidos": fundidos, "falhas": falhas, "detalhes": detalhes}
 

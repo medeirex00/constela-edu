@@ -4,7 +4,9 @@ from app.services import gamificacao as svc
 
 
 def _snapshots(db, escola_completa):
-    """Ana: 12 livros/650 min; João: 1 livro; Sofia: sem dados."""
+    """Ana: 12 livros/650 min e 320 atividades/1600 estrelas; João: 1 livro;
+    Sofia: sem dados. (Estrelas no máximo 5 por atividade: com 60 atividades, as
+    1600 estrelas não contariam — ``matific_destaque.limitar_estrelas``.)"""
     escola = escola_completa["escola"]
     ana, joao, _ = escola_completa["alunos"]
     importacao = Importacao(escola_id=escola.id, plataforma="elefante", tipo="seed")
@@ -16,7 +18,7 @@ def _snapshots(db, escola_completa):
                          tempo_leitura_min=650, questoes_tentativas=30,
                          questoes_acertos=27),
         SnapshotMatific(escola_id=escola.id, aluno_id=ana.id,
-                        importacao_id=importacao.id, atividades=60,
+                        importacao_id=importacao.id, atividades=320,
                         estrelas=1600, pontuacao_media=4.2),
         SnapshotElefante(escola_id=escola.id, aluno_id=joao.id,
                          importacao_id=importacao.id, livros_unicos=1,

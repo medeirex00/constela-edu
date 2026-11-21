@@ -8,7 +8,7 @@
 import { describe, expect, it } from "vitest";
 
 import Conquistas from "../pages/Conquistas";
-import { ApiError, renderComApp, responder, screen, userEvent, within } from "./utils";
+import { ApiError, escolaFake, renderComApp, responder, screen, userEvent, within } from "./utils";
 
 const URL_MURAL = "/escolas/1/gamificacao/mural";
 const URL_XP = "/escolas/1/gamificacao/ranking-xp";
@@ -112,6 +112,17 @@ describe("Conquistas e Mural", () => {
     expect(within(tabela).getAllByRole("row").slice(1)).toHaveLength(20);
     expect(screen.getByRole("link", { name: "Aluno XP 20" })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Mostrar mais" })).not.toBeInTheDocument();
+  });
+
+  it.each([
+    [2026, "Nível e conquistas de cada aluno — separado das notas"],
+    [2027, "XP, nível e novas conquistas do ano letivo 2027"],
+  ])("Ranking de XP informa a regra do ano letivo %i", async (ano_letivo_ativo, legenda) => {
+    responder("GET", URL_MURAL, muralFake());
+    responder("GET", URL_XP, xpFake(1));
+    renderComApp(<Conquistas />, { escolas: [escolaFake({ ano_letivo_ativo })] });
+
+    expect(await screen.findByText(legenda)).toBeInTheDocument();
   });
 
   it("mural: horário da COLETA (como na Visão geral) e 'Mostrar todos' expande a lista", async () => {

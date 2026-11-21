@@ -12,6 +12,7 @@ import { Avatar, Botao, Campo, Card, Carregando, Chip, IconePastel, Mensagem, Pa
 import type { TomPastel } from "../components/ui";
 import { useApp } from "../context/AppContext";
 import { useApi } from "../hooks/useApi";
+import { useModulos } from "../hooks/useModulos";
 import { api } from "../lib/api";
 import { nota, numero, tempoLeitura } from "../lib/formato";
 import type { Escola, PaginaAlunos, Turma } from "../lib/types";
@@ -21,8 +22,9 @@ interface Lado {
   id: number;
   nome: string;
   total_alunos?: number;
-  indicadores: Record<string, number>;
-  notas: { matific: number; elefante: number; geral: number; posicao: number | null };
+  /** `null` = matéria fora do plano da rede (ou escondida por grupo pequeno). */
+  indicadores: Record<string, number | null>;
+  notas: { matific: number | null; elefante: number | null; geral: number | null; posicao: number | null };
 }
 
 interface Comparacao {
@@ -46,6 +48,10 @@ const LADOS = {
 const ICONE_TIPO: Record<string, LucideIcon> = { aluno: User, turma: LayoutGrid, escola: School };
 const ROTULO_TIPO: Record<string, string> = { aluno: "Aluno", turma: "Turma", escola: "Escola" };
 
+/** Teto do `por_pagina` da API de alunos (`academico.listar_alunos`). Uma turma
+ *  cabe com folga numa página só. */
+const POR_PAGINA_DA_TURMA = 1000;
+
 function SeletorLado({
   lado,
   rotulo,
@@ -53,7 +59,9 @@ function SeletorLado({
   setTipo,
   id,
   setId,
+  escolaId,
   alunos,
+  escolaTemMais,
   turmas,
   escolas,
   podeEscola,
@@ -64,12 +72,37 @@ function SeletorLado({
   setTipo: (tipo: string) => void;
   id: string;
   setId: (id: string) => void;
+  escolaId: number | null;
+  /** A 1ª página de alunos da escola (as primeiras 100, em ordem alfabética). */
   alunos: OpcaoAluno[];
+  /** A escola tem mais alunos que os da 1ª página. */
+  escolaTemMais: boolean;
   turmas: Turma[];
   escolas: OpcaoAluno[];
   podeEscola: boolean;
 }) {
-  const opcoes = tipo === "aluno" ? alunos : tipo === "escola" ? escolas : turmas;
+  // Escola grande passa dos 100 da 1ª página: escolher a TURMA do aluno traz todos os
+  // alunos dela (uma página só, pequena) — assim todo aluno é alcançável sem montar um
+  // <select> com a escola inteira.
+  const [turmaDoAluno, setTurmaDoAluno] = useState("");
+  const urlDaTurma = tipo === "aluno" && turmaDoAluno && escolaId
+    ? `/escolas/${escolaId}/alunos?turma_id=${turmaDoAluno}&por_pagina=${POR_PAGINA_DA_TURMA}`
+    : null;
+  // A página vem junto com o endereço que a pediu: o useApi não zera `dados` quando a
+  // turma muda (nem quando a busca falha), e a lista da turma ANTERIOR ficava no
+  // seletor — dava para comparar um aluno que não é da turma mostrada.
+  const { dados: buscaDaTurma, erro: erroDaTurma } = useApi<{ url: string; pagina: PaginaAlunos }>(
+    urlDaTurma
+      ? (sinal) => api<PaginaAlunos>(urlDaTurma, { signal: sinal }).then((pagina) => ({ url: urlDaTurma, pagina }))
+      : null,
+    { chave: [urlDaTurma] },
+  );
+  const paginaDaTurma = buscaDaTurma && buscaDaTurma.url === urlDaTurma && !erroDaTurma
+    ? buscaDaTurma.pagina : null;
+  const carregandoTurma = urlDaTurma !== null && paginaDaTurma === null && !erroDaTurma;
+  const alunosDaTurma: OpcaoAluno[] = (paginaDaTurma?.itens ?? []).map((a) => ({ id: a.id, nome: a.nome }));
+  const opcoes = tipo === "aluno" ? (turmaDoAluno ? alunosDaTurma : alunos)
+    : tipo === "escola" ? escolas : turmas;
   return (
     <div className={`min-w-0 flex-1 rounded-2xl border p-4 ${LADOS[lado].moldura}`}>
       <p className="mb-3 flex items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.08em] text-zinc-600 dark:text-zinc-300">
@@ -85,15 +118,33 @@ function SeletorLado({
             {podeEscola && <option value="escola">Escola</option>}
           </select>
         </Campo>
-        <Campo rotulo={rotulo}>
-          <select className={estiloInput} value={id} onChange={(evento) => setId(evento.target.value)}>
-            <option value="">Selecione…</option>
-            {opcoes.map((opcao) => (
-              <option key={opcao.id} value={opcao.id}>{opcao.nome}</option>
-            ))}
-          </select>
-        </Campo>
+        {tipo === "aluno" && (
+          <Campo rotulo={`${rotulo} — turma do aluno`}>
+            <select className={estiloInput} value={turmaDoAluno}
+                    onChange={(evento) => { setTurmaDoAluno(evento.target.value); setId(""); }}>
+              {/* Sem turma, a lista é a 1ª página da escola: "Todas as turmas" prometeria a
+                  escola inteira quando ela tem mais alunos que isso. */}
+              <option value="">{escolaTemMais ? `Primeiros ${numero(alunos.length)} da escola` : "Todas as turmas"}</option>
+              {turmas.map((turma) => <option key={turma.id} value={turma.id}>{turma.nome}</option>)}
+            </select>
+          </Campo>
+        )}
+        <div className={tipo === "aluno" ? "sm:col-span-2" : undefined}>
+          <Campo rotulo={rotulo}>
+            <select className={estiloInput} value={id} onChange={(evento) => setId(evento.target.value)}>
+              <option value="">{carregandoTurma ? "Carregando os alunos da turma…" : "Selecione…"}</option>
+              {opcoes.map((opcao) => (
+                <option key={opcao.id} value={opcao.id}>{opcao.nome}</option>
+              ))}
+            </select>
+          </Campo>
+        </div>
       </div>
+      {tipo === "aluno" && erroDaTurma && (
+        <div className="mt-3">
+          <Mensagem tipo="erro">Não foi possível carregar os alunos da turma: {erroDaTurma.message}</Mensagem>
+        </div>
+      )}
     </div>
   );
 }
@@ -118,6 +169,12 @@ const GRUPOS: { chave: "matific" | "elefante"; titulo: string; icone: LucideIcon
   { chave: "matific", titulo: "Matemática · Matific", icone: Calculator, tom: "teal" },
 ];
 
+/** Módulo do contrato de cada plataforma (as notas e os grupos de indicadores). */
+const MODULO_DA_PLATAFORMA: Record<"matific" | "elefante", string> = {
+  matific: "matematica",
+  elefante: "leitura",
+};
+
 const NOTAS: { chave: "matific" | "elefante" | "geral"; rotulo: string; icone: LucideIcon; tom: TomPastel }[] = [
   { chave: "elefante", rotulo: "Nota Elefante Letrado", icone: BookOpen, tom: "violeta" },
   { chave: "matific", rotulo: "Nota Matific", icone: Calculator, tom: "teal" },
@@ -127,11 +184,11 @@ const NOTAS: { chave: "matific" | "elefante" | "geral"; rotulo: string; icone: L
 /** Duas barras (A e B) de um indicador, na mesma escala (o maior dos dois). */
 function BarrasLado({ rotulo, a, b, formato = (valor: number) => valor.toLocaleString("pt-BR") }: {
   rotulo: string;
-  a: { nome: string; valor: number };
-  b: { nome: string; valor: number };
+  a: { nome: string; valor: number | null };
+  b: { nome: string; valor: number | null };
   formato?: (valor: number) => string;
 }) {
-  const maximo = Math.max(a.valor, b.valor, 1);
+  const maximo = Math.max(a.valor ?? 0, b.valor ?? 0, 1);
   return (
     <div className="py-2.5">
       <p className="mb-2 text-[13px] font-semibold text-zinc-700 dark:text-zinc-200">{rotulo}</p>
@@ -141,13 +198,15 @@ function BarrasLado({ rotulo, a, b, formato = (valor: number) => valor.toLocaleS
             <span className={`font-bold ${LADOS[lado].texto}`}>{lado}</span> · {barra.nome}
           </span>
           <span aria-hidden className="h-2.5 flex-1 overflow-hidden rounded-full bg-zinc-100 dark:bg-zinc-800">
-            <span
-              className={`block h-full rounded-full bg-gradient-to-r ${LADOS[lado].barra}`}
-              style={{ width: `${Math.max(2, (barra.valor / maximo) * 100)}%` }}
-            />
+            {barra.valor !== null && (
+              <span
+                className={`block h-full rounded-full bg-gradient-to-r ${LADOS[lado].barra}`}
+                style={{ width: `${Math.max(2, (barra.valor / maximo) * 100)}%` }}
+              />
+            )}
           </span>
           <span className="w-20 shrink-0 text-right text-sm font-semibold tabular-nums text-zinc-900 dark:text-white">
-            {formato(barra.valor)}
+            {barra.valor === null ? <span aria-label="Sem dado">—</span> : formato(barra.valor)}
           </span>
         </div>
       ))}
@@ -178,6 +237,12 @@ function CartaoLado({ lado, dados }: { lado: keyof typeof LADOS; dados: Lado }) 
 
 export default function Comparador() {
   const { escolaId, usuario } = useApp();
+  // CONTRATO: a nota e o grupo de indicadores do módulo que a rede não contratou
+  // não aparecem (nem zerados). O Admin Global vê os dois (ele compara escolas de
+  // redes diferentes); o lado de uma rede sem o módulo chega nulo e mostra "—".
+  const { tem } = useModulos();
+  const notasNoPlano = NOTAS.filter((n) => n.chave === "geral" || tem(MODULO_DA_PLATAFORMA[n.chave]));
+  const gruposNoPlano = GRUPOS.filter((g) => tem(MODULO_DA_PLATAFORMA[g.chave]));
   // "Escola" como lado é exclusivo do ADM supremo (rede/Secretaria).
   const podeEscola = !!usuario?.is_global;
   // Opções dos seletores: buscas de leitura (ociosas sem escola) via useApi.
@@ -192,7 +257,8 @@ export default function Comparador() {
   const escolas: OpcaoAluno[] = (escolasLista ?? []).map((e) => ({ id: e.id, nome: e.nome }));
   // Reduz a página de alunos às opções (id + nome) que os seletores consomem.
   const alunos: OpcaoAluno[] = (paginaAlunos?.itens ?? []).map((aluno) => ({ id: aluno.id, nome: aluno.nome }));
-  // A busca traz só a 1ª página (100): a tela diz quando há mais alunos que isso.
+  // A busca da escola traz só a 1ª página (100): a tela diz quando há mais alunos que
+  // isso e como chegar a qualquer um (a turma do aluno, em cada lado).
   const alunosDeFora = paginaAlunos && paginaAlunos.total > alunos.length ? paginaAlunos.total : null;
   const erroOpcoes = erroTurmas ?? erroAlunos;
   const [tipoA, setTipoA] = useState("aluno");
@@ -229,11 +295,11 @@ export default function Comparador() {
 
       <Card className="mb-6 p-5">
         <div className="flex flex-col gap-4 lg:flex-row lg:items-stretch">
-          <SeletorLado lado="A" rotulo="Lado A" tipo={tipoA} setTipo={setTipoA} id={idA} setId={setIdA} alunos={alunos} turmas={turmas ?? []} escolas={escolas} podeEscola={podeEscola} />
+          <SeletorLado lado="A" rotulo="Lado A" tipo={tipoA} setTipo={setTipoA} id={idA} setId={setIdA} escolaId={escolaId} alunos={alunos} escolaTemMais={alunosDeFora != null} turmas={turmas ?? []} escolas={escolas} podeEscola={podeEscola} />
           <span aria-hidden className="grid h-10 w-10 shrink-0 place-items-center self-center rounded-full bg-marinho-900 text-xs font-bold text-white shadow-cartao dark:bg-indigo-500">
             vs
           </span>
-          <SeletorLado lado="B" rotulo="Lado B" tipo={tipoB} setTipo={setTipoB} id={idB} setId={setIdB} alunos={alunos} turmas={turmas ?? []} escolas={escolas} podeEscola={podeEscola} />
+          <SeletorLado lado="B" rotulo="Lado B" tipo={tipoB} setTipo={setTipoB} id={idB} setId={setIdB} escolaId={escolaId} alunos={alunos} escolaTemMais={alunosDeFora != null} turmas={turmas ?? []} escolas={escolas} podeEscola={podeEscola} />
         </div>
         <div className="mt-4 flex flex-wrap items-center justify-between gap-3">
           <p className="flex items-start gap-1.5 text-xs text-zinc-500 dark:text-zinc-400">
@@ -242,6 +308,7 @@ export default function Comparador() {
                 <Info size={14} aria-hidden className="mt-px shrink-0" />
                 <span>
                   A lista de alunos mostra os {numero(alunos.length)} primeiros de {numero(alunosDeFora)} da escola.
+                  Para achar qualquer aluno, escolha antes a turma dele.
                 </span>
               </>
             )}
@@ -273,8 +340,8 @@ export default function Comparador() {
             <CartaoLado lado="B" dados={comparacao.b} />
           </div>
 
-          <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
-            {NOTAS.map((n) => (
+          <div className={`grid grid-cols-1 gap-4 ${notasNoPlano.length === 3 ? "sm:grid-cols-3" : "sm:grid-cols-2"}`}>
+            {notasNoPlano.map((n) => (
               <Card key={n.chave} className="p-5">
                 <div className="flex items-center gap-3">
                   <IconePastel icone={n.icone} tom={n.tom} />
@@ -301,8 +368,8 @@ export default function Comparador() {
             ))}
           </div>
 
-          <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-            {GRUPOS.map((grupo) => (
+          <div className={`grid grid-cols-1 gap-4 ${gruposNoPlano.length > 1 ? "lg:grid-cols-2" : ""}`}>
+            {gruposNoPlano.map((grupo) => (
               <Card key={grupo.chave} className="p-5">
                 <div className="mb-2 flex items-center gap-3">
                   <IconePastel icone={grupo.icone} tom={grupo.tom} />
@@ -313,8 +380,8 @@ export default function Comparador() {
                     <BarrasLado
                       key={indicador.chave}
                       rotulo={indicador.rotulo}
-                      a={{ nome: comparacao.a.nome, valor: comparacao.a.indicadores[indicador.chave] ?? 0 }}
-                      b={{ nome: comparacao.b.nome, valor: comparacao.b.indicadores[indicador.chave] ?? 0 }}
+                      a={{ nome: comparacao.a.nome, valor: comparacao.a.indicadores[indicador.chave] ?? null }}
+                      b={{ nome: comparacao.b.nome, valor: comparacao.b.indicadores[indicador.chave] ?? null }}
                       formato={indicador.formato}
                     />
                   ))}

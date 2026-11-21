@@ -122,7 +122,9 @@ def test_contagens_elefante_e_matific(cliente, db, escola_completa):
     # Os totais por plataforma fecham com o universo (3 alunos ativos do ano).
     assert ele["alunos_com_dados"] + ele["alunos_sem_dados"] == 3
     assert mat["alunos_com_dados"] + mat["alunos_sem_dados"] == 3
-    assert st["qtd_alunos"] == 4                 # ativos da escola (inclui o de 2025)
+    # O total da escola é o MESMO universo (ativos matriculados no ano, como /alunos):
+    # antes era 4, com o aluno de 2025 (G_VIRADA-2).
+    assert st["qtd_alunos"] == 3
 
 
 def test_frescor_ignora_snapshot_fora_do_universo(cliente, db, escola_completa):

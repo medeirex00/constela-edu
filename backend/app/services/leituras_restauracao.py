@@ -35,7 +35,9 @@ inteira é recusada. É o oposto de "completar" um número que não fechou.
 GOVERNANÇA. Reescrever histórico é ação retroativa, então vale a mesma régua do
 ``aplicar_ao_historico`` do catálogo: só o Admin Global, com motivo escrito,
 auditada item a item com o de/para e o evento-fonte, e numa transação única.
-Este módulo NÃO commita — quem chama confirma, igual a ``alunos_fusao``.
+Este módulo NÃO commita — quem chama confirma, igual a ``alunos_fusao``, e quem
+aplica segura antes a trava da escola (a da fusão), para que a conferência e a
+escrita vejam a ficha que existe de fato.
 """
 from __future__ import annotations
 
@@ -45,16 +47,63 @@ from datetime import datetime
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.models import Aluno, Escola, EventoAluno, Leitura, Livro
+from app.models import Aluno, Escola, EventoAluno, Leitura, Livro, LogAuditoria
 from app.models.base import agora
-from app.services.audit import registrar
-from app.services.eventos import chave_evento
+from app.services.audit import PROVA_ORDEM_LEITURA_EXPURGADA, registrar
+from app.services.eventos import chave_evento, fichas_absorvidas
 
 # Nomes das ações de auditoria (``LogAuditoria.acao`` é String(80)).
 ACAO_ITEM = "leitura.data_restaurada"
 ACAO_LOTE = "leituras.restauracao_historica"
 
 MOTIVO_MINIMO = 10
+
+# Onde a deduplicação deixa a cópia de evento que ela APAGOU (só no log): a fusão
+# (``alunos_fusao.fundir_par``) e a limpeza do passivo
+# (``eventos.deduplicar_eventos_por_conteudo``, ``scripts/deduplicar_eventos_por_conteudo``);
+# e onde a ingestão deixa a cópia NATIVA que ela NÃO gravou porque o conteúdo já veio
+# de uma ficha absorvida (``eventos.ingerir_eventos``, PEND-14).
+_LOGS_DE_DESCARTE = {"aluno.fundido": "eventos_descartados_detalhe",
+                     "aluno.eventos_duplicados_removidos": "eventos",
+                     "aluno.eventos_nativos_nao_gravados": "eventos"}
+
+
+def _descartes_anteriores(db: Session, escola_id: int, item: "ItemRestauracao",
+                          evento: EventoAluno) -> tuple[list[tuple[datetime, dict]], bool]:
+    """As ocorrências ANTERIORES do livro na ficha de origem que a deduplicação
+    apagou e que só o log guarda: mesmo livro, instante anterior ao da evidência e
+    a chave que prova a MESMA ficha de origem (o hash é refeito aqui, como na regra
+    7). A fusão e a limpeza ainda tiram a cópia nativa ÚNICA de uma ficha (sem
+    releitura naquela hora); se a ficha ganha releitura depois e é absorvida, só o
+    log diz que a releitura não é a primeira."""
+    limite = _sem_tz(evento.ocorrido_em)
+    achados: list[tuple[datetime, dict]] = []
+    fichas_com_prova_expurgada: set[int] = set()
+    for acao, entidade_id, detalhes in db.execute(
+            select(LogAuditoria.acao, LogAuditoria.entidade_id, LogAuditoria.detalhes).where(
+                LogAuditoria.escola_id == escola_id,
+                LogAuditoria.acao.in_(sorted(_LOGS_DE_DESCARTE)))):
+        if not isinstance(detalhes, dict):
+            continue
+        if entidade_id is not None and detalhes.get(PROVA_ORDEM_LEITURA_EXPURGADA):
+            fichas_com_prova_expurgada.add(entidade_id)
+        lista = detalhes.get(_LOGS_DE_DESCARTE[acao])
+        for d in lista if isinstance(lista, list) else ():
+            if not isinstance(d, dict) or d.get("livro_id") != item.livro_id:
+                continue
+            try:
+                quando = _sem_tz(datetime.fromisoformat(str(d.get("ocorrido_em"))))
+            except ValueError:
+                continue
+            if quando < limite and d.get("chave_natural") == chave_evento(
+                    evento.plataforma, evento.tipo_evento, item.aluno_origem_id,
+                    evento.conteudo_titulo or "", quando):
+                achados.append((quando, d))
+    if not fichas_com_prova_expurgada:
+        return achados, False
+    origens = {item.aluno_id, item.aluno_origem_id}
+    origens.update(fichas_absorvidas(db, [item.aluno_id]).get(item.aluno_id, set()))
+    return achados, bool(origens & fichas_com_prova_expurgada)
 
 
 class RestauracaoInvalida(Exception):
@@ -119,9 +168,16 @@ def _conferir(db: Session, escola_id: int, item: ItemRestauracao,
             f"mesma ({item.aluno_id}). Uma restauração histórica só faz sentido "
             "quando o dado veio de OUTRA ficha — a que a fusão absorveu.")
 
-    # --- 1 e 2: o aluno existe, é desta escola e está ativo
+    # --- 1 e 2: o aluno existe, é desta escola e está ativo. A ficha que não existe
+    # é, quase sempre, a que uma fusão absorveu depois do ensaio: dizer "não é desta
+    # escola" mandaria procurar o erro no lugar errado.
     aluno = db.get(Aluno, item.aluno_id)
-    if aluno is None or aluno.escola_id != escola_id:
+    if aluno is None:
+        raise recusar(
+            f"A ficha {item.aluno_id} do item {indice + 1} não existe: ela pode ter sido "
+            "fundida em outra ficha ou excluída. Nada foi alterado — confira a ficha que "
+            "ficou e refaça o ensaio.")
+    if aluno.escola_id != escola_id:
         raise recusar(
             f"A ficha {item.aluno_id} do item {indice + 1} não é desta escola.")
     if aluno.status != "ativo":
@@ -208,7 +264,8 @@ def _conferir(db: Session, escola_id: int, item: ItemRestauracao,
     # É a regra inteira do método: a linha ``Leitura`` nasce na primeira
     # importação. Aceitar um evento posterior seria escolher a data mais
     # conveniente entre as disponíveis — exatamente a inferência que este
-    # serviço existe para proibir.
+    # serviço existe para proibir. Contam os eventos vivos e os que a
+    # deduplicação apagou e deixou no log (``_descartes_anteriores``).
     anteriores = [
         outro for outro in db.execute(
             select(EventoAluno).where(
@@ -228,12 +285,43 @@ def _conferir(db: Session, escola_id: int, item: ItemRestauracao,
             f"{primeiro.id}, em {primeiro.ocorrido_em:%d/%m/%Y %H:%M}. A data "
             "que a fusão apagou é a da PRIMEIRA, porque a linha de leitura "
             "nasce na primeira importação e nunca é atualizada.")
+    # ...e a anterior que a deduplicação apagou (só no log) também conta.
+    descartadas, prova_expurgada = _descartes_anteriores(db, escola_id, item, evento)
+    if descartadas:
+        quando, primeiro = min(descartadas, key=lambda par: par[0])
+        raise recusar(
+            f"O evento {evento.id} não é a primeira ocorrência de "
+            f"“{livro.titulo}” na ficha {item.aluno_origem_id}: houve uma em "
+            f"{quando:%d/%m/%Y %H:%M} (evento {primeiro.get('evento_id')}), "
+            "descartada como cópia repetida numa fusão ou na limpeza de eventos "
+            "duplicados — está no log de auditoria. A data que a fusão apagou é a "
+            "da PRIMEIRA, porque a linha de leitura nasce na primeira importação e "
+            "nunca é atualizada.")
+    if prova_expurgada:
+        raise recusar(
+            "O prazo de retenção removeu uma prova de leitura desta ficha. A auditoria "
+            "restante não confirma que este evento foi a primeira leitura. "
+            "A data não foi alterada.")
 
     # --- 10: nada a fazer é RECUSA, não sucesso silencioso. É esta regra que
     # protege os livros em que as duas fichas tinham a MESMA data: lá a fusão
-    # não perdeu nada, e "restaurar" só maquiaria um número.
+    # não perdeu nada, e "restaurar" só maquiaria um número. Quando a leitura está
+    # assim porque uma restauração JÁ foi aplicada (está no log), a recusa diz isso
+    # — e o que pode faltar: a rota grava a restauração antes de recalcular, e um
+    # recálculo que falhou deixa as notas para o "Recalcular".
     atual = _sem_tz(leitura.data)
     if atual == data_original and (leitura.tempo_leitura_min or 0) == (item.tempo_original or 0):
+        ja_restaurada = db.execute(select(LogAuditoria.id).where(
+            LogAuditoria.escola_id == escola_id, LogAuditoria.acao == ACAO_ITEM,
+            LogAuditoria.entidade == "leitura",
+            LogAuditoria.entidade_id == leitura.id).limit(1)).first() is not None
+        if ja_restaurada:
+            raise recusar(
+                f"A leitura de “{livro.titulo}” já foi restaurada para "
+                f"{atual:%d/%m/%Y %H:%M} com {leitura.tempo_leitura_min} minuto(s) — "
+                "está no log de auditoria —, então não há o que restaurar de novo. Se "
+                "as notas da escola ainda não mostram essa data, use “Recalcular” em "
+                "Importações.")
         raise recusar(
             f"A leitura de “{livro.titulo}” já está em "
             f"{atual:%d/%m/%Y %H:%M} com {leitura.tempo_leitura_min} minuto(s) "
@@ -308,7 +396,8 @@ def restaurar(db: Session, escola_id: int, itens: list[ItemRestauracao],
 
     Confere o lote inteiro ANTES de tocar em qualquer linha: se o item 14 não se
     sustenta, os 13 primeiros nem chegam a ser escritos. Com commit do chamador,
-    a transação única garante que auditoria, dados e recálculo caem juntos.
+    a transação única garante que auditoria e dados caem juntos (a rota recalcula
+    a escola depois do commit, que solta a trava da escola).
     """
     plano = planejar(db, escola_id, itens,
                      permitir_fora_do_ano_letivo=permitir_fora_do_ano_letivo)

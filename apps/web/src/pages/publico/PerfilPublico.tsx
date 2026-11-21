@@ -10,9 +10,14 @@ interface PerfilPublicoDados {
   nome: string;
   turma: string | null;
   posicao: number | null;
-  /** `null` = módulo fora do plano da rede: o telão mostra "—". */
+  /** `null` = módulo fora do plano da rede ou criança sem dado da plataforma:
+   *  a página mostra "—". */
   nota_matific: number | null;
   nota_elefante: number | null;
+  /** Existe retrato da plataforma daquela matéria (ausência não é zero). Ausente
+   *  num servidor antigo: aí vale só a nota (`notaDaMateria`). */
+  aferido_leitura?: boolean;
+  aferido_matematica?: boolean;
   nota_geral: number;
   nivel: number;
   xp: number;
@@ -67,13 +72,14 @@ export default function PerfilPublico() {
 
           <div className="mt-8 grid grid-cols-3 gap-3">
             {[
-              { rotulo: "Matific", valor: perfil.nota_matific },
-              { rotulo: "Leitura", valor: perfil.nota_elefante },
-              { rotulo: "Geral", valor: perfil.nota_geral },
+              { rotulo: "Matific", valor: perfil.nota_matific, aferido: perfil.aferido_matematica },
+              { rotulo: "Leitura", valor: perfil.nota_elefante, aferido: perfil.aferido_leitura },
+              // A nota única não é de uma plataforma: sem discriminante.
+              { rotulo: "Geral", valor: perfil.nota_geral, aferido: undefined },
             ].map((item) => (
               <div key={item.rotulo} className="rounded-xl bg-white/5 p-4">
                 <p className="text-xs uppercase tracking-wide text-zinc-400">{item.rotulo}</p>
-                <p className="mt-1 text-2xl font-bold tabular-nums">{notaDaMateria(item.valor)}</p>
+                <p className="mt-1 text-2xl font-bold tabular-nums">{notaDaMateria(item.valor, item.aferido)}</p>
               </div>
             ))}
           </div>

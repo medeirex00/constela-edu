@@ -1,6 +1,8 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { ApiError, MENSAGEM_SEM_REDE, api } from "./cliente";
+import {
+  ApiError, MENSAGEM_SEM_REDE, api, apiBlob, apiUpload, configurarApi, guardarToken,
+} from "./cliente";
 
 describe("cliente HTTP: falha de rede vira ApiError(0) em pt-BR", () => {
   const fetchOriginal = globalThis.fetch;
@@ -52,5 +54,84 @@ describe("cliente HTTP: falha de rede vira ApiError(0) em pt-BR", () => {
     expect(erro.message).toBe("Senha muito comum. Escolha outra. Field required");
     expect(erro.message).not.toMatch(/value error/i);
     expect(erro.message).not.toBe("Não foi possível completar a operação.");
+  });
+});
+
+describe("401 e troca de sessão", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  function simular401() {
+    let responder!: (response: Response) => void;
+    const fetchFalso = vi.fn(() => new Promise<Response>((resolve) => { responder = resolve; }));
+    vi.stubGlobal("fetch", fetchFalso);
+    return { fetchFalso, recusar: () => responder(new Response(null, { status: 401 })) };
+  }
+
+  const chamadas = [
+    { nome: "JSON", enviar: () => api("/recurso") },
+    { nome: "upload", enviar: () => apiUpload("/recurso", new FormData()) },
+    { nome: "download", enviar: () => apiBlob("/recurso") },
+  ];
+
+  it.each(chamadas)("$nome preserva o token da conta que entrou após a requisição", async ({ enviar }) => {
+    let token: string | null = "token-anterior";
+    const remover = vi.fn(async () => { token = null; });
+    const expirar = vi.fn();
+    configurarApi({
+      armazenamento: { obter: async () => token, guardar: async (valor) => { token = valor; }, remover },
+      aoExpirarSessao: expirar,
+    });
+    const { fetchFalso, recusar } = simular401();
+    const resultado = enviar();
+    await vi.waitFor(() => expect(fetchFalso).toHaveBeenCalledWith(
+      "/api/v1/recurso", expect.objectContaining({ headers: expect.objectContaining({
+        Authorization: "Bearer token-anterior",
+      }) }),
+    ));
+
+    await guardarToken("token-novo");
+    recusar();
+
+    await expect(resultado).rejects.toMatchObject({ status: 401 });
+    expect(token).toBe("token-novo");
+    expect(remover).not.toHaveBeenCalled();
+    expect(expirar).not.toHaveBeenCalled();
+  });
+
+  it("remove o token que recebeu a recusa e avisa uma vez quando há dois 401", async () => {
+    let token: string | null = "token-atual";
+    const remover = vi.fn(async () => { token = null; });
+    const expirar = vi.fn();
+    configurarApi({
+      armazenamento: { obter: async () => token, guardar: () => undefined, remover },
+      aoExpirarSessao: expirar,
+    });
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(null, { status: 401 })));
+
+    const resultados = await Promise.allSettled([api("/recurso"), api("/outro")]);
+
+    expect(resultados).toEqual([
+      expect.objectContaining({ reason: expect.objectContaining({ status: 401 }) }),
+      expect.objectContaining({ reason: expect.objectContaining({ status: 401 }) }),
+    ]);
+    expect(token).toBeNull();
+    expect(remover).toHaveBeenCalledTimes(1);
+    expect(expirar).toHaveBeenCalledTimes(1);
+  });
+
+  it("uma ação vinculada a outro token é recusada antes de acessar a rede", async () => {
+    const remover = vi.fn();
+    const expirar = vi.fn();
+    configurarApi({
+      armazenamento: { obter: async () => "token-atual", guardar: () => undefined, remover },
+      aoExpirarSessao: expirar,
+    });
+    const fetchFalso = vi.fn();
+    vi.stubGlobal("fetch", fetchFalso);
+
+    await expect(api("/acao", { method: "POST" }, "token-anterior")).rejects.toMatchObject({ status: 401 });
+    expect(fetchFalso).not.toHaveBeenCalled();
+    expect(remover).not.toHaveBeenCalled();
+    expect(expirar).not.toHaveBeenCalled();
   });
 });

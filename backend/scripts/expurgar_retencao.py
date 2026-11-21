@@ -65,8 +65,11 @@ def main(argv: list[str] | None = None) -> int:
             print(f"{categoria}: desligada (prazo 0)")
             continue
         ligadas += 1
+        reduzidas = r.get("reduzidas") or 0
+        extra = (f"; {reduzidas} reduzida(s) aos ids, sem dado pessoal (ligação da fusão)"
+                 if reduzidas else "")
         print(f"{categoria}: prazo {r['dias']} dias, antes de {r['corte']} — "
-              f"{r['linhas']} linha(s) {verbo}")
+              f"{r['linhas']} linha(s) {verbo}{extra}")
     if not ligadas:
         print("Nenhuma categoria com prazo definido: nada a fazer.")
     return 0

@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import JSON, ForeignKey, Index, String, UniqueConstraint
+from sqlalchemy import JSON, ForeignKey, Index, String, UniqueConstraint, false
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.database import Base
@@ -76,8 +76,11 @@ class Nota(Base):
     # do coordenador, alterar a config de uma escola não move a posição dela (nem
     # de nenhuma outra) no ranking da rede. Travado por
     # `backend/tests/test_scoring_institucional.py`.
-    nota_elefante_institucional: Mapped[float] = mapped_column(default=0.0)
-    nota_matific_institucional: Mapped[float] = mapped_column(default=0.0)
+    # server_default: o da 0028 (o ORM sempre grava pelo `default`).
+    nota_elefante_institucional: Mapped[float] = mapped_column(default=0.0,
+                                                               server_default="0.0")
+    nota_matific_institucional: Mapped[float] = mapped_column(default=0.0,
+                                                              server_default="0.0")
     # -----------------------------------------------------------------------
     # LEGADO / COMPATIBILIDADE — LEIA ANTES DE USAR
     # -----------------------------------------------------------------------
@@ -98,8 +101,9 @@ class Nota(Base):
     nota_geral: Mapped[float] = mapped_column(default=0.0)
     posicao: Mapped[int | None] = mapped_column(default=None)
     # Por dimensão — a ordenação OFICIAL a partir da Arquitetura 2.
-    aferido_leitura: Mapped[bool] = mapped_column(default=False)
-    aferido_matematica: Mapped[bool] = mapped_column(default=False)
+    # server_default: o da 0027 (o ORM sempre grava pelo `default`).
+    aferido_leitura: Mapped[bool] = mapped_column(default=False, server_default=false())
+    aferido_matematica: Mapped[bool] = mapped_column(default=False, server_default=false())
     posicao_leitura: Mapped[int | None] = mapped_column(default=None)
     posicao_matematica: Mapped[int | None] = mapped_column(default=None)
     detalhes: Mapped[dict] = mapped_column(JSON, default=dict)

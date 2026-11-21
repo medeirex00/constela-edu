@@ -29,7 +29,7 @@ import {
 import { useEffect, useMemo, useState } from "react";
 
 import { IconePlataforma } from "../components/identidadePlataforma";
-import { SeletorPeriodo, periodoParaQuery } from "../components/SeletorPeriodo";
+import { SeletorPeriodo, avisoPopulacao, periodoParaQuery } from "../components/SeletorPeriodo";
 import { MolduraPilula, estiloSelectPilula } from "../components/SeletorPilula";
 import { TabelaRolavel } from "../components/TabelaRolavel";
 import {
@@ -38,9 +38,10 @@ import {
 } from "../components/ui";
 import { useApp } from "../context/AppContext";
 import { useApi } from "../hooks/useApi";
+import { useModulos } from "../hooks/useModulos";
 import { apiDownload } from "../lib/api";
 import { dataHora, numero, tempoLeitura } from "../lib/formato";
-import type { Turma } from "../lib/types";
+import type { PopulacaoDoPeriodo, Turma } from "../lib/types";
 
 type Classificacao = "SUPORTADO" | "SUPORTADO COM RESSALVA" | "NÃO SUPORTADO";
 
@@ -103,6 +104,23 @@ interface Cobertura {
   /** (Elefante) contador vitalício que a primeira coleta já trazia, para quem
    *  não tem coleta no início: histórico SEM data, fora da conta. */
   acumulado_na_primeira_coleta?: number | null;
+  /** (Elefante) alunos cuja coleta no período veio SEM as questões (a plataforma
+   *  deixou de mandá-las): ela não mede a borda, e a conta deles vai só até a
+   *  coleta anterior — ou fica sem número. Ausente em API anterior. */
+  alunos_questoes_nao_vieram?: number;
+  /** Base mais antiga de quem entra em "não há coleta perto do início" (sem os alunos
+   *  cuja coleta do início veio sem as questões). Ausente em API anterior. */
+  coleta_base_ampliados?: string | null;
+  /** (Elefante) a coleta do INÍCIO veio sem as questões e a conta partiu de uma coleta
+   *  ANTERIOR: o número inclui esse intervalo (status "ampliada"). Houve coleta no
+   *  início — esses alunos não entram em "não há coleta perto do início". */
+  alunos_inicio_sem_questoes?: number;
+  coleta_base_inicio_sem_questoes?: string | null;
+  antecedencia_inicio_sem_questoes_horas?: number | null;
+  /** (Elefante) a coleta do INÍCIO veio sem as questões e não há coleta anterior: a conta
+   *  começa na primeira coleta com as questões (não entram em "Sem coleta no início"). */
+  alunos_inicio_sem_questoes_sem_base?: number;
+  primeira_coleta_inicio_sem_questoes?: string | null;
 }
 
 interface BlocoElefante {
@@ -163,6 +181,9 @@ interface LinhaAluno {
 
 interface RelatorioPeriodoT {
   escola: { id: number; nome: string; ano_letivo: number };
+  /** De que ano letivo são as crianças e as turmas medidas: num período de um ano já
+   *  encerrado, as daquele ano (não as do ano ativo da escola, em `escola`). */
+  populacao?: PopulacaoDoPeriodo;
   periodo: { preset: string; rotulo: string; inicio: string | null; fim: string | null; inclusivo: boolean };
   escopo: { tipo: string; turma_id: number | null; aluno_id: number | null; restrito_a_turmas: number[] | null };
   plataformas: string[];
@@ -185,15 +206,121 @@ const PLATAFORMAS = [
   { valor: "matific", rotulo: "Somente Matific" },
 ] as const;
 
+/** Plataforma do relatório → módulo do plano da rede (o `PLATAFORMA_MODULO` do backend). */
+const MODULO_DA_PLATAFORMA: Record<string, string> = { elefante: "leitura", matific: "matematica" };
+
 const TOM_CLASSIFICACAO: Record<Classificacao, "ok" | "alerta" | "neutro"> = {
   SUPORTADO: "ok",
   "SUPORTADO COM RESSALVA": "alerta",
   "NÃO SUPORTADO": "neutro",
 };
 
-/** Etiqueta da classificação — o vocabulário é o do backend, não um apelido. */
+/** Etiqueta da classificação, na língua de quem lê o relatório (a classificação
+ *  vem do backend; "SUPORTADO COM RESSALVA" não diz nada a uma professora). */
+const ROTULO_CLASSIFICACAO: Record<Classificacao, string> = {
+  SUPORTADO: "Confiável",
+  "SUPORTADO COM RESSALVA": "Confiável, com um cuidado",
+  "NÃO SUPORTADO": "Não calculado",
+};
+
 function Selo({ classificacao }: { classificacao: Classificacao }) {
-  return <Badge tom={TOM_CLASSIFICACAO[classificacao]}>{classificacao}</Badge>;
+  return (
+    <Badge tom={TOM_CLASSIFICACAO[classificacao]}>{ROTULO_CLASSIFICACAO[classificacao] ?? classificacao}</Badge>
+  );
+}
+
+/** "Como ler estes números" em linguagem de professor. Diz o MESMO que o backend
+ *  manda em `suporte` e `nao_suportado` (`services/relatorios_periodo.py`) — o que
+ *  cada número conta, por que dá (ou não dá) para confiar nele e o cuidado ao ler —,
+ *  sem nome de campo, de tabela ou de seção da especificação. Chave que esta lista
+ *  não conhece cai no texto do backend. */
+interface ExplicacaoNumero { nome: string; explicacao: string; cuidado?: string }
+
+const EXPLICACAO_ELEFANTE: Record<string, ExplicacaoNumero> = {
+  livros_novos: {
+    nome: "“Livros novos”",
+    // A data do livro é a que a plataforma mostrava na PRIMEIRA importação dele (a
+    // leitura mais recente naquele dia), não a da primeira leitura — e não muda.
+    explicacao: "Conta cada livro que apareceu pela primeira vez no relatório da plataforma dentro do período. É "
+      + "a mesma conta da premiação “Mais livros”: o relatório e o pódio mostram o mesmo número.",
+    cuidado: "Vale a data em que o livro apareceu pela primeira vez no relatório da plataforma, e ela não muda "
+      + "depois. Por isso um livro lido de novo não entra aqui — ele aparece em “Livros com atividade”, como relido.",
+  },
+  tempo_min: {
+    nome: "“Tempo de leitura”",
+    explicacao: "Soma o tempo dos livros novos do período. É a mesma conta da premiação “Mais tempo”.",
+    cuidado: "A plataforma nem sempre informa o tempo de um livro; quando não informa, ele entra como zero. Por "
+      + "isso o total é o mínimo lido no período — o tempo real pode ser maior.",
+  },
+  livros_com_atividade: {
+    nome: "“Livros com atividade”",
+    explicacao: "Conta os livros diferentes que o aluno abriu no período, inclusive os que ele releu, pela data "
+      + "e hora que a plataforma registra em cada leitura.",
+    // Sem "cuidado": o que colapsa no mesmo minuto é a contagem de VEZES que o livro
+    // foi lido (que a tela não mostra); o número de livros diferentes não muda.
+  },
+  tempo_min_por_evento: {
+    nome: "Tempo de cada leitura",
+    explicacao: "Não dá para saber quanto durou cada leitura: a plataforma informa o tempo somado de cada livro, "
+      + "não o de cada vez que o aluno o abriu, e esses totais às vezes até diminuem — o que um total somado não "
+      + "faria. O tempo do período vem do tempo dos livros novos, o mesmo da premiação “Mais tempo”.",
+  },
+  questoes: {
+    nome: "“Questões”",
+    explicacao: "A plataforma só informa o total de questões que o aluno já respondeu desde que começou, sem a "
+      + "data de cada uma. O número do período é a diferença entre a coleta do fim e a do início.",
+    cuidado: "Só entra quem tem coleta no período; quem não tem fica fora da conta (não conta como zero). Sem "
+      + "coleta no começo do período, a conta começa na primeira coleta; sem coleta no fim, termina na última — "
+      + "nos dois casos o número não cobre o período inteiro, e o aviso de “Questões”, acima, diz quanto falta.",
+  },
+};
+
+const EXPLICACAO_MATIFIC: ExplicacaoNumero = {
+  nome: "“Atividades” e “Estrelas”",
+  explicacao: "O Matific informa o total do ano (atividades e estrelas somadas), não a data de cada atividade. "
+    + "O número do período é o total no fim menos o de antes do início — a mesma regra das premiações.",
+  cuidado: "Sem coleta dentro do período, o aluno fica fora da conta (falta de dado não é zero) e é contado em "
+    + "“Sem coleta na janela”.",
+};
+
+/** O que o relatório não responde, pela chave `plataforma.metrica` do backend. */
+const EXPLICACAO_NAO_RESPONDE: Record<string, ExplicacaoNumero> = {
+  "elefante.tempo_min_por_evento": {
+    nome: "Tempo de cada leitura (Elefante Letrado)",
+    explicacao: EXPLICACAO_ELEFANTE.tempo_min_por_evento.explicacao,
+  },
+  "matific.questoes": {
+    nome: "Questões (Matific)",
+    explicacao: "O Matific guarda atividades, estrelas e pontuação média, mas não conta questões. Mostrar esse "
+      + "número para um período seria inventá-lo.",
+  },
+  "elefante.pontos_de_dificuldade": {
+    nome: "Pontos de dificuldade (Elefante Letrado)",
+    explicacao: "Quem se destaca pela dificuldade dos livros é decidido em Premiações, com a régua oficial. "
+      + "Calcular de novo aqui criaria uma segunda régua, que poderia discordar do pódio: para mérito, use "
+      + "Premiações.",
+  },
+};
+
+/** A explicação de um número; sem entrada na lista, o texto que o backend mandou. */
+function explicacaoDe(lista: Record<string, ExplicacaoNumero>, chave: string,
+                      s: { por_que: string; ressalva?: string }): ExplicacaoNumero {
+  return lista[chave] ?? { nome: chave.replace(/[._]/g, " "), explicacao: s.por_que, cuidado: s.ressalva };
+}
+
+function CartaoComoLer({ explicacao: e, classificacao }: { explicacao: ExplicacaoNumero; classificacao: Classificacao }) {
+  return (
+    <div className="rounded-2xl border border-zinc-200 p-4 dark:border-zinc-800">
+      <p className="flex flex-wrap items-center gap-2">
+        <strong className="text-zinc-800 dark:text-zinc-100">{e.nome}</strong>
+        <Selo classificacao={classificacao} />
+      </p>
+      <p className="mt-1.5 text-xs text-zinc-600 dark:text-zinc-300">{e.explicacao}</p>
+      {e.cuidado && (
+        <p className="mt-1 text-xs text-ouro-700 dark:text-ouro-300">Cuidado ao ler: {e.cuidado}</p>
+      )}
+    </div>
+  );
 }
 
 /* Caixas dos avisos de cobertura (a FORMA mudou; o texto é o mesmo de antes). */
@@ -227,6 +354,36 @@ function diaDoPeriodo(iso: string | null): string {
   return d && m && a ? `${d}/${m}/${a}` : iso;
 }
 
+/** Por que o cartão "Questões" do Elefante está sem número ("—"), na língua do aviso
+ *  de cobertura logo abaixo dele — e não o "acertos sobre tentativas" de quando há
+ *  número. Mesma ordem de causas do aviso (`AvisoCobertura`, estado "sem_intervalo"). */
+function motivoSemNumeroQuestoes(ele: BlocoElefante): string {
+  const c = ele.cobertura_questoes;
+  if (c?.status === "sem_intervalo") {
+    if ((c.alunos_questoes_nao_vieram ?? 0) > 0) {
+      return "sem número: a plataforma não mandou as questões — veja o aviso";
+    }
+    if (c.alunos_sem_intervalo > 0 && (c.alunos_sem_intervalo_so_inicio ?? 0) >= c.alunos_sem_intervalo) {
+      return "sem número ainda: a única coleta mede o início — veja o aviso";
+    }
+    return "sem número: uma única coleta por aluno no período, não é zero — veja o aviso";
+  }
+  if (ele.alunos_sem_retrato > 0) {
+    return `sem número: ${numero(ele.alunos_sem_retrato)} sem coleta na janela (não contam como zero)`;
+  }
+  return "sem número para o período (não é zero)";
+}
+
+/** Por que o trecho entre o início do período e a primeira coleta não sai das coletas,
+ *  por plataforma: o contador das questões do Elefante é vitalício; o do Matific é do ANO
+ *  e conta atividades e estrelas. As mesmas frases do PDF (`_POR_QUE_SEM_INICIO`). */
+const POR_QUE_SEM_INICIO: Record<Cobertura["regra"], string> = {
+  diferenca_de_coletas: "o contador que o Constela coleta é acumulado desde o início da conta e não diz quando "
+    + "cada questão foi respondida",
+  oficial_matific: "o contador do Matific é o total do ano (atividades e estrelas) e não diz quando cada "
+    + "atividade foi feita",
+};
+
 /** O período PEDIDO é a referência; o que as coletas cobrem vem ao lado. Se
  *  não cobrem exatamente, a tela diz o que falta (ou sobra) e por quê — nunca
  *  troca uma coisa pela outra. Mesma regra do PDF (`_avisos_cobertura`). */
@@ -238,12 +395,19 @@ function AvisoCobertura({ cobertura: c, titulo }: { cobertura: Cobertura; titulo
   const emAndamento = !!(c.periodo_inicio && c.periodo_fim_efetivo && c.periodo_fim
     && c.periodo_fim_efetivo < c.periodo_fim);
   const pedido = emAndamento ? `${periodo} (em andamento, até hoje ${diaDoPeriodo(c.periodo_fim_efetivo)})` : periodo;
-  const de = c.coleta_inicio ? dataHora(c.coleta_inicio) : "o início do contador";
-  const disponivel = `${de} a ${dataHora(c.coleta_fim)}`;
+  // Sem coleta-base, a conta parte do início do contador da plataforma: "desde o
+  // início do contador até …" (montar "de" + "o início" dava "de o início").
+  const ate = dataHora(c.coleta_fim);
+  const disponivel = c.coleta_inicio
+    ? `${dataHora(c.coleta_inicio)} a ${ate}`
+    : `desde o início do contador até ${ate}`;
+  const medidoPelasColetas = c.coleta_inicio ? `de ${disponivel}` : disponivel;
+  const coletaBase = c.coleta_inicio ? `a coleta-base, de ${dataHora(c.coleta_inicio)},` : "o início do contador";
   const medidos = c.alunos_medidos
     ?? c.alunos_cobertura_completa + c.alunos_cobertura_parcial + c.alunos_ampliados;
   const soInicio = c.alunos_sem_intervalo > 0
     && (c.alunos_sem_intervalo_so_inicio ?? 0) >= c.alunos_sem_intervalo;
+  const naoVieram = c.alunos_questoes_nao_vieram ?? 0;
   const para = (n: number) => (n && n < medidos ? ` para ${numero(n)} aluno(s)` : "");
 
   if (c.status === "sem_intervalo") {
@@ -256,6 +420,12 @@ function AvisoCobertura({ cobertura: c, titulo }: { cobertura: Cobertura; titulo
               <strong>{titulo}: sem intervalo medido para {pedido}.</strong> O 0 da regra oficial (a mesma das
               premiações) vem de uma única coleta por aluno no período e nenhuma antes — ele NÃO quer dizer que
               não houve atividade.
+            </>
+          ) : naoVieram > 0 ? (
+            <>
+              <strong>{titulo}: sem número para {pedido}.</strong> A plataforma não mandou as questões nas
+              coletas do período (a equipe do Constela precisa ajustar a coleta dessa plataforma): sem elas,
+              não há diferença a medir (não é zero).
             </>
           ) : soInicio ? (
             <>
@@ -277,7 +447,7 @@ function AvisoCobertura({ cobertura: c, titulo }: { cobertura: Cobertura; titulo
       <p className={`flex gap-2 ${CAIXA_INFO}`}>
         <Info size={14} aria-hidden className={ICONE_INFO} />
         <span>
-          <strong>{titulo}:</strong> período solicitado {pedido}, medido pelas coletas de {disponivel}.
+          <strong>{titulo}:</strong> período solicitado {pedido}, medido pelas coletas {medidoPelasColetas}.
           {c.em_andamento && ` Em andamento: os dados vão até a coleta de ${dataHora(c.coleta_fim)}.`}
         </span>
       </p>
@@ -289,15 +459,23 @@ function AvisoCobertura({ cobertura: c, titulo }: { cobertura: Cobertura; titulo
         <Info size={14} aria-hidden className={ICONE_INFO} />
         <span>
           <strong>{titulo}:</strong> período solicitado {pedido}. O número segue a regra oficial do Matific (a
-          mesma das premiações): diferença entre a coleta-base, {de}, e a última coleta considerada,{" "}
-          {dataHora(c.coleta_fim)} — as bordas do período não são verificadas aqui.
+          mesma das premiações): diferença entre {coletaBase} e a última coleta considerada, de {ate} — as
+          bordas do período não são verificadas aqui.
         </span>
       </p>
     );
   }
   const ampliada = c.status === "ampliada";
-  const antecedencia = c.antecedencia_max_horas == null ? ""
-    : c.antecedencia_max_horas < 48 ? `${c.antecedencia_max_horas} h` : `${Math.floor(c.antecedencia_max_horas / 24)} dias`;
+  const duracao = (horas: number | null | undefined) => horas == null ? ""
+    : horas < 48 ? `${horas} h` : `${Math.floor(horas / 24)} dias`;
+  const antecedencia = duracao(c.antecedencia_max_horas);
+  // "Não há coleta perto do início": sem os alunos cuja coleta do início veio sem as
+  // questões, que têm o aviso próprio (houve coleta, só sem as questões).
+  const baseAmpliados = c.coleta_base_ampliados ?? c.coleta_inicio;
+  const ampliadosSemColeta = c.inclui_antes_do_inicio && c.alunos_ampliados > 0;
+  const inicioSemQuestoes = c.alunos_inicio_sem_questoes ?? 0;
+  const antecedenciaSemQuestoes = duracao(c.antecedencia_inicio_sem_questoes_horas);
+  const inicioSemQuestoesSemBase = c.alunos_inicio_sem_questoes_sem_base ?? 0;
   return (
     <div role="status" className={CAIXA_ALERTA}>
       <p className="flex gap-2 font-semibold">
@@ -321,8 +499,8 @@ function AvisoCobertura({ cobertura: c, titulo }: { cobertura: Cobertura; titulo
               Sem coleta no início do período{para(c.alunos_sem_inicio)}: o que foi feito de{" "}
               {diaDoPeriodo(c.periodo_inicio)} até a primeira coleta
               {c.coleta_inicio_mais_tardio ? ` (até ${dataHora(c.coleta_inicio_mais_tardio)})` : ""} não está na
-              conta: o contador que o Constela coleta é acumulado desde o início da conta e não diz quando cada
-              questão foi respondida, então esse trecho não sai das coletas
+              conta: {POR_QUE_SEM_INICIO[oficial ? "oficial_matific" : "diferenca_de_coletas"]}, então esse trecho
+              não sai das coletas
               {c.acumulado_na_primeira_coleta
                 ? ` (a primeira coleta já trazia ${numero(c.acumulado_na_primeira_coleta)} questões acumuladas, de datas que o contador não informa)`
                 : ""}.
@@ -330,17 +508,36 @@ function AvisoCobertura({ cobertura: c, titulo }: { cobertura: Cobertura; titulo
             </li>
           )
         )}
+        {inicioSemQuestoesSemBase > 0 && (
+          <li>
+            A coleta do início veio sem as questões{para(inicioSemQuestoesSemBase)}: a conta começa na primeira
+            coleta com as questões
+            {c.primeira_coleta_inicio_sem_questoes ? ` (até ${dataHora(c.primeira_coleta_inicio_sem_questoes)})` : ""},
+            e o que foi feito de {diaDoPeriodo(c.periodo_inicio)} até ela não está na conta.
+          </li>
+        )}
         {!c.fim_coberto && c.alunos_sem_fim > 0 && (
           <li>
             A última coleta{para(c.alunos_sem_fim)} é de {dataHora(c.coleta_fim_mais_cedo ?? c.coleta_fim)}: o que
             veio depois, até {diaDoPeriodo(c.periodo_fim_efetivo ?? c.periodo_fim)}, não está na conta.
           </li>
         )}
-        {c.inclui_antes_do_inicio && (
+        {ampliadosSemColeta && (
           <li>
-            Não há coleta perto do início{para(c.alunos_ampliados)}: a coleta-base é de {de}
+            Não há coleta perto do início{para(c.alunos_ampliados)}:{" "}
+            {baseAmpliados ? `a coleta-base é de ${dataHora(baseAmpliados)}` : "a conta parte do início do contador"}
             {antecedencia ? `, ${antecedencia} antes de ${diaDoPeriodo(c.periodo_inicio)}` : ""} — o número INCLUI
             a atividade desse intervalo.
+          </li>
+        )}
+        {inicioSemQuestoes > 0 && (
+          <li>
+            A coleta do início veio sem as questões{para(inicioSemQuestoes)}: a conta parte{" "}
+            {c.coleta_base_inicio_sem_questoes
+              ? `da coleta de ${dataHora(c.coleta_base_inicio_sem_questoes)}`
+              : "da coleta anterior"}
+            {antecedenciaSemQuestoes ? `, ${antecedenciaSemQuestoes} antes de ${diaDoPeriodo(c.periodo_inicio)},` : ""} e
+            INCLUI a atividade desse intervalo.
           </li>
         )}
         {c.alunos_sem_intervalo > 0 && (
@@ -376,6 +573,13 @@ function AvisoCobertura({ cobertura: c, titulo }: { cobertura: Cobertura; titulo
             {c.turmas_sem_coleta!.map((t) => t.turma ?? `#${t.turma_id}`).join(", ")}.
           </li>
         )}
+        {naoVieram > 0 && (
+          <li>
+            {numero(naoVieram)} aluno(s) com coleta no período em que a plataforma não mandou as questões (a
+            equipe do Constela precisa ajustar a coleta dessa plataforma): essa coleta não mede as questões, e a
+            conta deles vai só até a coleta anterior, ou fica fora dela.
+          </li>
+        )}
       </ul>
     </div>
   );
@@ -403,8 +607,22 @@ export default function RelatorioPeriodo() {
   // O PERÍODO é global (AppContext): o recorte que o gestor escolheu aqui
   // continua valendo nos rankings e nas premiações, e vice-versa — é a mesma
   // pergunta ("qual janela?") e seria ruído pedi-la de novo em cada tela.
-  const { escolaId, periodo, definirPeriodo } = useApp();
-  const [plataformas, setPlataformas] = useState<string>("elefante,matific");
+  const { escolaId, escolaAtual, periodo, definirPeriodo } = useApp();
+  // Só as plataformas que a rede CONTRATOU: o backend recusa (403) o relatório
+  // inteiro quando uma das plataformas pedidas é de um módulo fora do plano — numa
+  // rede só com a Leitura, abrir em "Elefante + Matific" era abrir num erro. Vale o
+  // plano da ESCOLA selecionada (item de /escolas): o admin global recebe em /auth/me
+  // o catálogo inteiro, e numa escola de rede com um módulo só a tela pedia as duas
+  // plataformas e recebia o 403 (NAOCORR-11). Sem o plano na resposta, o do usuário.
+  const doUsuario = useModulos();
+  const plano = escolaAtual?.modulos;
+  const tem = plano?.length ? (m: string) => plano.includes(m) : doUsuario.tem;
+  const contratadas = PLATAFORMAS.filter((p) => p.valor.split(",").every((x) => tem(MODULO_DA_PLATAFORMA[x])));
+  const opcoesPlataforma: readonly (typeof PLATAFORMAS)[number][] = contratadas.length ? contratadas : PLATAFORMAS;
+  const [escolhaPlataformas, setPlataformas] = useState<string>(opcoesPlataforma[0].valor);
+  const plataformas = opcoesPlataforma.some((p) => p.valor === escolhaPlataformas)
+    ? escolhaPlataformas
+    : opcoesPlataforma[0].valor;
   const [turmaId, setTurmaId] = useState<number | null>(null);
   const [alunoId, setAlunoId] = useState<number | null>(null);
 
@@ -469,6 +687,14 @@ export default function RelatorioPeriodo() {
     ele?.primeiro_evento_da_escola && dados?.periodo.inicio
       ? dados.periodo.inicio < ele.primeiro_evento_da_escola
       : false;
+  // De que ano são as crianças e as turmas medidas: num período de um ano já encerrado,
+  // as daquele ano (o cabeçalho diz esse ano, não o ativo da escola); num período que
+  // passa por dois anos, as de agora. A mesma frase do PDF.
+  const anoLetivo = dados?.populacao?.ano_letivo ?? dados?.escola.ano_letivo;
+  const avisoAno = avisoPopulacao(
+    dados?.populacao,
+    dados?.escopo.turma_id ? "turma" : dados?.escopo.restrito_a_turmas ? "suas_turmas" : undefined,
+  );
 
   // Ao trocar o recorte, o relatório anterior fica na tela até o novo chegar: o aviso
   // "Atualizando" diz que os números ainda são do recorte de antes.
@@ -523,7 +749,7 @@ export default function RelatorioPeriodo() {
                 value={plataformas}
                 onChange={(e) => setPlataformas(e.target.value)}
               >
-                {PLATAFORMAS.map((p) => (
+                {opcoesPlataforma.map((p) => (
                   <option key={p.valor} value={p.valor}>{p.rotulo}</option>
                 ))}
               </select>
@@ -616,7 +842,7 @@ export default function RelatorioPeriodo() {
                   <p className="mt-1 flex items-start gap-1.5 text-xs text-zinc-500 dark:text-zinc-400">
                     <School size={13} aria-hidden className="mt-px shrink-0" />
                     <span className="min-w-0">
-                      {dados.plataformas_rotulo} · {dados.escola.nome} · ano letivo {dados.escola.ano_letivo}
+                      {dados.plataformas_rotulo} · {dados.escola.nome} · ano letivo {anoLetivo}
                       {dados.periodo.inclusivo && " · intervalo inclusivo nas duas datas"}
                     </span>
                   </p>
@@ -639,6 +865,12 @@ export default function RelatorioPeriodo() {
             {dados.escopo.restrito_a_turmas && (
               <p className="mt-4 text-xs text-zinc-500 dark:text-zinc-400">
                 Você vê as turmas vinculadas ao seu cadastro ({dados.escopo.restrito_a_turmas.length}).
+              </p>
+            )}
+            {avisoAno && (
+              <p role="note" className={`mt-4 flex gap-2 ${CAIXA_ALERTA}`}>
+                <Info size={14} aria-hidden className={ICONE_ALERTA} />
+                <span>{avisoAno}</span>
               </p>
             )}
             {antesDoHistorico && (
@@ -695,7 +927,7 @@ export default function RelatorioPeriodo() {
                       // celular "1.234/2.345" quebra depois da barra em vez de vazar.
                       : `${numero(ele.questoes_acertos ?? 0)}/\u200B${numero(ele.questoes_tentativas)}`
                   }
-                  detalhe={[
+                  detalhe={ele.questoes_tentativas === null ? motivoSemNumeroQuestoes(ele) : [
                     ele.cobertura_questoes?.status === "parcial" && "cobertura parcial do período — veja o aviso",
                     ele.cobertura_questoes?.status === "ampliada" && "inclui antes do período — veja o aviso",
                     ele.alunos_sem_retrato > 0
@@ -771,50 +1003,36 @@ export default function RelatorioPeriodo() {
               {ele && (
                 <div className="space-y-2.5">
                   <RotuloSecao>Elefante Letrado</RotuloSecao>
-                  {Object.entries(ele.suporte).map(([chave, s]) => (
-                    <div key={chave} className="rounded-2xl border border-zinc-200 p-4 dark:border-zinc-800">
-                      <p className="flex flex-wrap items-center gap-2">
-                        <strong className="text-zinc-800 dark:text-zinc-100">{chave.replace(/_/g, " ")}</strong>
-                        <Selo classificacao={s.classificacao} />
-                        {s.campo && <code className="text-[11px] text-zinc-500 dark:text-zinc-400">{s.campo}</code>}
-                      </p>
-                      <p className="mt-1.5 text-xs text-zinc-600 dark:text-zinc-300">{s.por_que}</p>
-                      {s.ressalva && (
-                        <p className="mt-1 text-xs text-ouro-700 dark:text-ouro-300">Ressalva: {s.ressalva}</p>
-                      )}
-                    </div>
-                  ))}
+                  {Object.entries(ele.suporte)
+                    // O que o relatório não calcula fica só em "O que este relatório NÃO
+                    // responde" (com o nome da plataforma, como as questões do Matific) —
+                    // não repetido aqui, com o mesmo texto, sob o selo "Não calculado".
+                    .filter(([chave]) => !dados.nao_suportado.some(
+                      (n) => n.plataforma === "elefante" && n.metrica === chave))
+                    .map(([chave, s]) => (
+                      <CartaoComoLer key={chave} explicacao={explicacaoDe(EXPLICACAO_ELEFANTE, chave, s)}
+                                     classificacao={s.classificacao} />
+                    ))}
                 </div>
               )}
               {mat && (
                 <div className="space-y-2.5">
                   <RotuloSecao>Matific</RotuloSecao>
-                  <div className="rounded-2xl border border-zinc-200 p-4 dark:border-zinc-800">
-                    <p className="flex flex-wrap items-center gap-2">
-                      <strong className="text-zinc-800 dark:text-zinc-100">atividades e estrelas</strong>
-                      <Selo classificacao={mat.suporte.classificacao} />
-                      {mat.suporte.campo && (
-                        <code className="text-[11px] text-zinc-500 dark:text-zinc-400">{mat.suporte.campo}</code>
-                      )}
-                    </p>
-                    <p className="mt-1.5 text-xs text-zinc-600 dark:text-zinc-300">{mat.suporte.por_que}</p>
-                    {mat.suporte.ressalva && (
-                      <p className="mt-1 text-xs text-ouro-700 dark:text-ouro-300">Ressalva: {mat.suporte.ressalva}</p>
-                    )}
-                  </div>
+                  <CartaoComoLer explicacao={EXPLICACAO_MATIFIC} classificacao={mat.suporte.classificacao} />
                 </div>
               )}
               {dados.nao_suportado.length > 0 && (
                 <div className="space-y-2.5">
                   <RotuloSecao>O que este relatório NÃO responde</RotuloSecao>
-                  {dados.nao_suportado.map((n) => (
-                    <div key={`${n.plataforma}-${n.metrica}`} className="rounded-2xl bg-zinc-50 p-4 dark:bg-zinc-800/50">
-                      <p className="text-xs font-semibold text-zinc-700 dark:text-zinc-200">
-                        {n.plataforma} · {n.metrica.replace(/_/g, " ")}
-                      </p>
-                      <p className="mt-1 text-xs text-zinc-600 dark:text-zinc-300">{n.por_que}</p>
-                    </div>
-                  ))}
+                  {dados.nao_suportado.map((n) => {
+                    const e = explicacaoDe(EXPLICACAO_NAO_RESPONDE, `${n.plataforma}.${n.metrica}`, n);
+                    return (
+                      <div key={`${n.plataforma}-${n.metrica}`} className="rounded-2xl bg-zinc-50 p-4 dark:bg-zinc-800/50">
+                        <p className="text-xs font-semibold text-zinc-700 dark:text-zinc-200">{e.nome}</p>
+                        <p className="mt-1 text-xs text-zinc-600 dark:text-zinc-300">{e.explicacao}</p>
+                      </div>
+                    );
+                  })}
                 </div>
               )}
             </div>

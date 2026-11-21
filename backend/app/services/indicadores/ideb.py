@@ -168,6 +168,47 @@ def texto_celula(valor) -> str:
     return str(valor).replace("\r\n", "\n").replace("\r", "\n").strip()
 
 
+# Ruído binário do float: o número que difere do arredondado em menos que isto
+# (relativo) é o arredondado.
+_TOLERANCIA_RUIDO = 1e-12
+# O INEP publica no máximo 6 casas (N e P). Um número escrito com mais casas é o ``repr``
+# do ruído do float (57.99999999999999, de 0,58 × 100), não precisão publicada.
+_CASAS_MAX_PUBLICADAS = 6
+_RE_DECIMAL_COM_PONTO = re.compile(r"[+-]?\d+\.(\d+)")
+
+
+def texto_limpo(valor) -> str:
+    """O texto da célula (como ``texto_celula``), sem o ruído binário do float que a
+    planilha às vezes grava (o 0,3 de ``0.1 + 0.2``, escrito 0.30000000000000004): o
+    menor número de casas que reproduz o MESMO float. Vale para a planilha e para o CSV
+    do pacote (o parser do território e o da planilha do Saeb usam este)."""
+    if isinstance(valor, float) and not isinstance(valor, bool) and valor == valor:
+        for casas in range(0, 11):
+            arredondado = round(valor, casas)
+            if abs(arredondado - valor) <= _TOLERANCIA_RUIDO * max(1.0, abs(valor)):
+                texto = repr(arredondado)
+                if "e" in texto or "E" in texto:
+                    texto = format(Decimal(texto), "f")
+                return texto[:-2] if casas == 0 and texto.endswith(".0") else texto
+    return texto_celula(valor)
+
+
+def texto_sem_ruido(valor) -> str:
+    """O texto de uma célula da linha de DADOS do Ideb por escola: ``texto_celula``, mas
+    o número escrito com mais casas do que o INEP publica (o ruído do float) sai pelo
+    menor número de casas que reproduz o mesmo float (``texto_limpo``). O resto — o zero
+    final (6.0), a vírgula e o asterisco do INEP, os marcadores — fica como está.
+
+    Vale para a planilha (float) e para o TEXTO do CSV do pacote: o pacote gerado antes
+    desta limpeza traz o ``repr`` do ruído escrito, e a leitura do servidor o limpa do
+    mesmo jeito (sem isso, as casas do ruído viravam a precisão publicada da coluna)."""
+    texto = texto_celula(valor)
+    casou = _RE_DECIMAL_COM_PONTO.fullmatch(texto)
+    if casou is None or len(casou.group(1)) <= _CASAS_MAX_PUBLICADAS:
+        return texto
+    return texto_limpo(float(texto))
+
+
 def _aparar(linha: list[str]) -> list[str]:
     fim = len(linha)
     while fim and not linha[fim - 1]:
@@ -490,7 +531,8 @@ def ler_grade(linhas: Iterable[Sequence], *, codigo_ibge: str, nome: str = "",
         if rede != "municipal":
             leitura.outras_redes[rede or "sem rede"] += 1
             continue
-        linha = _aparar([texto_celula(c) for c in bruta])
+        # Sem o ruído do float: é este texto que vai para o pacote e para as casas.
+        linha = _aparar([texto_sem_ruido(c) for c in bruta])
         inep = normalizar_inep(codigo_escola)
         if inep in vistos:
             raise _recusa_layout(f"O código INEP {inep} aparece em mais de uma linha da rede.")
