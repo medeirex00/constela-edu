@@ -39,7 +39,7 @@
  * todo link leva o `?rede=` (`ctx.link`), e as metas e a vitrine são as da rede escolhida aqui.
  */
 import {
-  Award, BookOpen, Calculator, ChevronDown, ListChecks, Megaphone, MonitorSmartphone, School, Target,
+  Award, BookOpen, Calculator, ChevronDown, ListChecks, MapPinned, Megaphone, MonitorSmartphone, School, Target,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { useId, useMemo, useState, type ReactNode } from "react";
@@ -47,9 +47,11 @@ import { Link } from "react-router-dom";
 
 import { SeloFrescorDaRede } from "../../../components/SeloFrescor";
 import { Badge, Card, IconePastel, type TomPastel } from "../../../components/ui";
+import { useApp } from "../../../context/AppContext";
 import { useModulos } from "../../../hooks/useModulos";
 import { usePerfil } from "../../../hooks/usePerfil";
 import type { ApiError } from "../../../lib/api";
+import { podeVerDemoCaragua, ROTA_DEMO_CARAGUA } from "../../../lib/demoCaragua";
 import { numero } from "../../../lib/formato";
 import { SeloNatureza, usePlataformasDaRede, type NaturezaSelo } from "../../analise/comum";
 import { decimal, diaBR } from "../../analise/formato";
@@ -606,6 +608,7 @@ function MetasRecolhidas({ redeId, modulos }: { redeId: number; modulos: string[
 // --- A tela ----------------------------------------------------------------------------------
 
 function Panorama({ ctx, titulo }: { ctx: ContextoDaPagina; titulo: string }) {
+  const { usuario } = useApp();
   const { redeId } = ctx;
   const painel = useDashboardDaRede(redeId);
   const plataformas = usePlataformasDaRede(redeId, null, ANO_LETIVO);
@@ -658,9 +661,17 @@ function Panorama({ ctx, titulo }: { ctx: ContextoDaPagina; titulo: string }) {
         nomeRede={nomeRede}
         ctx={ctx}
         depois={(
-          <SeloFrescorDaRede redeId={redeId}
-                             dimensoes={[...(mods.elefante ? ["leitura" as const] : []),
-                                         ...(mods.matific ? ["matematica" as const] : [])]} />
+          <div className="flex flex-wrap items-center gap-3">
+            <SeloFrescorDaRede redeId={redeId}
+                               dimensoes={[...(mods.elefante ? ["leitura" as const] : []),
+                                           ...(mods.matific ? ["matematica" as const] : [])]} />
+            {podeVerDemoCaragua(usuario) && (
+              <Link to={ROTA_DEMO_CARAGUA}
+                    className="inline-flex min-h-10 items-center gap-2 rounded-lg border border-indigo-300 px-3 text-sm font-semibold text-indigo-700 hover:bg-indigo-50 dark:border-indigo-500/60 dark:text-indigo-300 dark:hover:bg-indigo-500/15">
+                <MapPinned size={16} aria-hidden /> Abrir mapa de demonstração
+              </Link>
+            )}
+          </div>
         )}
       />
 

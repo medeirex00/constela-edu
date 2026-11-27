@@ -29,8 +29,10 @@ from app.schemas import (
     RedeUpdate,
     RedeUsuariosIn,
 )
+from app.schemas.demo_caragua import DemonstracaoCaragua
 from app.services import avaliacoes as svc_avaliacoes
 from app.services import casamento_inep as svc_inep
+from app.services import demo_caragua as svc_demo
 from app.services import frescor_ranking
 from app.services import geocodificacao as svc_geo
 from app.services import modulos as svc_modulos
@@ -43,6 +45,24 @@ from app.services.audit import registrar
 _MAX_BYTES_INEP = 150 * 1024 * 1024  # mesmo teto do IDEB (arquivo oficial ~97 MB)
 
 router = APIRouter(prefix="/redes", tags=["Rede / Secretaria"])
+
+
+def _exigir_rede_editavel(db: Session, rede_id: int) -> None:
+    if svc_demo.tem_rede_da_demonstracao(db, {rede_id}):
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "A rede de demonstração é somente leitura.")
+
+
+@router.get("/{rede_id}/demonstracao-caragua", response_model=DemonstracaoCaragua)
+def demonstracao_caragua(
+    rede_id: int,
+    response: Response,
+    usuario: Usuario = Depends(get_usuario_atual),
+    db: Session = Depends(get_db),
+) -> DemonstracaoCaragua:
+    if not svc_demo.pode_ver(db, rede_id, usuario):
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "Acesso à demonstração indisponível.")
+    response.headers["Cache-Control"] = "private, no-store"
+    return svc_demo.CENARIO
 
 
 @router.get("")
@@ -142,6 +162,7 @@ def atualizar_rede(
     rede = db.get(Rede, rede_id)
     if rede is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Rede não encontrada.")
+    _exigir_rede_editavel(db, rede_id)
     alteracoes = dados.model_dump(exclude_unset=True)
     if "nome" in alteracoes:
         alteracoes["nome"] = alteracoes["nome"].strip()
@@ -230,6 +251,7 @@ def definir_escolas(
     rede = db.get(Rede, rede_id)
     if rede is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Rede não encontrada.")
+    _exigir_rede_editavel(db, rede_id)
     alvo = set(dados.escola_ids)
     validas = db.execute(
         select(Escola).where(Escola.id.in_(alvo))
@@ -377,11 +399,14 @@ def definir_usuarios(
     rede = db.get(Rede, rede_id)
     if rede is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Rede não encontrada.")
+    _exigir_rede_editavel(db, rede_id)
     alvo = set(dados.usuario_ids)
     validos = db.execute(
         select(Usuario).where(Usuario.id.in_(alvo))
     ).scalars().all() if alvo else []
     ids_validos = {u.id for u in validos}
+    if svc_demo.tem_rede_da_demonstracao(db, {u.rede_id for u in validos if u.rede_id is not None}):
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "A conta de demonstração é exclusiva da sua rede.")
     atuais = db.execute(
         select(Usuario).where(Usuario.rede_id == rede_id)
     ).scalars().all()
@@ -604,6 +629,7 @@ def definir_meta(
 ):
     """Cadastra/atualiza uma meta da rede (upsert por métrica). Ação de quem tem a
     rede (Secretaria) ou o admin global — como a vitrine pública."""
+    _exigir_rede_editavel(db, rede_id)
     svc_rede.definir_meta(db, rede_id, dados.metrica, dados.alvo, dados.descricao)
     registrar(db, "rede.meta_definida", usuario_id=usuario.id, entidade="rede",
               entidade_id=rede_id, detalhes={"metrica": dados.metrica, "alvo": dados.alvo})
@@ -619,6 +645,7 @@ def remover_meta(
     db: Session = Depends(get_db),
 ):
     """Remove a meta de uma métrica da rede."""
+    _exigir_rede_editavel(db, rede_id)
     svc_rede.remover_meta(db, rede_id, metrica)
     registrar(db, "rede.meta_removida", usuario_id=usuario.id, entidade="rede",
               entidade_id=rede_id, detalhes={"metrica": metrica})
@@ -719,6 +746,7 @@ def painel_publico_definir(
     """Liga (gera token) ou desliga (invalida o link) a vitrine pública da rede —
     top 5 escolas em leitura e matemática, SEM PII de criança. Ação de quem tem a
     rede (Secretaria) ou o admin global."""
+    _exigir_rede_editavel(db, rede_id)
     svc_rede.definir_painel_publico(db, rede_id, dados.ativo)
     registrar(db, "rede.painel_publico", usuario_id=usuario.id, entidade="rede",
               entidade_id=rede_id, detalhes={"ativo": dados.ativo})
