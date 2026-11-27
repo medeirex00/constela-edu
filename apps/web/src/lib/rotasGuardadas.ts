@@ -1,6 +1,6 @@
 /**
  * Espelho das GUARDAS DE ROTA de `App.tsx` (RotaGestao, RotaEscolaOp,
- * RotaSemSecretaria, RotaAdmin, RotaRede, RotaGlobal, RotaModulo), para quem precisa saber ANTES
+ * RotaSemSecretaria, RotaAdmin, RotaRede, RotaGlobal, RotaDemoCaragua, RotaModulo), para quem precisa saber ANTES
  * de navegar se o perfil abre a tela — hoje o sino de notificações: um aviso
  * que aponta para uma tela barrada fica sem clique, em vez de levar a um
  * redirecionamento mudo para o Dashboard.
@@ -10,6 +10,8 @@
  * se as duas divergirem. Rota fora da tabela não tem guarda (abre para todos).
  */
 
+import { ROTA_DEMO_CARAGUA } from "./demoCaragua";
+
 /** O mesmo recorte de `usePerfil()` que as guardas de `App.tsx` consultam. */
 export interface PerfilDaRota {
   global: boolean;
@@ -17,10 +19,11 @@ export interface PerfilDaRota {
   rede: boolean;
   gestor: boolean;
   admin: boolean;
+  demoCaragua?: boolean;
 }
 
 export type Guarda =
-  | "RotaGestao" | "RotaEscolaOp" | "RotaSemSecretaria" | "RotaAdmin" | "RotaRede" | "RotaGlobal";
+  | "RotaGestao" | "RotaEscolaOp" | "RotaSemSecretaria" | "RotaAdmin" | "RotaRede" | "RotaGlobal" | "RotaDemoCaragua";
 
 export interface RotaGuardada {
   caminho: string;
@@ -44,6 +47,7 @@ export const ROTAS_GUARDADAS: RotaGuardada[] = [
   { caminho: "/rede/analise", guardas: ["RotaRede"] },
   { caminho: "/rede/ranking", guardas: ["RotaRede"] },
   { caminho: "/rede/visao", guardas: ["RotaRede"] },
+  { caminho: ROTA_DEMO_CARAGUA, guardas: ["RotaDemoCaragua"] },
   { caminho: "/rede/acompanhamento", guardas: ["RotaRede"] },
   { caminho: "/rede/escolas", guardas: ["RotaRede"] },
   { caminho: "/rede/escolas/:escolaId", guardas: ["RotaRede"] },
@@ -83,6 +87,7 @@ const PASSA: Record<Guarda, (p: PerfilDaRota) => boolean> = {
   RotaAdmin: (p) => p.admin && !p.secretaria,
   RotaRede: (p) => p.rede,
   RotaGlobal: (p) => p.global,
+  RotaDemoCaragua: (p) => p.demoCaragua === true,
 };
 
 function segmentos(caminho: string): string[] {

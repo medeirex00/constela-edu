@@ -212,7 +212,7 @@ function Demonstracao({ dados }: { dados: DadosDemoCaragua }) {
 
   return (
     <>
-      <div className="grid min-w-0 items-start gap-4 xl:grid-cols-[minmax(0,1.8fr)_minmax(18rem,1fr)]">
+      <div className="grid min-w-0 grid-cols-1 items-start gap-4 xl:grid-cols-[minmax(0,1.8fr)_minmax(18rem,1fr)]">
         <MapaDemoCaragua escolas={dados.escolas} regiao={regiaoId} escola={escolaId}
             escolherRegiao={escolherRegiao} escolherEscola={escolherEscola} />
         <Card className="min-w-0 space-y-4 p-4">

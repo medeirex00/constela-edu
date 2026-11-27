@@ -1,4 +1,5 @@
 import { useApp } from "../context/AppContext";
+import { podeVerDemoCaragua } from "../lib/demoCaragua";
 
 /**
  * Deriva o PERFIL do usuário a partir de `is_global` / `rede_id` / `cargo` —
@@ -24,5 +25,6 @@ export function usePerfil() {
   const gestor = global || ["admin", "coordenador"].includes(usuario?.cargo ?? "");
   const admin = global || usuario?.cargo === "admin";
   const escolaOnly = !global && usuario?.rede_id == null;
-  return { global, secretaria, rede, gestor, admin, escolaOnly, cargo: usuario?.cargo ?? null };
+  const demoCaragua = podeVerDemoCaragua(usuario);
+  return { global, secretaria, rede, gestor, admin, escolaOnly, demoCaragua, cargo: usuario?.cargo ?? null };
 }

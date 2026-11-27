@@ -14,6 +14,7 @@ import { describe, expect, it } from "vitest";
 import fonteDoApp from "../App.tsx?raw";
 import Layout from "../components/Layout";
 import { ImportacaoLoteProvider } from "../context/ImportacaoLoteContext";
+import { ROTA_DEMO_CARAGUA } from "../lib/demoCaragua";
 import { podeAbrirRota, ROTAS_GUARDADAS } from "../lib/rotasGuardadas";
 import { escolaFake, renderComApp, responder, screen, userEvent, usuarioFake } from "./utils";
 
@@ -79,6 +80,14 @@ describe("rotasGuardadas — espelho das guardas de App.tsx", () => {
     expect(podeAbrirRota("/matific", coordenador, soMatematica)).toBe(true);
   });
 
+  it("exige a capacidade da demonstração mesmo de quem pode abrir telas de rede", () => {
+    const global = { ...secretaria, global: true, secretaria: false };
+    for (const perfil of [professor, coordenador, secretaria, global]) {
+      expect(podeAbrirRota(ROTA_DEMO_CARAGUA, perfil, todos)).toBe(false);
+    }
+    expect(podeAbrirRota(ROTA_DEMO_CARAGUA + "?modo=mapa", { ...secretaria, demoCaragua: true }, todos)).toBe(true);
+  });
+
   it("a ficha da escola (/rede/escolas/:id) tem a guarda das telas da rede", () => {
     expect(podeAbrirRota("/rede/escolas/3", secretaria, todos)).toBe(true);
     expect(podeAbrirRota("/rede/escolas/3?periodo=mes", secretaria, todos)).toBe(true);
@@ -141,6 +150,19 @@ describe("Sino — aviso para tela que o perfil não abre fica sem clique", () =
     expect(await botaoDo("Nova importação de dados concluída")).toBeEnabled();
     expect(await botaoDo("Pesos do cálculo foram alterados")).toBeEnabled();
     expect(await botaoDo("Novo aluno cadastrado")).toBeEnabled();
+  });
+
+  it.each([
+    ["secretaria-comum", false],
+    [" @IFSP2026SEC ", true],
+  ])("demonstração no sino (%s): permite o clique somente para a conta da demonstração", async (username, pode) => {
+    await abrirSino(
+      usuarioFake({ username, nome: "Secretaria Fictícia", rede_id: 7, escola_id: null }),
+      [aviso(11, "Ver demonstração de Caraguatatuba", ROTA_DEMO_CARAGUA)],
+    );
+    const botao = await botaoDo("Ver demonstração de Caraguatatuba");
+    if (pode) expect(botao).toBeEnabled();
+    else expect(botao).toBeDisabled();
   });
 
   it("escola sem Leitura contratada: aviso do Elefante sem clique", async () => {
