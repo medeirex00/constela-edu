@@ -10,9 +10,14 @@
  */
 import { describe, expect, it } from "vitest";
 
+import { useApp } from "../context/AppContext";
+import { ApiError } from "../lib/api";
 import Metricas from "../pages/configuracoes/Metricas";
 import {
+  act,
   api,
+  apiDownload,
+  escolaFake,
   rankingItemFake,
   renderComApp,
   responder,
@@ -29,6 +34,7 @@ const URL_PESOS_MATIFIC = "/escolas/1/configuracoes/pesos/matific";
 const URL_PESOS_ELEFANTE = "/escolas/1/configuracoes/pesos/elefante";
 const URL_PESOS_QUESTOES = "/escolas/1/configuracoes/pesos/questoes";
 const URL_REGRA = "/escolas/1/configuracoes/pontuacao/regra";
+const URL_PDF = `${URL_REGRA}/pdf`;
 const URL_RANKING_LEITURA = /^\/escolas\/1\/ranking\?dimensao=leitura$/;
 const URL_RANKING_MATEMATICA = /^\/escolas\/1\/ranking\?dimensao=matematica$/;
 const URL_REFERENCIAS = "/escolas/1/configuracoes/referencias";
@@ -148,6 +154,66 @@ function semearEditoresGlobal() {
   responder("GET", URL_DIFICULDADE, { niveis: [] });
   responder("GET", URL_DIFICULDADE_LIVRO, dificuldadeLivroFake());
 }
+
+describe("Métricas — PDF da régua em uso", () => {
+  it.each([
+    ["escola", usuarioFake(), undefined],
+    ["Secretaria", secretaria, 1],
+    ["Admin Global", adminGlobal, undefined],
+  ] as const)("baixa o PDF da escola selecionada na visão %s", async (_perfil, usuario, escolaSelecionada) => {
+    semearEditoresGlobal();
+    renderComApp(<Metricas />, { rota: "/metricas", usuario, escolaSelecionada });
+    const u = userEvent.setup();
+
+    await u.click(await screen.findByRole("button", { name: "Baixar PDF" }));
+
+    expect(apiDownload).toHaveBeenCalledExactlyOnceWith(URL_PDF);
+  });
+
+  it("Secretaria em Toda a Rede não recebe botão para baixar", async () => {
+    renderComApp(<Metricas />, { rota: "/metricas", usuario: secretaria });
+
+    expect(await screen.findByRole("heading", { name: "Critérios de pontuação" })).toBeVisible();
+    expect(screen.queryByRole("button", { name: "Baixar PDF" })).not.toBeInTheDocument();
+    expect(apiDownload).not.toHaveBeenCalled();
+  });
+
+  it("bloqueia o clique duplo e mantém erros e estado ocupados na escola do pedido", async () => {
+    function MetricasComSeletor() {
+      const { selecionarEscola } = useApp();
+      return <>
+        <button type="button" onClick={() => selecionarEscola(2)}>Selecionar outra escola</button>
+        <Metricas />
+      </>;
+    }
+    semearEditoresGlobal();
+    let rejeitarEscolaAnterior!: (motivo: Error) => void;
+    let rejeitarEscolaAtual!: (motivo: Error) => void;
+    apiDownload.mockImplementationOnce(() => new Promise<void>((_, rejeitar) => { rejeitarEscolaAnterior = rejeitar; }));
+    apiDownload.mockImplementationOnce(() => new Promise<void>((_, rejeitar) => { rejeitarEscolaAtual = rejeitar; }));
+    renderComApp(<MetricasComSeletor />, {
+      rota: "/metricas", usuario: adminGlobal,
+      escolas: [escolaFake(), escolaFake({ id: 2, nome: "Escola 2" })],
+    });
+    const u = userEvent.setup();
+
+    await u.dblClick(await screen.findByRole("button", { name: "Baixar PDF" }));
+    expect(screen.getByRole("button", { name: "Baixando PDF…" })).toBeDisabled();
+    expect(apiDownload).toHaveBeenCalledExactlyOnceWith(URL_PDF);
+
+    await u.click(screen.getByRole("button", { name: "Selecionar outra escola" }));
+    await u.click(await screen.findByRole("button", { name: "Baixar PDF" }));
+    expect(apiDownload).toHaveBeenNthCalledWith(2, "/escolas/2/configuracoes/pontuacao/regra/pdf");
+
+    await act(async () => { rejeitarEscolaAnterior(new ApiError(403, "Falha da escola anterior")); });
+    expect(screen.queryByText("Falha da escola anterior")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Baixando PDF…" })).toBeDisabled();
+
+    await act(async () => { rejeitarEscolaAtual(new ApiError(403, "Falha da escola atual")); });
+    expect(screen.getByText("Falha da escola atual")).toHaveAttribute("role", "alert");
+    expect(screen.getByRole("button", { name: "Baixar PDF" })).toBeEnabled();
+  });
+});
 
 describe("Métricas — visão da escola (Critérios de pontuação)", () => {
   it("coordenadora vê a explicação, sem nenhum editor", async () => {

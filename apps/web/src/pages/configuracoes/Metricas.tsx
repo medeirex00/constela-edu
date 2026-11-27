@@ -9,7 +9,7 @@
  *     as regras FIXAS da premiação; o ranking atual (5 primeiros de cada matéria,
  *     só para a gestão da escola — a Secretaria não recebe nome de criança); e o
  *     "Como funciona?" recolhível com a explicação longa e o exemplo calculado.
- *     Nenhum controle: a escola usa o Constela, não administra a matemática.
+ *     O PDF documenta a mesma régua efetiva, sem controles de edição.
  *
  *   ADMIN GLOBAL — os MESMOS cartões, com os editores reais: régua Padrão ×
  *     Personalizada no topo, pesos com controles deslizantes coloridos e "Salvar
@@ -23,6 +23,7 @@
 import {
   BookOpen,
   Calculator,
+  Download,
   Gauge,
   Info,
   MessageCircleQuestion,
@@ -35,7 +36,7 @@ import {
   Wand2,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
-import { useEffect, useId, useState, type ReactNode } from "react";
+import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 
 import ComoFuncionaPontuacao from "../../components/ComoFuncionaPontuacao";
 import {
@@ -71,7 +72,7 @@ import { useApp } from "../../context/AppContext";
 import { useApi, type ResultadoUseApi } from "../../hooks/useApi";
 import { useModulos } from "../../hooks/useModulos";
 import { usePerfil } from "../../hooks/usePerfil";
-import { api, ApiError } from "../../lib/api";
+import { api, apiDownload, ApiError } from "../../lib/api";
 import { nota } from "../../lib/formato";
 import type { ModoRegua, PesosDaRegua, RegraPontuacao } from "../../lib/tiposCriterios";
 import type { Pesos, Referencias } from "../../lib/types";
@@ -938,6 +939,43 @@ function CartoesDaRegua({ escolaId, regra }: { escolaId: number | null; regra: R
   );
 }
 
+/** A chave da escola nas duas visões isola o estado do download ao mudar a seleção. */
+function CabecalhoMetricas({ escolaId, descricao }: { escolaId: number | null; descricao: ReactNode }) {
+  const [baixando, setBaixando] = useState(false);
+  const [erro, setErro] = useState<string | null>(null);
+  const emAndamento = useRef(false);
+
+  async function baixar() {
+    if (escolaId == null || emAndamento.current) return;
+    emAndamento.current = true;
+    setBaixando(true);
+    setErro(null);
+    try {
+      await apiDownload(`/escolas/${escolaId}/configuracoes/pontuacao/regra/pdf`);
+    } catch (excecao) {
+      setErro(excecao instanceof ApiError ? excecao.message : "Não foi possível baixar o PDF.");
+    } finally {
+      emAndamento.current = false;
+      setBaixando(false);
+    }
+  }
+
+  return (
+    <>
+      <PageHeader
+        titulo="Critérios de pontuação"
+        descricao={descricao}
+        acoes={escolaId != null && (
+          <Botao type="button" variante="secundario" onClick={baixar} disabled={baixando} aria-busy={baixando}>
+            <Download size={16} aria-hidden /> {baixando ? "Baixando PDF…" : "Baixar PDF"}
+          </Botao>
+        )}
+      />
+      {erro && <div className="mb-6"><Mensagem tipo="erro">{erro}</Mensagem></div>}
+    </>
+  );
+}
+
 function PontuacaoDaEscola() {
   const { escolaId } = useApp();
   const { secretaria, gestor } = usePerfil();
@@ -954,7 +992,7 @@ function PontuacaoDaEscola() {
 
   return (
     <div>
-      <PageHeader titulo="Critérios de pontuação" descricao={descricao} />
+      <CabecalhoMetricas key={escolaId} escolaId={escolaId} descricao={descricao} />
 
       <div className="space-y-6">
         <Card className="bg-gradient-to-br from-white via-white to-indigo-50/80 p-5 dark:from-zinc-900 dark:via-zinc-900 dark:to-indigo-500/10 sm:p-7">
@@ -1058,8 +1096,9 @@ function MetricasGlobal() {
 
   return (
     <div>
-      <PageHeader
-        titulo="Critérios de pontuação"
+      <CabecalhoMetricas
+        key={escolaId}
+        escolaId={escolaId}
         descricao="Régua institucional da rede e configurações da régua personalizada. Alterações recalculam as notas automaticamente."
       />
 
