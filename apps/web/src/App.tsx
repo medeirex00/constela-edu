@@ -7,6 +7,7 @@ import { useApp } from "./context/AppContext";
 import { ImportacaoLoteProvider } from "./context/ImportacaoLoteContext";
 import { useModulos } from "./hooks/useModulos";
 import { usePerfil } from "./hooks/usePerfil";
+import { podeVerDemoCaragua, ROTA_DEMO_CARAGUA } from "./lib/demoCaragua";
 
 // Code-splitting por rota: cada página vira um chunk próprio, carregado sob
 // demanda. Assim as rotas públicas (/p/:token) e o /login não baixam o app
@@ -46,6 +47,7 @@ const AnaliseEducacional = lazy(() => import("./pages/analise/AnaliseEducacional
 // As telas PRINCIPAIS da Secretaria (DESENHO2 §2.3): conclusão primeiro, cada indicador
 // explicado, avaliações externas e plataformas separadas. Só leitura, sem PII.
 const PanoramaSecretaria = lazy(() => import("./pages/rede/secretaria/PanoramaSecretaria"));
+const DemonstracaoCaragua = lazy(() => import("./pages/rede/secretaria/DemonstracaoCaragua"));
 const AcompanhamentoRede = lazy(() => import("./pages/rede/secretaria/AcompanhamentoRede"));
 // A tela Escolas (lista e comparação lado a lado; o arquivo guarda o nome antigo) e a ficha.
 const CompararEscolas = lazy(() => import("./pages/rede/secretaria/CompararEscolas"));
@@ -136,6 +138,11 @@ export function RotaAdmin({ children }: { children: React.ReactNode }) {
 function RotaRede({ children }: { children: React.ReactNode }) {
   const { rede } = usePerfil();
   return rede ? <>{children}</> : <Navigate to="/" replace />;
+}
+
+function RotaDemoCaragua({ children }: { children: React.ReactNode }) {
+  const { usuario } = useApp();
+  return podeVerDemoCaragua(usuario) ? <>{children}</> : <Navigate to="/" replace />;
 }
 
 /** Operações de ESCOLA (importar, sincronizar, diagnóstico, onboarding) e telas de
@@ -241,6 +248,7 @@ export default function App() {
               existem, todos `exigir_rede`). A Visão da rede é o Panorama da Secretaria (que ela
               abre em "/") para o admin global, com o seletor de rede. */}
           <Route path="/rede/visao" element={<RotaRede><PanoramaSecretaria /></RotaRede>} />
+          <Route path={ROTA_DEMO_CARAGUA} element={<RotaDemoCaragua><DemonstracaoCaragua /></RotaDemoCaragua>} />
           <Route path="/rede/acompanhamento" element={<RotaRede><AcompanhamentoRede /></RotaRede>} />
           <Route path="/rede/escolas" element={<RotaRede><CompararEscolas /></RotaRede>} />
           {/* A ficha de UMA escola da rede (a escola vem do endereço, não do contexto): a mesma

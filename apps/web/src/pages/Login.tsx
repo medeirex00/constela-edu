@@ -5,6 +5,7 @@ import { Eye, EyeOff, Loader2, Lock, Mail } from "lucide-react";
 import { MolduraEntrada } from "../components/MolduraEntrada";
 import { Carregando, Mensagem } from "../components/ui";
 import { useApp } from "../context/AppContext";
+import { podeVerDemoCaragua, ROTA_DEMO_CARAGUA } from "../lib/demoCaragua";
 
 // Classe base dos campos: altos (48 px, bom alvo de toque), cantos de 12 px e o
 // mesmo foco violeta do resto do sistema. O anel de foco por teclado vem do
@@ -38,7 +39,7 @@ const ehCelular = () => window.matchMedia?.(MEDIA_CELULAR).matches ?? false;
  * Tela de entrada na identidade v2: painel marinho com o logotipo oficial e uma
  * frase curta, ao lado do cartão branco do formulário (ver `MolduraEntrada`). Os
  * rótulos ("E-mail ou nome de usuário", "Senha"), o autocomplete, o h1 e o fluxo
- * (redireciona para / quando já há sessão; mostra o erro da API) não mudaram.
+ * e as mensagens de erro da API são os mesmos do restante do aplicativo.
  */
 export default function Login() {
   const { usuario, carregando, entrar } = useApp();
@@ -50,7 +51,10 @@ export default function Login() {
   const celular = useSyncExternalStore(assinarCelular, ehCelular, () => false);
 
   if (carregando) return <Carregando texto="Abrindo o sistema..." />;
-  if (usuario) return <Navigate to="/" replace />;
+  if (usuario) {
+    const destino = podeVerDemoCaragua(usuario) ? ROTA_DEMO_CARAGUA : "/";
+    return <Navigate to={destino} replace />;
+  }
 
   async function enviar(evento: FormEvent) {
     evento.preventDefault();

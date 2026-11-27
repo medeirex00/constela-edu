@@ -631,6 +631,7 @@ const TITULOS_ESPECIAIS: Record<string, string> = {
   "/rede/acompanhamento": "Escolas em acompanhamento",
   "/rede/escolas": "Escolas",
   "/rede/avaliacoes-externas": "Avaliações externas",
+  "/rede/demonstracao-caragua": "Mapa de demonstração",
   "/rede/relatorios": "Relatórios e exportações",
   // D4: o mesmo nome do menu para os dois perfis (era "Métricas" no global e
   // "Pontuação" na escola).
