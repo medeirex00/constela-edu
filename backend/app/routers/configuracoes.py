@@ -5,7 +5,7 @@ Qualquer alteração dispara recálculo integral (PRD §43) e fica no log.
 """
 import math
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
 
@@ -44,7 +44,7 @@ from app.schemas import (
     ReferenciasOut,
     ReferenciasUpdate,
 )
-from app.services import (dificuldade_livro, elegibilidade, matific_destaque,
+from app.services import (criterios_pdf, dificuldade_livro, elegibilidade, matific_destaque,
                           periodos, politica_sync, provisionamento, scoring)
 from app.services import premiacoes as svc_premiacoes
 from app.services.audit import registrar
@@ -186,7 +186,14 @@ def regra_da_pontuacao(
     coordenação; a Secretaria, por GET, nas escolas da rede dela): os parâmetros
     da fórmula ficam fechados ao professor desde a Onda 2 (F17/F18). Não exige
     módulo: a resposta diz o que está contratado em vez de esconder."""
-    escola = db.get(Escola, escola_id)
+    regra = _montar_regra_da_pontuacao(db, db.get(Escola, escola_id))
+    # Média ponderada das matérias com dado do aluno (renormalizada).
+    regra["nota_geral"] = {"pesos": scoring.pesos_efetivos(db, escola_id, "pesos.geral")[1]}
+    return regra
+
+
+def _montar_regra_da_pontuacao(db: Session, escola: Escola) -> dict:
+    escola_id = escola.id
     personalizado = scoring._scoring_personalizado(db, escola_id)
     contratadas = scoring.dimensoes_contratadas(db, escola)
 
@@ -216,9 +223,6 @@ def regra_da_pontuacao(
              "contratada": "matematica" in contratadas,
              "pesos": percentuais("pesos.matific")},
         ],
-        # LEGADO: média ponderada das matérias COM dado do aluno (renormalizada);
-        # ordena o Ranking Geral, o certificado "Geral" e as vitrines.
-        "nota_geral": {"pesos": percentuais("pesos.geral")},
         "normalizacao": {
             "modo": modo,
             # Referência = percentil 90 dos alunos com dado (>0) quando a
@@ -229,6 +233,28 @@ def regra_da_pontuacao(
             "indicadores_volume": sorted(scoring.INDICADORES_VOLUME),
         },
     }
+
+
+@router.get("/pontuacao/regra/pdf", response_class=Response,
+            responses={200: {"content": {"application/pdf": {}}}})
+def baixar_criterios_pontuacao(
+    escola_id: int = Depends(escola_autorizada),
+    db: Session = Depends(get_db),
+    usuario: Usuario = Depends(exigir_papeis("admin", "coordenador")),
+):
+    """Guia compartilhável das regras em uso, sem consultar o ranking dos alunos."""
+    escola = db.get(Escola, escola_id)
+    regra = _montar_regra_da_pontuacao(db, escola)
+    pesos_geral = scoring.pesos_efetivos(db, escola_id, "pesos.geral")[1]
+    conteudo = criterios_pdf.gerar_criterios_pdf(escola.nome, regra, pesos_geral)
+    return Response(
+        content=conteudo,
+        media_type="application/pdf",
+        headers={
+            "Content-Disposition": 'attachment; filename="criterios_de_pontuacao.pdf"',
+            "Cache-Control": "private, no-store",
+        },
+    )
 
 
 # --- "Quer ver um exemplo?" — a conta REAL de um caso, por plataforma ---------

@@ -14,12 +14,17 @@ Trava:
     fórmula são fechados a ele desde a Onda 2); sem login 401, outra escola 403;
     é só GET (a governança da fórmula cobre a rota).
 """
+import re
+from io import BytesIO
+
+import pytest
 from fastapi.testclient import TestClient
+from pypdf import PdfReader
 from sqlalchemy import select
 
 from app.core.security import hash_senha
 from app.main import app
-from app.models import Configuracao, Escola, ModuloRede, Rede, ReferenciaNormalizacao, Usuario
+from app.models import Configuracao, Escola, ModuloRede, Nota, Rede, ReferenciaNormalizacao, Usuario
 from app.services import dificuldade_livro, scoring
 
 API = "/api/v1"
@@ -152,3 +157,105 @@ def test_nenhuma_escrita_na_rota(cliente, escola_completa):
     url = _url(escola_completa["escola"].id)
     for metodo in (cliente.put, cliente.post, cliente.delete):
         assert metodo(url).status_code == 405
+
+
+def _texto_pdf(resposta) -> str:
+    assert resposta.status_code == 200
+    assert resposta.headers["content-type"] == "application/pdf"
+    assert resposta.headers["content-disposition"] == (
+        'attachment; filename="criterios_de_pontuacao.pdf"')
+    assert {p.strip() for p in resposta.headers["cache-control"].split(",")} >= {"private", "no-store"}
+    assert resposta.content.startswith(b"%PDF-")
+    paginas = PdfReader(BytesIO(resposta.content)).pages
+    texto = "\n".join(pagina.extract_text() or "" for pagina in paginas)
+    return " ".join(texto.split()).casefold()
+
+
+def _tem_peso(texto: str, peso: int) -> bool:
+    return re.search(rf"\b{peso}(?:[,.]0)?\s*%", texto) is not None
+
+
+def test_pdf_reproduz_pesos_efetivos_e_as_secoes(cliente, db, escola_completa):
+    escola = escola_completa["escola"]
+    url = _url(escola.id) + "/pdf"
+    _pesos_locais(db, escola.id, "pesos.elefante",
+                  {"livros": 73.0, "dificuldade": 7.0, "questoes": 9.0, "tempo": 11.0})
+    _pesos_locais(db, escola.id, "pesos.geral", {"matific": 61.0, "elefante": 39.0})
+
+    institucional = _texto_pdf(cliente.get(url))
+    for secao in ("critérios de pontuação", "regras da premiação", "como funciona na prática",
+                  "melhor leitor", "melhor matemática", "nota geral"):
+        assert secao in institucional
+    assert _tem_peso(institucional, 35) and _tem_peso(institucional, 50)
+    assert not _tem_peso(institucional, 73) and not _tem_peso(institucional, 61)
+
+    db.add(Configuracao(escola_id=escola.id, namespace=scoring.PERFIL_SCORING_NS,
+                        chave="modo", valor="personalizado"))
+    db.commit()
+    personalizado = _texto_pdf(cliente.get(url))
+    assert "nota geral" in personalizado
+    assert all(_tem_peso(personalizado, peso) for peso in (73, 61, 39))
+
+
+@pytest.mark.parametrize(("fora_do_plano", "visivel", "oculta"), [
+    ("matematica", "melhor leitor", "melhor matemática"),
+    ("leitura", "melhor matemática", "melhor leitor"),
+])
+def test_pdf_restringe_as_secoes_ao_plano(cliente, db, escola_completa, fora_do_plano, visivel, oculta):
+    escola = escola_completa["escola"]
+    rede = Rede(nome="Rede fictícia com uma matéria")
+    db.add(rede)
+    db.flush()
+    escola.rede_id = rede.id
+    db.add(ModuloRede(rede_id=rede.id, modulo=fora_do_plano, ativo=False))
+    db.commit()
+
+    texto = _texto_pdf(cliente.get(_url(escola.id) + "/pdf"))
+    assert visivel in texto
+    assert oculta not in texto
+    assert "nota geral" not in texto
+
+
+def test_pdf_preserva_permissoes_e_nao_expoe_dados_da_escola(cliente, db, escola_completa):
+    escola = escola_completa["escola"]
+    rede = Rede(nome="Rede fictícia de critérios")
+    db.add(rede)
+    db.flush()
+    escola.rede_id = rede.id
+    outra = Escola(nome="Escola fictícia de fora", ano_letivo_ativo=escola.ano_letivo_ativo)
+    secretaria_email = "secretaria@regra-pdf.local"
+    db.add_all([outra, Usuario(rede_id=rede.id, nome="Secretaria Fictícia", email=secretaria_email,
+                               senha_hash=hash_senha("s3nh4"), cargo="coordenador")])
+
+    # Mesmo com aluno aferido e referência escolar definida, o documento
+    # contém as regras sem imprimir o ranking ou os valores de referência.
+    aluno = escola_completa["alunos"][0]
+    aluno.nome = "Marcador do ranking fictício XYZ 7842"
+    db.add(Nota(escola_id=escola.id, aluno_id=aluno.id, ano_letivo=escola.ano_letivo_ativo,
+                nota_geral=80, nota_elefante=80, posicao=1, posicao_leitura=1,
+                aferido_leitura=True))
+    ref = db.scalars(select(ReferenciaNormalizacao).where(
+        ReferenciaNormalizacao.escola_id == escola.id)).one()
+    ref.modo = "manual"
+    ref.valores_manuais = {"max_tempo": 43127.0}
+    db.add(Configuracao(escola_id=escola.id, namespace=scoring.PERFIL_SCORING_NS,
+                        chave="modo", valor="personalizado"))
+    db.commit()
+
+    url = _url(escola.id) + "/pdf"
+    url_outra = _url(outra.id) + "/pdf"
+    ranking = cliente.get(f"{API}/escolas/{escola.id}/ranking?dimensao=leitura").json()
+    assert any(item["nome"] == aluno.nome for item in ranking)
+    referencias = cliente.get(f"{API}/escolas/{escola.id}/configuracoes/referencias").json()
+    assert referencias["valores_em_uso"]["max_tempo"] == 43127.0
+
+    assert TestClient(app).get(url).status_code == 401
+    professor = _usuario(db, escola.id, "prof@regra-pdf.local", "professor")
+    assert professor.get(url).status_code == 403
+    coord = _usuario(db, escola.id, "coord@regra-pdf.local", "coordenador")
+    secretaria = _login(secretaria_email)
+    for autorizado in (cliente, coord, secretaria):
+        texto = _texto_pdf(autorizado.get(url))
+        assert aluno.nome.casefold() not in texto
+        assert re.search(r"43[ .]?127", texto) is None
+        assert autorizado.get(url_outra).status_code == 403
